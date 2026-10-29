@@ -273,7 +273,7 @@ for the rendered output so each viewer sees their own home profile projection.
 
 Favorites are pieces added to the user's home space; they are accessible from
 any space. You can wish for the favorites list directly (see
-`system/favorites-manager.tsx` for a full example):
+`system/favorites-manager/favorites-manager.tsx` for a full example):
 
 ```tsx
 // Shown at module scope.

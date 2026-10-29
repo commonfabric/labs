@@ -99,7 +99,7 @@ though it succeeds from source.
 
 The toolshed embeds the pattern trees so that it can serve them, which puts
 every module in them into its graph. It leaves out the files there that it never
-serves: the `integration/` and `baselines/` directories of `packages/patterns`,
+serves: the `integration/` and `baselines/` directories of `patterns`,
 every test file (`*.test.ts` and `*.test.tsx`), and every iframe guest source,
 which the iframe wrapper generator has already bundled into each generated
 `main.tsx`. An npm import in a pattern tree belongs in one of those files.
@@ -171,15 +171,15 @@ against it:
 - `tasks/check.sh` (run by `deno task check` and by CI) reads the pin for its
   version warning, and accepts the surrounding range set in its
   `DENO_VERSION_MIN`/`DENO_VERSION_MAX` variables.
-- `Dockerfile.dashboard` and `Dockerfile.toolshed` repeat the version in their
-  `FROM` lines, which cannot read another file.
+- `dashboard/Dockerfile` and `runtime/toolshed/Dockerfile` repeat the
+  version in their `FROM` lines, which cannot read another file.
 
 To bump the toolchain: update the version in `mise.toml` and every
-`denoland/deno` `FROM` line in the root deployment Dockerfiles, and move the
+`denoland/deno` `FROM` line in the deployment Dockerfiles, and move the
 `tasks/check.sh` range if the new version falls outside it.
 
 `deno task check-deno-pins` (also a CI step) catches a bump that misses one of
-those. It checks that every `denoland/deno` tag in the root deployment
+those. It checks that every `denoland/deno` tag in the deployment
 Dockerfiles equals the pin, that the `tasks/check.sh` range contains the pin,
 that `check.sh` and the `deno-setup` action both still read `mise.toml` rather
 than a hardcoded version, and that the action holds no version literal that
@@ -259,8 +259,8 @@ To roll the version, update the pins and the lockfile, then verify:
 deno outdated --update --recursive typescript@<version>
 deno task check
 deno task test
-(cd packages/static && deno task check-cfc-types)
-deno run -A packages/api/perf/run-tsc.ts --version
+(cd base/static && deno task check-cfc-types)
+deno run -A base/api/perf/run-tsc.ts --version
 ```
 
 The `check-cfc-types` command is a CI gate that `deno task test` does not cover;
@@ -291,9 +291,9 @@ newest version on npm, which is now the Go line — hence the explicit 6.x pins.
 
 Pattern compilation runs outside Node and cannot read the compiler's type
 libraries off disk, so it uses ambient libraries vendored in
-`packages/static/assets/types`. The two have different provenance:
+`base/static/assets/types`. The two have different provenance:
 `es2023.d.ts` is flattened from the `lib` directory of a TypeScript source
-checkout by `packages/static/scripts/compile-type-lib.ts`, while `dom.d.ts` is
+checkout by `base/static/scripts/compile-type-lib.ts`, while `dom.d.ts` is
 a hand-maintained subset of the web APIs the runtime actually provides.
 
 A compiler roll does not regenerate either one. They declare the API surface
@@ -307,34 +307,34 @@ beside the Labs checkout, then regenerate the flattened library from the static
 package:
 
 ```bash
-cd packages/static
+cd base/static
 deno task compile-types
 ```
 
 The task expects the TypeScript checkout at the path encoded in
-`packages/static/deno.jsonc`. The static package's
-[withheld-globals documentation](../../packages/static/README.md#withheld-globals)
+`base/static/deno.jsonc`. The static package's
+[withheld-globals documentation](../../base/static/README.md#withheld-globals)
 describes the sandbox-specific filtering applied to the generated file.
 
 The third file in that directory, `cfc.ts`, is different: it comes out of the
-compiler's declaration emit, via `packages/static/scripts/generate-cfc-types.ts`.
+compiler's declaration emit, via `base/static/scripts/generate-cfc-types.ts`.
 A roll can therefore change it, which is why `check-cfc-types` is part of the
 sequence above. It reports whether the committed file still matches what the new
 compiler emits. If it does not, run
-`(cd packages/static && deno task gen-cfc-types)` and commit the result.
+`(cd base/static && deno task gen-cfc-types)` and commit the result.
 
 ### esbuild
 
-`packages/felt` is the only package that declares esbuild. Its import map holds
+`base/felt` is the only package that declares esbuild. Its import map holds
 two entries that have to move in step: `npm:esbuild`, which felt calls directly,
 and `jsr:@deno/esbuild-plugin`, which teaches esbuild to resolve and load
 modules the way Deno does. The plugin is what lets felt bundle a source tree
 full of `jsr:` and `npm:` specifiers.
 
-Callers reach felt two ways, and the difference matters below. `packages/shell`
-owns `packages/shell/felt.config.ts`, the only felt config file in the repo, and
+Callers reach felt two ways, and the difference matters below. `runtime/shell`
+owns `runtime/shell/felt.config.ts`, the only felt config file in the repo, and
 it is the only caller that minifies. Everything else calls felt's exported
-`build()` and passes its own esbuild options: `packages/deno-web-test`, which is
+`build()` and passes its own esbuild options: `runtime/deno-web-test`, which is
 the browser test runner and forwards each package's `esbuildConfig`;
 `scripts/bundle.ts`; and one shell integration test.
 
@@ -400,14 +400,14 @@ is cache size.
 
 #### Keep `using` lowering on while the pin stands
 
-`packages/shell/felt.config.ts` sets `supported: { using: false }`, which asks
+`runtime/shell/felt.config.ts` sets `supported: { using: false }`, which asks
 esbuild to lower `using` declarations into explicit disposal calls instead of
 emitting them unchanged. The setting is there for output compatibility. On
 0.25.x it also prevents a miscompilation, so it needs to stay until the pin
 moves.
 
 esbuild 0.25.12's minifier sometimes folds a `using` declaration into the next
-use of the variable, and the disposal is lost. `packages/runner/src/traverse.ts`
+use of the variable, and the disposal is lost. `runtime/runner/src/traverse.ts`
 has the shape that triggers it, in five places: it declares
 `using t = ...tracker.include(...)` and reads `t` on the following line.
 Disposal is what releases the entry from the cycle tracker, so losing it leaves
@@ -431,7 +431,7 @@ dependency resolves. Roll the two together, and run the `cf view` Python tests
 afterward.
 
 `tree-sitter-python` is reached in two ways, both of which have to keep
-working. `packages/cli/lib/view/languages/python/python.ts` imports its
+working. `runtime/cli/lib/view/languages/python/python.ts` imports its
 `package.json`, which is what makes the package present, and resolves the
 compiled grammar beside it with `import.meta.resolve`, which the adapter then
 reads as a file. A source run resolves that through the Deno cache, and
@@ -440,7 +440,7 @@ Neither path is exercised by type checking, so a change to either is checked by
 running `cf view` against a `.py` file.
 
 Swift reaches its grammar the same way, through
-`packages/cli/lib/view/languages/swift/swift.ts`, and the CLI pins
+`runtime/cli/lib/view/languages/swift/swift.ts`, and the CLI pins
 `@binclusive/tree-sitter-swift-wasm` exactly as well. The Swift grammar is
 [`alex-pinkus/tree-sitter-swift`](https://github.com/alex-pinkus/tree-sitter-swift),
 whose own npm package ships no compiled WebAssembly grammar; its WebAssembly
@@ -455,7 +455,7 @@ integrity hash then holds the package to those bytes. Run the `cf view` Swift
 tests afterward, and `cf view` against a `.swift` file.
 
 Kotlin reaches its grammar through
-`packages/cli/lib/view/languages/kotlin/kotlin.ts`, and the CLI pins
+`runtime/cli/lib/view/languages/kotlin/kotlin.ts`, and the CLI pins
 `@binclusive/tree-sitter-kotlin-wasm` exactly. The Kotlin grammar is
 [`tree-sitter-grammars/tree-sitter-kotlin`](https://github.com/tree-sitter-grammars/tree-sitter-kotlin),
 whose own npm package ships its WebAssembly build beside 44 MB of generated C
@@ -470,7 +470,7 @@ asset. Like every grammar, it has to match the `web-tree-sitter` runtime's
 binary interface, so roll it with the runtime. Run the `cf view` Kotlin tests
 afterward, and `cf view` against a `.kt` file.
 
-TOML reaches its grammar through `packages/cli/lib/view/languages/toml/toml.ts`,
+TOML reaches its grammar through `runtime/cli/lib/view/languages/toml/toml.ts`,
 and the CLI pins `@tree-sitter-grammars/tree-sitter-toml` exactly. That package
 is the grammar's own and ships its WebAssembly build. Like `tree-sitter-python`,
 it also ships native bindings and an install script that builds them, which the
@@ -479,7 +479,7 @@ dependencies are the ones `tree-sitter-python` already brings. Roll it with the
 runtime, then run the `cf view` TOML tests and `cf view` against a `.toml`
 file.
 
-HCL reaches its grammar through `packages/cli/lib/view/languages/hcl/hcl.ts`,
+HCL reaches its grammar through `runtime/cli/lib/view/languages/hcl/hcl.ts`,
 and the CLI pins `@tree-sitter-grammars/tree-sitter-hcl` exactly. That package
 is the grammar's own and ships WebAssembly builds of HCL and of a Terraform
 dialect with the same rules, of which the pager loads the HCL one. Like
@@ -488,7 +488,7 @@ install script, which the pager never uses; its dependencies are the two
 `tree-sitter-python` already brings. Roll it with the runtime, then run the
 `cf view` HCL tests and `cf view` against a `.tf` file.
 
-Shell reaches its grammar through `packages/cli/lib/view/languages/shell/shell.ts`,
+Shell reaches its grammar through `runtime/cli/lib/view/languages/shell/shell.ts`,
 and the CLI pins `tree-sitter-bash` exactly. That package is the official Bash
 grammar and ships its WebAssembly build, which the pager loads for Bash and
 POSIX shell alike. Like `tree-sitter-python`, it also ships generated C source,
@@ -509,7 +509,7 @@ and inspect the generated HTML before accepting a new release.
 The CLI uses four declarations that have to remain compatible:
 
 - The root import map pins `@cliffy/command` at `1.0.0-rc.8`.
-- `packages/cli/deno.jsonc` pins `@cliffy/flags` at the same release. It is
+- `runtime/cli/deno.jsonc` pins `@cliffy/flags` at the same release. It is
   `@cliffy/command`'s own option parser, read directly by the shuttle shell so
   that a shell verb's flags are spelled and refused as a command's are.
 - That CLI config pins `@cliffy/table` at the same release.
@@ -528,7 +528,7 @@ required argument followed by a variadic argument is parsed. With that release,
 The `@std/fmt/colors` pin has a separate single-copy requirement.
 `setColorEnabled()` stores state in its module instance. If the CLI imports a
 different copy from Cliffy, disabling color does not affect Cliffy's version,
-error, and usage output. `packages/cli/test/color-mode.test.ts` guards that
+error, and usage output. `runtime/cli/test/color-mode.test.ts` guards that
 shared state.
 
 When rolling Cliffy, update `@cliffy/command`, `@cliffy/flags` and
@@ -538,7 +538,7 @@ to a compatible range that resolves to the same copy. Refresh the lockfile and
 run the complete CLI test task:
 
 ```bash
-(cd packages/cli && deno task test)
+(cd runtime/cli && deno task test)
 ```
 
 ### SQLite
@@ -554,7 +554,7 @@ the runner's UNIT lane does not import `@db/sqlite`: its disk-source test
 registers an empty temp file, whose contents never matter because the write it
 asserts on is refused before any attach. The memory package also repeats that
 version in `SQLITE3_RELEASE_VERSION` in
-`packages/memory/v2/sqlite/column-origin.ts`.
+`runtime/memory/v2/sqlite/column-origin.ts`.
 
 The second pin is a native-library identity requirement, not bookkeeping.
 `@db/sqlite` derives its libsqlite3 download URL from its package version, while
@@ -567,7 +567,7 @@ To roll SQLite, update all eight import maps and
 `SQLITE3_RELEASE_VERSION` in one change, run `deno install`, and verify:
 
 ```bash
-deno test -A packages/memory/test/v2-sqlite-column-origin.test.ts
+deno test -A runtime/memory/test/v2-sqlite-column-origin.test.ts
 deno task check
 deno task test
 ```
@@ -596,8 +596,8 @@ checking. At 24.2.0 the same code checks clean, and so does 26.1.1 under Deno
 
 The practical trap is that `typeof fetch` is not a dependable way to name a
 fetch-shaped value. Write the signature out instead. `HarnessFetch` in
-`packages/cf-harness/src/contracts/http-fetch.ts` and `RuntimeFetch` in
-`packages/runner/src/runtime.ts` are the package-level contracts. They hold
+`runtime/cf-harness/src/contracts/http-fetch.ts` and `RuntimeFetch` in
+`runtime/runner/src/runtime.ts` are the package-level contracts. They hold
 whichever version resolves and whichever compiler checks them.
 
 CI uses the exact Deno pin in `mise.toml`. Setting
@@ -618,13 +618,13 @@ boundary:
 
 | Behavior | Common Fabric owner | Published Astral surface |
 | --- | --- | --- |
-| Query open shadow roots with `strategy: "pierce"` | `packages/integration/astral-adapter.ts` | Raw page protocol bindings and the public `ElementHandle` constructor |
-| Wait for a matching shadow element | `packages/integration/astral-adapter.ts` | Raw page protocol bindings |
-| Observe clicks and typing for presentation recordings | `packages/integration/page.ts` | `ElementHandle`, page mouse, and page keyboard |
-| Apply a default per-character typing delay | `packages/integration/page.ts` | Keyboard's per-call `delay` option |
-| Treat an already-exited browser process as closed | `packages/integration/astral-adapter.ts` | Published browser lifecycle |
-| Start and acknowledge screencast frames | `packages/integration/page.ts` | Raw page protocol bindings |
-| Capture a Deno inspector CPU profile | `packages/cli/support/profiling/inspector-protocol-client.ts` | Chrome DevTools Protocol over the inspector WebSocket |
+| Query open shadow roots with `strategy: "pierce"` | `runtime/integration/astral-adapter.ts` | Raw page protocol bindings and the public `ElementHandle` constructor |
+| Wait for a matching shadow element | `runtime/integration/astral-adapter.ts` | Raw page protocol bindings |
+| Observe clicks and typing for presentation recordings | `runtime/integration/page.ts` | `ElementHandle`, page mouse, and page keyboard |
+| Apply a default per-character typing delay | `runtime/integration/page.ts` | Keyboard's per-call `delay` option |
+| Treat an already-exited browser process as closed | `runtime/integration/astral-adapter.ts` | Published browser lifecycle |
+| Start and acknowledge screencast frames | `runtime/integration/page.ts` | Raw page protocol bindings |
+| Capture a Deno inspector CPU profile | `runtime/cli/support/profiling/inspector-protocol-client.ts` | Chrome DevTools Protocol over the inspector WebSocket |
 
 The pierce strategy searches the whole page: everything a native query matches
 in the light DOM, plus every element inside an open shadow root at any depth. It
@@ -648,9 +648,9 @@ uses only the Console, Debugger, Profiler, and Runtime methods it needs.
 Update the version in the root `deno.jsonc`, refresh `deno.lock`, and run:
 
 ```sh
-deno test -A packages/integration/test/astral-adapter.test.ts
-deno test -A packages/cli/support/profiling/inspector-protocol-client.test.ts
-deno test -A packages/cli/support/profiling/capture-deno-inspector-profile-lib.test.ts
+deno test -A runtime/integration/test/astral-adapter.test.ts
+deno test -A runtime/cli/support/profiling/inspector-protocol-client.test.ts
+deno test -A runtime/cli/support/profiling/capture-deno-inspector-profile-lib.test.ts
 deno fmt --check
 deno lint
 ```

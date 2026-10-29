@@ -43,10 +43,10 @@ describe("checkShape", () => {
     const { problems, entries } = checkShape(index(
       "## Investigations, journals, and working notes",
       "",
-      "- [a.md](packages/a.md) and [b.md](packages/b.md) — working notes.",
+      "- [a.md](runtime/a.md) and [b.md](runtime/b.md) — working notes.",
     ));
     expect(problems).toEqual([]);
-    expect(entries[0].targets).toEqual(["packages/a.md", "packages/b.md"]);
+    expect(entries[0].targets).toEqual(["runtime/a.md", "runtime/b.md"]);
   });
 
   it("rejects a wrapped entry, which a union merge can splice", () => {

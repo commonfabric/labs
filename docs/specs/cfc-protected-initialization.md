@@ -357,4 +357,4 @@ name projection, stored policies, and exact name-chain values. Application
 revalidates them on one transaction, including ordinary concurrency reads of
 policy metadata. Missing protection commits atomically across the supported
 chain. Existing protection is never replaced or weakened. The CLI surface is
-[`cf profile repair-name-protection`](../../packages/cli/README.md#repairing-profile-name-protection).
+[`cf profile repair-name-protection`](../../runtime/cli/README.md#repairing-profile-name-protection).

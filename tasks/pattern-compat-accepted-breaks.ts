@@ -40,7 +40,7 @@
  * an exemption cannot outlive the break it was granted for.
  */
 export interface AcceptedContractBreak {
-  /** Pattern key: the path relative to `packages/patterns`. */
+  /** Pattern key: the path relative to `patterns`. */
   pattern: string;
 
   /** Baseline labels (filename stems) this pattern may fail to apply over. */
@@ -93,7 +93,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // stored profile without the field still validates. An unlabelled
     // pointer would pass the proof and let a stranger redirect the owner's
     // inbox; the label is the point.
-    pattern: "system/profile-picker.tsx",
+    pattern: "system/profile-picker/profile-picker.tsx",
     baselines: [
       "20260729T022742Z-BVxqS5A3M24IcX6m",
       "20260818T220011Z-J-y30yE6xQ8axACi",
@@ -112,7 +112,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The share inbox pointer's `space` and `host` fields left, replaced by
     // a link to the inbox piece under `piece`. The recorded object requires
     // the two fields, so no candidate without them applies over it.
-    pattern: "system/profile-picker.tsx",
+    pattern: "system/profile-picker/profile-picker.tsx",
     baselines: [
       "20260915T064957Z-Idjl03Ljo7Yyeecn",
       "20260918T000350Z-TY78mWqtLnHDoZtN",
@@ -131,7 +131,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // taxonomy, and the proof blames both paths in one finding, so this entry
     // names both; `agent-run-invalid-result-error-code-break.md` records the
     // second.
-    pattern: "system/agent-run.tsx",
+    pattern: "system/agent-run/agent-run.tsx",
     baselines: [
       "20260920T164352Z-nTSuqgfjRzkwXIgf",
       "20260920T170445Z-TMoN6scQaXVlTvPW",
@@ -146,7 +146,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // reader of the result has seen. Every reader shows the code as text. The
     // entry above covers the two earlier baselines, whose finding also blames
     // `argument.run`.
-    pattern: "system/agent-run.tsx",
+    pattern: "system/agent-run/agent-run.tsx",
     baselines: [
       "20260922T054240Z-8--YFk9i7OyiTc6X",
     ],
@@ -158,7 +158,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same ruling seen from the profile itself: both fields that left,
     // in the pointer it publishes and in the event `setInbox` takes.
-    pattern: "system/profile-home.tsx",
+    pattern: "system/profile-home/profile-home.tsx",
     baselines: [
       "20260915T064957Z-mE7S34E5xl20_PZs",
       "20260917T235321Z--A47I2nujs7eKua6",
@@ -179,7 +179,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // carries the ruling that lets it name one: every space's root takes the
     // break the moment it merges, and nothing deployed beyond one install
     // holds a pointer of the old shape.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20260915T064957Z-k40oHeJO0hh31i1H",
       "20260917T220636Z-xdDxE87ojM-_6i1g",
@@ -216,7 +216,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // brand, so no baseline carries the `default: {}` the declarations always
     // meant. A piece holding one of them unset reads `{}` where it read
     // `undefined`.
-    pattern: "cfc-group-chat-demo/main.tsx",
+    pattern: "examples/cfc-group-chat-demo/main.tsx",
     baselines: [
       "20260729T022742Z-piF14M8QDh5pSPw1",
       "20260821T064855Z-7vNcdzNpQKWFJXVr",
@@ -254,7 +254,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the rendered button's serialized DOM event was refused and the roster
     // could never be joined. `void` (the lobby's shape) is a different
     // recorded contract for the stream; nothing held state under the old one.
-    pattern: "profile-roster-live-demo.tsx",
+    pattern: "examples/profile-roster-live-demo/profile-roster-live-demo.tsx",
     baselines: ["20260729T022742Z-QNOFVBAs80X9XKZu"],
     paths: ["result.join"],
     reason:
@@ -263,7 +263,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the shared roster, same record.
-    pattern: "shared-profile-roster/main.tsx",
+    pattern: "examples/shared-profile-roster/main.tsx",
     baselines: ["20260729T022742Z-MLeLOCqjpbIUoIib"],
     paths: ["result.join"],
     reason:
@@ -284,7 +284,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the published projection with it, opens the link and author `kind`
     // domains a closed enum in provided data could never widen, and stops
     // `addLink` requiring the two fields its handler already defaulted.
-    pattern: "topics/main.tsx",
+    pattern: "apps/topics/main.tsx",
     baselines: [
       "20260729T022742Z-31DT95VXuyOj8JeU",
       "20260803T191013Z-jUl4tnb6Dw8LBVJj",
@@ -379,7 +379,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the bound tight: forgiving this path on the older baselines too would
     // forgive a later break at it against pairs this break never produced a
     // finding against.
-    pattern: "topics/main.tsx",
+    pattern: "apps/topics/main.tsx",
     baselines: [
       "20260826T221814Z-pt-HCeVbN-iyz9VX",
       "20260831T174843Z-iQFp3QQPN2zAkRuJ",
@@ -424,7 +424,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `addLink` requiring the two fields its handler already defaulted. And
     // the mention universe reaching a topic as a readable cell, the break
     // the entry below records for the baselines after these.
-    pattern: "topics/topic.tsx",
+    pattern: "apps/topics/topic.tsx",
     baselines: [
       "20260729T022742Z-6pmDbdEVBz84jJRa",
       "20260804T003803Z-I2QhJWkighYF1Fa1",
@@ -489,7 +489,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // and checking a spot write reads the roster. The floor also gained a
     // `writeAuthorizedBy` binding, so the roster is written by one reviewed
     // handler rather than by any action that happens to hold the cell.
-    pattern: "factory-outputs/parking-coordinator/main.tsx",
+    pattern: "dev/factory-outputs/parking-coordinator/main.tsx",
     baselines: [
       "20260729T022742Z-ZaBTuPX0s1ITifoj",
       "20260804T003803Z-xkP59lcpdOUTy_M1",
@@ -524,7 +524,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // declaration gained the mint, the single `lot-watch-admin` atom, and a
     // `writeAuthorizedBy` binding naming the one handler that may write it,
     // so the roster is no longer written by any action that holds the cell.
-    pattern: "factory-outputs/lot-watch/main.tsx",
+    pattern: "dev/factory-outputs/lot-watch/main.tsx",
     baselines: [
       "20260729T022742Z-W-iDVp0QJ9fPJBsi",
       "20260804T003803Z-MtNQDxsoMJZjryZC",
@@ -550,7 +550,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // links. Cell metadata is stable under default insertion, so the proof
     // identifies the incompatible link at `loggedBy`. The
     // vintage replay still preserves the stored visit rows.
-    pattern: "lunch-poll/main.tsx",
+    pattern: "apps/lunch-poll/main.tsx",
     baselines: ["20260729T022742Z-5bjUubcOZ-gpvz7F"],
     paths: [
       "argument.visits[].loggedBy",
@@ -579,7 +579,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // is compatible; the checker exemption is only for `me`, which published
     // the viewer's display name as identity. Joined-ness and host status are
     // now derived from profile-cell comparison.
-    pattern: "lunch-poll/participant-identity-card.tsx",
+    pattern: "apps/lunch-poll/participant-identity-card.tsx",
     baselines: ["20260729T022742Z-KMaq_J9475tWtRxW"],
     paths: [
       "result.me",
@@ -616,7 +616,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // primitives instead — compare profiles by their cells, not by what those
     // cells are called — so a role names the viewer's `#profile` cell, and the
     // stored shape of a role changed with it.
-    pattern: "factory-outputs/parking-coordinator/main.tsx",
+    pattern: "dev/factory-outputs/parking-coordinator/main.tsx",
     baselines: [
       "20260820T191154Z-Fah23u1z5LYk4qKk",
       "20260825T211621Z-wEoO6wvf7g-fhtJd",
@@ -647,7 +647,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // address is the item's address, so nothing in a row carries a separate
     // reference to it; and a row reads the board's name for its item out of
     // the item's own `shortName`, so the demand carries that member too.
-    pattern: "collection-naming/board.tsx",
+    pattern: "product/collection-naming/board.tsx",
     baselines: [
       "20260904T001531Z-WRSzkgeFJQmQt1ZM",
       "20260904T022635Z-OsLnrwxWR4PfC0gG",
@@ -675,7 +675,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // twice would take the later path set in place of the earlier one. The
     // older baselines report this same narrowing for the argument role and
     // name it in their own entry above, beside the breaks only they carry.
-    pattern: "topics/topic.tsx",
+    pattern: "apps/topics/topic.tsx",
     baselines: [
       "20260826T221814Z-RZiIzB74VkCoXYty",
       "20260831T181712Z-hoTDhhCHJzB2Umnc",
@@ -707,7 +707,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `shortName?: string`. One property in two roles here, because a row IS
     // the item: the board's demand of a stored item, and the row the board
     // publishes.
-    pattern: "collection-naming/board.tsx",
+    pattern: "product/collection-naming/board.tsx",
     baselines: [
       "20260904T051612Z-5rtP1U2c-e31PtKt",
       "20260904T063417Z-pWfbKiYw-7bd7xpC",
@@ -734,7 +734,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The member's side of the same alignment: an item publishes its name the
     // way a topic does, and demands it of a universe entry the same way.
-    pattern: "collection-naming/item.tsx",
+    pattern: "product/collection-naming/item.tsx",
     baselines: [
       "20260904T001531Z-z0Gy14PpefRML1fx",
       "20260904T022635Z-GMG883UMGFeAnh-r",
@@ -758,7 +758,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // and the mention universe becoming a readable binding — the two
     // breaks land on the same baselines, which is what puts them in one
     // entry.
-    pattern: "collection-naming/item.tsx",
+    pattern: "product/collection-naming/item.tsx",
     baselines: [
       "20260904T082808Z-1fwb7SfgxGYK3VR0",
       "20260905T003605Z-gslMTuThImQHhkVQ",
@@ -786,7 +786,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Two entries, one per pattern, for one ruling: `LLMMessageSchema` stopped
     // admitting the `system` role, and that schema reaches the argument
     // contract of every pattern whose `messages` it types.
-    pattern: "chatbot.tsx",
+    pattern: "system/chatbot/chatbot.tsx",
     baselines: [
       "20260729T022742Z-Wx_o-CaAUThcJygl",
       "20260818T183826Z-ibsxlvix5LQH7bfY",
@@ -809,7 +809,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The second pattern of the same ruling. Its baseline appears in no other
     // entry, so the pairs stay disjoint.
-    pattern: "deep-research.tsx",
+    pattern: "apps/deep-research/deep-research.tsx",
     baselines: [
       "20260729T022742Z-6PInVAlNOHThJNGH",
     ],
@@ -829,7 +829,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `$UI` included — which is what denied the whole rendered sub-view of any
     // pattern holding a confidential argument. The author's own per-field
     // declarations are untouched.
-    pattern: "budget-tracker/confidential.tsx",
+    pattern: "apps/budget-tracker/confidential.tsx",
     baselines: [
       "20260818T045519Z-gy2rtE24CYfgovy8",
     ],
@@ -853,7 +853,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The second pattern of the same ruling. Its baseline appears in no other
     // entry, so the pairs stay disjoint.
-    pattern: "cfc-input-cell-demo/briefing.tsx",
+    pattern: "examples/cfc-input-cell-demo/briefing.tsx",
     baselines: [
       "20260828T041445Z-xK1PX5XOqtJknIj6",
     ],
@@ -868,7 +868,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The third pattern of the same ruling.
-    pattern: "cfc-input-cell-demo/seed.tsx",
+    pattern: "examples/cfc-input-cell-demo/seed.tsx",
     baselines: [
       "20260828T041445Z-77e4kMM67vF8OWFf",
     ],
@@ -888,7 +888,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // serialized DOM event was refused and no message could be sent. `void`
     // is a different recorded contract for the stream; nothing held state
     // under the old one.
-    pattern: "profile-group-chat/main.tsx",
+    pattern: "examples/profile-group-chat/main.tsx",
     baselines: ["20260729T022742Z-VIR19UFKyKrauX_B"],
     paths: ["result.sendMessage"],
     reason:
@@ -897,7 +897,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat, same record.
-    pattern: "scoped-group-chat/main-plain-inputs.tsx",
+    pattern: "examples/scoped-group-chat/main-plain-inputs.tsx",
     baselines: [
       "20260729T022742Z-Z-pkp9K1p6P_byR_",
       "20260909T184756Z-M530BSuyTtIuZ_9J",
@@ -909,7 +909,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat's writable-input variant, same record.
-    pattern: "scoped-group-chat/main-with-writable-inputs.tsx",
+    pattern: "examples/scoped-group-chat/main-with-writable-inputs.tsx",
     baselines: [
       "20260729T022742Z-_XyScfA2QEj14JnS",
       "20260909T184756Z-NMt89YDsQnt_urES",
@@ -923,7 +923,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The everyone-is-admin flag's `true` branch gains the `writeAuthorizedBy`
     // claim its type declares, which a canonical alias formatting its payload
     // without a node had dropped. The proof descends to the flag here.
-    pattern: "cfc-group-chat-demo/main.tsx",
+    pattern: "examples/cfc-group-chat-demo/main.tsx",
     baselines: ["20260922T020444Z-IRoEgfpuUdf-xwvE"],
     paths: [
       "argument.adminRegistry.everyoneIsAdmin",
@@ -950,7 +950,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same break; against this older contract the proof blames the whole
     // registry rather than descending to the flag.
-    pattern: "cfc-group-chat-demo/main.tsx",
+    pattern: "examples/cfc-group-chat-demo/main.tsx",
     baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
     paths: [
       "argument.adminRegistry",
@@ -980,7 +980,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // setter streams are removed, and the trusted streams take the submitted
     // text as their event. The older baselines carry this break in the
     // entries above that already name them.
-    pattern: "cfc-group-chat-demo/main.tsx",
+    pattern: "examples/cfc-group-chat-demo/main.tsx",
     baselines: ["20260923T205929Z-mHuHgI9LlBLCu53t"],
     paths: [
       "result.profileDraft",
@@ -1005,7 +1005,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // apply the open-object evolution allowance inside a union branch, so a
     // stored panel whose `addedBy` held a non-string reads as a refused
     // alternative.
-    pattern: "loom/main.tsx",
+    pattern: "system/loom/main.tsx",
     baselines: [
       "20260920T232507Z-_ewvPy8qDJYL47km",
       "20260922T052256Z--2Q9ESzxSenSTer9",
@@ -1029,7 +1029,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // a narrowed union branch, and the narrowed `Panel` reaches the `before`
     // of `addPanel`'s event. Under this baseline the pair already failed on
     // `argument.panels[]` for `addedByProfile`, which this entry also covers.
-    pattern: "loom/main.tsx",
+    pattern: "system/loom/main.tsx",
     baselines: ["20260923T232217Z-9unt7nppL26FihSK"],
     paths: [
       "argument.panels[]",
@@ -1063,7 +1063,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The same change over the baseline that carries `addedByProfile`. An
     // admission event no longer names an adder, so `addedBy` leaves the
     // event of the three streams that add a panel.
-    pattern: "loom/main.tsx",
+    pattern: "system/loom/main.tsx",
     baselines: ["20260924T085224Z-oEtBQ4AVdy1fMTAB"],
     paths: [
       "argument.panels[]",
@@ -1100,7 +1100,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The demo's release rule now pins two levels, `commit` and the `submit`
     // step beneath it, so the policy its briefs declare has a new digest,
     // which the proof reads as a changed label on the briefs.
-    pattern: "cfc-exchange-rules/witnessed-chain.tsx",
+    pattern: "examples/cfc-exchange-rules/witnessed-chain.tsx",
     baselines: ["20260926T005010Z-wTSqH_JN5Vg6LFNp"],
     paths: [
       "argument.briefs[]",
@@ -1124,7 +1124,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // and stay with that entry, keeping the pairs disjoint. Home is a
     // required pattern, so this entry carries the ruling that lets it name
     // one.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20260729T022742Z-mKLGw1aighDtz0A6",
       "20260818T220011Z-KnU5UM1qdaNt22eV",
@@ -1167,7 +1167,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // cell and so the picker could not re-point it. The slot is a fresh cell;
     // the cell the default was kept in stays, as `legacyDefaultProfile`, and
     // is the default until one is chosen in the slot.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261001T190916Z-5k9_Adl37zMhsNgG",
       "20261001T210138Z-P3RELdPaFKfIXROk",
@@ -1188,7 +1188,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // A THIRD entry for the picker, naming only baselines the two entries
     // above leave out. The picker's `defaultProfile` argument is home's slot,
     // which holds the default's link under `profile`, rather than the link.
-    pattern: "system/profile-picker.tsx",
+    pattern: "system/profile-picker/profile-picker.tsx",
     baselines: [
       "20260918T215200Z-jd2IozSP5n9l8UnE",
       "20260922T062506Z-a2dPgr0XCKC82UO6",
@@ -1213,7 +1213,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // These baselines also report the scope the manager's `rooms` now
     // declares, which `fabrichat-view-scopes-break.md` records, so the
     // entry names that path beside its own.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: ["20261002T164437Z-O47ebJ7gn-iAk7TA"],
     paths: [
       "argument.requests.*",
@@ -1244,7 +1244,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // These baselines also report the scope the manager's `rooms` now
     // declares, which `fabrichat-view-scopes-break.md` records, so the
     // entry names that path beside its own.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261005T182129Z-yX4jdpH1wLhIowBh",
       "20261006T233809Z-8LxrZWka1s7az21n",
@@ -1282,7 +1282,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // a request outcome gained, under the manager's views, and the entry
     // names that path too, which `fabrichat-add-member-offer-break.md`
     // records.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261008T225324Z-Oj3DbCTq-94tEYN3",
       "20261009T161813Z-r7DggcJdZ7FzrPCR",
@@ -1319,7 +1319,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // stored request outcome gained, which
     // `fabrichat-add-member-offer-break.md` records, so the entry names that
     // path beside its own.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T013628Z-pqvm47igo4Famzxe",
     ],
@@ -1355,7 +1355,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // which `fabrichat-view-scopes-per-user-break.md` records, in the result
     // role. The entry names both paths, and the last baseline, recorded with
     // that scope, reports the policy alone.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T221322Z-ESDR30hfSt52JJjG",
       "20261012T173536Z-6WvdcsJ1uCY7_PMp",
@@ -1397,7 +1397,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // manager's `rooms` declares reaches home's contract too. Home is a
     // required pattern, so this entry carries the ruling that lets it name
     // one.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261003T212417Z-SrR1RyP2_xSZaWGa",
       "20261003T224735Z-H6PR-p3yRuZx4uT2",
@@ -1442,7 +1442,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same ruling, against the one home baseline whose manager has
     // `people`, which declares its scope beside `rooms`.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261011T013629Z-onNetb9BZoDKytX7",
     ],
@@ -1479,7 +1479,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // beside `result.defaultProfile`. The entry names both paths. `home-default-profile-slot-break.md`
     // records the first, with the ruling its own entry carries, and this
     // record the second.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261002T164437Z-Ppiw9bONPOzUfI_d",
       "20261003T003223Z-fDj2SHhwNCXbd-O3",
@@ -1518,7 +1518,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The proof also blames the scope the manager's `people` declares, which
     // `fabrichat-view-scopes-per-user-break.md` records. The entry names both
     // paths.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261011T170652Z-2XdZAneyCTt2Teex",
     ],
@@ -1552,7 +1552,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // the same ruling it carries there, and the proof blames `requests`
     // beside it. The entry names both paths. Home is a required pattern, so it carries the ruling that lets
     // it name one.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261008T225325Z-PhnyFM45uYaav17c",
       "20261009T161814Z-Oyyi7wIUz7AJ5r33",
@@ -1591,7 +1591,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // `people` declares, which `fabrichat-view-scopes-per-user-break.md`
     // records under the ruling its own entry carries. The entry names both
     // paths.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261011T170655Z-AJPqLNiOact-MHN0",
       "20261011T215215Z-wYgeQ3_Ossuzky4g",
@@ -1637,7 +1637,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // reviewed break `fabrichat-start-reviewed-break.md` records; the entry
     // that forgave it alone could forgive nothing once the messages broke
     // beside it, so this entry names both.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261002T164437Z-1xU0r9QuhxWHgK6y",
       "20261003T224731Z-o9skqwp4KfLbCDBT",
@@ -1744,7 +1744,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break, against the baselines that offered the activity log.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261006T233809Z-D8hKhP8UI9lV8o-V",
       "20261006T235529Z-O5mJyExuecHZTzFi",
@@ -1882,7 +1882,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same break, against the baselines that offered the per-user act
     // outcomes.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261014T012736Z-lylYV6qdLO9BesnG",
       "20261014T025519Z-0k_a1bve4vofmYu-",
@@ -2004,7 +2004,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same break, against the baselines that offered `closeWindow` at the
     // room's top level; the room offers no windows.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261014T140128Z-95MKWhVw3ffYhuDn",
       "20261014T151858Z-e6AvrFyYi8qb50yc",
@@ -2166,7 +2166,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // declares, which `fabrichat-view-scopes-per-user-break.md` records, in
     // the result role: the proof reports one issue per role. The entry names
     // both paths, in place of that break's own entry for the room.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261016T053638Z-KQKz6B5ir-i_b2SS",
       "20261016T153436Z-pRy5c_bxbuVZdFhZ",
@@ -2237,7 +2237,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same two breaks: the baselines recorded with the per-user scope
     // report the reply split alone.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261024T002137Z-Vy-7CaW79knps1fr",
       "20261024T171044Z-nGvvC4U9_mwy0apw",
@@ -2283,7 +2283,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The same two breaks: the baseline recorded with the reply split, before
     // the per-user scope reached it, reports the scope alone.
-    pattern: "fabrichat/room.tsx",
+    pattern: "system/fabrichat/room.tsx",
     baselines: [
       "20261024T154554Z-Bj6AuJ00TzMD7yZs",
     ],
@@ -2300,7 +2300,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // A placement no longer passes the room's activity log through, since
     // the room keeps none.
-    pattern: "fabrichat/placement.tsx",
+    pattern: "system/fabrichat/placement.tsx",
     baselines: [
       "20261002T164437Z-YHxasJyb9fC8x4pe",
       "20261013T211911Z-zT2_vHqj25wS-uwm",
@@ -2318,7 +2318,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The adapter re-exports the placement's data face, so it loses the same
     // field.
-    pattern: "fabrichat/adapter.tsx",
+    pattern: "system/fabrichat/adapter.tsx",
     baselines: [
       "20261002T164437Z-2PzF8f6WgNbffWBh",
       "20261013T211911Z-ucRdNCI0HJOQ7XAv",
@@ -2339,7 +2339,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // A pick was a required link to a held finished book, so every valid
     // result was five rereads. A pick is the recommended book inline now,
     // with an optional link to the finished book it builds on.
-    pattern: "book-recommendations/main.tsx",
+    pattern: "apps/book-recommendations/main.tsx",
     baselines: [
       "20260920T171659Z-3vmp5U6KQQHIKzya",
       "20261004T000822Z-RG9CkXhT9Y8zMON8",
@@ -2351,7 +2351,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The seeded demo composes the pattern and returns its result.
-    pattern: "book-recommendations/seeded-live-demo.tsx",
+    pattern: "apps/book-recommendations/seeded-live-demo.tsx",
     baselines: [
       "20260922T074703Z-x2D--ODNVd-Doeie",
       "20261004T000822Z-Uae2gNquN1m1hysE",
@@ -2364,7 +2364,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The view takes the state it displays as an argument and returns it,
     // so the pick's new shape shows on both faces.
-    pattern: "book-recommendations/view.tsx",
+    pattern: "apps/book-recommendations/view.tsx",
     baselines: ["20260920T171659Z-uSukTQQPKBcQgQSk"],
     paths: [
       "argument.state.result.picks[].title",
@@ -2381,7 +2381,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // The proof reads that as a changed scope at each. The baselines that
     // also report the room policy's `maxAttachments` are in that break's
     // entry, which names both paths.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261024T000755Z-abyOKppwBZufFk_m",
     ],
@@ -2404,7 +2404,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Home types its `chatManager` as the manager's output, so the manager's
     // per-user `people` reaches home's contract too. Home is a required
     // pattern, so it carries the ruling that lets it name one.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261011T232406Z-H8GLTyEEvgcBxdB1",
       "20261012T052420Z-12t_tpKxi8VbviJa",
@@ -2459,7 +2459,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // attests its recipient, and the roster is read under the reader's access.
     // These are the baselines recorded with the other views per user, which no
     // earlier entry names.
-    pattern: "fabrichat/manager.tsx",
+    pattern: "system/fabrichat/manager.tsx",
     baselines: [
       "20261024T171043Z-W-9cfBARX4FCKpd0",
     ],
@@ -2475,7 +2475,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Home types its `chatManager` as the manager's output, so the manager's
     // per-user `outgoingNotices` reaches home's contract too. Home is a
     // required pattern, so it carries the ruling that lets it name one.
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     baselines: [
       "20261024T002138Z-zFMiTW917nbAWd9u",
       "20261024T171045Z-AbQ0NYaesBn-mJ1I",
@@ -2493,5 +2493,83 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       reason:
         "declaring the manager's outgoing notices per user as the follow-up to the views per user, once the update proof reports every issue in each role so the entries it needs are exact",
     },
+  },
+  {
+    // A module policy reference names its module by the module's identity, a
+    // hash that includes the module's path.
+    pattern: "examples/cfc-exchange-rules/blessed-computation.tsx",
+    baselines: ["20260924T153051Z-6YvT2oA4V8_lByEi"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/blessed-object.tsx",
+    baselines: ["20260924T153321Z-aNS-4QMEm-bSTeHE"],
+    paths: ["argument.briefs[]"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/custody-answer-room.tsx",
+    baselines: ["20260929T142717Z-MSQfLEOX58y8JP5S"],
+    paths: ["argument.policy", "result.policy"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/custody-projector.tsx",
+    baselines: ["20260926T003025Z-vb5BZbezEKFEfTfj"],
+    paths: ["argument.policy", "result.policy"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/direct-release.tsx",
+    baselines: ["20260729T020824Z-dSrUECIg3W9_Mi8K"],
+    paths: ["result.message"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/imported-policy.tsx",
+    baselines: ["20260729T020824Z-WwYPk5u3LARG_Lxj"],
+    paths: ["result.message"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "examples/cfc-exchange-rules/witnessed-chain.tsx",
+    baselines: ["20260927T152058Z-ZBUN3fsJzOF3hUxP"],
+    paths: ["argument.briefs[]", "argument.committed"],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
+  },
+  {
+    // The same policy module, named by its identity at its new path.
+    pattern: "dev/test/writer-policy/main.tsx",
+    baselines: ["20260924T160954Z-5mOpUn-cDcpPkO5A"],
+    paths: [
+      "argument.entries[]",
+      "argument.frozen",
+      "result.entries[]",
+      "result.frozen",
+    ],
+    reason:
+      "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
+    record: "docs/history/package-layout-module-identity-break.md",
   },
 ];

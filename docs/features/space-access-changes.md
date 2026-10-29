@@ -7,8 +7,8 @@ space: the first sets `principal`'s entry in the space's access list to exactly
 second removes the entry. They are what a pattern such as a chat room uses to
 add or remove a member once the space exists. They work in a handler a client
 runs and in one the serving loop runs. The implementation is
-`packages/runner/src/builder/space-access-change.ts`. A client's change ends in
-`writeAcl()` in `packages/runner/src/acl-manager.ts`, the same write
+`runtime/runner/src/builder/space-access-change.ts`. A client's change ends in
+`writeAcl()` in `runtime/runner/src/acl-manager.ts`, the same write
 `ACLManager` and `cf acl` go through, and a served change ends in the memory
 server's `commitServedAclChange()`. Both apply the staged changes to the list
 through `applyAccessListChanges()`, beside `writeAcl()`.

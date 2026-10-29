@@ -26,7 +26,7 @@ Two neighbors:
   steps 5 through 8 for one instance.
 
 The tool is `cf space compact`, described in
-[the CLI README](../../packages/cli/README.md#compacting-a-space-store). Three
+[the CLI README](../../runtime/cli/README.md#compacting-a-space-store). Three
 things about it decide the shape of everything below. It rewrites a store in
 place and writes the result as a fresh file, so it runs against a **copy of
 the backup**, never the backup and never a served file. It **refuses** a store

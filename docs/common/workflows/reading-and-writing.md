@@ -104,7 +104,7 @@ settlement is that handler's commit, deliberately and not the recomputation
 the commit sets off. Waiting for the graph to quiesce would hold an
 already-committed write hostage to every recomputation it triggered elsewhere,
 so `executeResolvedCallable` in
-[`packages/cli/lib/callable.ts`](../../../packages/cli/lib/callable.ts) does
+[`runtime/cli/lib/callable.ts`](../../../runtime/cli/lib/callable.ts) does
 not wait. Act 8 calls a verb and then reads a derived field that has not
 moved.
 
@@ -127,7 +127,7 @@ are addresses the session read out of a run rather than a second, hidden one.
 #### Act 1 · A piece to read and write
 
 The fixture is
-[`thermostat.tsx`](../../../packages/cli/integration/pattern/thermostat.tsx),
+[`thermostat.tsx`](../../../runtime/cli/integration/pattern/thermostat.tsx),
 and it belongs to this demonstration and nothing else. A target a caller
 writes, three zones with a reading each, and two figures derived from both:
 `targetFahrenheit` from the target alone, and `belowTarget` from the target
@@ -135,7 +135,7 @@ and the zones together. Two derived fields rather than one, because the tour
 needs to show that neither of them moves.
 
 ```bash
-cf piece new packages/cli/integration/pattern/thermostat.tsx -s demo --slug thermostat
+cf piece new runtime/cli/integration/pattern/thermostat.tsx -s demo --slug thermostat
 ```
 
 #### Act 2 · Two cells behind one piece
@@ -329,7 +329,7 @@ draws: it is shaped like a read, and it is not effect-free.
 ## How the story is kept honest
 
 Every command above is one
-`packages/cli/integration/read-write-demo.sh` runs. The demo narrates each act
+`runtime/cli/integration/read-write-demo.sh` runs. The demo narrates each act
 and then executes it, and each act re-parses its own displayed line and
 compares the words against the argv that ran — so a line a reader retypes is
 the line that executed, checked rather than asserted. The `echo … |` half of a
@@ -344,17 +344,17 @@ in this document — every line above ran.
 What the demo cannot check is the prose, and two claims here are properties of
 the implementation rather than of a transcript: that `cf cell set`'s default lands
 on the result cell (`setCellValue` in
-[`packages/cli/lib/piece.ts`](../../../packages/cli/lib/piece.ts) branches on
+[`runtime/cli/lib/piece.ts`](../../../runtime/cli/lib/piece.ts) branches on
 `options.input` and reaches `piece.result` without it), and that resolving a
 wish commits (`resolveWish` in
-[`packages/cli/lib/wish.ts`](../../../packages/cli/lib/wish.ts) opens a
+[`runtime/cli/lib/wish.ts`](../../../runtime/cli/lib/wish.ts) opens a
 transaction, runs its pattern into a cell, and commits before reading). Both
 are stated from those functions.
 
 ## Running it yourself
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/read-write-demo.sh
+API_URL=http://localhost:8000 runtime/cli/integration/read-write-demo.sh
 ```
 
 The transcript is the artifact, and every act in it runs. Each one makes a
@@ -373,7 +373,7 @@ cannot exit zero.
   what a retry does and does not guarantee
 - [An agent's entry](../verbs/agents-over-the-cli.md) — the discovery surfaces
   `cf wish` sits among, and what an empty answer does not prove
-- [`packages/cli/README.md`](../../../packages/cli/README.md) — the reference
+- [`runtime/cli/README.md`](../../../runtime/cli/README.md) — the reference
   for `get`, `set`, `wish`, and the reference forms their targets take
 - [computed()](../concepts/computed/computed.md) — the authoring side of a
   derived field: what makes one, and why it is the pattern's to write

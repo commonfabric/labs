@@ -19,19 +19,19 @@ and one left out by accident look identical in a list of paths, so the record is
 what separates them: a tree nobody decided about fails the test rather than
 passing in silence. Adding an exemption means adding an entry that says why.
 
-Five trees are recorded as unchecked. `packages/schema-generator/test/fixtures`
-and `packages/ts-transformers/test/fixtures` are fixture corpora — the inputs
+Five trees are recorded as unchecked. `base/schema-generator/test/fixtures`
+and `base/ts-transformers/test/fixtures` are fixture corpora — the inputs
 those tests feed their transformer, and the outputs they compare against —
-`packages/runner/test/fixtures/compile-cache-corpus` is the frozen pattern
+`runtime/runner/test/fixtures/compile-cache-corpus` is the frozen pattern
 corpus a build compiles to hash the compiler's output into the compile-cache
-version, and `packages/static/assets/types` is the ambient environment a
+version, and `base/static/assets/types` is the ambient environment a
 pattern compiles against, handed to the in-memory compiler. What earns all four
 the exemption is holding data rather than modules this repository builds;
 neither test corpus compiles as a unit, though files within one may well compile
-alone. The fifth is `packages/patterns`, which the next paragraph covers.
+alone. The fifth is `patterns`, which the next paragraph covers.
 
 An exemption's reason is held to being true of every file it matches, which is
-what decides how wide the entry may be. Two entries divide `packages/patterns`,
+what decides how wide the entry may be. Two entries divide `patterns`,
 because two different things happen to the files there. The one pointing at
 `deno task cfcheck` may excuse only files the collector in
 `tasks/pattern-files.ts` hands that gate, and no single entry may span both
@@ -67,7 +67,7 @@ Each of these gates fails CI on its own, and none of them run as part of
 `deno task check`:
 
 - `deno task check-no-waitfor` — an integration test that imports the polling
-  `waitFor`. It reads only `integration/` directories under `packages/`, so its
+  `waitFor`. It reads only `integration/` directories in packages, so its
   green says nothing about a poll in a unit test
 - `deno task check-bench-workflow` — a benchmark file the dashboard names by
   path that `.github/workflows/benchmarks.yml` no longer runs, or a workflow
@@ -108,12 +108,12 @@ Each of these gates fails CI on its own, and none of them run as part of
   string. `tasks/check-address-examples.ts` states what counts as an example
 - `deno task check-cfc-correspondence` — the runtime's claim about which
   Contextual Flow Control specification it implements, held to the snapshot
-  committed at `packages/runner/src/cfc/kernel/spec-snapshot.json`: a kernel
+  committed at `runtime/runner/src/cfc/kernel/spec-snapshot.json`: a kernel
   function whose `@spec` header hash the snapshot no longer carries or that
   imports past the kernel, a manifest row in
-  `packages/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
+  `runtime/runner/src/cfc/kernel/manifest.ts` naming a function the snapshot
   lacks or a kernel symbol that does not exist, a `§` citation under
-  `packages/runner/src/cfc/` naming a section the specification has not, or more
+  `runtime/runner/src/cfc/` naming a section the specification has not, or more
   than three `SPEC-PENDING` markers in the files it governs (`GOVERNED_SOURCE`
   in `tasks/check-cfc-correspondence.ts`), or one naming no specs pull request. The specification is private and the snapshot is what crosses:
   `deno task cfc-spec-snapshot` regenerates it from a specs checkout, and labs
@@ -126,9 +126,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   both documents quote commands, never compose them
 - `deno task check-single-copy-deps`, `check-unused-deps`, `check-deno-pins` —
   dependency declarations across the workspace
-- `deno task check-package-cycles` — two packages that import each other, the
-  part of the dependency direction in `AGENTS.md`, "Pace Layers", that a machine
-  can settle
+- `deno task check-package-cycles` — two packages that import each other
+- `deno task check-dependency-direction` — a production import that runs against
+  the order in `AGENTS.md`, "Pace Layers": from a package to one in a later
+  layer, or from a pattern to one in a later category
 - `deno task check-completion-slots` — a `cf` option or positional nobody
   decided about completing. Shell completion's values come from two
   hand-maintained tables, and a slot missing from both is silent: it offers
@@ -167,10 +168,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   reports among them. A pattern that fails to compile on
   either side fails the gate, unless that side's own
   `tasks/pattern-compat-unevaluable.ts` lists it. The gate
-  compiles only for a change touching `packages/js-compiler/`,
-  `packages/runner/src/builder/`, `packages/runner/src/builtins/`,
-  `packages/runner/src/harness/`, `packages/schema-generator/src/` or
-  `packages/ts-transformers/src/`, or its own files (`COMPILER_PATHS` and
+  compiles only for a change touching `base/js-compiler/`,
+  `runtime/runner/src/builder/`, `runtime/runner/src/builtins/`,
+  `runtime/runner/src/harness/`, `base/schema-generator/src/` or
+  `base/ts-transformers/src/`, or its own files (`COMPILER_PATHS` and
   `GATE_PATHS` in `tasks/check-cause-assignments.ts`), and passes any other
   change without compiling. A move that has to ship is declared in
   `tasks/cause-assignments-accepted-moves.ts`, naming the two builds by the
@@ -181,7 +182,7 @@ Each of these gates fails CI on its own, and none of them run as part of
   path segment of the test file they cover, so that renames in test files of
   different names do not meet in one file
 - `deno task check-pattern-tiers` — a legacy or fixture pattern that does not
-  open with the marker saying so. `packages/patterns` is example code of unequal
+  open with the marker saying so. `patterns` is example code of unequal
   authority, and the marker is what stops the wrong example being copied by
   someone who never found the index. Membership is `tasks/pattern-tiers.ts`, and
   `deno task fix-pattern-tiers` applies or corrects a marker

@@ -7,7 +7,7 @@ the same operations. The flat `sharedSpaceCatalog`, `registerSharedSpace`,
 `changeSharedSpaceMembership`, and `removeSharedSpace` fields are aliases over
 the same storage and streams.
 Catalog types, validation, and transitions live in
-`packages/patterns/system/shared-space-catalog.ts`.
+`patterns/system/shared-space/shared-space-catalog.ts`.
 
 The catalog's backing cell has Home's stable `sharedSpaceCatalog` cause. An
 in-place source update retains that identity. Supported root-recreation commands
@@ -35,7 +35,7 @@ its stable cause. Importing Home's full output type or binding the whole
 
 Pattern consumers can wish for `#default/sharedSpaces/commands` with
 `scope: ["~"]` and the shallow `SharedSpaceCommands` role exported by
-`packages/patterns/system/shared-space-interface.ts`. A reader selects
+`patterns/system/shared-space/shared-space-interface.ts`. A reader selects
 `#default/sharedSpaces/view` with `SharedSpaceCollectionView`, or a narrower
 local projection. The `~` scope is essential: an unscoped `#default` names the
 current social space's root. No catalog-specific wish builtin is required.
@@ -301,7 +301,7 @@ returns `conflict` with the reason, when:
   profiles (`unknown-profile`): one Home's `profiles` list holds, that is the
   person's own by the one rule for every reader of which profiles are the
   person's (`profileOwnerOf()`, which applies `profileOwnerAt()` in
-  `packages/runner/src/profile-owner.ts`; "Profile" in
+  `runtime/runner/src/profile-owner.ts`; "Profile" in
   [`HOME_SPACE.md`](../common/conventions/HOME_SPACE.md) states it), and that
   `retiredProfiles` does not list. A label that cannot be read fails the
   registration, which writes nothing, rather than refusing the profile.

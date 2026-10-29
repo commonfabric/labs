@@ -3,15 +3,15 @@
  * Holds every pattern source in a "do not copy" tier to carrying a marker that
  * says so, and every marker to naming the tier the tables give that file.
  *
- * `packages/patterns` is example code whose examples carry unequal authority.
+ * `patterns` is example code whose examples carry unequal authority.
  * A legacy or fixture pattern is indistinguishable from an exemplar in a
  * directory listing, and copying one is the failure this guards: the wrong
  * idiom propagates into new patterns, and from there into the next thing that
- * copies those. `packages/patterns/index.md` explains the tiers; the marker is
+ * copies those. `patterns/index.md` explains the tiers; the marker is
  * what puts the answer in front of a reader who never opened the index.
  *
  * The check runs in both directions. A file the tables place in a marked tier
- * and that carries no marker fails, so a pattern added to `gideon-tests/`
+ * and that carries no marker fails, so a pattern added to `dev/gideon-tests/`
  * cannot arrive unmarked. A marker on a file the tables do not place fails
  * too, so a marker cannot outlive the reason for it. A table entry matching no
  * file fails last, which is what catches a directory renamed out from under
@@ -37,7 +37,6 @@ import {
   type MarkedTier,
   TIER_DIRECTORIES,
   TIER_FILES,
-  UNTIERED_FILES,
   withMarker,
 } from "./pattern-tiers.ts";
 
@@ -64,17 +63,15 @@ export function isWritable(
   return !hasMarkerLine(source) || declaredTier(source) !== undefined;
 }
 
-/** The three membership tables, injectable so their guards can be tested. */
+/** The two membership tables, injectable so their guards can be tested. */
 export interface TierTables {
   directories: Readonly<Record<string, MarkedTier>>;
   files: Readonly<Record<string, MarkedTier>>;
-  untiered: Readonly<Record<string, string>>;
 }
 
 const LIVE_TABLES: TierTables = {
   directories: TIER_DIRECTORIES,
   files: TIER_FILES,
-  untiered: UNTIERED_FILES,
 };
 
 /** Table entries that match nothing under `keys`, and so have gone stale. */
@@ -82,17 +79,7 @@ export function staleTableEntries(
   keys: readonly string[],
   tables: TierTables = LIVE_TABLES,
 ): string[] {
-  const {
-    directories: TIER_DIRECTORIES,
-    files: TIER_FILES,
-    untiered: UNTIERED_FILES,
-  } = tables;
-  // The tier a table would give a key, ignoring the exemptions, computed from
-  // the tables in hand rather than the live ones.
-  const tableTier = (key: string): MarkedTier | undefined =>
-    TIER_FILES[key] ??
-      Object.entries(TIER_DIRECTORIES)
-        .find(([prefix]) => key.startsWith(prefix))?.[1];
+  const { directories: TIER_DIRECTORIES, files: TIER_FILES } = tables;
   const stale: string[] = [];
   for (const prefix of Object.keys(TIER_DIRECTORIES)) {
     // Without the trailing slash the prefix match spills into any sibling
@@ -108,21 +95,6 @@ export function staleTableEntries(
   for (const file of Object.keys(TIER_FILES)) {
     if (!keys.includes(file)) {
       stale.push(`TIER_FILES["${file}"] is not a pattern source.`);
-    }
-  }
-  for (const file of Object.keys(UNTIERED_FILES)) {
-    if (!keys.includes(file)) {
-      stale.push(
-        `UNTIERED_FILES exempts "${file}", which is not a pattern source.`,
-      );
-      continue;
-    }
-    // The table lookup, not `tierOf`: the latter honours the exemption, so it
-    // reports undefined for every entry here and tests nothing.
-    if (tableTier(file) === undefined) {
-      stale.push(
-        `UNTIERED_FILES exempts "${file}", which no table would tier.`,
-      );
     }
   }
   return stale;

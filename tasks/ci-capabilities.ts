@@ -688,7 +688,7 @@ const toolshed: Capability = {
   open: (context) =>
     startToolshed(context, {
       command: [Deno.execPath(), "run", "--unstable-otel", "-A", "index.ts"],
-      cwd: path.join(context.root, "packages", "toolshed"),
+      cwd: path.join(context.root, "runtime", "toolshed"),
       role: "default",
     }),
 };

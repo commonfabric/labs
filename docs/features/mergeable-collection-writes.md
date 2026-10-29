@@ -114,10 +114,10 @@ for exactly which reads are kept. `Cell.push` is unconditional, so it merges.
 The same machinery carries three mergeable ops. `append` is described below;
 `add-unique` and `increment` follow the same shape (see *The op family*).
 
-- **`PatchOp` (`packages/memory/v2.ts`)** — a new `{ op: "append"; path; values }`
+- **`PatchOp` (`runtime/memory/v2.ts`)** — a new `{ op: "append"; path; values }`
   variant. It carries only the array path and the elements to append.
 
-- **`appendAtPath` (`packages/memory/v2/patch.ts`)** — thaws the array at
+- **`appendAtPath` (`runtime/memory/v2/patch.ts`)** — thaws the array at
   `path` and pushes `values` at the tail, creating the array where there is no
   list yet: where the path is missing, and where its slot holds `undefined`,
   which is what setting a list to `undefined` leaves. Any other value that is
@@ -126,7 +126,7 @@ The same machinery carries three mergeable ops. `append` is described below;
   optimistic pending replay. The two engine touched-path maps each gain an
   `append` case that returns the array path, the same as `splice`.
 
-- **Transaction (`packages/runner/src/storage/v2-transaction.ts`)** —
+- **Transaction (`runtime/runner/src/storage/v2-transaction.ts`)** —
   `recordMergeableOp(address, { op: "append", count })` records, per document and
   path, a mergeable intent (`mergeableOps` on the writable entry). At commit:
   - The op builder emits an `append` op for each recorded array path whose
@@ -149,7 +149,7 @@ The same machinery carries three mergeable ops. `append` is described below;
   - `getMergeableOpAddresses()` exposes the recorded addresses so the commit's
     read-set builder can drop the op's incidental reads.
 
-- **Read-set builder (`packages/runner/src/storage/v2.ts`)** — `buildReads`
+- **Read-set builder (`runtime/runner/src/storage/v2.ts`)** — `buildReads`
   drops, on a mergeable-op entity, only the reads the op issues *as part of
   itself*: the read the op's `Cell` method marks as its own (`mergeableOpRead`),
   a read marked as an attempted write, the `["cfc"]` write-policy label, and any
@@ -199,7 +199,7 @@ The same machinery carries three mergeable ops. `append` is described below;
   `["cfc"]` one is not scoped to a mergeable-op entity, which is what lets a
   label derivation consult a collection another session is appending to.
 
-- **Engine touched paths (`packages/memory/v2/engine.ts`)** — each op reports its
+- **Engine touched paths (`runtime/memory/v2/engine.ts`)** — each op reports its
   array path (like `splice`) in both `touchedPathsForPatch` (which the
   nonRecursive/shape matcher uses, retaining the parent injection) and
   `touchedLeafPathsForPatch` (the leaf-only matcher the conflict check and the
@@ -284,11 +284,11 @@ missing value is a zero default, `increment` is always zero-based: a counter
 whose displayed starting value should be non-zero must be `set` to that value
 first, since the op carries only the delta.
 
-- **Call sites** — `Cell.pushAll` (`packages/runner/src/cell.ts`), which
+- **Call sites** — `Cell.pushAll` (`runtime/runner/src/cell.ts`), which
   `Cell.push` calls with its arguments as the list, calls
   `recordMergeableOp` with an `append` delta after writing the combined array.
   Where the array already exists, it and `Cell.addUnique` write that array
-  through `diffAndAppend()` (`packages/runner/src/data-updating.ts`), the same
+  through `diffAndAppend()` (`runtime/runner/src/data-updating.ts`), the same
   diff walk `diffAndUpdate` runs, so id anchoring, cross-space link elements,
   and CFC write-policy recording apply to the appended elements as to any write.
   The walk passes over each element carried through from the stored array
@@ -565,7 +565,7 @@ concurrent conditional appends conflict, the loser retries, sees the winner's
 entry, and bails, while an unconditional `push` (no explicit read) stays fully
 mergeable. This is the narrowing described under the read-set builder above. The
 lunch poll's `addUser`
-([participant-identity-card.tsx](../../packages/patterns/lunch-poll/participant-identity-card.tsx))
+([participant-identity-card.tsx](../../patterns/apps/lunch-poll/participant-identity-card.tsx))
 is a deliberate read-then-push that relies on it.
 
 The narrowing keys on the read's path, and does not care which layer issued the
@@ -595,11 +595,11 @@ Two further responses make the keyed case cheaper and catch misuse (see
 - **Catch misuse at build time (implemented).** The transformer's capability
   analysis already tracks per-handler reads and the mergeable write methods. The
   `MergeablePushValidationTransformer`
-  ([packages/ts-transformers/src/transformers/mergeable-push-validation.ts](../../packages/ts-transformers/src/transformers/mergeable-push-validation.ts))
+  ([base/ts-transformers/src/transformers/mergeable-push-validation.ts](../../base/ts-transformers/src/transformers/mergeable-push-validation.ts))
   runs that analysis over each handler, finds a handler that both reads a
   collection (an explicit `.get()` or an iteration) and mergeable-`push`es to
   the same collection path, and classifies how the read relates to the push
-  ([packages/ts-transformers/src/policy/mergeable-push-classification.ts](../../packages/ts-transformers/src/policy/mergeable-push-classification.ts)).
+  ([base/ts-transformers/src/policy/mergeable-push-classification.ts](../../base/ts-transformers/src/policy/mergeable-push-classification.ts)).
   A push that *depends* on the read — through a guard (the dedup-then-push
   shape: an enclosing condition or an earlier early-return derived from the
   read) or through the pushed value — gets the diagnostic
@@ -677,7 +677,7 @@ claim on its container. A mergeable op is authorized by that claim the same way 
 whole-value `set` is: the authorization runs over the transaction's write log and
 the schema write-policy inputs, and the mergeable ops record those inputs exactly
 as `set` does, so migrating the list would not weaken the owner-write protection.
-A test in `packages/runner/test/profile-owner-cfc.test.ts` confirms this — an
+A test in `runtime/runner/test/profile-owner-cfc.test.ts` confirms this — an
 authorized writer's `addUnique` and `removeByValue` on an owner-protected list
 commit, and an unauthorized writer's are rejected. The list is left unmigrated
 for two other reasons. A pin is addressed by its element cell's identity rather
@@ -741,8 +741,8 @@ or a transport error — is not windowed: re-running cannot resolve it, so it
 drops on the first attempt rather than burning the window. A stale basis that
 cannot converge within the retry window surfaces a loud `CommitConvergenceError`
 instead of silently dropping the append. See `classifyCommitDisposition` in
-`packages/runner/src/scheduler/events.ts`, and the regression test
-`packages/runner/test/mergeable-append-multispace-conflict.test.ts`, which injects
+`runtime/runner/src/scheduler/events.ts`, and the regression test
+`runtime/runner/test/mergeable-append-multispace-conflict.test.ts`, which injects
 a stale-basis inconsistency storm on the home-space commit of a multi-space
 mergeable append and asserts the append survives durably, alongside a companion
 case that asserts a non-stale-basis rejection fails fast.

@@ -68,12 +68,12 @@ two ways:
 So a `$value` write is "only apply if the target is unchanged since I read it."
 Under an **own-write race** — two sessions/tabs of one user sharing the PerUser
 `profileDraft`, **or** the typed `$value` set racing the save handler's own
-`nameDraft.set` ([`trusted.tsx:533`](../../../../packages/patterns/cfc-group-chat-demo/trusted.tsx))
+`nameDraft.set` ([`trusted.tsx:533`](../../../../patterns/examples/cfc-group-chat-demo/trusted.tsx))
 — the write-target read is baselined at a stale seq and loses:
 `ConflictError: stale confirmed read: <id> at seq N conflicted with seq M`. The
 write is **rejected and rolled back**, the draft reverts, and the save handler
 (`commitTrustedProfileSave`, which reads
-[`draftText(nameDraft)` at `trusted.tsx:530`](../../../../packages/patterns/cfc-group-chat-demo/trusted.tsx))
+[`draftText(nameDraft)` at `trusted.tsx:530`](../../../../patterns/examples/cfc-group-chat-demo/trusted.tsx))
 reads the wrong/empty draft → the typed name is lost.
 
 **The conflict is tier-2 (patch path-overlap) on the *same* leaf path**
@@ -93,12 +93,12 @@ the client sent), not by the value's shape. Both handlers share `applyCellWrite`
   is a **blind last-write-wins** write (any value type). It marks its transaction
   as a blind-leaf-write **around the `cell.set()` call only** (cleared before
   `prepareTxForCommit`). While marked, `V2StorageTransaction.read()`
-  ([`v2-transaction.ts`](../../../../packages/runner/src/storage/v2-transaction.ts))
+  ([`v2-transaction.ts`](../../../../runtime/runner/src/storage/v2-transaction.ts))
   tags every read `ignoreReadForCommit` and **skips `doc.validated`**, so the leaf
   carries no value-equality precondition. In its place, `handleCellSet` threads
   the cell's resolved **parent** address (`setBlindStructuralTarget`, via
   `resolveAsCell().getAsNormalizedFullLink()`), and `buildReads`
-  ([`v2.ts`](../../../../packages/runner/src/storage/v2.ts)) emits **one
+  ([`v2.ts`](../../../../runtime/runner/src/storage/v2.ts)) emits **one
   `nonRecursive` read at that parent** — catching a concurrent whole-doc delete or
   ancestor reshape as a clean `ConflictError` (see §5.3).
 - **`CellHandle.push` → `CellPush` → `handleCellPush`** is read-modify-write: it
@@ -107,7 +107,7 @@ the client sent), not by the value's shape. Both handlers share `applyCellWrite`
   clobbered.
 
 The marker registry lives in
-[`reactivity-log.ts`](../../../../packages/runner/src/storage/reactivity-log.ts):
+[`reactivity-log.ts`](../../../../runtime/runner/src/storage/reactivity-log.ts):
 `markUiInputBlindWriteTx` / `unmark` / `is` + the `ignoreReadForCommit` marker,
 plus `setBlindStructuralTarget` / `getBlindStructuralTarget` (the parent target
 threaded from `handleCellSet` to `buildReads`). The mark walks the tx wrapper
@@ -233,21 +233,21 @@ load-bearing reads). The original framing, then what we found.
 - **The edge is real.** A precondition-free nested-scalar `replace` patch whose
   doc was concurrently whole-doc-deleted throws **`Error: missing path
   /value/profileDraft`**. `reconstructPatchedDocument`
-  ([engine.ts:4147](../../../../packages/memory/v2/engine.ts)) reads the delete as
+  ([engine.ts:4147](../../../../runtime/memory/v2/engine.ts)) reads the delete as
   its base (`SELECT_LATEST_BASE` is `op IN ('set','delete')`), so the doc is
   `emptyEntityDocument() = {}`, and `replaceAtPath` → `thawSpine`
-  ([patch.ts:107](../../../../packages/memory/v2/patch.ts)) can't descend.
+  ([patch.ts:107](../../../../runtime/memory/v2/patch.ts)) can't descend.
 - **Why the fix exposes it.** Same scenario *pre-fix* (compare-and-set) is caught
   cleanly as `ConflictError: stale confirmed read … conflicted with seq 2` — the
   concurrent delete fires **TIER-1 (set/delete), which is path-blind**, and the
   value-equality precondition we drop was the *only* carrier of that catch. The
   engine has **no `entity-present` precondition** at all — only
   `origin-committed` / `receipt-exists` / `entity-absent`
-  ([engine.ts:3446](../../../../packages/memory/v2/engine.ts)).
+  ([engine.ts:3446](../../../../runtime/memory/v2/engine.ts)).
 - **Blast radius is bounded.** The throw fires inside commit-time
   `materializeSnapshots` (calls `readStateForScopeKey` unconditionally), which is
   inside `engine.database.transaction(applyCommitTransaction).immediate(...)`
-  ([engine.ts:1542](../../../../packages/memory/v2/engine.ts)) → **the commit rolls
+  ([engine.ts:1542](../../../../runtime/memory/v2/engine.ts)) → **the commit rolls
   back**; the doc is **not** durably poisoned (observed `read = null` after). The
   harm is a *raw `Error` instead of a `ConflictError`* — ungraceful failure, not
   corruption or silent loss. (A blind **`add`** of a fresh key instead silently
@@ -259,10 +259,10 @@ load-bearing reads). The original framing, then what we found.
 **Mitigation (prototype — uncommitted on the working tree; see §5.3).** Instead
 of dropping every blind read, `buildReads` **downgrades** each to a single
 `nonRecursive` existence read at the **entity root**
-([v2.ts:2165](../../../../packages/runner/src/storage/v2.ts)). TIER-1 is path-blind
+([v2.ts:2165](../../../../runtime/runner/src/storage/v2.ts)). TIER-1 is path-blind
 → a concurrent whole-doc delete/replace still yields a clean `ConflictError`;
 TIER-2 `nonRecursive` overlap fires only at-or-above the read path
-(`patchOverlapsNonRecursiveRead`, [engine.ts:3914](../../../../packages/memory/v2/engine.ts)),
+(`patchOverlapsNonRecursiveRead`, [engine.ts:3914](../../../../runtime/memory/v2/engine.ts)),
 and the dropped leaf value read sits strictly **below** the root, so the same-leaf
 own-write race stays conflict-free. Verified:
 
@@ -297,7 +297,7 @@ choice.
 > `excludeReadFromConflict`" vocabulary. Possible unification.
 
 The three drop-from-conflict filters now sit as siblings in one `buildReads` loop
-([v2.ts:2157](../../../../packages/runner/src/storage/v2.ts)), at **three different
+([v2.ts:2157](../../../../runtime/runner/src/storage/v2.ts)), at **three different
 granularities**:
 
 | Filter | Owner | Granularity | Keeps |
@@ -308,7 +308,7 @@ granularities**:
 
 Neither #4220 marker can absorb ours as-is: `excludeReadFromConflict` is
 `nonRecursive`-gated but our write-target read is **recursive** (by-value,
-[data-updating.ts:666](../../../../packages/runner/src/data-updating.ts)) — confirmed
+[data-updating.ts:666](../../../../runtime/runner/src/data-updating.ts)) — confirmed
 by code *and* empirically (with #4220 present, disabling our fix still fails the
 race); `mergeableOpRead` *deliberately keeps* the recursive read at the op path
 (so conditional mergeable writes still conflict) — exactly the read we must drop —
@@ -451,9 +451,9 @@ ratchet: `packages/runner` **7864 → 7866 (+2)**. memory (−4) and runtime-cli
 
 **The puzzle to resolve next session:** the `+2` is the new structural-target
 registry — `setBlindStructuralTarget` / `getBlindStructuralTarget`
-([reactivity-log.ts](../../../../packages/runner/src/storage/reactivity-log.ts) 160–176)
+([reactivity-log.ts](../../../../runtime/runner/src/storage/reactivity-log.ts) 160–176)
 and the `buildReads` emission block
-([v2.ts](../../../../packages/runner/src/storage/v2.ts) ~2315–2345) — uncovered
+([v2.ts](../../../../runtime/runner/src/storage/v2.ts) ~2315–2345) — uncovered
 because runner's own suite never marks a tx blind. I added
 `packages/runner/test/blind-write-structural-precondition.test.ts`, and it
 **covers those exact lines locally** (verified DA hits: 160–167, 173, 2317–2340 all

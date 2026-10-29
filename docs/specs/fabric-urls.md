@@ -4,7 +4,7 @@
 
 Concept design. No implementation or deployment is currently planned. The
 document remains a reference for evaluating a future URL and naming system;
-the [current shell routes](../../packages/shell/README.md#routes) remain
+the [current shell routes](../../runtime/shell/README.md#routes) remain
 authoritative.
 
 The [space name registry](../plans/space-name-registry.md) describes a

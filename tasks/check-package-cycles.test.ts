@@ -23,7 +23,7 @@ import {
 const edge = (from: string, to: string): Edge => ({
   from,
   to,
-  file: `packages/${from}/src/mod.ts`,
+  file: `runtime/${from}/src/mod.ts`,
   specifier: `@commonfabric/${to}`,
 });
 
@@ -32,18 +32,18 @@ async function fixtureTree(
   packages: Record<string, Record<string, string>>,
 ): Promise<string> {
   const root = await Deno.makeTempDir({ prefix: "check-package-cycles-" });
-  const members = Object.keys(packages).map((name) => `./packages/${name}`);
+  const members = Object.keys(packages).map((name) => `./runtime/${name}`);
   await Deno.writeTextFile(
     join(root, "deno.jsonc"),
     JSON.stringify({ workspace: members }),
   );
   for (const [name, files] of Object.entries(packages)) {
     for (const [path, contents] of Object.entries(files)) {
-      const full = join(root, "packages", name, path);
+      const full = join(root, "runtime", name, path);
       await Deno.mkdir(join(full, ".."), { recursive: true });
       await Deno.writeTextFile(full, contents);
     }
-    const config = join(root, "packages", name, "deno.jsonc");
+    const config = join(root, "runtime", name, "deno.jsonc");
     try {
       await Deno.stat(config);
     } catch {
@@ -85,11 +85,11 @@ const tree = async (
 };
 
 const MEMBERS = [
-  "runner",
-  "html",
-  "ui",
+  "runtime/runner",
+  "runtime/html",
+  "runtime/ui",
   "patterns",
-  "integration",
+  "runtime/integration",
   "connectors/agents/connector",
 ];
 
@@ -138,61 +138,61 @@ describe("check-package-cycles", () => {
 
   describe("isProductionSource()", () => {
     it("returns true for a source file inside a package", () => {
-      expect(isProductionSource("packages/runner/src/cell.ts", MEMBERS)).toBe(
+      expect(isProductionSource("runtime/runner/src/cell.ts", MEMBERS)).toBe(
         true,
       );
     });
 
     it("returns true for a `.tsx` source file", () => {
-      expect(isProductionSource("packages/html/src/view.tsx", MEMBERS)).toBe(
+      expect(isProductionSource("runtime/html/src/view.tsx", MEMBERS)).toBe(
         true,
       );
     });
 
     it("returns false for a file under a package's `test` directory", () => {
-      expect(isProductionSource("packages/runner/test/cell.test.ts", MEMBERS))
+      expect(isProductionSource("runtime/runner/test/cell.test.ts", MEMBERS))
         .toBe(false);
     });
 
     it("returns false for a file under a package's `integration` directory", () => {
       expect(
-        isProductionSource("packages/runner/integration/setup.ts", MEMBERS),
+        isProductionSource("runtime/runner/integration/setup.ts", MEMBERS),
       )
         .toBe(false);
     });
 
     it("returns false for a file nested below a `test` directory", () => {
       expect(
-        isProductionSource("packages/runner/test/support/fake.ts", MEMBERS),
+        isProductionSource("runtime/runner/test/support/fake.ts", MEMBERS),
       )
         .toBe(false);
     });
 
     it("returns false for a `.test.tsx` file sitting beside its subject", () => {
       expect(
-        isProductionSource("packages/ui/src/cf-card/cf-card.test.tsx", MEMBERS),
+        isProductionSource("runtime/ui/src/cf-card/cf-card.test.tsx", MEMBERS),
       )
         .toBe(false);
     });
 
     it("returns false for a `.bench.ts` file", () => {
-      expect(isProductionSource("packages/runner/src/cell.bench.ts", MEMBERS))
+      expect(isProductionSource("runtime/runner/src/cell.bench.ts", MEMBERS))
         .toBe(false);
     });
 
     it("returns true for source in a package whose own name is `integration`", () => {
-      expect(isProductionSource("packages/integration/src/mod.ts", MEMBERS))
+      expect(isProductionSource("runtime/integration/src/mod.ts", MEMBERS))
         .toBe(true);
     });
 
-    it("returns false for a file outside `packages/`", () => {
+    it("returns false for a file outside every package", () => {
       expect(isProductionSource("tasks/check-package-cycles.ts", MEMBERS)).toBe(
         false,
       );
     });
 
     it("returns false for a file with no code extension", () => {
-      expect(isProductionSource("packages/runner/README.md", MEMBERS)).toBe(
+      expect(isProductionSource("runtime/runner/README.md", MEMBERS)).toBe(
         false,
       );
     });
@@ -200,27 +200,27 @@ describe("check-package-cycles", () => {
 
   describe("resolveRelative()", () => {
     it("returns a sibling path for a `./` specifier", () => {
-      expect(resolveRelative("packages/a/src/x.ts", "./y.ts"))
-        .toBe("packages/a/src/y.ts");
+      expect(resolveRelative("runtime/a/src/x.ts", "./y.ts"))
+        .toBe("runtime/a/src/y.ts");
     });
 
     it("returns the parent's path for a `../` specifier", () => {
-      expect(resolveRelative("packages/a/src/x.ts", "../mod.ts"))
-        .toBe("packages/a/mod.ts");
+      expect(resolveRelative("runtime/a/src/x.ts", "../mod.ts"))
+        .toBe("runtime/a/mod.ts");
     });
 
     it("returns another package's path when the specifier climbs out", () => {
-      expect(resolveRelative("packages/a/src/x.ts", "../../b/src/y.ts"))
-        .toBe("packages/b/src/y.ts");
+      expect(resolveRelative("runtime/a/src/x.ts", "../../b/src/y.ts"))
+        .toBe("runtime/b/src/y.ts");
     });
   });
 
   describe("targetPackage()", () => {
     const workspace = {
       members: [
-        "runner",
-        "sprocket-service",
-        "a",
+        "runtime/runner",
+        "runtime/sprocket-service",
+        "runtime/a",
         "connectors/agents/connector",
       ],
       names: new Map([
@@ -232,21 +232,21 @@ describe("check-package-cycles", () => {
 
     it("returns the package a bare specifier names", () => {
       expect(
-        targetPackage("packages/a/x.ts", "@commonfabric/runner", workspace),
+        targetPackage("runtime/a/x.ts", "@commonfabric/runner", workspace),
       )
         .toBe("runner");
     });
 
     it("returns the package a subpath export names", () => {
       expect(
-        targetPackage("packages/a/x.ts", "@commonfabric/runner/cfc", workspace),
+        targetPackage("runtime/a/x.ts", "@commonfabric/runner/cfc", workspace),
       ).toBe("runner");
     });
 
     it("returns the directory rather than the package name where they differ", () => {
       expect(
         targetPackage(
-          "packages/a/x.ts",
+          "runtime/a/x.ts",
           "@commonfabric/sprocket",
           workspace,
         ),
@@ -256,7 +256,7 @@ describe("check-package-cycles", () => {
     it("returns the nested member a bare specifier names", () => {
       expect(
         targetPackage(
-          "packages/a/x.ts",
+          "runtime/a/x.ts",
           "@commonfabric/agents-connector",
           workspace,
         ),
@@ -266,8 +266,8 @@ describe("check-package-cycles", () => {
     it("returns the nested member a relative specifier climbs into", () => {
       expect(
         targetPackage(
-          "packages/a/src/x.ts",
-          "../../connectors/agents/connector/src/y.ts",
+          "runtime/a/src/x.ts",
+          "../../../connectors/agents/connector/src/y.ts",
           workspace,
         ),
       ).toBe("connectors/agents/connector");
@@ -276,7 +276,7 @@ describe("check-package-cycles", () => {
     it("returns the package a relative specifier climbs into", () => {
       expect(
         targetPackage(
-          "packages/a/src/x.ts",
+          "runtime/a/src/x.ts",
           "../../runner/src/cell.ts",
           workspace,
         ),
@@ -284,18 +284,18 @@ describe("check-package-cycles", () => {
     });
 
     it("returns the importing package for a specifier that stays inside it", () => {
-      expect(targetPackage("packages/a/src/x.ts", "./y.ts", workspace)).toBe(
+      expect(targetPackage("runtime/a/src/x.ts", "./y.ts", workspace)).toBe(
         "a",
       );
     });
 
     it("returns undefined for a specifier naming no workspace package", () => {
-      expect(targetPackage("packages/a/x.ts", "@std/path", workspace))
+      expect(targetPackage("runtime/a/x.ts", "@std/path", workspace))
         .toBe(undefined);
     });
 
     it("returns undefined for an npm specifier", () => {
-      expect(targetPackage("packages/a/x.ts", "npm:typescript", workspace))
+      expect(targetPackage("runtime/a/x.ts", "npm:typescript", workspace))
         .toBe(undefined);
     });
   });
@@ -381,7 +381,7 @@ describe("check-package-cycles", () => {
     it("returns the package name declared by each workspace member", async () => {
       const root = await tree({ alpha: { "src/mod.ts": "" } });
       const workspace = await readWorkspace(root);
-      expect(workspace.members).toEqual(["alpha"]);
+      expect(workspace.members).toEqual(["runtime/alpha"]);
       expect(workspace.names)
         .toEqual(new Map([["@commonfabric/alpha", "alpha"]]));
     });
@@ -391,7 +391,9 @@ describe("check-package-cycles", () => {
         "connectors/agents/connector": { "src/mod.ts": "" },
       });
       const workspace = await readWorkspace(root);
-      expect(workspace.members).toEqual(["connectors/agents/connector"]);
+      expect(workspace.members).toEqual([
+        "runtime/connectors/agents/connector",
+      ]);
       expect(workspace.names).toEqual(
         new Map([
           [
@@ -407,7 +409,7 @@ describe("check-package-cycles", () => {
         alpha: { "deno.jsonc": "{}", "src/mod.ts": "" },
       });
       const workspace = await readWorkspace(root);
-      expect(workspace.members).toEqual(["alpha"]);
+      expect(workspace.members).toEqual(["runtime/alpha"]);
       expect(workspace.names).toEqual(new Map());
     });
 
@@ -418,13 +420,13 @@ describe("check-package-cycles", () => {
       await Deno.writeTextFile(
         join(root, "deno.jsonc"),
         JSON.stringify({
-          workspace: [null, 42, "./tools", "./packages/alpha"],
+          workspace: [null, 42, "./tools", "./runtime/alpha"],
         }),
       );
-      await Deno.remove(join(root, "packages", "alpha", "deno.jsonc"));
+      await Deno.remove(join(root, "runtime", "alpha", "deno.jsonc"));
 
       const workspace = await readWorkspace(root);
-      expect(workspace.members).toEqual(["alpha"]);
+      expect(workspace.members).toEqual(["runtime/alpha"]);
       expect(workspace.names).toEqual(
         new Map([["alpha-from-json", "alpha"]]),
       );
@@ -433,25 +435,25 @@ describe("check-package-cycles", () => {
 
   describe("packageOfPath()", () => {
     it("returns the member holding the file", () => {
-      expect(packageOfPath("packages/runner/src/cell.ts", MEMBERS))
+      expect(packageOfPath("runtime/runner/src/cell.ts", MEMBERS))
         .toBe("runner");
     });
 
     it("returns the nested member rather than the directory containing it", () => {
       expect(
         packageOfPath(
-          "packages/connectors/agents/connector/src/x.ts",
+          "connectors/agents/connector/src/x.ts",
           MEMBERS,
         ),
       ).toBe("connectors/agents/connector");
     });
 
     it("returns undefined for a path in no member", () => {
-      expect(packageOfPath("packages/connectors/README.md", MEMBERS))
+      expect(packageOfPath("connectors/README.md", MEMBERS))
         .toBe(undefined);
     });
 
-    it("returns undefined for a path outside `packages/`", () => {
+    it("returns undefined for a path outside every package", () => {
       expect(packageOfPath("tasks/check-package-cycles.ts", MEMBERS))
         .toBe(undefined);
     });
@@ -466,7 +468,7 @@ describe("check-package-cycles", () => {
       expect(await buildEdges(root)).toEqual([{
         from: "alpha",
         to: "beta",
-        file: "packages/alpha/src/mod.ts",
+        file: "runtime/alpha/src/mod.ts",
         specifier: "@commonfabric/beta",
       }]);
     });
@@ -571,7 +573,7 @@ describe("check-package-cycles", () => {
       expect(code).toBe(1);
       expect(err).toContain("1 package import cycle not on the allowlist");
       expect(err).toContain("alpha + beta");
-      expect(err).toContain("packages/alpha/src/mod.ts");
+      expect(err).toContain("runtime/alpha/src/mod.ts");
       expect(err).toContain("alpha -> beta, 1 import:");
       expect(err).toContain("Removing any one of these would break the cycle");
     });

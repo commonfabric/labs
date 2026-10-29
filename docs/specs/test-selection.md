@@ -10,7 +10,7 @@ reasoning behind it. It rests on
 [test-run records](test-records.md), whose store it reads and beside whose
 dataset area it writes. The implementation is `tasks/test-selection/`, and
 the manifest format itself is
-`packages/test-support/src/records/selection.ts`, beside the record schema
+`base/test-support/src/records/selection.ts`, beside the record schema
 it is the counterpart of.
 
 ## What the score measures
@@ -882,7 +882,7 @@ at all, since scoring it would score whatever else happened to write into
 its directory.
 
 The suite that runs each workspace member's own tests declares one set for
-every member under `packages/` with tests that run under Deno alone, at
+every package member with tests that run under Deno alone, at
 whatever depth the member sits, reached by its own tree less the trees of
 members nested inside it. The repository's `tasks` and `scripts` trees
 carry none. That suite leaves a member out only where the member is named,

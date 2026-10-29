@@ -124,8 +124,8 @@ Purpose: pin the cross-layer examples before production implementation.
 
 Likely files:
 
-- `packages/memory/test/fixtures/apply-op/`
-- `packages/memory/test/v2-apply-op-fixtures.test.ts`
+- `runtime/memory/test/fixtures/apply-op/`
+- `runtime/memory/test/v2-apply-op-fixtures.test.ts`
 
 Completion gate:
 
@@ -138,11 +138,11 @@ Purpose: prove deterministic integration without involving persistence or the
 wire protocol.
 
 - [x] Add the codec types, registry, size limits, and registry lookup under
-      `packages/memory/v2/op-codec.ts`.
+      `runtime/memory/v2/op-codec.ts`.
 - [x] Make registration reject duplicate ids and ids without an explicit
       version suffix.
 - [x] Implement the CodeMirror codec under
-      `packages/memory/v2/op-codecs/codemirror.ts` using
+      `runtime/memory/v2/op-codecs/codemirror.ts` using
       `@codemirror/state` and `@codemirror/collab`.
 - [x] Decode all JSON into fresh trusted values; do not retain mutable request
       objects inside a codec result.
@@ -167,15 +167,15 @@ Required tests:
 
 Likely files:
 
-- `packages/memory/v2/op-codec.ts`
-- `packages/memory/v2/op-codecs/codemirror.ts`
-- `packages/memory/test/v2-op-codec.test.ts`
-- `packages/memory/deno.jsonc`
+- `runtime/memory/v2/op-codec.ts`
+- `runtime/memory/v2/op-codecs/codemirror.ts`
+- `runtime/memory/test/v2-op-codec.test.ts`
+- `runtime/memory/deno.jsonc`
 - `deno.lock`
 
 Completion gate:
 
-- [x] `packages/memory` codec tests pass without opening an Engine or Runtime.
+- [x] `runtime/memory` codec tests pass without opening an Engine or Runtime.
 
 ## WP2 — Wire types, negotiation, and strict validation
 
@@ -184,7 +184,7 @@ accepts it.
 
 - [x] Add `OpCodecId`, `OpCursor`, `ApplyOpOperation`,
       `ReleaseOpFieldOperation`, integrated operation records, and
-      `ApplyOpResolution` to `packages/memory/v2.ts`.
+      `ApplyOpResolution` to `runtime/memory/v2.ts`.
 - [x] Extend `Operation`, `AppliedCommit`, and stored commit-resolution types
       without changing `PatchOp`.
 - [x] Add optional `applyOp` handshake support and an advertised codec-id list.
@@ -200,12 +200,12 @@ accepts it.
 
 Likely files:
 
-- `packages/memory/v2.ts`
-- `packages/memory/v2/handshake.ts`
-- `packages/memory/v2/server.ts`
-- `packages/memory/v2/client.ts`
-- `packages/memory/test/v2-handshake.test.ts`
-- `packages/memory/test/v2-server.test.ts`
+- `runtime/memory/v2.ts`
+- `runtime/memory/v2/handshake.ts`
+- `runtime/memory/v2/server.ts`
+- `runtime/memory/v2/client.ts`
+- `runtime/memory/test/v2-handshake.test.ts`
+- `runtime/memory/test/v2-server.test.ts`
 
 Completion gate:
 
@@ -218,7 +218,7 @@ Completion gate:
 Purpose: land storage shapes and read helpers before the atomic apply path.
 
 - [x] Add `op_field_epoch`, `op_submission`, `op_integrated`, and
-      `op_checkpoint` DDL plus indexes to `packages/memory/v2/engine.ts`.
+      `op_checkpoint` DDL plus indexes to `runtime/memory/v2/engine.ts`.
 - [x] Use canonical JSON Pointer encoding from the shared Memory path helpers
       for `path_key`; do not invent a second escaping implementation.
 - [x] Include `branch` and resolved `scope_key` in every primary and lookup key.
@@ -235,11 +235,11 @@ Purpose: land storage shapes and read helpers before the atomic apply path.
 
 Likely files:
 
-- `packages/memory/v2/engine.ts`
-- `packages/memory/v2/path.ts`
-- `packages/memory/v2/sqlite/guard.ts`
-- `packages/memory/test/v2-engine-apply-op-schema.test.ts`
-- `packages/state-inspector/`
+- `runtime/memory/v2/engine.ts`
+- `runtime/memory/v2/path.ts`
+- `runtime/memory/v2/sqlite/guard.ts`
+- `runtime/memory/test/v2-engine-apply-op-schema.test.ts`
+- `runtime/state-inspector/`
 
 Completion gate:
 
@@ -294,12 +294,12 @@ Required tests:
 
 Likely files:
 
-- `packages/memory/v2/engine.ts`
-- `packages/memory/v2/server.ts`
-- `packages/memory/v2/patch.ts`
-- `packages/memory/test/v2-apply-op.test.ts`
-- `packages/memory/test/v2-apply-op-concurrency.test.ts`
-- `packages/memory/test/v2-apply-op-replay.test.ts`
+- `runtime/memory/v2/engine.ts`
+- `runtime/memory/v2/server.ts`
+- `runtime/memory/v2/patch.ts`
+- `runtime/memory/test/v2-apply-op.test.ts`
+- `runtime/memory/test/v2-apply-op-concurrency.test.ts`
+- `runtime/memory/test/v2-apply-op-replay.test.ts`
 
 Completion gate:
 
@@ -348,14 +348,14 @@ Required tests:
 
 Likely files:
 
-- `packages/memory/v2.ts`
-- `packages/memory/v2/engine.ts`
-- `packages/memory/v2/server.ts`
-- `packages/memory/v2/server-sync.ts`
-- `packages/memory/v2/client.ts`
-- `packages/memory/test/v2-op-query.test.ts`
-- `packages/memory/test/v2-op-watch.test.ts`
-- `packages/memory/test/v2-op-resume.test.ts`
+- `runtime/memory/v2.ts`
+- `runtime/memory/v2/engine.ts`
+- `runtime/memory/v2/server.ts`
+- `runtime/memory/v2/server-sync.ts`
+- `runtime/memory/v2/client.ts`
+- `runtime/memory/test/v2-op-query.test.ts`
+- `runtime/memory/test/v2-op-watch.test.ts`
+- `runtime/memory/test/v2-op-resume.test.ts`
 
 Completion gate:
 
@@ -370,11 +370,11 @@ connection and commit sequence without teaching ordinary Cell transactions
 editor semantics.
 
 - [x] Add a separate optional `IOperationStorageCapability` beside
-      `IStorageManager` in `packages/runner/src/storage/interface.ts`. Do not add
+      `IStorageManager` in `runtime/runner/src/storage/interface.ts`. Do not add
       CodeMirror types to runner interfaces.
 - [x] Define codec-neutral `openOpField`, `applyOp`, `releaseOpField`, and
       subscription/result types using Memory wire values.
-- [x] Implement the capability in `packages/runner/src/storage/v2.ts` using the
+- [x] Implement the capability in `runtime/runner/src/storage/v2.ts` using the
       same per-space `SpaceSession`, local-sequence allocator, reconnect state,
       and pending-commit durability barrier as ordinary writes.
 - [x] Do not place `apply-op` in `PendingVersion`: the editor owns its immediate
@@ -400,10 +400,10 @@ Required tests:
 
 Likely files:
 
-- `packages/runner/src/storage/interface.ts`
-- `packages/runner/src/storage/v2.ts`
-- `packages/runner/src/storage/v2-emulate.ts`
-- `packages/runner/test/storage-v2-apply-op.test.ts`
+- `runtime/runner/src/storage/interface.ts`
+- `runtime/runner/src/storage/v2.ts`
+- `runtime/runner/src/storage/v2-emulate.ts`
+- `runtime/runner/test/storage-v2-apply-op.test.ts`
 
 Completion gate:
 
@@ -416,7 +416,7 @@ Purpose: expose collaborative fields to main-thread consumers without moving
 integration authority out of Memory.
 
 - [x] Add generic operation-session request, response, notification, receipt,
-      and close messages to `packages/runtime-client/src/protocol/`.
+      and close messages to `runtime/runtime-client/src/protocol/`.
 - [x] Resolve a `CellHandle` to its canonical `(space, id, scope, path)` once in
       the worker and open the runner operation-storage capability.
 - [x] Add codec-neutral runtime-client methods for capability discovery,
@@ -442,9 +442,9 @@ Required tests:
 
 Files:
 
-- `packages/runtime-client/src/protocol/types.ts`
-- `packages/runtime-client/src/backends/runtime-processor.ts`
-- `packages/runtime-client/src/runtime-client.ts`
+- `runtime/runtime-client/src/protocol/types.ts`
+- `runtime/runtime-client/src/backends/runtime-processor.ts`
+- `runtime/runtime-client/src/runtime-client.ts`
 
 Completion gate:
 
@@ -487,11 +487,11 @@ Required tests:
 
 Likely files:
 
-- `packages/ui/src/v2/components/cf-code-editor/cf-code-editor.ts`
-- `packages/ui/src/v2/components/cf-code-editor/codemirror-collaboration.ts`
-- `packages/ui/src/v2/components/cf-code-editor/*.test.ts`
-- `packages/ui/src/v2/components/cf-code-editor/docs/collaboration.md`
-- `packages/patterns/integration/`
+- `runtime/ui/src/v2/components/cf-code-editor/cf-code-editor.ts`
+- `runtime/ui/src/v2/components/cf-code-editor/codemirror-collaboration.ts`
+- `runtime/ui/src/v2/components/cf-code-editor/*.test.ts`
+- `runtime/ui/src/v2/components/cf-code-editor/docs/collaboration.md`
+- `patterns/integration/`
 
 Completion gate:
 
@@ -583,7 +583,7 @@ other.
       field with the changed text, which is the store's result whenever the
       commit is accepted.
 - [x] Encode the changes as a `codemirror-changeset@1` payload in
-      `packages/memory/v2/text-changes.ts`, which imports no CodeMirror, so the
+      `runtime/memory/v2/text-changes.ts`, which imports no CodeMirror, so the
       runner names the codec without loading it.
 
 Required tests:
@@ -604,12 +604,12 @@ Required tests:
 
 Files:
 
-- `packages/memory/v2/engine.ts`
-- `packages/memory/v2/text-changes.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/storage/v2-transaction.ts`
-- `packages/runner/src/storage/v2.ts`
-- `packages/patterns/shared-note/main.tsx`
+- `runtime/memory/v2/engine.ts`
+- `runtime/memory/v2/text-changes.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/storage/v2-transaction.ts`
+- `runtime/runner/src/storage/v2.ts`
+- `patterns/apps/shared-note/main.tsx`
 
 ---
 
@@ -618,12 +618,12 @@ Files:
 | Work packages | Required validation |
 | --- | --- |
 | WP0–WP2 | Focused Memory fixture/protocol tests, `deno task check-docs` |
-| WP3–WP5 | Complete `packages/memory` test task, migration tests, protocol tests |
-| WP6 | Complete `packages/runner` test task plus Memory tests |
-| WP7 | Complete `packages/runtime-client` and runner tests |
+| WP3–WP5 | Complete `runtime/memory` test task, migration tests, protocol tests |
+| WP6 | Complete `runtime/runner` test task plus Memory tests |
+| WP7 | Complete `runtime/runtime-client` and runner tests |
 | WP8 | Complete UI Deno and browser tests plus focused integration test |
 | WP9–WP10 | All touched package tests, benchmarks recorded without pass/fail timing thresholds, repository-wide gates |
-| WP11 | Complete `packages/memory` and `packages/runner` test tasks, the `shared-note` pattern test, `deno task cfcheck` |
+| WP11 | Complete `runtime/memory` and `runtime/runner` test tasks, the `shared-note` pattern test, `deno task cfcheck` |
 
 Every review-ready PR must also run `deno fmt --check`, `deno lint`, relevant
 type checks, `deno task check-docs`, `deno task check-conflict-markers`,

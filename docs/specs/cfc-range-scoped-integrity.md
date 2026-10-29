@@ -65,34 +65,34 @@ Runner side:
 
 - **The persisted entry already has two orthogonal axes.** `LabelMapEntry`
   (`path`, `label`, `origin?`, `observes?` —
-  [types.ts](../../packages/runner/src/cfc/types.ts)) carries update
+  [types.ts](../../runtime/runner/src/cfc/types.ts)) carries update
   discipline (S16) and consumption class (Epic C). `CfcMetadata` rides the
   entity doc at path `["cfc"]`
-  ([metadata.ts](../../packages/runner/src/cfc/metadata.ts)). F adds a third
+  ([metadata.ts](../../runtime/runner/src/cfc/metadata.ts)). F adds a third
   *refinement* to one entry, not a new model.
 - **Observation classes are landed (C1–C5)**: per-class consumption in
   `prepare.ts` and per-class label views
-  ([label-view-core.ts](../../packages/runner/src/cfc/label-view-core.ts),
+  ([label-view-core.ts](../../runtime/runner/src/cfc/label-view-core.ts),
   C4). Partial reads (§7) ride this frame; they need no new class.
 - **Propagation classes with a fail-safe default.** `atomPropagationClass`
-  ([atom-classes.ts](../../packages/runner/src/cfc/atom-classes.ts)) defaults
+  ([atom-classes.ts](../../runtime/runner/src/cfc/atom-classes.ts)) defaults
   unknown types to value-bound (SC-10), so new atom families are safe before
   their class entry ships. `TransformedBy` exists in code (classed
   `provenance`; the spec registry says value-bound — both drop in the §8.9.3
   meet, and the difference matters only for endorsed-preservation
   eligibility, which F does not use).
 - **The authorship family exists as an authoring alias.**
-  `AuthoredByCurrentUser` ([api/cfc.ts](../../packages/api/cfc.ts)) mints
+  `AuthoredByCurrentUser` ([api/cfc.ts](../../base/api/cfc.ts)) mints
   kind-shaped `{ kind: "authored-by", subject }` atoms with acting-user
   substitution — the per-range claim family.
 - **A mint-authority chokepoint exists.** The runtime-minted evidence gate
-  ([prepare.ts](../../packages/runner/src/cfc/prepare.ts)) strips
+  ([prepare.ts](../../runtime/runner/src/cfc/prepare.ts)) strips
   runtime-minted atom families from author-influenceable labels (the
   discipline `LlmDerived`/`ExternalIngest` already follow).
 - **Verified implementation identity** for trusted computations:
-  [implementation-identity.ts](../../packages/runner/src/cfc/implementation-identity.ts)
+  [implementation-identity.ts](../../runtime/runner/src/cfc/implementation-identity.ts)
   over
-  [verified-provenance.ts](../../packages/runner/src/harness/verified-provenance.ts).
+  [verified-provenance.ts](../../runtime/runner/src/harness/verified-provenance.ts).
 
 Memory side — the sqlite per-row work is the nearest shipped analog:
 
@@ -100,17 +100,17 @@ Memory side — the sqlite per-row work is the nearest shipped analog:
   either side identically
   ([`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md)); a shared
   declarative evaluator
-  ([memory/v2/sqlite/row-label.ts](../../packages/memory/v2/sqlite/row-label.ts),
-  [builtins/sqlite/row-label-read.ts](../../packages/runner/src/builtins/sqlite/row-label-read.ts)).
+  ([memory/v2/sqlite/row-label.ts](../../runtime/memory/v2/sqlite/row-label.ts),
+  [builtins/sqlite/row-label-read.ts](../../runtime/runner/src/builtins/sqlite/row-label-read.ts)).
 - **Server-applied operations inside the commit apply loop**
   (`applySqliteOperation`,
-  [memory/v2/engine.ts](../../packages/memory/v2/engine.ts);
+  [memory/v2/engine.ts](../../runtime/memory/v2/engine.ts);
   [`sqlite-builtin/04`](./sqlite-builtin/04-server-execution-and-transactions.md)),
   gated by a **capability handshake**
-  ([memory/v2/handshake.ts](../../packages/memory/v2/handshake.ts), the E4
+  ([memory/v2/handshake.ts](../../runtime/memory/v2/handshake.ts), the E4
   shape).
 - **Verified commit signers** (Epic E;
-  [memory/v2/session-open-auth.ts](../../packages/memory/v2/session-open-auth.ts))
+  [memory/v2/session-open-auth.ts](../../runtime/memory/v2/session-open-auth.ts))
   — the evidence source for op authorship.
 - And the named hole to avoid: sqlite's `authoredBy(sender)` rule mints
   provenance from a **stored column any writer controls** (audit; ties to
@@ -168,7 +168,7 @@ type LabelMapEntry = {
 - **inv-F3 — mint authority: runtime-authored, verified-evidence-only.**
   Range side-data and every §5/§6 atom are minted exclusively by the trusted
   integrator through the runtime-minted path. The existing runtime-minted
-  evidence gate ([prepare.ts](../../packages/runner/src/cfc/prepare.ts))
+  evidence gate ([prepare.ts](../../runtime/runner/src/cfc/prepare.ts))
   filters flat `IFCLabel.integrity` arrays only — it cannot see nested range
   side-data — so F3 MUST extend it to the `view` refinement, and the sound
   extension is wholesale: an author-influenceable channel (a carried label
@@ -199,7 +199,7 @@ from the runtime.
 
 A **declared collaborative field** is an authoring-surface marker (a
 `Cfc<>`-family alias alongside the existing canonical aliases in
-[api/cfc.ts](../../packages/api/cfc.ts)). The declaration is what turns on
+[api/cfc.ts](../../base/api/cfc.ts)). The declaration is what turns on
 memory-side op storage and the opt-in projections; undeclared fields are
 untouched.
 
@@ -251,7 +251,7 @@ Design points, each normative for F:
   and red-tested so the planned matcher upgrade (Epic B's §8.10.3 work) never
   helpfully bridges it.
 - **First parameter-sensitive propagation class.** `CLASS_BY_TYPE`
-  ([atom-classes.ts](../../packages/runner/src/cfc/atom-classes.ts)) keys on
+  ([atom-classes.ts](../../runtime/runner/src/cfc/atom-classes.ts)) keys on
   `type` alone; `IntegritySummary` needs a predicate on `basis`. SC-10's
   unknown→value-bound default means summaries persisted before that entry
   ships behave fail-safe (a hereditary-basis summary temporarily drops — an
@@ -282,7 +282,7 @@ Design points, each normative for F:
 
 The integrator/materializer is one trusted implementation with verified
 identity
-([implementation-identity.ts](../../packages/runner/src/cfc/implementation-identity.ts);
+([implementation-identity.ts](../../runtime/runner/src/cfc/implementation-identity.ts);
 builtins resolve `kind: "builtin"` like the sqlite builtins). Its authority is
 a reviewable registry surface — a trust-concept entry in the
 §8.7.2/§8.9.1 style (`collaborative-integration`), not ambient runner code.
@@ -358,18 +358,18 @@ Per materialization it mints, whole-field:
   integrity, scoped as a projection of the field (§4.5.3) — valid as a
   component of the field, not as a standalone value.
 - **Label views carry the same refinement.** `CfcLabelViewEntry`
-  ([label-view-core.ts](../../packages/runner/src/cfc/label-view-core.ts))
+  ([label-view-core.ts](../../runtime/runner/src/cfc/label-view-core.ts))
   gains the `view` field so the UI renders per-span authorship through the
   existing per-class view protocol (C4 lineage) — no new render machinery.
 
 ## 8. What lands memory-side vs runner-side
 
-Memory-side (`packages/memory/v2`) — canonical history and storage; no label
+Memory-side (`runtime/memory/v2`) — canonical history and storage; no label
 semantics beyond persisting side-data:
 
 1. **The integrated op log per declared field**: append + transform inside
    the commit apply loop — the `applySqliteOperation` precedent
-   ([engine.ts](../../packages/memory/v2/engine.ts)). Server-authoritative
+   ([engine.ts](../../runtime/memory/v2/engine.ts)). Server-authoritative
    ordering is what makes the history *canonical*; this is
    [`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md)'s "why this stays
    declarative" argument transplanted: the transform runs where no sandbox
@@ -380,25 +380,25 @@ semantics beyond persisting side-data:
    memory-side computation — deterministic and label-blind); it never joins
    labels or evaluates policy.
 4. **Verified op authorship** recorded per op from the commit signer
-   ([session-open-auth.ts](../../packages/memory/v2/session-open-auth.ts)).
+   ([session-open-auth.ts](../../runtime/memory/v2/session-open-auth.ts)).
 5. **Capability handshake**
-   ([handshake.ts](../../packages/memory/v2/handshake.ts), the E4 shape): a
+   ([handshake.ts](../../runtime/memory/v2/handshake.ts), the E4 shape): a
    server without the codec refuses declared-field ops rather than corrupt
    the canonical stream — fail-closed, like sqlite 3.c's absent capability.
 
-Runner-side (`packages/runner`) — declaration, minting, consumption:
+Runner-side (`runtime/runner`) — declaration, minting, consumption:
 
 1. **The authoring surface** (declared-field alias) and the submit path, with
    speculative local apply (the client materializes optimistically; server
    order is canonical).
 2. **The integrator/materializer builtin** and every mint (`TransformedBy`,
    summaries, the lift) through the runtime-minted path, identity via
-   [implementation-identity.ts](../../packages/runner/src/cfc/implementation-identity.ts).
+   [implementation-identity.ts](../../runtime/runner/src/cfc/implementation-identity.ts).
 3. **Consumption**: the `prepare.ts` flow join and `effectiveReadLabel` are
    unchanged for whole-field reads; F5 adds the partial-read refinement;
    label views expose ranges (§7).
 4. **Atom registry + classes**: `CFC_ATOM_TYPE.IntegritySummary`
-   ([api/cfc.ts](../../packages/api/cfc.ts)), the parameter-sensitive class
+   ([api/cfc.ts](../../base/api/cfc.ts)), the parameter-sensitive class
    entry, and the inv-F2 floor non-satisfaction test at the floor matcher.
 5. **The anchors API** (map-anchor read surface over the integrator).
 
@@ -483,25 +483,25 @@ summary), §4.5.3 (scoped projection), §4.5.5 (the three survival paths);
 `15-atom-registry.md` §15.1.1 (propagation classes; the `IntegritySummary`
 basis rule; `AuthoredBy` non-hereditary; the `TransformedBy` entry);
 `08-09-runtime-label-propagation.md` §8.9.3 (the class-aware meet). Runner
-seams: [types.ts](../../packages/runner/src/cfc/types.ts)
+seams: [types.ts](../../runtime/runner/src/cfc/types.ts)
 (`LabelMapEntry`/`CfcMetadata`),
-[metadata.ts](../../packages/runner/src/cfc/metadata.ts) (`readStoredCfcMetadata`
+[metadata.ts](../../runtime/runner/src/cfc/metadata.ts) (`readStoredCfcMetadata`
 at `["cfc"]`),
-[label-view-core.ts](../../packages/runner/src/cfc/label-view-core.ts)
+[label-view-core.ts](../../runtime/runner/src/cfc/label-view-core.ts)
 (`IFCLabel`, `CfcLabelView`),
-[atom-classes.ts](../../packages/runner/src/cfc/atom-classes.ts)
+[atom-classes.ts](../../runtime/runner/src/cfc/atom-classes.ts)
 (`atomPropagationClass`, the SC-10 default),
-[prepare.ts](../../packages/runner/src/cfc/prepare.ts) (the runtime-minted
-evidence gate and floor matcher), [api/cfc.ts](../../packages/api/cfc.ts)
+[prepare.ts](../../runtime/runner/src/cfc/prepare.ts) (the runtime-minted
+evidence gate and floor matcher), [api/cfc.ts](../../base/api/cfc.ts)
 (`CFC_ATOM_TYPE`, `AuthoredByCurrentUser`),
-[implementation-identity.ts](../../packages/runner/src/cfc/implementation-identity.ts)
-+ [verified-provenance.ts](../../packages/runner/src/harness/verified-provenance.ts).
-Memory seams: [engine.ts](../../packages/memory/v2/engine.ts)
+[implementation-identity.ts](../../runtime/runner/src/cfc/implementation-identity.ts)
++ [verified-provenance.ts](../../runtime/runner/src/harness/verified-provenance.ts).
+Memory seams: [engine.ts](../../runtime/memory/v2/engine.ts)
 (`applySqliteOperation`, the server-applied-op precedent),
-[handshake.ts](../../packages/memory/v2/handshake.ts),
-[session-open-auth.ts](../../packages/memory/v2/session-open-auth.ts),
-[row-label.ts](../../packages/memory/v2/sqlite/row-label.ts) +
-[row-label-read.ts](../../packages/runner/src/builtins/sqlite/row-label-read.ts)
+[handshake.ts](../../runtime/memory/v2/handshake.ts),
+[session-open-auth.ts](../../runtime/memory/v2/session-open-auth.ts),
+[row-label.ts](../../runtime/memory/v2/sqlite/row-label.ts) +
+[row-label-read.ts](../../runtime/runner/src/builtins/sqlite/row-label-read.ts)
 with [`sqlite-builtin/06-cfc.md`](./sqlite-builtin/06-cfc.md) (the per-row
 precedent and its `authoredBy(sender)` hole) and
 [`04-server-execution-and-transactions.md`](./sqlite-builtin/04-server-execution-and-transactions.md);

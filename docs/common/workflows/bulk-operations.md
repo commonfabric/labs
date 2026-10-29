@@ -72,7 +72,7 @@ where the plan wanted it, though `landed` says only that it is there, never
 that this run put it there.
 
 Each of those outcomes is pinned in
-`packages/piece/test/ops/bulk-retarget.test.ts`, which races a writer into the
+`runtime/piece/test/ops/bulk-retarget.test.ts`, which races a writer into the
 classification read in one test and into the gap before the write in another.
 The [bulk operations contract](../../features/piece-bulk-operations.md) is where
 every refusal and the moment it fires are written down.
@@ -283,7 +283,7 @@ narrated here.
 
 ## How the story is kept honest
 
-Every command above is one `packages/cli/integration/bulk-ops-demo.sh` runs.
+Every command above is one `runtime/cli/integration/bulk-ops-demo.sh` runs.
 The demo narrates each act and then executes it, and each act re-parses its own
 displayed line and compares the words against the argv that ran — so a line a
 reader retypes is the line that executed, checked rather than asserted.
@@ -291,14 +291,14 @@ reader retypes is the line that executed, checked rather than asserted.
 line here either quotes a command the demo runs or carries a `# not in the demo`
 comment saying why it cannot.
 
-`packages/cli/integration/bulk-survey-drill.sh` asserts the same surface as
+`runtime/cli/integration/bulk-survey-drill.sh` asserts the same surface as
 pass/fail in CI, which is what keeps the demo from drifting into a transcript
 nobody runs.
 
 ## Running it yourself
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/bulk-ops-demo.sh
+API_URL=http://localhost:8000 runtime/cli/integration/bulk-ops-demo.sh
 ```
 
 The transcript is the artifact, and every act in it runs. Each one makes a
@@ -315,7 +315,7 @@ exit zero.
   operations refuses
 - [`docs/plans/piece-bulk-operations.md`](../../plans/piece-bulk-operations.md)
   — the design: what each stage owes, and what the later ones wait on
-- [`packages/cli/README.md`](../../../packages/cli/README.md) — the reference
+- [`runtime/cli/README.md`](../../../runtime/cli/README.md) — the reference
   for `survey`, `repair` and `retarget`, and the reference forms their
   selections take
 - [The Verb Session](../verbs/the-verb-session.md) — the tour of the surface a

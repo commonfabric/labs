@@ -18,7 +18,7 @@ mean four cold compilations.
 
 The source snapshot is the recorded base plus `candidate.patch` with SHA-256
 `248edfc03f42ecef4a83208b7d37231e0fc1ea7795757419f9d0dc9913a4ac36`. The compact
-[evidence archive](../../../../tools/server-execution-topics/evidence/2026-09-10-sidecar-source/README.md)
+[evidence archive](../../../../scripts/server-execution-topics/evidence/2026-09-10-sidecar-source/README.md)
 contains exact patches, manifests, per-slot results, hashes, and reproduction
 instructions. Its external artifact index identifies the durable full logs and
 original orchestration scripts. Nothing relies on session scratch.

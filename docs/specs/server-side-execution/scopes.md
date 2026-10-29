@@ -12,7 +12,7 @@ MUST/NEVER language is binding on implementers.
 
 ## Anchors
 
-Today's scope machinery. Paths are relative to `packages/runner/src/`
+Today's scope machinery. Paths are relative to `runtime/runner/src/`
 unless another package is named; runtime-mapping.md rows 49/56/57/60
 remain the mapping rows.
 
@@ -35,7 +35,7 @@ remain the mapping rows.
   broader slot. On-disk shape: a sigil link at the broader address
   resolving to `{scope: "user"|"session", id: <same doc id>}`
   (asserted by the eager base-scope redirect case in
-  `packages/runner/test/pattern-scope.test.ts`).
+  `runtime/runner/test/pattern-scope.test.ts`).
 - **Declared-scope redirects** (schema `asCell: [{kind, scope}]`): the
   scope-narrowing branch at the top of `normalizeAndDiff` in
   `data-updating.ts`, over `declaredCellScope`; eager redirects for
@@ -52,16 +52,16 @@ remain the mapping rows.
   `navigateTo`, `builtins/navigate-to.ts`).
 - **Instance addressing**: scope never changes the doc id. Storage
   rows are keyed `(branch, id, scope_key)` (the `head` primary key in
-  `packages/memory/v2/engine.ts`; `revision` extends it with `seq`
+  `runtime/memory/v2/engine.ts`; `revision` extends it with `seq`
   and `op_index`), with scope keys `'space'`, `'user:<principal>'`,
   `'session:<principal>:<sessionId>'` — the shared vocabulary
-  `resolveScopeKey` in the wire-shape module (`packages/memory/v2.ts`;
+  `resolveScopeKey` in the wire-shape module (`runtime/memory/v2.ts`;
   LD3, key-vocabulary.md §3) — resolved from the authenticated session
   at admission for `authored` traffic.
 - **Dirtiness**: the server's query/watch tracking and the client
   dependency graph are keyed per scope INSTANCE via the shared
   vocabulary (`entityKey` in `scheduler/keys.ts`;
-  `packages/memory/v2/query.ts`'s `toDocKey` — stage E, §7 M2), and
+  `runtime/memory/v2/query.ts`'s `toDocKey` — stage E, §7 M2), and
   since stage F the wake/sync path keys dirtiness AND delivery per
   instance too (`toDirtyKey` = `${scope_key}\0${id}` — §7 M4,
   landed). The full inventory of instance-keyed construction sites
@@ -376,7 +376,7 @@ Corpus reachability is nil (all 165 declarations put the union inside
 the wrapper), so it is a latent trap; the enforcement is a
 SCHEMA-GENERATOR guard that throws when a scope wrapper ends up a union
 member (`scopeInsideUnionError` in
-`packages/schema-generator/src/scope-placement.ts`; owned by the
+`base/schema-generator/src/scope-placement.ts`; owned by the
 main-side scope-handler-write thread, 2026-08-17 —
 verification-coverage.md's flag row), not a v2 write-path change.
 
@@ -409,7 +409,7 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   learned by BEING the principal+session whose reads ratchet it; no
   server-side floor stands beside it
   (`migrateSchedulerObservationTablesToBasis` in
-  `packages/memory/v2/engine.ts` drops `scheduler_context_floor`).
+  `runtime/memory/v2/engine.ts` drops `scheduler_context_floor`).
   → v2: the server must
   evaluate per-instance just to DISCOVER per-instance scope — N
   runs under N identities, with N time-varying (§2).
@@ -425,7 +425,7 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   the same one equality check as derived writes. Without it a
   SpaceServer read under its service envelope resolves
   `user:<serviceDID>` and returns an EMPTY instance silently:
-  `resolveScopeKey` (`packages/memory/v2.ts`) throws
+  `resolveScopeKey` (`runtime/memory/v2.ts`) throws
   on a MISSING principal, never on a wrong one. Which identity a
   run assumes is §5's run-identity rule.
 - **M2 — Every in-memory identity key used the scope NAME, never
@@ -447,7 +447,7 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   police both inventories).
 - **M3 — There is no all-principals write path.** `resolveScopeKey`
   is fed from the authenticated session at admission
-  (`#decideTransaction()` in `packages/memory/v2/server.ts` threads
+  (`#decideTransaction()` in `runtime/memory/v2/server.ts` threads
   principal + sessionId into `Engine.applyCommit`, whose
   `applyCommitTransaction` constructs the key): a scoped write
   requires that instance's principal. → v2, RESOLVED (R-Q6b,
@@ -462,7 +462,7 @@ not spec debt; Phases 1–5 meet them wherever scoped state appears.
   (the query/watch tracking is scope_key-keyed, M2), and the wake/sync
   path now keys dirtiness
   AND delivery by scope INSTANCE (`toDirtyKey` =
-  `${scope_key}\0${id}`, `packages/memory/v2/query.ts`; the session
+  `${scope_key}\0${id}`, `runtime/memory/v2/query.ts`; the session
   cache and tracked-id sets carry instance keys, and the wire frames
   are stripped back to scope names — key-vocabulary.md §5's
   re-keyed list). The name-keyed form was fine while each session

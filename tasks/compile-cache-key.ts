@@ -11,7 +11,7 @@
  */
 import { fromFileUrl } from "@std/path";
 
-import { computeCompilerFingerprint } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { computeCompilerFingerprint } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 /**
  * The compiler-input fingerprint of the repository this module sits in. The

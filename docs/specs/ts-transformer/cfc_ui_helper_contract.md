@@ -10,8 +10,8 @@ default tag; (b) the shipped `uiContract` hint carries two additional fields —
 `trustedPattern` and `requiredEventIntegrity` — fed by the
 `TrustedActionUiContract` alias (type-level, not JSX). See the behavior spec
 §6.8/§7.1.\
-**Scope:** `packages/api`, `packages/ts-transformers`,
-`packages/schema-generator`, runner UI builder/runtime integration
+**Scope:** `base/api`, `base/ts-transformers`,
+`base/schema-generator`, runner UI builder/runtime integration
 
 This document specifies the compile-time and builder-time contract for the CFC
 UI helpers. These helpers are authoring sugar for trusted
@@ -199,9 +199,9 @@ Those belong to runner/UI specs, not this authoring contract.
 The contract is not fully implemented until these tests pass or equivalent
 coverage exists:
 
-- `packages/ts-transformers/test/cfc-authoring.test.ts`
-- `packages/ts-transformers/test/cfc-ui-helper.test.ts`
-- `packages/runner/test/cfc-ui-contract.test.ts` and the `cfc-*` integration
+- `base/ts-transformers/test/cfc-authoring.test.ts`
+- `base/ts-transformers/test/cfc-ui-helper.test.ts`
+- `runtime/runner/test/cfc-ui-contract.test.ts` and the `cfc-*` integration
   suites (the originally named
-  `packages/patterns/integration/cfc-ui-direct-command.test.ts` does not
+  `patterns/integration/cfc-ui-direct-command.test.ts` does not
   exist)

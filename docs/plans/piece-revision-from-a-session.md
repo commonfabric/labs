@@ -18,23 +18,23 @@ A piece carries an append-only log of source revisions. A revision names the
 exact content-addressed pattern, the origin at that point, and one of eight
 operations — `baseline`, `create`, `edit`, `origin-update`, `detach`,
 `revert`, `follow`, `repoint`
-([`runner.ts:1190`](../../packages/runner/src/runner.ts#L1190),
-[`runner.ts:1200`](../../packages/runner/src/runner.ts#L1200)).
-[`readPieceSourceState`](../../packages/piece/src/ops/piece-origin.ts#L577)
+([`runner.ts:1190`](../../runtime/runner/src/runner.ts#L1190),
+[`runner.ts:1200`](../../runtime/runner/src/runner.ts#L1200)).
+[`readPieceSourceState`](../../runtime/piece/src/ops/piece-origin.ts#L577)
 returns every source fact one piece carries, including its authored files.
 
 Replacing a piece's source is two calls on the piece controller.
-[`checkPattern`](../../packages/piece/src/ops/piece-controller.ts#L4647)
+[`checkPattern`](../../runtime/piece/src/ops/piece-controller.ts#L4647)
 compiles a candidate without persisting it and answers every compatibility
 reason at once — pattern schema, retained argument, retained links, and the
 CFC schema envelope stored on the argument document.
-[`setPattern`](../../packages/piece/src/ops/piece-controller.ts#L4713)
+[`setPattern`](../../runtime/piece/src/ops/piece-controller.ts#L4713)
 applies one, detaching the piece from any origin it follows and returning
 the accepted setup transaction's receipt: the content-addressed pointer, the
 source revision id, and the origin it detached. The harness already holds
 the controller that makes those calls — a fabric session is a connected
 `PiecesController`
-([`fabric-session.ts:21`](../../packages/cf-harness/src/fabric-session.ts#L21)).
+([`fabric-session.ts:21`](../../runtime/cf-harness/src/fabric-session.ts#L21)).
 
 Undo already has a face, and it is not the agent's. The piece menu that
 `cf-render` gives every host, the Weaver included, lists every recorded
@@ -54,11 +54,11 @@ And the parent already cannot see what the child reads. The
 `pattern-author` profile's return contract is a discriminated union with,
 in its own words, "no field for source, in any encoding, because a parent
 has no use for source it should not be compiling"
-([`subagent.ts:251-306`](../../packages/cf-harness/src/contracts/subagent.ts#L251-L306)),
+([`subagent.ts:251-306`](../../runtime/cf-harness/src/contracts/subagent.ts#L251-L306)),
 and the profile holds authority over that contract
-([`subagent.ts:509`](../../packages/cf-harness/src/contracts/subagent.ts#L509)),
+([`subagent.ts:509`](../../runtime/cf-harness/src/contracts/subagent.ts#L509)),
 so a delegation cannot widen it with a `returnSchema` of its own
-([`subagent.ts:560-566`](../../packages/cf-harness/src/contracts/subagent.ts#L560-L566)).
+([`subagent.ts:560-566`](../../runtime/cf-harness/src/contracts/subagent.ts#L560-L566)).
 One test pins that this holds for a return carrying source.
 
 What that establishes is a property of the return contract, not of every
@@ -101,7 +101,7 @@ else the call returned. Not an atom, not a taxonomy, not a new label.
 Those three are the piece's own origin states rather than a claim about
 who typed the code, and the difference matters: **the revision log records
 no author**
-([`runner.ts:1200`](../../packages/runner/src/runner.ts#L1200) — a revision
+([`runner.ts:1200`](../../runtime/runner/src/runner.ts#L1200) — a revision
 carries an id, a timestamp, a pattern, a source link, an origin and an
 operation, and nothing about a principal). So "this principal wrote it"
 versus "another principal did" is not a fact this can report today. What
@@ -183,7 +183,7 @@ candidate. The revised program's derived values go through the runner's
 commit boundary like any write. A revision that widens what a cell reads is
 caught by writer-fit, a named per-transaction refusal gate measured at
 commit
-([`refusal-detail.ts:68`](../../packages/runner/src/cfc/refusal-detail.ts#L68)) —
+([`refusal-detail.ts:68`](../../runtime/runner/src/cfc/refusal-detail.ts#L68)) —
 the same rule that catches a first-authored program doing the same thing.
 The setup transaction carries the requesting principal's CFC trust snapshot
 rather than the serving identity's
@@ -233,7 +233,7 @@ workspace-file source is a trusted-host read channel whose compile
 diagnostics can exfiltrate file content, so it comes back only as a
 mediated capability, with reads routed through the same policy surface as
 `read_file` and CFC observation metadata on the source bytes
-([`ROADMAP.md` §5](../../packages/cf-harness/docs/ROADMAP.md)). The other
+([`ROADMAP.md` §5](../../runtime/cf-harness/docs/ROADMAP.md)). The other
 shape is edits against a source the harness already holds host-side, which
 needs no new read channel at all. Both are CT-2299's to choose between.
 

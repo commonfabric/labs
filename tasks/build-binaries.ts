@@ -7,11 +7,12 @@ import {
   compileCacheVersionSourceOf,
   computeCompilerVersion,
   renderVersionModule,
-} from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
-import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
-import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
-import { treeSitterGrammars } from "../packages/cli/lib/view/languages/treesitter/grammars.ts";
+} from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
+import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
+import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
+import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
+import { PACKAGE_ROOTS } from "./package-layout.ts";
 
 export interface BuildConfigInitializer {
   root: string;
@@ -38,8 +39,8 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 /**
  * Everything a built binary is made from, as repository-relative files and
  * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
- * which `deno compile` embeds in every binary; this script and the pattern
- * file classification it imports; the workspace
+ * which `deno compile` embeds in every binary; this script, the package
+ * layout, and the pattern file classification it imports; the workspace
  * manifest and lockfile; the port table the servers import; and the trees
  * that the entry points' module graphs and every `--include` reach. A CI lane
  * keys the binaries it caches on the tracked contents of these, so a change
@@ -49,13 +50,14 @@ export type BinaryName = (typeof BINARY_NAMES)[number];
 export const BINARY_SOURCES = [
   "mise.toml",
   "tasks/build-binaries.ts",
+  "tasks/package-layout.ts",
   "tasks/pattern-files.ts",
   "deno.jsonc",
   "deno.lock",
   "ports.json",
-  "packages/",
+  ...PACKAGE_ROOTS.map((root) => `${root}/`),
   "docs/common/",
-] as const;
+];
 
 /**
  * The environment variables a build needs from the machine it runs on: where
@@ -97,7 +99,7 @@ export async function computeShippedCompileCacheVersion(
 ): Promise<string> {
   // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which the test topology and an inputs-only build never load
   const { computeCompilerOutputVersion } = await import(
-    "../packages/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
+    "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
   );
   return await computeCompilerOutputVersion(root);
 }
@@ -186,7 +188,7 @@ export class BuildConfig {
 
   compileCacheVersionPath() {
     return this.#path(
-      "packages",
+      "runtime",
       "runner",
       "src",
       "compilation-cache",
@@ -199,44 +201,44 @@ export class BuildConfig {
   }
 
   shellProjectPath() {
-    return this.#path("packages", "shell");
+    return this.#path("runtime", "shell");
   }
 
   shellOutPath() {
-    return this.#path("packages", "shell", "dist");
+    return this.#path("runtime", "shell", "dist");
   }
 
   toolshedProjectPath() {
-    return this.#path("packages", "toolshed");
+    return this.#path("runtime", "toolshed");
   }
 
   toolshedShellFrontendPath() {
-    return this.#path("packages", "toolshed", "shell-frontend");
+    return this.#path("runtime", "toolshed", "shell-frontend");
   }
 
   toolshedShellFrontendPathDev() {
-    return this.#path("packages", "toolshed", "shell-frontend-dev");
+    return this.#path("runtime", "toolshed", "shell-frontend-dev");
   }
 
   toolshedEntryPath() {
-    return this.#path("packages", "toolshed", "index.ts");
+    return this.#path("runtime", "toolshed", "index.ts");
   }
 
   toolshedEnvPath() {
-    return this.#path("packages", "toolshed", "COMPILED");
+    return this.#path("runtime", "toolshed", "COMPILED");
   }
 
   cliEnvPath() {
-    return this.#path("packages", "cli", "COMPILED");
+    return this.#path("runtime", "cli", "COMPILED");
   }
 
   staticAssetsPath() {
-    return this.#path("packages", "static", "assets");
+    return this.#path("base", "static", "assets");
   }
 
   patternPaths() {
     return [
-      this.#path("packages", "patterns"),
+      this.#path("patterns"),
       ...CONNECTOR_PATTERN_SOURCES.map((source) =>
         this.#path(...source.directory.split("/"))
       ),
@@ -244,7 +246,7 @@ export class BuildConfig {
   }
 
   staticTypesPath() {
-    return this.#path("packages", "static", "assets", "types");
+    return this.#path("base", "static", "assets", "types");
   }
 
   docsCommonPath() {
@@ -252,15 +254,15 @@ export class BuildConfig {
   }
 
   cliEntryPath() {
-    return this.#path("packages", "cli", "mod.ts");
+    return this.#path("runtime", "cli", "mod.ts");
   }
 
   cliMultiUserTestWorkerPath() {
-    return this.#path("packages", "cli", "lib", "multi-user-test-worker.ts");
+    return this.#path("runtime", "cli", "lib", "multi-user-test-worker.ts");
   }
 
   fusePackagePath() {
-    return this.#path("packages", "fuse");
+    return this.#path("runtime", "fuse");
   }
 
   /**
@@ -316,7 +318,7 @@ export class BuildConfig {
           // The worker `cf test` spawns in multi-user mode. The compile does
           // not follow a worker's module, so it is named here.
           this.cliMultiUserTestWorkerPath(),
-          // The build metadata `packages/cli/lib/build-info.ts` reads.
+          // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];
     }
@@ -337,8 +339,8 @@ export class BuildConfig {
   excludePaths(binary: BinaryName): string[] {
     if (binary !== "toolshed") return [];
     const directories = [
-      this.#path("packages", "patterns", "integration"),
-      this.#path("packages", "patterns", "topics", "tools"),
+      this.#path("patterns", "integration"),
+      this.#path("patterns", "apps", "topics", "tools"),
       this.#path(...BASELINES_DIR.split("/")),
     ];
     const files = this.patternPaths().flatMap((tree) =>
@@ -639,12 +641,12 @@ export async function prepareWorkspace(
   // Write build metadata into the COMPILED files. Included via `--include`
   // when the toolshed and cf binaries are compiled, so the values travel with
   // each artifact and can be read at runtime (see
-  // packages/toolshed/lib/build-info.ts and packages/cli/lib/build-info.ts).
+  // runtime/toolshed/lib/build-info.ts and runtime/cli/lib/build-info.ts).
   const buildInfo = {
     commitSha: Deno.env.get("COMMIT_SHA") ?? "",
     builtAt: new Date().toISOString(),
     // The server-execution v2 posture the browser shell BAKES (an esbuild
-    // define read from this same environment in packages/shell/felt.config.ts
+    // define read from this same environment in runtime/shell/felt.config.ts
     // when buildShell runs below): the raw `EXPERIMENTAL_SERVER_EXECUTION`
     // value, or null when unset — the shell then follows the first-party
     // default. Surfaced on toolshed's /api/meta as

@@ -45,10 +45,10 @@ stage lands, archive it under `docs/history/plans/` following
 Four mechanisms carry the current behavior. The design below reuses all four.
 
 **Eager, schema-driven materialization.** `Cell.get()`
-([`cell.ts`](../../../packages/runner/src/cell.ts)) calls `validateAndTransform`
-([`schema.ts`](../../../packages/runner/src/schema.ts)), which reads the whole
+([`cell.ts`](../../../runtime/runner/src/cell.ts)) calls `validateAndTransform`
+([`schema.ts`](../../../runtime/runner/src/schema.ts)), which reads the whole
 document value in one shot and hands it to `SchemaObjectTraverser`
-([`traverse.ts`](../../../packages/runner/src/traverse.ts)). The traverser walks
+([`traverse.ts`](../../../runtime/runner/src/traverse.ts)). The traverser walks
 the _data's_ own properties and, for each one, narrows the schema by that key.
 Properties the schema does not select are skipped without descent, via the
 `emptyProperties` / `missingProperty` marker schemas that make
@@ -57,7 +57,7 @@ prunes. What it does not do is defer: everything the schema _does_ select is
 built.
 
 **A schema-less lazy proxy.** `createQueryResultProxy`
-([`query-result-proxy.ts`](../../../packages/runner/src/query-result-proxy.ts)) is
+([`query-result-proxy.ts`](../../../runtime/runner/src/query-result-proxy.ts)) is
 the existing lazy view. It resolves links per access, records container reads as
 non-recursive shape reads (`SHAPE_READ`) and value reads as recursive, wraps
 array methods, and exposes `toCell`. It is reached from two places:
@@ -68,7 +68,7 @@ defaults, cannot mint `Cell`s for `asCell` fields, and cannot tell a reader that
 the data has stopped matching.
 
 **Schema narrowing already exists.** `ContextualFlowControl.schemaAtPath`
-([`cfc.ts`](../../../packages/runner/src/cfc.ts)) narrows a schema by a path,
+([`cfc.ts`](../../../runtime/runner/src/cfc.ts)) narrows a schema by a path,
 resolves `$ref`, and caches per interned schema. That is the narrowing a view
 applies to an ordinary container child. It does not decide a combinator: the
 view defers `anyOf`, `oneOf` and `allOf` to the eager traverser at the position
@@ -78,7 +78,7 @@ on the eager path — type check plus required-key presence, no descent — and
 nothing in the view is decided by it.
 
 **The "argument did not resolve" path.** `readJavaScriptArgument`
-([`runner.ts`](../../../packages/runner/src/runner.ts)) computes `isValidArgument`
+([`runner.ts`](../../../runtime/runner/src/runner.ts)) computes `isValidArgument`
 as `argument !== undefined`. When it is false the action skips the body, writes
 an undefined result through the ordinary result path, and logs at info level —
 the run is a non-event, not a failure. This is the disposition a schema refusal
@@ -88,7 +88,7 @@ Two boundaries worth naming because they bound the win:
 
 - **Loading is unaffected.** The query selector that decides which documents the
   server ships is the cell's own schema, taken in `syncCell`
-  ([`v2.ts`](../../../packages/runner/src/storage/v2.ts)), independent of `.get()`.
+  ([`v2.ts`](../../../runtime/runner/src/storage/v2.ts)), independent of `.get()`.
   Laziness saves local traversal, allocation, freezing, and reactive read
   registration. It does not, by itself, save network. Narrowing the sync
   selector to what a reader touches is a separate, later piece of work.
@@ -117,7 +117,7 @@ single non-recursive read of the container at `link`. Reading a property `p`:
 Point 5 is load-bearing and not incidental. A refusal must leave behind the
 dependency that will re-trigger the reader when the missing data arrives. The
 existing read path already records the activity before it inspects the value
-([`v2-transaction.ts`](../../../packages/runner/src/storage/v2-transaction.ts)), so
+([`v2-transaction.ts`](../../../runtime/runner/src/storage/v2-transaction.ts)), so
 a read of an absent path registers; the lazy view must make sure it issues that
 read rather than short-circuiting on the container's key set.
 
@@ -259,7 +259,7 @@ Disposition of a refusal:
 
 Lazy materialization is a mode on the transaction, not an argument threaded
 through every call. `TransactionWrapper`
-([`extended-storage-transaction.ts`](../../../packages/runner/src/storage/extended-storage-transaction.ts))
+([`extended-storage-transaction.ts`](../../../runtime/runner/src/storage/extended-storage-transaction.ts))
 is the existing shape for a transaction that changes read behavior —
 `createNonReactiveTransaction` is the precedent — and the mode belongs alongside
 it, with a scoped `runWithLazyMaterialization(fn)` helper mirroring
@@ -276,7 +276,7 @@ off before `writeJavaScriptActionResult`. Result writing, diffing, and the
 scheduler's own reads keep eager semantics.
 
 The per-transaction read cache on `Cell.get()`
-([`cell.ts`](../../../packages/runner/src/cell.ts)) keys on a `variant` string; the
+([`cell.ts`](../../../runtime/runner/src/cell.ts)) keys on a `variant` string; the
 mode joins it, so an eager and a lazy read of the same view do not share an
 entry.
 
@@ -548,7 +548,7 @@ the Stage 5 gate asserts the change deliberately rather than discovering it.
 **Proxy-hostile consumers.** Code that freezes, structurally clones, or
 `preventExtensions` a materialized value will now hit a proxy that refuses those
 operations. `snapshotQueryResult`
-([`query-result-proxy.ts`](../../../packages/runner/src/query-result-proxy.ts)) is
+([`query-result-proxy.ts`](../../../runtime/runner/src/query-result-proxy.ts)) is
 the existing escape and should be the documented answer. Auditing the consumers
 that survive to the result-writing boundary is part of Stage 5.
 

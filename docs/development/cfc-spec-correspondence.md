@@ -59,13 +59,13 @@ The vocabulary:
   function takes no transaction, reads no dial, calls no hook, and records no
   diagnostic. The kernel is being carved out of the boundary adapter one
   function at a time; the plan names the order.
-- **Adapter.** Everything else under `packages/runner/src/cfc/`. An adapter
+- **Adapter.** Everything else under `runtime/runner/src/cfc/`. An adapter
   gathers a kernel function's inputs from the transaction, calls it, and
   interprets the result for this runtime: retry against terminal verdict,
   diagnostics, dial posture, persistence. `prepare.ts` is the boundary
   adapter.
 - **Pin.** The specs commit the snapshot at
-  `packages/runner/src/cfc/kernel/spec-snapshot.json` records in its
+  `runtime/runner/src/cfc/kernel/spec-snapshot.json` records in its
   `specsCommit` field, which is the commit every kernel header's hash and
   every `§` citation is checked against. `deno task cfc-spec-snapshot`
   regenerates the snapshot from a specs checkout (`CF_SPECS_DIR`, or
@@ -82,13 +82,13 @@ The vocabulary:
 ## The procedure
 
 1. **Read the specification before the code.** A change under
-   `packages/runner/src/cfc/` or `packages/runner/src/cfc.ts`, to the CFC
-   tests under `packages/runner/test/`, to the render boundaries in
-   `packages/html/src/worker/reconciler.ts` and
-   `packages/html/src/worker/display-fit.ts`, to the harness's CFC enforcement
-   in `packages/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+   `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, to the CFC
+   tests under `runtime/runner/test/`, to the render boundaries in
+   `runtime/html/src/worker/reconciler.ts` and
+   `runtime/html/src/worker/display-fit.ts`, to the harness's CFC enforcement
+   in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
    `sandbox/runsc-cfc-result.ts`), to the harness console's display ceiling in
-   `packages/cf-harness/console/display-ceiling.ts`, or to a
+   `runtime/cf-harness/console/display-ceiling.ts`, or to a
    `docs/specs/cfc-*.md` document
    starts by reading the governing section at the pin, and the kernel function
    for any critical function the change touches, or, until that function has
@@ -253,7 +253,7 @@ it. The procedure still applies; what changes is who completes which step.
   without access to the specification, so a reviewer with access knows to
   verify the classification rather than trust it.
 - **Use what is public.** The kernel manifest and spec snapshot under
-  `packages/runner/src/cfc/kernel/` give the section numbers, the pseudocode
+  `runtime/runner/src/cfc/kernel/` give the section numbers, the pseudocode
   function names and their hashes; `docs/specs/cfc-conformance-statement.md`
   says how this runtime answers §18.6.4; the `§` citations in the code and
   the sentences they quote say what each decision rests on; the labs CFC
@@ -276,7 +276,7 @@ it. The procedure still applies; what changes is who completes which step.
 `deno task check-cfc-correspondence` runs in CI as a repository gate and fails
 on four things, each read against the committed snapshot:
 
-- A manifest row in `packages/runner/src/cfc/kernel/manifest.ts` naming a
+- A manifest row in `runtime/runner/src/cfc/kernel/manifest.ts` naming a
   function the snapshot does not define in the section the row says, or a
   section `CRITICAL_SECTIONS` does not list; a function the snapshot defines
   in a critical section that is neither a row nor a recorded companion; a row
@@ -284,7 +284,7 @@ on four things, each read against the committed snapshot:
   under a `@spec` header for the row's section; a row marked `missing` whose
   function the kernel does export; or a kernel export whose header names a
   block that is neither a row nor a companion.
-- A function exported from a file under `packages/runner/src/cfc/kernel/`
+- A function exported from a file under `runtime/runner/src/cfc/kernel/`
   with no `@spec` header, with a header whose hash is not the snapshot's for
   that function, or in a file whose value imports reach past the kernel.
   Type-only imports are erased before anything runs and are not held to that;
@@ -292,8 +292,8 @@ on four things, each read against the committed snapshot:
   packages that hold such constants also export behavior. The manifest and the
   header module are the ledger: they carry no header and are held to the
   import rule.
-- A `§` citation in `packages/runner/src/cfc.ts` or under
-  `packages/runner/src/cfc/` naming a section number the snapshot does not
+- A `§` citation in `runtime/runner/src/cfc.ts` or under
+  `runtime/runner/src/cfc/` naming a section number the snapshot does not
   list. A citation written on purpose to something else, such as a section
   of a labs document, is recorded in `EXEMPTIONS` in
   `tasks/check-cfc-correspondence.ts` with the file, the citation and the
@@ -304,7 +304,7 @@ on four things, each read against the committed snapshot:
 - More than three `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
   sources and their tests, the render boundaries `reconciler.ts` and
-  `display-fit.ts` in `packages/html`, the harness's `cfc-*.ts`,
+  `display-fit.ts` in `runtime/html`, the harness's `cfc-*.ts`,
   `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
   console's `display-ceiling.ts`; or one on a line
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker
@@ -334,7 +334,7 @@ reconciled pin address it.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
-`packages/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
+`runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
 for that function, so a specs change to the block fails the check once the
 snapshot is regenerated, and a header naming a block the specification no
 longer has fails the same way.
