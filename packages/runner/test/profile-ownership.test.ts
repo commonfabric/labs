@@ -506,9 +506,10 @@ export default pattern<{ friend: Cell<{ name: string }> }>(({ friend }) => ({
 
   describe("a profile whose own `name` cell links to a bare document beside it", () => {
     // The shape `isLegacyName()` in `profile-owner.ts` accepts, which every
-    // profile set up by `profile-home.tsx` before d5c274f052 stores.
+    // profile created by `profile-home.tsx` before #7701 (d5c274f052) stores.
     // TODO(@hixie): remove this case with the exception in `isLegacyName()`,
-    // once profiles created before d5c274f052 keep working without it.
+    // once profiles created before #7701 (d5c274f052) keep working without
+    // it.
 
     it("is its owner's, and the answer to `#profile`", async () => {
       await rewriteNameCell(

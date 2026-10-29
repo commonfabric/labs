@@ -244,7 +244,12 @@ returns, `cf profile`, and Home's record of the profile acting in each social
 space and its view of those records. A name borrowed from another document, a
 name attested to anyone else, and a document carrying no label at all make no
 one's profile, and a listed profile whose document is absent is left out too,
-as is an entry whose links run in a cycle, which names no profile.
+as is an entry whose links run in a cycle, which names no profile. The rule
+makes one exception, for the shape a profile set up by an older
+`profile-home.tsx` stores: its own `name` cell holds a link to the root of one
+document in the profile's space that holds the name as a string, carries no
+label and names no owner, and that document counts as the profile's own
+(`isLegacyName()`).
 A name stored before names were labeled carries no label on its value, but its
 profile is its owner's through that installed claim;
 `cf profile attest-name` labels the value too. Since the guard and the

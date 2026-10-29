@@ -122,8 +122,8 @@ function nameIsOwn(
 
 /**
  * Helper for `nameIsOwn()`, which returns whether `hops` has the shape the
- * `name` of a profile set up by `profile-home.tsx` before commit `d5c274f052`
- * holds: two hops, the first into the profile's own `name` cell
+ * `name` of a profile created by `profile-home.tsx` before #7701
+ * (`d5c274f052`) holds: two hops, the first into the profile's own `name` cell
  * (`ownedBy()`), which holds a link to the root of a second document in the
  * profile's space that names no owner, carries no label, and holds the name as
  * a string. That setup defaulted the `name` cell to a computed value, and
@@ -146,10 +146,10 @@ function isLegacyName(
   hops: readonly NormalizedFullLink[],
   profile: NormalizedFullLink,
 ): boolean {
-  // TODO(@hixie): re-fix this so profiles created before d5c274f052 keep
-  // working without this exception, e.g. by repairing their stored name, then
-  // remove it. `profile-ownership.test.ts` pins the shape, under "a profile
-  // whose own `name` cell links to a bare document beside it".
+  // TODO(@hixie): re-fix this so profiles created before #7701 (d5c274f052)
+  // keep working without this exception, e.g. by repairing their stored name,
+  // then remove it. `profile-ownership.test.ts` pins the shape, under "a
+  // profile whose own `name` cell links to a bare document beside it".
   if (hops.length !== 2) return false;
   const [cell, held] = hops;
   return ownedBy(runtime, tx, cell, profile) &&
