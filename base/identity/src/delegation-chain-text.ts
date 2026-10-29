@@ -27,7 +27,9 @@ export const DELEGATION_CHAIN_FORMAT = "commonfabric/delegation-chains";
  * Encodes `chains`, each a list of delegations' bytes root first, as the
  * text {@link decodeDelegationChains} reads back. Encodes nothing about the
  * delegations: a chain is written as given, so one that would not verify is
- * written here and refused where it is held.
+ * written here and refused where it is held. No chains are an empty list.
+ *
+ * @throws A `DelegationError` for an empty chain, which no reader accepts.
  */
 export function encodeDelegationChains(
   chains: readonly (readonly Uint8Array[])[],
@@ -35,7 +37,12 @@ export function encodeDelegationChains(
   return JSON.stringify(
     {
       format: DELEGATION_CHAIN_FORMAT,
-      chains: chains.map((chain) => chain.map(toUnpaddedBase64url)),
+      chains: chains.map((chain, i) => {
+        if (chain.length === 0) {
+          throw new DelegationError(`chain ${i} is empty`);
+        }
+        return chain.map(toUnpaddedBase64url);
+      }),
     },
     null,
     2,

@@ -23,6 +23,12 @@ Deno.test("delegation-chain-text: encodes no chains as an empty list", () => {
   expect(decodeDelegationChains(encodeDelegationChains([]))).toEqual([]);
 });
 
+Deno.test("delegation-chain-text: throws a DelegationError naming an empty chain it is asked to encode", () => {
+  expect(() => encodeDelegationChains([[bytes(1)], []])).toThrow(
+    new DelegationError("chain 1 is empty"),
+  );
+});
+
 Deno.test("delegation-chain-text: reads a text carrying fields it does not know", () => {
   const text = JSON.stringify({
     format: DELEGATION_CHAIN_FORMAT,
