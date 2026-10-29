@@ -1,6 +1,6 @@
 import type { FabricValue } from "@commonfabric/data-model";
-import { defer } from "@commonfabric/utils/defer";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { defer } from "@commonfabric/async/defer";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type {
   BridgeCell,

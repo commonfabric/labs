@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import type { MIME, URI } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -9,7 +9,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { StorageManager as CutoverStorageManager } from "../src/storage/cache.deno.ts";
 import type {
   IStorageProvider,

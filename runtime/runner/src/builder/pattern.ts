@@ -10,9 +10,12 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isInertPlainObject } from "@commonfabric/utils/objects";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isInertPlainObject } from "@commonfabric/js-values/objects";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   RECORD_SUBSCHEMA_KEYS,

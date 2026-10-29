@@ -2,7 +2,7 @@ import { resolve, toFileUrl } from "@std/path";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import {
   createHarnessChatErrorResponse,
   HARNESS_CHAT_PROTOCOL_VERSION,

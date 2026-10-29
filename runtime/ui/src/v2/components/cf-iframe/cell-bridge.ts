@@ -20,7 +20,7 @@ import {
   isCellHandle,
 } from "@commonfabric/runtime-client";
 import type { JSONSchema } from "@commonfabric/runner/shared";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { presenceFailureCategory } from "../../core/presence-failure.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";

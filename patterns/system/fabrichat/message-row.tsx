@@ -80,16 +80,18 @@ export interface ReactionTally extends ChatReactionTally {
   cardId: string;
 
   /**
-   * The viewer's reaction with this emoji, the one `deleteReaction` removes;
-   * absent where `mine` is false.
+   * The reaction offered for removal with this emoji; absent where `mine` is
+   * false. `deleteReaction` checks its author against the authenticated actor
+   * before removing it.
    */
   own?: Cell<ChatReaction>;
 }
 
 /**
  * The reactions `list` holds, tallied as `reactionTalliesOf()` does, each
- * tally with a card id made from `cardIdPrefix` and, where the viewer is
- * among its reactors, the viewer's reaction by its cell.
+ * tally with a card id made from `cardIdPrefix`. `mine` and `own` compare
+ * each reaction's authenticated author with `profileOwnerOf(viewer)`;
+ * counts and reactor lists retain their profile-based identity.
  */
 export const reactionTallies = (
   list: Cell<ReactionsValue> | undefined,
@@ -97,15 +99,17 @@ export const reactionTallies = (
   cardIdPrefix: string,
 ): ReactionTally[] => {
   const reactions = (list?.get() ?? []) as ChatReaction[];
-  return reactionTalliesOf(reactions, viewer).map((tally, index) => {
-    const own = viewer === undefined
+  const owner = viewer === undefined ? undefined : profileOwnerOf(viewer);
+  return reactionTalliesOf(reactions, undefined).map((tally, index) => {
+    const own = list === undefined || owner === undefined
       ? -1
-      : reactions.findIndex((reaction) =>
+      : reactions.findIndex((reaction, reactionIndex) =>
         reaction?.emoji === tally.emoji &&
-        equals(reaction.reactorProfile, viewer)
+        principalOf(list.key(reactionIndex), "authored-by") === owner
       );
     return {
       ...tally,
+      mine: own >= 0,
       cardId: `${cardIdPrefix}-${index}`,
       ...(own < 0 || list === undefined ? {} : { own: list.key(own) }),
     };

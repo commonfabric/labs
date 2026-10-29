@@ -74,7 +74,7 @@ import {
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { loadIdentity } from "../lib/identity.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 

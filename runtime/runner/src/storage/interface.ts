@@ -60,7 +60,7 @@ import type {
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import type { Immutable } from "@commonfabric/utils/types";
+import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
 import { Cell } from "../cell.ts";

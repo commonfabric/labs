@@ -13,9 +13,9 @@
 import type { JSONValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 import type { Cell } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";

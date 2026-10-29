@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 import { waitFor } from "@commonfabric/integration";
 import { fromFileUrl } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -10,7 +10,7 @@ import {
   Runtime,
   runtimePresets,
 } from "@commonfabric/runner";
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 export interface EventSpec {

@@ -1,5 +1,5 @@
 import { FabricInstance, refuseFabricInstance } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { exportCell, isCell } from "../cell.ts";
 import { ContextualFlowControl } from "../cfc.ts";

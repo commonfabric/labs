@@ -30,8 +30,8 @@ const PACKAGE_ROOT = fromFileUrl(new URL("..", import.meta.url));
  */
 const ALLOWED = [
   "@commonfabric/api",
-  "@commonfabric/pure-json",
-  "@commonfabric/utils",
+  "@commonfabric/js-values",
+  "@commonfabric/json",
   "@std/",
 ];
 

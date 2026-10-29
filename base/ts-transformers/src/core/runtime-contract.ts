@@ -7,7 +7,7 @@
  * the runner's compiler-stack module).
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * Name of the sandbox global the pattern-coverage transformer emits probe

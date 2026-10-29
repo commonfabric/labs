@@ -1,5 +1,5 @@
 import { Identity } from "@commonfabric/identity";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 import { dirname } from "@std/path";
 import { cliText } from "./cli-name.ts";
 import { shellQuote } from "./shell-quote.ts";

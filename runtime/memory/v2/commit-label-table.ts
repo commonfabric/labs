@@ -9,7 +9,7 @@ import {
   type FabricPlainObject,
   type FabricValue,
 } from "@commonfabric/data-model";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import type { ClientMessage, ServerMessage } from "../v2.ts";
 import {

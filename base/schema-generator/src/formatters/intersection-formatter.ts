@@ -4,8 +4,8 @@ import type {
   SchemaScope,
 } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import ts from "typescript";
 
 import { extractDocFromType } from "../doc-utils.ts";

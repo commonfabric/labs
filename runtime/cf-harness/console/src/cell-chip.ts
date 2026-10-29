@@ -8,7 +8,7 @@
  */
 
 import { html, LitElement, nothing, type TemplateResult } from "lit";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type {
   ConsoleCellLabelEntry,
   ConsoleCellLabels,

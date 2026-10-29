@@ -33,7 +33,7 @@ import {
   type InitializedRuntimeConnection,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Default CellRef used when none is provided. */
 const DEFAULT_REF: CellRef = {

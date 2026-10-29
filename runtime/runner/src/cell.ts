@@ -48,16 +48,16 @@ import {
   type StreamLinkRef,
 } from "@commonfabric/memory/v2";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { getLogger } from "@commonfabric/utils/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { getLogger } from "@commonfabric/logger";
 import {
   type Immutable,
   isObjectNotArray,
   isObjectOrArray,
   isPlainContainer,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { toCell } from "./back-to-cell.ts";
 import {

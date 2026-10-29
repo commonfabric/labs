@@ -7,7 +7,7 @@
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { isCell } from "../../src/cell.ts";
 import type { Runtime } from "../../src/runtime.ts";
 

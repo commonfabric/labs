@@ -10,7 +10,7 @@
  */
 
 import ts from "typescript";
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 /** A position in authored source: line 1-based, column 0-based. */
 export interface SourcePosition {

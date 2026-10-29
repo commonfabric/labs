@@ -8,7 +8,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import type { Cell } from "../../runtime/runner/src/cell.ts";
 import { SpaceServer } from "../../runtime/runner/src/executor/space-server.ts";

@@ -6,9 +6,9 @@
  * only from a list, so none of what is written there would reach it.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import ts from "typescript";
 
 import type {

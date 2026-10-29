@@ -67,7 +67,7 @@ export default pattern("Feed reader", ({ url, items }) => ({
 ```
 
 `[SCHEDULE]` would join the reserved keys in
-[`framework-result-keys.ts`](../../base/utils/src/framework-result-keys.ts).
+[`framework-result-keys.ts`](../../base/pattern-contract/src/framework-result-keys.ts).
 That file already states the contract these keys live under: the spellings
 belong to the framework, the runner reads them back off the result, and the
 transformer decides what a pattern may declare about them.

@@ -18,10 +18,7 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";

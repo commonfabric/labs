@@ -1,8 +1,8 @@
 import {
   bigintFromUnpaddedBase64url,
   bigintToUnpaddedBase64url,
-} from "@commonfabric/utils/bigint";
-import type { Constructor } from "@commonfabric/utils/types";
+} from "@commonfabric/bytes/bigint";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";

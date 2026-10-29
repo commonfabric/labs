@@ -1,5 +1,5 @@
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import { REQUEST_SCHEMA_CAS_REF_PREFIX } from "./schema-table-links.ts";
 
 export const SYNC_SCHEMA_REF_PREFIX = "schema-ref@2:";

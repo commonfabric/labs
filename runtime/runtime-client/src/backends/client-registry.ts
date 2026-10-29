@@ -17,8 +17,8 @@
 
 import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { isDID } from "@commonfabric/identity";
 import {

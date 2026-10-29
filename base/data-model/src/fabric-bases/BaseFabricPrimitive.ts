@@ -9,7 +9,7 @@
  * instead of being assumed.
  */
 
-import { type Constructor } from "@commonfabric/utils/types";
+import { type Constructor } from "@commonfabric/js-values/types";
 
 import { FabricPrimitive } from "@/interface.ts";
 import type { FabricPrimitiveValueTag } from "@/fabric-primitives";

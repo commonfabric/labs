@@ -9,8 +9,11 @@ import {
 } from "@commonfabric/data-model";
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
 import { noteDerivedCopy } from "./builder/pattern-metadata.ts";

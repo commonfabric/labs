@@ -22,8 +22,11 @@ import {
 } from "@commonfabric/data-model-schema";
 import { hasInlineCellScheme, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";

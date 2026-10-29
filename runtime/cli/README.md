@@ -2883,11 +2883,11 @@ deno task cf --help
 deno task cf check runtime/cli/fixtures/pattern.tsx --no-run
 ```
 
-From a sibling consumer such as Pattern Factory:
+From a repository checked out beside labs:
 
 ```bash
 deno run --allow-run --allow-env --allow-read ../labs/runtime/cli/launcher.ts \
-  -- check workspace/<run-id>/pattern/main.tsx --no-run
+  -- check pattern/main.tsx --no-run
 ```
 
 From a vendored consumer such as Loom:

@@ -29,7 +29,6 @@ on the Common Fabric runtime.
 | Write tests | [ai/pattern-testing-guide.md](ai/pattern-testing-guide.md) (mechanics: [workflows/pattern-testing.md](workflows/pattern-testing.md)) |
 | Review / critique a pattern | [ai/pattern-critique-guide.md](ai/pattern-critique-guide.md) |
 | Manual / runtime testing | [ai/manual-testing-guide.md](ai/manual-testing-guide.md) |
-| Pattern Factory build phase | [ai/pattern-factory-build-guide.md](ai/pattern-factory-build-guide.md) |
 | Author CFC helpers | [ai/cfc-helper-authoring-guide.md](ai/cfc-helper-authoring-guide.md) |
 | Style / UI work | [patterns/style.md](patterns/style.md) → [patterns/ui-cookbook.md](patterns/ui-cookbook.md) → [components/COMPONENTS.md](components/COMPONENTS.md) |
 | Something broke | [../development/debugging/README.md](../development/debugging/README.md) |

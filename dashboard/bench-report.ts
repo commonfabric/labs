@@ -53,16 +53,40 @@ export const MOVED_PACKAGES: Readonly<Record<string, string>> = {
   utils: "base/utils",
 };
 
+// The current path of each benchmark file that moved out of the package it
+// was in. Keys are mapped through this table after `MOVED_PACKAGES`.
+export const MOVED_BENCH_FILES: Readonly<Record<string, string>> = {
+  "base/utils/bench/bigint.bench.ts": "base/bytes/bench/bigint.bench.ts",
+  "base/utils/bench/index-tracking-stack.bench.ts":
+    "base/collections/bench/index-tracking-stack.bench.ts",
+  "base/utils/src/arrays.bench.ts": "base/js-values/src/arrays.bench.ts",
+  "base/utils/src/buffers.bench.ts": "base/bytes/src/buffers.bench.ts",
+  "base/utils/src/cache.bench.ts": "base/collections/src/cache.bench.ts",
+  "base/utils/test/deep-equal.bench.ts":
+    "base/js-values/test/deep-equal.bench.ts",
+  "base/utils/test/path-key-map.bench.ts":
+    "base/collections/test/path-key-map.bench.ts",
+  "base/utils/test/string-tuple-key.bench.ts":
+    "base/collections/test/string-tuple-key.bench.ts",
+};
+
 /**
  * A series key as the current layout spells it. A key from a report or cache
- * written while the packages lived under `packages/` names its file there.
+ * written while the packages lived under `packages/` names its file there, and
+ * one written before its file moved to another package names the old file.
  */
-export const currentBenchKey = (key: string): string =>
-  key.replace(
+export const currentBenchKey = (key: string): string => {
+  const inPackage = key.replace(
     /^packages\/([^/]+)\//,
     (whole, name: string) =>
       MOVED_PACKAGES[name] === undefined ? whole : `${MOVED_PACKAGES[name]}/`,
   );
+  const file = inPackage.split(" > ", 1)[0]!;
+  const current = MOVED_BENCH_FILES[file];
+  return current === undefined
+    ? inPackage
+    : `${current}${inPackage.slice(file.length)}`;
+};
 
 /** The identity of a chart series: file, group, and benchmark name. */
 export const benchKey = (b: Bench): string =>

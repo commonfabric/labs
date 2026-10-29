@@ -20,7 +20,7 @@
 // this read path.
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   enrollRuntimeOwnedStore,
@@ -86,7 +86,7 @@ import {
   type SqliteParamsWire,
   sqliteRowToWire,
 } from "@commonfabric/memory/v2";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import {
   type Cell,

@@ -326,7 +326,7 @@ events and batches do not have a one-to-one relationship.
 
 Occurrence details are JSON in the measure's detail suffix, leaving aggregate
 keys fixed. The logger computes them lazily for emitted measures and retained
-slowest samples. Use `detailOfMeasure` from `utils/logger` to decode the suffix,
+slowest samples. Use `detailOfMeasure` from `@commonfabric/logger` to decode the suffix,
 then group by individual fields when `--detail` is too specific. No document
 values are included. Timing measures remain opt-in with `CF_TIMING_MEASURES=1`.
 For causal scheduler data, enable both `setTriggerTraceEnabled(true)` and

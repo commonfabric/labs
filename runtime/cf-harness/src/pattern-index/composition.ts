@@ -29,7 +29,7 @@ import {
   type RuntimeProgram,
   sourceDocKey,
 } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { type HarnessPatternIndexClientFactory } from "./factory.ts";
 
 /**

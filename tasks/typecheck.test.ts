@@ -746,7 +746,7 @@ describe("main()", () => {
     console.error = () => {};
     try {
       expect(
-        await main(["--scope=leb128"], REPO_ROOT, {
+        await main(["--scope=bytes"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,
@@ -758,7 +758,7 @@ describe("main()", () => {
         }),
       ).toBe(0);
       expect(
-        await main(["--scope=leb128"], REPO_ROOT, {
+        await main(["--scope=bytes"], REPO_ROOT, {
           check: (scope) =>
             Promise.resolve({
               scope,

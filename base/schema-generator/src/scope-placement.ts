@@ -16,7 +16,7 @@
  * questions.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { MutableJSONSchema } from "@commonfabric/api";
 
 /**

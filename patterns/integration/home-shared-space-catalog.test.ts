@@ -33,7 +33,7 @@ import {
 } from "@commonfabric/runner/executor/host";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
 import { interceptTransaction } from "../../runtime/runner/test/support/intercept-transaction.ts";

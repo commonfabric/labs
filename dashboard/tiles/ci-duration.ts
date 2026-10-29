@@ -8,7 +8,7 @@
  */
 
 import { fromFileUrl } from "@std/path";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   type GreenMark,
   type Route,

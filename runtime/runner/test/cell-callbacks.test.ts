@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import { Writable } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";

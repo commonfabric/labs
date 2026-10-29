@@ -1,6 +1,6 @@
 // Scheduler throttle and bounded-freshness tests.
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   afterEach,
   beforeEach,

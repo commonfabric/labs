@@ -11,8 +11,8 @@
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+} from "@commonfabric/bytes/base64url";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { DelegationError } from "./delegation.ts";
 

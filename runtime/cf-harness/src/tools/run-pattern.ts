@@ -35,7 +35,10 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   HARNESS_POLICY_REFUSAL_SCHEMA,
   type HarnessPolicyRefusal,

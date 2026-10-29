@@ -9,7 +9,7 @@
 
 import { basename, dirname, join } from "@std/path";
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Canonical name of this repository in every record context. */
 export const REPO = "commonfabric/labs";

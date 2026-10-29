@@ -36,6 +36,7 @@
   },
   "exports": {
     "./native-ui": "./src/native-ui.ts",
+    "./hashtags": "./src/hashtags.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

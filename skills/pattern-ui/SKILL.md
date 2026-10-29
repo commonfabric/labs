@@ -7,9 +7,8 @@ user-invocable: false
 # UI Polish Phase
 
 In a build/polish pass, apply this only after logic is verified and tests pass.
-In a design phase (e.g. Pattern Factory ui_design), use this guidance to write
-the UI design document — specify theme, layout composition, and state scoping;
-do not write implementation code.
+In a design phase, use this guidance to write the UI design document — specify
+theme, layout composition, and state scoping; do not write implementation code.
 
 ## Read First, In Order
 
@@ -212,9 +211,9 @@ domain flow, not as the first place to copy styling from.
 
 ## Done When
 
-In a design phase, the artifact is the design doc (`ui-design.md` in the
-factory), not a rendering UI: done when the doc commits to a theme, layout
-composition, and explicit UI-state scoping. In a build/polish pass:
+In a design phase, the artifact is the design doc, not a rendering UI: done when
+the doc commits to a theme, layout composition, and explicit UI-state scoping.
+In a build/polish pass:
 
 - UI renders correctly
 - Bindings work (typing updates state)

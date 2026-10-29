@@ -42,7 +42,7 @@
 import { encodeHex } from "@std/encoding/hex";
 import { dirname, fromFileUrl, join } from "@std/path";
 import { sha256 } from "@commonfabric/content-hash";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 

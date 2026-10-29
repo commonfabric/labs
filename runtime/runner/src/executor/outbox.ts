@@ -39,7 +39,7 @@ import {
 } from "@commonfabric/memory/v2/execution-outbox";
 import type { PendingOutboxRow } from "@commonfabric/memory/v2/execution-outbox";
 import { ProtocolError } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   POST_COMMIT_RELEASE_REJECTED,
   type PostCommitSideEffect,

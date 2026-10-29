@@ -267,6 +267,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Shipped or superseded designs and decision records
 
+- [Pattern Factory build guide](common/ai/pattern-factory-build-guide.md) — what an agent in the Build phase of a Pattern Factory session read, produced, and had to pass before handing off, from May 2026 until the Pattern Factory repository was archived in October 2026.
 - [Compact CFC label maps](plans/compact-cfc-label-maps.md) — proposed 2026-09-28 and superseded unbuilt: a shared-subtree label map and reader-first format migration meant to bound staged-reference diamonds, whose stored growth ended when a link slot began persisting only the reference's own label (#8767).
 
 - [Pattern computation cost design](plans/pattern-computation-cost.md) — original #7155 proposal, executed scope and separately tracked remaining lazy-materialization work.

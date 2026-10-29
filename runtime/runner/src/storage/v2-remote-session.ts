@@ -42,8 +42,8 @@ import {
   routerRecords,
   routerRoute,
 } from "@commonfabric/memory/v2/router-protocol";
-import { getLogger } from "@commonfabric/utils/logger";
-import { utf8ByteLength } from "@commonfabric/utils/utf8";
+import { getLogger } from "@commonfabric/logger";
+import { utf8ByteLength } from "@commonfabric/text/utf8";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
 import type { MemoryConnectionSizes } from "./diagnostics.ts";

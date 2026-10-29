@@ -1,5 +1,5 @@
-import { encode } from "@commonfabric/utils/encoding";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { encode } from "@commonfabric/text/utf8";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 function stringify(value: unknown): string {
   switch (typeof value) {

@@ -19,7 +19,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   batchTypeCheckFixtures,

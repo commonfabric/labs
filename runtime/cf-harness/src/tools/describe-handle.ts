@@ -21,7 +21,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   cfcLabelAtomTypes,
   type DisclosedCfcLabel,

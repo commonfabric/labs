@@ -1,4 +1,4 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { topologicalSort } from "./topology.ts";
 import type { Action, SettleIterationStats } from "./types.ts";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";

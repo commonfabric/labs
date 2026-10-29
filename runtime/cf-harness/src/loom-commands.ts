@@ -12,7 +12,7 @@
  */
 
 import type { JSONObject } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type {
   HarnessCallableDescriptor,

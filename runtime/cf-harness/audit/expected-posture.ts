@@ -14,7 +14,7 @@ import {
   CFC_DIAL_LADDERS,
   type CfcPostureReport,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** What a spec may assert about a posture record. */
 export interface ExpectedPosture {

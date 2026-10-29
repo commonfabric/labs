@@ -11,7 +11,7 @@ import type {
   StripDefaultBrand,
   WrapOrPreserve,
 } from "@commonfabric/api";
-import type { Same } from "@commonfabric/utils/types";
+import type { Same } from "@commonfabric/js-values/types";
 
 /**
  * The api's own type utilities, applied to a stream that DECLARES A RESULT.

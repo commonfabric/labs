@@ -4,7 +4,7 @@ import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import {
   EmulatedStorageManager,
   newLoopbackServer,

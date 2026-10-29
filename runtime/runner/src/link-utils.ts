@@ -33,8 +33,11 @@ import {
 import type { MetaLinkField } from "./meta-seam.ts";
 import type { IReadOptions } from "./storage/interface.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { getLogger } from "@commonfabric/utils/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
 
 import {
   type AnyCell,

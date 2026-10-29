@@ -1427,7 +1427,7 @@ shape. It follows nothing else: a `$ref` the generator cannot resolve locally,
 or a root that is a combinator rather than an object, is left alone.
 
 The list of reserved keys is `FRAMEWORK_RESULT_KEYS`
-(`base/utils/src/framework-result-keys.ts`). The runner builds pattern
+(`base/pattern-contract/src/framework-result-keys.ts`). The runner builds pattern
 results and reads those keys back off them, this package decides what a
 pattern may declare about them, and neither may import the other, so the
 spelling sits in a package below both and the runner's builder surface
@@ -3583,12 +3583,12 @@ The emitted-shape contract is pinned primarily by the "adds stable … causes"
 `src/transformers/module-scope-shadowing.ts`) inserts one module-scope
 `const <name> = undefined;` declaration for each name in
 `SHADOWED_FACTORY_BINDINGS` — as of this writing `define`, `runtimeDeps`, and
-`__cfAmdHooks` (`base/utils/src/sandbox-contract.ts`). These are
+`__cfAmdHooks` (`base/pattern-contract/src/sandbox-contract.ts`). These are
 module-loader binding names: declaring each as `undefined` at module scope makes
 loader machinery unreachable from authored/compiled pattern code even if a
 binding of that name were ever in scope around a module body. The stage landed
 with the SES-default sandbox (#3168) and is shared vocabulary with the runner's
-sandbox verifier via `@commonfabric/utils/sandbox-contract` (see §14.4).
+sandbox verifier via `@commonfabric/pattern-contract/sandbox-contract` (see §14.4).
 
 No such binding reaches a module body today. The module wrapper supplies
 `exports`, `require`, `module`, and `__cfReg` as parameters and nothing else, and
@@ -3648,7 +3648,7 @@ interface CounterEvent { increment: number }
 `test/fixtures/handler-schema/simple-handler.expected.jsx`.)
 
 The emitted text matches `createFactoryShadowGuardSource()`
-(`base/utils/src/sandbox-contract.ts`), which renders the same list as
+(`base/pattern-contract/src/sandbox-contract.ts`), which renders the same list as
 `const ${name} = undefined;` strings — the canonical byte form the runner-side
 verifier compares against (§14.4). The transformer performs no dedupe or
 collision check: it does not look for existing declarations of the guard names
@@ -3682,7 +3682,7 @@ contract, analogous to §11.4's `__cfReg` pairing:
 - **Shared constants** — `SHADOWED_FACTORY_BINDINGS`,
   `RESERVED_FACTORY_BINDINGS` (currently the same list), and
   `createFactoryShadowGuardSource()` live in
-  `base/utils/src/sandbox-contract.ts` and are imported by both the
+  `base/pattern-contract/src/sandbox-contract.ts` and are imported by both the
   transformer (`module-scope-shadowing.ts`) and the runner verifier
   (`runtime/runner/src/sandbox/compiled-bundle-verifier.ts`).
 - **Verifier mechanism** — `classifyModuleItems` (the format-agnostic SES
@@ -3802,7 +3802,7 @@ encloses the original expression, wrappers included:
 - **Call expressions.** Excluded first: calls whose callee names a trusted
   builder — `action`, `computed`, `derive`, `handler`, `lift`,
   `multiUserTest`, `pattern` (`isTrustedBuilder`,
-  `@commonfabric/utils/sandbox-contract`). Matching is name-based
+  `@commonfabric/pattern-contract/sandbox-contract`). Matching is name-based
   (`hasNamedTarget`): a bare identifier or the terminal property name
   (`__cfHelpers.lift`), not §5 provenance detection. Otherwise a call is
   wrapped when any of these arms match:
@@ -3963,7 +3963,7 @@ fixed order").
 
 The emitted shape is one half of a pattern-matched contract with the runner's
 SES module verifier; the shared vocabulary lives in
-`@commonfabric/utils/sandbox-contract` (`TRUSTED_BUILDERS`,
+`@commonfabric/pattern-contract/sandbox-contract` (`TRUSTED_BUILDERS`,
 `TRUSTED_DATA_HELPERS`, `isTrustedBuilder`, `isTrustedDataHelper`), which both
 the transformer (`src/transformers/module-scope-cf-data.ts` imports) and the
 verifier (`runtime/runner/src/sandbox/policy.ts` re-exports) consume. On the
@@ -4324,7 +4324,7 @@ the metadata field are imported from the cross-package sandbox contract:
 `FUNCTION_HARDENING_HELPER_NAME = "__cfHardenFn"`,
 `BINDING_IDENTITY_HELPER_NAME = "__cfBindVerifiedBinding"`,
 `VERIFIED_BINDING_METADATA_FIELD = "__cfVerifiedBindingIdentity"`
-(`base/utils/src/sandbox-contract.ts`). The stage landed with the switch
+(`base/pattern-contract/src/sandbox-contract.ts`). The stage landed with the switch
 to SES as the default runner sandbox (#3168); the verified-binding annotation
 is CT-1665.
 
@@ -4706,8 +4706,8 @@ The stage-26 slot (after everything, and specifically after
 
 The helper names **and the exact text of the helper bodies** are a published
 compile-side/runtime-side contract, centralized in
-`@commonfabric/utils/sandbox-contract`
-(`base/utils/src/sandbox-contract.ts`): the transformer imports the
+`@commonfabric/pattern-contract/sandbox-contract`
+(`base/pattern-contract/src/sandbox-contract.ts`): the transformer imports the
 names; the runner's module verifier imports the same names plus
 `createFunctionHardeningHelperSource()` /
 `createBindingIdentityHelperSource()` — string builders whose output must be
@@ -4777,7 +4777,7 @@ every pattern load — and the equivalence is asserted directly by
 `runtime/runner/test/sandbox-contract-helper-equivalence.test.ts`, which
 transforms a module and compares each emitted helper declaration's
 trivia-stripped text against the corresponding string builder's output
-(`base/utils/test/sandbox-contract.test.ts` covers only the trusted-name
+(`base/pattern-contract/test/sandbox-contract.test.ts` covers only the trusted-name
 lists).
 
 ### 17.7 Edge cases (observed)
@@ -4934,13 +4934,13 @@ re-listing it. The enforced sources of truth:
 | Recognized runtime exports + which are reactive origins (§5, §6.3) | `COMMONFABRIC_RUNTIME_EXPORT_REGISTRY` (`src/core/commonfabric-runtime-registry.ts`) | `test/core/commonfabric-runtime-registry.test.ts` asserts coverage of the runner builder factory |
 | SES self-contained callback boundaries (§6.5) | `SES_SELF_CONTAINED_CALLBACK_BOUNDARIES` (`src/transformers/pattern-context-validation.ts`) | excludes `sqlite-row-label-rule` by design |
 | Lowerable expression-site container kinds (§6.7) | `getExpressionContainerKind` (`expression-site-policy.ts`) | — |
-| Reserved keys the framework puts on a pattern result (§6.12) | `FRAMEWORK_RESULT_KEYS` (`base/utils/src/framework-result-keys.ts`) | imported by both readers rather than restated: this package cannot import the runner, which imports it, so the shared spelling sits below both and `runtime/runner/src/builder/types.ts` re-exports it onto the builder surface |
+| Reserved keys the framework puts on a pattern result (§6.12) | `FRAMEWORK_RESULT_KEYS` (`base/pattern-contract/src/framework-result-keys.ts`) | imported by both readers rather than restated: this package cannot import the runner, which imports it, so the shared spelling sits below both and `runtime/runner/src/builder/types.ts` re-exports it onto the builder surface |
 | Diagnostic `type:` strings | the emitting transformer's `reportDiagnostic` calls | grep `type: "…"` per validator |
 | Auto-`.for()` cause triggers, cause-path grammar, and the `__patternResult` root (§13) | `shouldAddReactiveFor` / `createForCall` / `PATTERN_RESULT_CAUSE` (`src/transformers/reactive-variable-for.ts`) | emitted shapes pinned by the stable-cause tests in `test/transform.test.ts` |
-| Shadow-guard binding set + canonical guard text (§14) | `SHADOWED_FACTORY_BINDINGS` / `createFactoryShadowGuardSource()` (`base/utils/src/sandbox-contract.ts`); insertion point `findFactoryGuardInsertionIndex` (`src/transformers/module-scope-shadowing.ts`) | emission byte-pinned by ~all fixture expected outputs; verifier consumes the same constants via `RESERVED_FACTORY_BINDINGS` (`runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); `cf view`'s `SCAFFOLDING_NAMES` (`runtime/cli/lib/view/languages/typescript/vocab.ts`) is an unimported copy — check for drift |
-| Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`base/utils/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`runtime/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `runtime/runner/src/sandbox/plain-data.ts` |
+| Shadow-guard binding set + canonical guard text (§14) | `SHADOWED_FACTORY_BINDINGS` / `createFactoryShadowGuardSource()` (`base/pattern-contract/src/sandbox-contract.ts`); insertion point `findFactoryGuardInsertionIndex` (`src/transformers/module-scope-shadowing.ts`) | emission byte-pinned by ~all fixture expected outputs; verifier consumes the same constants via `RESERVED_FACTORY_BINDINGS` (`runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); `cf view`'s `SCAFFOLDING_NAMES` (`runtime/cli/lib/view/languages/typescript/vocab.ts`) is an unimported copy — check for drift |
+| Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`base/pattern-contract/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`runtime/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `runtime/runner/src/sandbox/plain-data.ts` |
 | Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`runtime/runner/src/harness/engine.ts`) — change them together |
-| Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`base/utils/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
+| Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`base/pattern-contract/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `runtime/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
 | Trusted-binding type names + binding positions (§17.3) | seed map `LIBRARY_BINDING_POSITIONS`, extended by `discoverAliasBindingPositions` / `collectAliasBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
 
 A drift-resistant habit: when a section enumerates a set, cite the constant /

@@ -12,7 +12,7 @@ import {
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 
 import type { Signer } from "../interface.ts";
 

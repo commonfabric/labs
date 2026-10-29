@@ -3,7 +3,7 @@ import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, Ref, ref } from "lit/directives/ref.js";
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { type FabricBridge, FabricBridgeHost } from "./bridge.ts";
 import { GuestSessions } from "./guest-sessions.ts";

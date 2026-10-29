@@ -25,7 +25,7 @@ import {
   type IFCLabel,
   joinCfcObservedConfidentiality,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { REFERENT_HANDLE_TOKEN_PREFIX } from "../contracts/handle-table.ts";
 import { createHarnessImageAttachmentFromBase64 } from "../image-attachments.ts";

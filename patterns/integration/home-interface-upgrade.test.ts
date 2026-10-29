@@ -19,7 +19,7 @@ import {
   ensurePrivateInboxOf,
   PiecesController,
 } from "@commonfabric/piece/ops";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   type Cell,
   getDerivedInternalCellLink,

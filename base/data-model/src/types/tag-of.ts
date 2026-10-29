@@ -8,7 +8,7 @@
  * rather than one inside each of them.
  */
 
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   BaseFabricPrimitive,

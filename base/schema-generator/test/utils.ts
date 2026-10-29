@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { StaticCache } from "@commonfabric/static";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { FabricPrimitive } from "@commonfabric/data-model";
 import type { JSONSchemaObj } from "@commonfabric/api";
 

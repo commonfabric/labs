@@ -30,7 +30,7 @@ import {
   getLoggerFlagsBreakdown,
   getTimingStatsBreakdown,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import { renderProfileReport } from "../../../runtime/integration/cdp-profiler.ts";
 
 const out = Deno.env.get("CF_PROF_OUT") ?? "cf-prof";

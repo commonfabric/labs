@@ -5,7 +5,7 @@
  * `docs/features/collection-aggregates.md` explains why.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { NormalizedFullLink } from "../link-types.ts";
 

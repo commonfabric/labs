@@ -30,7 +30,7 @@ import {
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";

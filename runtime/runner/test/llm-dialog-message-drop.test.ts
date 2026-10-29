@@ -37,7 +37,7 @@ import {
   setMockResponseGate,
 } from "@commonfabric/llm/client";
 import type { BuiltInLLMMessage, JSONSchema } from "@commonfabric/api";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";

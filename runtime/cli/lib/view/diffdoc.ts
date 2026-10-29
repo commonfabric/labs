@@ -21,7 +21,7 @@ import { dirname, isAbsolute, join, relative } from "@std/path";
 
 import { spawnSync } from "@node/child_process";
 
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 
 import { cpLen } from "./ansi.ts";
 import { type DiffFile, type DiffHunk, type DiffModel } from "./diff.ts";

@@ -25,7 +25,7 @@ import type { Cfc, CurrentPrincipal, WriteAuthorizedBy } from "./cfc.ts";
 /**
  * Recursively removes `readonly` from all properties of `T`.
  *
- * Copy of `Mutable` from `@commonfabric/utils/types`. These two definitions
+ * Copy of `Mutable` from `@commonfabric/js-values/types`. These two definitions
  * should be unified; see that module for the canonical version.
  */
 type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]

@@ -10,8 +10,8 @@ import {
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { getLogger } from "@commonfabric/logger";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {

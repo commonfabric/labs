@@ -13,7 +13,7 @@ import {
   enableMockMode,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import {

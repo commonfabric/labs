@@ -56,8 +56,8 @@ import {
   TESTS,
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
-import { defer } from "@commonfabric/utils/defer";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { defer } from "@commonfabric/async/defer";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { printCfcDenials } from "./cfc-denials.ts";

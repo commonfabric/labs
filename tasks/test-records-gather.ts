@@ -36,7 +36,7 @@ import {
   parseSeed,
   SHUFFLE_SEED_VARIABLE,
 } from "@commonfabric/test-support/shuffle";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** One JUnit ingestion request from the command line. */
 export interface JUnitSpec {

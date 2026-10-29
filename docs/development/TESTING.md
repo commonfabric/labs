@@ -859,7 +859,7 @@ exits before that write finishes loses the worker's profiles or leaves one
 truncated. A `Worker` object gives no signal when its shutdown is done, but in
 Deno a Web Lock that a web worker holds is released only when the worker's
 runtime is torn down, which comes after that write.
-`@commonfabric/utils/worker-lifetime` is built on that. The worker calls
+`@commonfabric/platform/worker-lifetime` is built on that. The worker calls
 `holdWorkerLifetimeLock()` and posts the name it returns no later than the
 first reply its creator waits for, and the creator ends the worker with
 `terminateWorker()`, which settles once the worker has been torn down. Where the

@@ -59,7 +59,7 @@ import {
   RECORD_SCHEMA_VERSION,
   type StoredReport,
 } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   ciSubmissionsPrefix,
   storeBucket,

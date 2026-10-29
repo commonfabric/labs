@@ -36,8 +36,17 @@
       "@commonfabric/data-model/api": [
         "../../data-model/src/api.ts"
       ],
-      "@commonfabric/utils/*": [
-        "../../../base/utils/src/*"
+      "@commonfabric/bytes/*": [
+        "../../../base/bytes/src/*"
+      ],
+      "@commonfabric/collections/*": [
+        "../../../base/collections/src/*"
+      ],
+      "@commonfabric/js-values/*": [
+        "../../../base/js-values/src/*"
+      ],
+      "@commonfabric/text/*": [
+        "../../../base/text/src/*"
       ],
       "commonfabric": [
         "../index.ts"

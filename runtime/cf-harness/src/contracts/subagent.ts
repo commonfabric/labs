@@ -1,7 +1,7 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import type { JSONSchema } from "@commonfabric/api";
 import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "@commonfabric/llm/types";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type HarnessNativeModelToolId,
   type HarnessOpenAIWebSearchResult,

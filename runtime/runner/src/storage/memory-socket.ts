@@ -1,7 +1,7 @@
 /** Socket selection and the event surface used by the memory transport. */
 
 import type { EncodedMemoryMessage } from "@commonfabric/memory/v2/message-compression";
-import { isDeno } from "@commonfabric/utils/env";
+import { isDeno } from "@commonfabric/platform/env";
 
 /** Event fields consumed by the memory transport. */
 export interface MemorySocketEvents {

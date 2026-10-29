@@ -24,7 +24,7 @@ import {
   type ServerExecutionObserver,
   type SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {

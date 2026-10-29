@@ -8,7 +8,7 @@
  */
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 /**
  * Attesting space → successor module identity → every predecessor identity

@@ -16,7 +16,7 @@ import {
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import { releaseExecutionLease } from "@commonfabric/memory/v2/execution-lease";
 import type { ServedAclChange, Server } from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { applyAccessListChanges, validateStoredAcl } from "../acl-manager.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";

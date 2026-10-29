@@ -5,7 +5,7 @@
  * and how each one runs.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * One action the client performs after a completed task.

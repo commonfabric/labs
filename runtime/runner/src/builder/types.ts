@@ -35,13 +35,13 @@ import {
   TYPE,
   UI,
   VIEWS,
-} from "@commonfabric/utils/framework-result-keys";
+} from "@commonfabric/pattern-contract/framework-result-keys";
 import type { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { valueEqual } from "@commonfabric/data-model";
 import type * as RowLabelHelpers from "@commonfabric/memory/sqlite/row-label";
 import type { cfLink, table } from "@commonfabric/memory/sqlite/schema";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import type { EntityKind } from "../entity-kind.ts";
@@ -56,10 +56,10 @@ import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
 
 // Define runtime constants here - actual runtime values
 
-// The reserved result keys are spelled in `@commonfabric/utils`, where the
-// transformer that polices what a pattern may declare about them reads the
-// same list. They are re-exported here because this is the builder surface a
-// pattern sees them through.
+// The reserved result keys are spelled in `@commonfabric/pattern-contract`,
+// where the transformer that polices what a pattern may declare about them
+// reads the same list. They are re-exported here because this is the builder
+// surface a pattern sees them through.
 export {
   CHIP_UI,
   FRAMEWORK_RESULT_KEYS,
