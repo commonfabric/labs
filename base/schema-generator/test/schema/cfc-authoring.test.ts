@@ -2203,6 +2203,26 @@ describe("Schema: CFC authoring aliases", () => {
       });
       expect(byNode!.schema.properties.a).toBeDefined();
     });
+
+    it("reads a `Pick` on keys no literal names by its type, as an object open to every key", async () => {
+      // `Pick` keeps the keys its second argument names, and `string` names
+      // none the mapping can list, so the reference is read by its type, as
+      // the checker maps `any` over every string key.
+
+      for (
+        const { schema, diagnostics } of await schemasOfBothPaths(
+          "",
+          "Pick<Secret, string>",
+        )
+      ) {
+        expect(schema.properties.a).toMatchObject({
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        });
+        expect(diagnostics).toEqual([]);
+      }
+    });
   });
 
   describe("an alias chain entered without argument nodes", () => {
