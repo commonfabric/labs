@@ -6,8 +6,8 @@ Design, implemented through its fourth phase for the command line: the
 server verifies a chain, a runtime presents one, a profile space is born
 owning itself with its delegation recorded in Home, and `cf delegation`
 issues a chain to another key. The phase after that, caveats with
-revocation, is design only; "Phases" below says which is which. The document is written against the session authentication and
-access-list rules in
+revocation, is design only; "Phases" below says which is which. The document
+is written against the session authentication and access-list rules in
 [`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5 and the profile
 creation path in [`shared-profile-space.md`](shared-profile-space.md), and is
 the first slice of the UCAN-authorized memory commands that §4.5.2 of the
