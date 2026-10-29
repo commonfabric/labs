@@ -12,7 +12,11 @@ import type { MemorySocketConnection } from "./memory-socket.ts";
  */
 export const MEMORY_SOCKET_KEEPALIVE_IDLE_MS = 30_000;
 
-/** Opens a memory WebSocket whose writes are driven by Deno's Node TLS stack. */
+/**
+ * Opens a memory WebSocket on Deno's Node networking stack, for `ws:` and
+ * `wss:` addresses alike. Its TCP socket has Nagle's algorithm off, which `ws`
+ * sets on every socket it opens, and TCP keepalive on.
+ */
 export function createDenoMemorySocket(address: URL): MemorySocketConnection {
   const socket = new WebSocket(address, {
     // Fabric negotiates compression in its own message envelope.

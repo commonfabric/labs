@@ -10,6 +10,8 @@ import {
   equals,
   pattern,
   type PerSession,
+  principalOf,
+  profileOwnerOf,
   type ReadonlyCell,
   Stream,
   UI,
@@ -335,11 +337,12 @@ export const FabriChatMessageRow = pattern<
   const rights = computed(() => {
     if (cannotWrite || myProfile?.get() === undefined) return NO_MESSAGE_RIGHTS;
     const record = message.get();
+    const reader = profileOwnerOf(myProfile);
     return messageRightsOf(
       record === undefined
         ? undefined
         : { authorProfile: record.authorProfile, body: record.body },
-      myProfile.resolveAsCell(),
+      reader !== undefined && principalOf(message, "authored-by") === reader,
       kind,
       isOwner === true,
       ownersMayObliterate === true,

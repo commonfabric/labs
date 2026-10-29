@@ -45,13 +45,10 @@ the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
 `#default` is itself. `roster` is computed from those who joined alone.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
-computed from the messages when it's read, and isn't stored. `canSend`,
-`canAdd`, `viewer`, and `messageRights` are computed for each session, in a
-`PerSession` instance of each: `canSend` from the reader's access and profile,
-`canAdd` from their access, `viewer` from their profile and access, and
-`messageRights` from those and the messages, for every message at once. So
-are the values the room's rendering derives from them, such as whether its
-composers are disabled.
+computed from the messages, and `canSend` from the reader's access and profile,
+when they're read. Neither is stored. `viewer` and `messageRights` are computed
+for each reader too, `viewer` from their profile and access, and
+`messageRights` from those and the messages, for every message at once.
 
 `participantEntries` is computed from `participants`, reading whose own profile
 each is with `profileOwnerOf()`, and
@@ -188,6 +185,9 @@ a message another room's rules govern, and what keeps a reply from linking
 the room to a document of another space.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
+They compare the authenticated event actor with the message's `authored-by`
+attestation. A resolved profile is required, but selecting a profile neither
+grants nor removes the actor's authorship rights.
 `commitEdit` records the new text in place, with the time as `editedAt`.
 `commitDelete` records the deletion, which keeps the author and drops the text
 and the message's link to its reactions, or, when the room's
@@ -200,9 +200,13 @@ room as in a group room or a space's own chat, when the room's policy states
 handler is bound to that setting as a value, the same value that picks which
 policy document `about.policy` links, so a room enforces what it states, and a
 binding without the setting lets no OWNER obliterate. One function,
-`messageRightsOf()`, states who may edit, delete, and obliterate a message: the
-three handlers admit an act by it, and `messageRights` and the rendering's
-controls offer one by it, so what a reader is offered is what the room takes.
+`messageRightsOf()`, states who may edit, delete, and obliterate a message from
+its authorship and moderation facts. Handlers identify the author by the
+authenticated actor. Displayed `messageRights` and controls use the owner of
+the viewer's selected profile, as `profileOwnerOf()` determines from its
+attestation and name-chain ownership. Authenticated actor identity is available
+only inside handlers, so a selected profile can offer a control the handler
+refuses. Obliteration needs no resolved profile.
 `commitObliterate` rewrites the message to its tombstone, which drops its author
 and its link to its reactions. So the message's write policy admits it alongside
 the send handlers, `commitEdit`, and `commitDelete`.
@@ -221,7 +225,9 @@ asked.
 onto it unless the sender already has one there with that emoji.
 `commitDeleteReaction` reads the list, and removes the sender's reaction with
 that emoji by its cell, with `removeByValue()`, the mergeable removal, so a
-reaction added and one removed at the same moment both land. The reactions
+reaction added and one removed at the same moment both land. It checks the
+reaction's `authored-by` attestation against the authenticated actor. Reaction
+addition and tallying identify reactors by profile. The reactions
 are a separately authorized part of the message: the list is a document of
 its own, which the send that made the message made and the message links, so
 the send handlers and `commitEdit` can't write a reaction, and the reaction
@@ -242,8 +248,8 @@ which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
 policy names those three, and a later schema can neither add a writer to a
 stored policy nor drop one.
-`canSend` is computed for each session from the reader's access and whether
-their profile resolves.
+`canSend` is computed for each viewer from their access and whether their
+profile resolves.
 
 ## Configuration
 

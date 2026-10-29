@@ -310,6 +310,17 @@ class RecordingWebSocket extends EventTarget {
     );
   }
 
+  /** Opens a connection over a new recording socket. */
+  static readonly connect: MemorySocketFactory = (address) => {
+    const socket = new RecordingWebSocket(address);
+    // `EventTarget` types its listeners for DOM events, which the memory
+    // socket's events are not.
+    return {
+      socket: socket as MemorySocket,
+      send: (frame) => socket.send(frame),
+    };
+  };
+
   /** Resolves once `count` sockets have been dialed — no polling. */
   static whenDialed(count: number): Promise<void> {
     if (RecordingWebSocket.dialed.length >= count) return Promise.resolve();
@@ -330,29 +341,24 @@ describe("StorageManager per-space host wiring", () => {
     // The pending session promises hold no resources, but their microtask
     // chains outlive the test body; opt out of the op sanitizer for that.
 
-    const realWebSocket = globalThis.WebSocket;
-    (globalThis as { WebSocket: unknown }).WebSocket = RecordingWebSocket;
     RecordingWebSocket.dialed.length = 0;
-    try {
-      const signer = await Identity.fromPassphrase("per-space-host-wiring");
-      const spaceA = signer.did();
-      const spaceB = "did:key:z6Mk-other-space" as MemorySpace;
-      const manager = StorageManager.open({
-        as: signer,
-        memoryHost: new URL("http://host-a.test"),
-        spaceHostMap: { [spaceB]: "http://host-b.test" },
-      });
-      manager.open(spaceA).sync("of:wiring-probe" as URI).catch(() => {});
-      manager.open(spaceB).sync("of:wiring-probe" as URI).catch(() => {});
-      await RecordingWebSocket.whenDialed(2);
-      const hosts = RecordingWebSocket.dialed.map((url) => new URL(url).host)
-        .sort();
-      expect(hosts).toEqual(["host-a.test", "host-b.test"]);
-      for (const url of RecordingWebSocket.dialed) {
-        expect(new URL(url).pathname).toBe(MEMORY_STORAGE_PATH);
-      }
-    } finally {
-      (globalThis as { WebSocket: unknown }).WebSocket = realWebSocket;
+    const signer = await Identity.fromPassphrase("per-space-host-wiring");
+    const spaceA = signer.did();
+    const spaceB = "did:key:z6Mk-other-space" as MemorySpace;
+    const manager = StorageManager.open({
+      as: signer,
+      memoryHost: new URL("http://host-a.test"),
+      spaceHostMap: { [spaceB]: "http://host-b.test" },
+      createSocket: RecordingWebSocket.connect,
+    });
+    manager.open(spaceA).sync("of:wiring-probe" as URI).catch(() => {});
+    manager.open(spaceB).sync("of:wiring-probe" as URI).catch(() => {});
+    await RecordingWebSocket.whenDialed(2);
+    const hosts = RecordingWebSocket.dialed.map((url) => new URL(url).host)
+      .sort();
+    expect(hosts).toEqual(["host-a.test", "host-b.test"]);
+    for (const url of RecordingWebSocket.dialed) {
+      expect(new URL(url).pathname).toBe(MEMORY_STORAGE_PATH);
     }
   });
 
@@ -403,6 +409,7 @@ describe("StorageManager.registerSpaceHost", () => {
       as: signer,
       memoryHost: new URL("http://host-a.test"),
       spaceHostMap: { [spaceSeeded]: "http://host-seed.test" },
+      createSocket: RecordingWebSocket.connect,
     });
   }
 
@@ -418,8 +425,6 @@ describe("StorageManager.registerSpaceHost", () => {
   });
 
   it("keeps an accepted hint stable and replaces a provisional default route", async () => {
-    const realWebSocket = globalThis.WebSocket;
-    (globalThis as { WebSocket: unknown }).WebSocket = RecordingWebSocket;
     RecordingWebSocket.dialed.length = 0;
     let manager: Awaited<ReturnType<typeof makeManager>> | undefined;
     try {
@@ -455,7 +460,6 @@ describe("StorageManager.registerSpaceHost", () => {
         .toBe(false);
     } finally {
       await manager?.closeNow();
-      (globalThis as { WebSocket: unknown }).WebSocket = realWebSocket;
     }
   });
 

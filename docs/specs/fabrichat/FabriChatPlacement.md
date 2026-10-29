@@ -50,9 +50,7 @@ treat the container as admitting others.
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `messages` and `canSend`, from the room (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#facts)). `canSend` is the reader's own,
-    per session, as the room's is (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#scopes)).
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
   - `about`, `participants`, and `reactionTallies` (per
     message in `messages.latest`: emoji, count,
     whether the viewer is among them, and the reactors' profiles), each read
