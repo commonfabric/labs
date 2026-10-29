@@ -93,8 +93,8 @@
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
  * | preferredProfileSpace      | core-default (none — the home's order); delta on |
- * |                            | browserWorker (the host acting as one of the     |
- * |                            | user's profiles says which)                      |
+ * |                            | browserWorker and remoteClient (the host acting  |
+ * |                            | as one of the user's profiles says which)        |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
  * |                            | remoteClient / browserWorker (patterns fetch     |
  * |                            | against the real deployment, not the builder's   |
@@ -599,6 +599,13 @@ export interface RemoteClientPresetParams extends CoreParams {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The profile `#profile` answers with
+   * (`RuntimeOptions.preferredProfileSpace`), for a client acting as one of
+   * the user's profiles.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * The client class the runtime declares. A remote client is unclassed; one
    * standing in for a browser tab, as the pattern integration harness's
    * sessions do, declares `"web"`, and then follows the web client's flags,
@@ -766,6 +773,9 @@ export const runtimePresets = {
         ? { cfcWriteFloor: params.cfcWriteFloor }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.preferredProfileSpace !== undefined
+        ? { preferredProfileSpace: params.preferredProfileSpace }
+        : {}),
       ...(params.clientClass !== undefined
         ? { clientClass: params.clientClass }
         : {}),

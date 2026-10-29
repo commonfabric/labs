@@ -175,6 +175,14 @@ export interface MultiRuntimeSessionSpec {
    * floor and another does not.
    */
   cfcWriteFloor?: CfcWriteFloorMode;
+
+  /**
+   * The profile space this session's runtime answers `#profile` with
+   * (`RuntimeOptions.preferredProfileSpace`), as a client acting as one of
+   * the user's profiles does. A space the user's home does not list makes
+   * the session's `#profile` wish fail rather than answer as another profile.
+   */
+  preferredProfileSpace?: DID;
 }
 
 export interface MultiRuntimeHarnessOptions {
@@ -1025,6 +1033,9 @@ export class MultiRuntimeHarness {
             : {}),
           ...(started.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
+          ...(started.preferredProfileSpace !== undefined
+            ? { preferredProfileSpace: started.preferredProfileSpace }
+            : {}),
         }).catch(async (error) => {
           await client.terminate();
           throw error;

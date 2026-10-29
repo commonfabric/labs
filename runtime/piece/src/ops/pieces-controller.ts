@@ -300,6 +300,7 @@ export class PiecesController<T = unknown> {
       cfcWriteFloor,
       cfcReadMaxConfidentiality,
       cfcReadOnExceed,
+      preferredProfileSpace,
       clientClass,
       clientBuild,
     }: {
@@ -380,6 +381,10 @@ export class PiecesController<T = unknown> {
       // space server, whose runtime reads under it for the session's runs.
       cfcReadMaxConfidentiality?: readonly CfcConfClause[];
       cfcReadOnExceed?: CfcReadOnExceed;
+      // The profile this controller's runtime answers `#profile` with, for a
+      // controller acting as one of the user's profiles (the remoteClient
+      // preset's `preferredProfileSpace`); unset means the home's order.
+      preferredProfileSpace?: MemorySpace;
       // The client class the runtime declares (the remoteClient preset's
       // `clientClass`): a controller standing in for a browser tab, as the
       // pattern integration harness's sessions do, declares `"web"`.
@@ -433,6 +438,9 @@ export class PiecesController<T = unknown> {
           ? { cfcReadMaxConfidentiality }
           : {}),
         ...(cfcReadOnExceed !== undefined ? { cfcReadOnExceed } : {}),
+        ...(preferredProfileSpace !== undefined
+          ? { preferredProfileSpace }
+          : {}),
         ...(clientClass !== undefined ? { clientClass } : {}),
         ...(navigateCallback !== undefined ? { navigateCallback } : {}),
         ...(onPatternInstantiated !== undefined
