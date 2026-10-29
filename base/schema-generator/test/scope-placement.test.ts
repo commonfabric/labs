@@ -69,5 +69,18 @@ describe("scope-placement", () => {
         scope: "user",
       }], {})).toEqual({ scope: "session", member: "a.x" });
     });
+
+    it("returns a definition's own scope where a member reaches it after the value itself did", () => {
+      // The scope is the whole value's where the first schema reaches the
+      // definition, and a member's where the second does.
+
+      expect(memberScopeWithin([
+        { $ref: "#/$defs/U" },
+        { properties: { u: { $ref: "#/$defs/U" } } },
+      ], { U: { type: "object", scope: "user" } })).toEqual({
+        scope: "user",
+        member: "u",
+      });
+    });
   });
 });

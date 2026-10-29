@@ -21,7 +21,10 @@ import {
   type SubschemaKeyword,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import type { MutableJSONSchema } from "@commonfabric/api";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 
 import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
 
@@ -208,47 +211,75 @@ const LOCAL_DEFINITION_PREFIX = "#/$defs/";
 
 /**
  * A scope declared on a member of a value, and that member's path from the
- * value: property names, `[number]` for an element and `[string]` for the
- * value under any other key.
+ * value: property names, after a dot or, where a name is no identifier,
+ * quoted in brackets (`[""]`), `[number]` for an element and `[string]` for
+ * the value under any other key.
  */
 export type MemberScope = { readonly scope: string; readonly member: string };
 
-/** `member`'s path extended by the child schema `keyword` holds at `key`. */
+/** A property name a path can write after a dot, as `a.b`. */
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * The path of the child schema `keyword` holds at `key`, from the path of its
+ * parent, `member`, which is `undefined` at the value itself: a child of the
+ * same position, as a union's arm is, stays at its parent's.
+ */
 const memberAt = (
-  member: string,
+  member: string | undefined,
   keyword: SubschemaKeyword,
   key: string | undefined,
-): string => {
-  if (keyword === "properties") return member ? `${member}.${key}` : key!;
+): string | undefined => {
+  if (keyword === "properties") {
+    if (IDENTIFIER.test(key!)) return member ? `${member}.${key}` : key;
+    return `${member ?? ""}[${JSON.stringify(key)}]`;
+  }
   if (keyword === "items" || keyword === "prefixItems") {
-    return `${member}[number]`;
+    return `${member ?? ""}[number]`;
   }
   if (keyword === "additionalProperties" || keyword === "patternProperties") {
-    return `${member}[string]`;
+    return `${member ?? ""}[string]`;
   }
   return member;
 };
 
 /**
+ * The first scope `schema` declares at its own position, on any handle of
+ * its cell stack (`asCell`) or beside it (`scope`), or `undefined` where it
+ * declares none.
+ */
+const scopeDeclaredAt = (schema: MutableJSONSchemaObj): string | undefined => {
+  for (const entry of Array.isArray(schema.asCell) ? schema.asCell : []) {
+    if (isObjectOrArray(entry) && typeof entry.scope === "string") {
+      return entry.scope;
+    }
+  }
+  return typeof schema.scope === "string" ? schema.scope : undefined;
+};
+
+/**
  * The first scope a member of `schemas` declares, anywhere in their values
  * and through the definitions in `definitions` their local references reach
- * (`topLevelScope()`), or `undefined` where none does. A schema's own scope,
- * at its top level, is the whole value's and not a member's. A definition
- * `definitions` does not hold yet is passed over.
+ * (`scopeDeclaredAt()`), or `undefined` where none does. A schema's own scope,
+ * at its top level or on an arm of it, is the whole value's and not a
+ * member's. A definition `definitions` does not hold yet is passed over.
  */
 export const memberScopeWithin = (
   schemas: readonly MutableJSONSchema[],
   definitions: Readonly<Record<string, MutableJSONSchema>>,
 ): MemberScope | undefined => {
-  const visited = new Set<MutableJSONSchema>();
+  // A schema met at the value itself is read again where it is a member.
+  const visitedAtValue = new Set<MutableJSONSchema>();
+  const visitedAsMember = new Set<MutableJSONSchema>();
   const visit = (
     node: MutableJSONSchema,
-    member: string,
+    member: string | undefined,
   ): MemberScope | undefined => {
+    const visited = member === undefined ? visitedAtValue : visitedAsMember;
     if (!isObjectOrArray(node) || visited.has(node)) return undefined;
     visited.add(node);
-    const scope = member ? topLevelScope(node) : undefined;
-    if (scope !== undefined) return { scope, member };
+    const scope = member === undefined ? undefined : scopeDeclaredAt(node);
+    if (scope !== undefined) return { scope, member: member! };
     let found: MemberScope | undefined;
     if (
       typeof node.$ref === "string" &&
@@ -268,7 +299,7 @@ export const memberScopeWithin = (
     return found;
   };
   for (const schema of schemas) {
-    const found = visit(schema, "");
+    const found = visit(schema, undefined);
     if (found) return found;
   }
   return undefined;

@@ -1683,6 +1683,18 @@ describe("SchemaGenerator", () => {
           "user",
         ],
         [
+          "an inner handle of a cell member",
+          `type M1 = { c: Cell<PerUser<Cell<string>>> }; type M2 = string[];`,
+          "c",
+          "user",
+        ],
+        [
+          "a member with an empty name",
+          `type M1 = { "": PerUser<string> }; type M2 = string[];`,
+          `[""]`,
+          "user",
+        ],
+        [
           "a member of a property several constituents declare",
           `type M1 = { a: { x: PerUser<string> } }; type M2 = { a: string[] };`,
           "x",
@@ -1702,6 +1714,20 @@ describe("SchemaGenerator", () => {
         expect(byNode).toThrow(message);
       });
     }
+
+    it("throws for a scope wrapper on an arm of a union beside constituents that cannot be merged", async () => {
+      // The arm's scope is in an `anyOf` branch of the value itself, which
+      // the union rule refuses before the fallback could drop it.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = PerUser<{ x: string }> | { y: number };
+        type M2 = string[];
+      `);
+      const message = "A scope wrapper cannot be a member of a union.";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
 
     it("throws where constituents that cannot be merged meet a definition whose member declares a scope, once it is written", async () => {
       // `Node` is still being generated where its own member falls back, so

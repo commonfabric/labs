@@ -1189,7 +1189,8 @@ Default paths of §7:
   string[]` gives the fallback `ifc: { confidentiality: C }`. A scope on
   the whole value is kept, as `PerUser<{ x: string }> & string[]` gives the
   fallback `scope: "user"`. A scope a member declares, anywhere in a
-  constituent's value and through its references, is refused ("An
+  constituent's value, on any handle of a cell the member is, and through
+  its references, is refused ("An
   intersection whose constituents cannot be merged falls back to a schema
   that accepts any object and describes none of its members, so it cannot
   keep the scope `user` declared on `x` …"): the write path reads a value's
