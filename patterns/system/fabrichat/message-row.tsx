@@ -80,8 +80,9 @@ export interface ReactionTally extends ChatReactionTally {
   cardId: string;
 
   /**
-   * The viewer's reaction with this emoji, the one `deleteReaction` removes;
-   * absent where `mine` is false.
+   * The reaction offered for removal with this emoji; absent where `mine` is
+   * false. `deleteReaction` checks its author against the authenticated actor
+   * before removing it.
    */
   own?: Cell<ChatReaction>;
 }
