@@ -162,7 +162,7 @@ export function startShareIntakeOf(
  * while the profile was retired or not yet listed, is sent again once it is
  * one of the person's live profiles, and Home records it. While that view
  * cannot be read, the scan fails and its rows are taken up again at the
- * next change.
+ * next change, or when a lost connection to the host comes back, as below.
  * Any other offer is registered, with its sender and `id`, its `kind`, `host` and
  * `title`, and as `profile` the space of the profile its `toProfile` names,
  * if it names one, when:
@@ -198,21 +198,25 @@ export function startShareIntakeOf(
  * refused for something in the row itself (its envelope, its `kind` or its
  * `host`) or for the kind its space declares, which never changes, is decided
  * for the life of the instance, and so is one sent or skipped for its
- * receipt, unless it is sent again for its profile as above. A
- * row refused for the state of its space (an access list or a root) is vetted
- * again when that state changes, as the instance follows it
- * (`followSpaceState`) while any row waits on it, when the host's verdict on
- * this identity's access to it changes (`subscribeSpaceAccessChange`), and the
- * next time its inbox's offers change. A refusal is logged once per row, under
+ * receipt, unless it is sent again for its profile as above. A row refused
+ * for the state of its space (its access list, its root, or the result schema
+ * its root stores) is vetted again when that state changes, as the instance
+ * follows it (`followSpaceState`) while an inbox it follows holds a row
+ * waiting on it, when the host's verdict on this identity's access to the
+ * space changes (`subscribeSpaceAccessChange`), and the next time its inbox's
+ * offers change. A refusal is logged once per row, under
  * `piece.share-intake`, with its reason, and so is a `conflict` Home's handler
  * returns for a row it was sent. A failure to read what vetting needs, other
- * than a refusal of access, and a send to Home that throws, leave the row to be
- * vetted again when a lost connection to the host comes back
- * (`subscribeConnectionRestored`) or its inbox next changes; so does a space
- * whose kind the host cannot tell. So a lone offer is taken up once what kept
- * it waiting changes, with no other offer, profile change or restart. A row sent to
- * Home is logged at info (`offer-sent`), so the logger's counts tell a send
- * from a scan that sent nothing. Nothing consumes an offer or deletes it.
+ * than a refusal of access, and a send to Home that throws, leave the row
+ * undecided, and so does a space whose kind the host cannot tell, or a scan
+ * that fails before reaching the row. When a lost connection to the host comes
+ * back (`subscribeConnectionRestored`), the instance reads again which inboxes
+ * Home holds and retains and considers every row of each, so each row left
+ * undecided while it was down is taken up then, or when its inbox next
+ * changes. So a lone offer is taken up once what kept it waiting changes, with
+ * no other offer, profile change or restart. A row sent to Home is logged at
+ * info (`offer-sent`), so the logger's counts tell a send from a scan that
+ * sent nothing. Nothing consumes an offer or deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -246,21 +250,16 @@ export class ShareIntake {
   #settled = new Map<string, OfferDecision>();
   #latest = new Map<string, RowDecision>();
   /**
-   * The rows a failed read or send left undecided, each with the address of
-   * the inbox holding it, which a restored connection to the host takes up.
+   * The rows refused for the state of their space, by the address of each
+   * inbox holding one, each with that space, which a change to that state
+   * takes up. A row two inboxes hold waits in both.
    */
-  #unread = new Map<string, string>();
-  /**
-   * The rows refused for the state of their space, each with that space and
-   * the address of the inbox holding it, which a change to that state takes
-   * up.
-   */
-  #refusedFor = new Map<string, { space: DID; address: string }>();
-  /** What follows the state of each space a row of {@link #refusedFor} names. */
+  #waiting = new Map<string, Map<string, DID>>();
+  /** What follows the state of each space a row of {@link #waiting} names. */
   #spaces = new Map<DID, Cancel>();
   #logged = new Set<string>();
   #holdersChanged = false;
-  #profilesChanged = false;
+  #everyInbox = false;
   #changedInboxes = new Set<string>();
   #draining = false;
   #drained: Promise<void> = Promise.resolve();
@@ -302,13 +301,18 @@ export class ShareIntake {
       );
       this.#holders.push(
         home.key("sharedSpaces").key("profiles").asSchema(profilesSchema).sink(
-          () => this.#poke(PROFILES_CHANGED),
+          () => this.#poke(EVERY_INBOX),
         ),
       );
       // A read that failed while the connection was down may succeed once it
-      // is back, and nothing else says when to ask again.
+      // is back, and nothing else says when to ask again. Which reads failed
+      // is not kept: what Home holds is read again, and every row of every
+      // inbox considered, a decided row costing no more than its key.
       const restored = runtime.storageManager.subscribeConnectionRestored?.(
-        () => this.#pokeEach(this.#unread.values()),
+        () => {
+          this.#poke();
+          this.#poke(EVERY_INBOX);
+        },
       );
       if (restored !== undefined) this.#holders.push(restored);
       // A space refused to this identity reads nothing until access comes
@@ -390,13 +394,13 @@ export class ShareIntake {
   /**
    * Notes that the offers of the inbox at `address` changed, or, with no
    * address, that which inboxes Home holds and retains may have, or, with
-   * {@link PROFILES_CHANGED}, that Home's profile records observation did,
-   * and takes it up once the scan under way, if any, is done. Changes
-   * arriving during a scan are taken up by one more.
+   * {@link EVERY_INBOX}, that every row of every inbox followed is to be
+   * considered again, and takes it up once the scan under way, if any, is
+   * done. Changes arriving during a scan are taken up by one more.
    */
-  #poke(address?: string | typeof PROFILES_CHANGED): void {
+  #poke(address?: string | typeof EVERY_INBOX): void {
     if (address === undefined) this.#holdersChanged = true;
-    else if (address === PROFILES_CHANGED) this.#profilesChanged = true;
+    else if (address === EVERY_INBOX) this.#everyInbox = true;
     else this.#changedInboxes.add(address);
     if (this.#draining) return;
     this.#draining = true;
@@ -413,18 +417,18 @@ export class ShareIntake {
   async #drain(): Promise<void> {
     try {
       while (
-        (this.#holdersChanged || this.#profilesChanged ||
+        (this.#holdersChanged || this.#everyInbox ||
           this.#changedInboxes.size > 0) &&
         !this.#halted
       ) {
         const holdersChanged = this.#holdersChanged;
-        const profilesChanged = this.#profilesChanged;
+        const everyInbox = this.#everyInbox;
         const changed = [...this.#changedInboxes];
         this.#holdersChanged = false;
-        this.#profilesChanged = false;
+        this.#everyInbox = false;
         this.#changedInboxes.clear();
         try {
-          await this.#scan(holdersChanged, profilesChanged, changed);
+          await this.#scan(holdersChanged, everyInbox, changed);
         } catch (error) {
           if (this.#halted) return;
           logger.warn("scan-failed", () => [
@@ -441,12 +445,13 @@ export class ShareIntake {
   /**
    * Follows the inboxes Home holds and retains, when `holdersChanged`, and
    * decides each row not yet decided in the inboxes at `changed`, or in every
-   * inbox followed, when `profilesChanged`. An inbox newly followed reports
-   * its offers through its own subscription.
+   * inbox followed, when `everyInbox`. An inbox newly followed reports its
+   * offers through its own subscription. A row waiting in a scanned inbox
+   * that the inbox no longer holds waits there no more.
    */
   async #scan(
     holdersChanged: boolean,
-    profilesChanged: boolean,
+    everyInbox: boolean,
     changed: string[],
   ): Promise<void> {
     if (holdersChanged) {
@@ -455,7 +460,7 @@ export class ShareIntake {
       this.#current = inboxes;
       this.#follow(inboxes);
     }
-    const addresses = profilesChanged ? [...this.#current.keys()] : changed;
+    const addresses = everyInbox ? [...this.#current.keys()] : changed;
     const inboxes = addresses.flatMap((address) => {
       const inbox = this.#current.get(address);
       return inbox === undefined ? [] : [{ address, inbox }];
@@ -464,7 +469,13 @@ export class ShareIntake {
     const receipts = await this.#homeReceipts();
     for (const { address, inbox } of inboxes) {
       const offers = await inbox.key("offers").asSchema(offersSchema).pull();
-      for (const raw of Array.isArray(offers) ? offers : []) {
+      if (this.#halted) return;
+      const rows = Array.isArray(offers) ? offers : [];
+      this.#keepWaiting(
+        address,
+        new Set(rows.filter(isObjectNotArray).map(rowKey)),
+      );
+      for (const raw of rows) {
         if (this.#halted) return;
         await this.#consider(raw, receipts, address);
       }
@@ -633,7 +644,6 @@ export class ShareIntake {
         `Vetting the offer ${receipt}:`,
         error,
       ]);
-      this.#unread.set(row, address);
       return;
     }
     if (this.#halted) return;
@@ -678,7 +688,6 @@ export class ShareIntake {
         `Sending Home the offer ${receipt}:`,
         error,
       ]);
-      this.#unread.set(row, address);
       return;
     }
     logger.info("offer-sent", () => [`Sent Home the offer ${receipt}`]);
@@ -700,7 +709,6 @@ export class ShareIntake {
     address: string,
   ): void {
     this.#latest.set(row, { from: raw.from, id: raw.id, decision });
-    this.#unread.delete(row);
     if (STATE_REFUSALS.has(decision)) {
       // A refusal for a space's state is only ever made of a well-formed
       // offer, whose space is a DID.
@@ -715,10 +723,12 @@ export class ShareIntake {
    * Has the row keyed `row`, in the inbox at `address`, taken up again when
    * the state of `space` changes, following that state if nothing yet does.
    * A space whose state cannot be followed leaves the row to its inbox's next
-   * change, as before.
+   * change.
    */
   #waitOn(row: string, space: DID, address: string): void {
-    this.#refusedFor.set(row, { space, address });
+    const rows = this.#waiting.get(address) ?? new Map<string, DID>();
+    rows.set(row, space);
+    this.#waiting.set(address, rows);
     if (this.#spaces.has(space)) return;
     try {
       // The sinks call back at once; that pokes the row's inbox, which the
@@ -739,37 +749,54 @@ export class ShareIntake {
     }
   }
 
-  /** {@link #poke}s the inbox of each row of {@link #refusedFor} naming `space`. */
+  /** {@link #poke}s each inbox a row of {@link #waiting} naming `space` waits in. */
   #pokeWaitingOn(space: string): void {
     this.#pokeEach(
-      [...this.#refusedFor.values()]
-        .filter((waiting) => waiting.space === space)
-        .map((waiting) => waiting.address),
+      [...this.#waiting]
+        .filter(([, rows]) => [...rows.values()].some((each) => each === space))
+        .map(([address]) => address),
     );
   }
 
-  /**
-   * Takes the row keyed `row` out of {@link #refusedFor}, and stops following
-   * its space once no other row waits on it.
-   */
+  /** Takes the row keyed `row`, decided, out of every inbox it waits in. */
   #stopWaiting(row: string): void {
-    const waiting = this.#refusedFor.get(row);
-    if (waiting === undefined) return;
-    this.#refusedFor.delete(row);
-    for (const other of this.#refusedFor.values()) {
-      if (other.space === waiting.space) return;
+    for (const rows of this.#waiting.values()) rows.delete(row);
+    this.#releaseSpaces();
+  }
+
+  /**
+   * Keeps waiting in the inbox at `address` only the rows whose keys `held`
+   * holds, those its offers hold now.
+   */
+  #keepWaiting(address: string, held: Set<string>): void {
+    const rows = this.#waiting.get(address);
+    if (rows === undefined) return;
+    for (const row of rows.keys()) {
+      if (!held.has(row)) rows.delete(row);
     }
-    this.#spaces.get(waiting.space)?.();
-    this.#spaces.delete(waiting.space);
+    this.#releaseSpaces();
   }
 
   /** Forgets every row waiting in the inbox at `address`, no longer followed. */
   #forgetInbox(address: string): void {
-    for (const [row, held] of this.#unread) {
-      if (held === address) this.#unread.delete(row);
+    this.#waiting.delete(address);
+    this.#releaseSpaces();
+  }
+
+  /**
+   * Stops following the state of each space no row of {@link #waiting} names
+   * any longer, and drops each inbox no row waits in.
+   */
+  #releaseSpaces(): void {
+    const named = new Set<DID>();
+    for (const [address, rows] of this.#waiting) {
+      if (rows.size === 0) this.#waiting.delete(address);
+      for (const space of rows.values()) named.add(space);
     }
-    for (const [row, waiting] of [...this.#refusedFor]) {
-      if (waiting.address === address) this.#stopWaiting(row);
+    for (const [space, cancel] of this.#spaces) {
+      if (named.has(space)) continue;
+      cancel();
+      this.#spaces.delete(space);
     }
   }
 
@@ -851,10 +878,11 @@ export class ShareIntake {
 }
 
 /**
- * What {@link ShareIntake}'s `#poke` is passed when Home's profile records
- * observation changes.
+ * What {@link ShareIntake}'s `#poke` is passed to have every row of every
+ * inbox followed considered again: when Home's profile records observation
+ * changes, and when a lost connection to the host comes back.
  */
-const PROFILES_CHANGED: unique symbol = Symbol("profiles changed");
+const EVERY_INBOX: unique symbol = Symbol("every inbox");
 
 /** What an instance last decided about one row, and the offer it names. */
 interface RowDecision {

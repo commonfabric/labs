@@ -10,7 +10,10 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
-import { classifySchemaMetaValue } from "@commonfabric/data-model-schema/schema-refs";
+import {
+  classifySchemaMetaValue,
+  SCHEMA_META_MEMBER,
+} from "@commonfabric/data-model-schema/schema-refs";
 import type { DID } from "@commonfabric/identity";
 import { type ACL, hasConcreteOwner, isACL } from "@commonfabric/memory/acl";
 import {
@@ -142,10 +145,11 @@ export async function vetWritableSpaceRoot(
 
 /**
  * Calls `changed` whenever what {@link vetSpace} reads of `space` that can
- * change does: its access list, or which document its `defaultPattern` links
- * as its root. Each subscription also calls it once at once, with what it
- * starts from, as a cell's sink does. The kind a space declares never
- * changes, so nothing follows it. Until the returned function is called.
+ * change does: its access list, which document its `defaultPattern` links as
+ * its root, or the result schema that root stores, which a kind's root check
+ * may read. Each subscription also calls it once at once, with what it starts
+ * from, as a cell's sink does. The kind a space declares never changes, so
+ * nothing follows it. Until the returned function is called.
  */
 export function followSpaceState(
   runtime: Runtime,
@@ -154,7 +158,18 @@ export function followSpaceState(
 ): Cancel {
   const cancels = [
     new ACLManager(runtime, space).sink(() => changed()),
-    runtime.getSpaceCell(space).key("defaultPattern").sink(() => changed()),
+    // The root's schema is followed for as long as the space links that root,
+    // since the sink a callback returns is cancelled when the link next
+    // changes, and read as vetting reads it, loading nothing the root links.
+    runtime.getSpaceCell(space).key("defaultPattern").sink((root) => {
+      changed();
+      return isOwnRoot(root, space)
+        ? root.asSchema(DOCUMENT_ALONE).sinkMeta(
+          SCHEMA_META_MEMBER,
+          () => changed(),
+        )
+        : undefined;
+    }),
   ];
   return () => {
     for (const cancel of cancels) cancel();
