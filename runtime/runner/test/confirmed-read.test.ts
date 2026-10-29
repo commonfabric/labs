@@ -7,7 +7,7 @@ import {
   parseExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { taggedHashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { Cell } from "../src/cell.ts";
 import type {

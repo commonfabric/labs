@@ -42,7 +42,7 @@
  */
 import { parseArgs } from "@std/cli/parse-args";
 import { fromFileUrl, join } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   argvHolds,

@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { parseCfHarnessCliArgs } from "./support/on-linux.ts";
+import { startCommandHost } from "./support/command-host.ts";
 import {
   HARNESS_COMMAND_CATALOG_LIMIT,
   HARNESS_COMMAND_DESCRIPTION_MAX_LENGTH,
@@ -12,238 +13,111 @@ import {
 import {
   createLoomCommandCatalogSource,
   type HarnessLoomCommandsConfig,
-  isHiddenFromAgents,
   listLoomCommands,
   LOOM_COMMAND_OUTPUTS_LIMIT,
   loomCommandCatalogOf,
   loomCommandEntryOfRow,
   nearestCommandNames,
-  readLoomCommandsConfig,
   runLoomCommand,
   validateLoomCommandsConfig,
 } from "../src/loom-commands.ts";
-import type {
-  ProcessRunner,
-  ProcessRunRequest,
-} from "../src/sandbox/process-runner.ts";
 
-/** A broker-routed host configuration. */
-const config: HarnessLoomCommandsConfig = {
-  cliPath: "/trusted/loom",
-  transport: { kind: "broker", queuePath: "/trusted/queue" },
-};
+/** A host configuration whose endpoint is `url`. */
+const configFor = (url: string): HarnessLoomCommandsConfig => ({
+  url,
+  actor: "agent:agent-runner",
+  runId: "job-1",
+});
 
-/** Helper for tests, which answers every process with `stdout`. */
-const runnerAnswering = (
-  stdout: string,
-  exitCode = 0,
-): { runner: ProcessRunner; calls: ProcessRunRequest[] } => {
-  const calls: ProcessRunRequest[] = [];
-  return {
-    calls,
-    runner: {
-      run(request) {
-        calls.push(request);
-        return Promise.resolve({ stdout, stderr: "host text", exitCode });
-      },
-    },
-  };
-};
-
-/** A process runner whose process cannot be started. */
-const failingRunner: ProcessRunner = {
-  run: () => Promise.reject(new Error("spawn failed")),
-};
+/** An endpoint nothing listens on: a request to it cannot be sent. */
+const UNREACHABLE = "http://127.0.0.1:1";
 
 describe("loom-commands", () => {
-  it("uses each concurrent job's identity for discovery and execution in a cleared environment", async () => {
-    const { runner, calls } = runnerAnswering(
-      JSON.stringify({ ok: true, commands: [] }),
-    );
-    await Promise.all(["job-first", "job-second"].map(async (jobId) => {
+  it("sends each concurrent run's own id, from its flags, on discovery and execution", async () => {
+    await using host = startCommandHost();
+    await Promise.all(["job-first", "job-second"].map(async (runId) => {
       const parsed = await parseCfHarnessCliArgs(
-        ["--prompt", "t", "--loom-commands-config", "/trusted/config.json"],
-        {
-          cwd: "/trusted",
-          env: {},
-          commandJobId: jobId,
-          readTextFile: () =>
-            Promise.resolve(JSON.stringify({
-              ...config,
-              jobIdEnvVar: "HOST_JOB_ID",
-              jobId: "file-must-not-supply-the-current-job",
-            })),
-        },
+        [
+          "--prompt",
+          "t",
+          "--commands-url",
+          host.url,
+          "--commands-actor",
+          "agent:agent-runner",
+          "--commands-run-id",
+          runId,
+        ],
+        { cwd: "/trusted", env: {} },
       );
       if ("help" in parsed) throw new Error("expected config");
-      await listLoomCommands(parsed.loomCommands!, runner);
-      await runLoomCommand(
-        parsed.loomCommands!,
-        { command: "note.create", args: {} },
-        runner,
-      );
+      await listLoomCommands(parsed.loomCommands!);
+      await runLoomCommand(parsed.loomCommands!, {
+        command: "note.create",
+        args: {},
+      });
     }));
-    expect(calls).toHaveLength(4);
-    for (const jobId of ["job-first", "job-second"]) {
-      const own = calls.filter((call) => call.env?.HOST_JOB_ID === jobId);
-      expect(own).toHaveLength(2);
-      expect(own.map((call) => call.args?.[1]).sort()).toEqual(["list", "run"]);
-      for (const call of own) {
-        expect(call.clearEnv).toBe(true);
-        expect(call.env?.LOOM_PAGE_RPC_QUEUE).toBe(config.transport.queuePath);
-      }
+    expect(host.requests).toHaveLength(4);
+    for (const runId of ["job-first", "job-second"]) {
+      const own = host.requests.filter((request) => request.runId === runId);
+      expect(own.map((request) => request.path).sort()).toEqual([
+        "/command",
+        "/commands",
+      ]);
     }
   });
 
   describe("validateLoomCommandsConfig()", () => {
-    it("throws for an invalid or reserved job identity environment name", () => {
-      for (
-        const jobIdEnvVar of ["", "bad-name", "PATH", "LOOM_PAGE_RPC_QUEUE"]
-      ) {
-        expect(() => validateLoomCommandsConfig({ ...config, jobIdEnvVar }))
-          .toThrow("jobIdEnvVar");
+    it("accepts an http(s) endpoint, an actor and a run id", () => {
+      for (const url of ["http://127.0.0.1:8080", "https://host.test/base"]) {
+        expect(() => validateLoomCommandsConfig(configFor(url))).not.toThrow();
       }
     });
 
-    it("accepts an absolute CLI path and an absolute broker queue", () => {
-      expect(() => validateLoomCommandsConfig(config)).not.toThrow();
+    it("throws for an endpoint that is not an http(s) URL", () => {
+      for (const url of ["", "127.0.0.1:8080", "file:///commands"]) {
+        expect(() => validateLoomCommandsConfig(configFor(url))).toThrow(
+          "`http:` or `https:` endpoint",
+        );
+      }
     });
 
-    it("throws for a relative CLI path", () => {
-      expect(() => validateLoomCommandsConfig({ ...config, cliPath: "loom" }))
-        .toThrow("absolute `cliPath`");
+    it("throws for an endpoint with a query or a fragment", () => {
+      for (
+        const url of [
+          "http://127.0.0.1:8080/?a=1",
+          "http://127.0.0.1:8080/#a",
+          "http://127.0.0.1:8080/?",
+          "http://127.0.0.1:8080/#",
+        ]
+      ) {
+        expect(() => validateLoomCommandsConfig(configFor(url))).toThrow(
+          "no query or fragment",
+        );
+      }
     });
 
-    it("throws for the direct transport, which does not stamp the actor", () => {
+    it("throws for an empty actor", () => {
       expect(() =>
-        validateLoomCommandsConfig({
-          ...config,
-          transport: {
-            kind: "direct",
-            instanceDir: "/instance",
-            runId: "run",
-            actor: "agent:x",
-          } as unknown as HarnessLoomCommandsConfig["transport"],
-        })
-      ).toThrow("broker transport");
+        validateLoomCommandsConfig({ ...configFor(UNREACHABLE), actor: "" })
+      ).toThrow("actor");
     });
 
-    it("throws for a transport that is not an object", () => {
-      expect(() =>
-        validateLoomCommandsConfig({
-          ...config,
-          transport: "broker" as unknown as HarnessLoomCommandsConfig[
-            "transport"
-          ],
-        })
-      ).toThrow("broker transport");
-    });
-
-    it("throws for a relative or missing queue path", () => {
-      for (const queuePath of ["queue", undefined]) {
+    it("throws for relevant commands that are not a list of ids", () => {
+      for (const relevant of ["search.run", [7]]) {
         expect(() =>
           validateLoomCommandsConfig({
-            ...config,
-            transport: {
-              kind: "broker",
-              queuePath,
-            } as unknown as HarnessLoomCommandsConfig["transport"],
+            ...configFor(UNREACHABLE),
+            relevant: relevant as unknown as string[],
           })
-        ).toThrow("absolute broker `queuePath`");
-      }
-    });
-  });
-
-  describe("readLoomCommandsConfig()", () => {
-    it("returns `undefined` when no path is named", async () => {
-      expect(await readLoomCommandsConfig(undefined)).toBeUndefined();
-    });
-
-    it("throws for a relative path before reading anything", async () => {
-      await expect(
-        readLoomCommandsConfig("commands.json", () => {
-          throw new Error("read");
-        }),
-      ).rejects.toThrow("must be absolute");
-    });
-
-    it("returns the configuration a file names", async () => {
-      const read = await readLoomCommandsConfig(
-        "/trusted/commands.json",
-        (path) => {
-          expect(path).toBe("/trusted/commands.json");
-          return Promise.resolve(JSON.stringify(config));
-        },
-      );
-      expect(read).toEqual(config);
-    });
-
-    it("throws for a file that names no CLI", async () => {
-      for (const text of ["[]", JSON.stringify({ transport: {} })]) {
-        await expect(
-          readLoomCommandsConfig(
-            "/trusted/commands.json",
-            () => Promise.resolve(text),
-          ),
-        ).rejects.toThrow("host CLI and a transport");
+        ).toThrow("Relevant commands");
       }
     });
 
-    it("throws for a file whose transport is not a broker", async () => {
-      await expect(
-        readLoomCommandsConfig(
-          "/trusted/commands.json",
-          () =>
-            Promise.resolve(JSON.stringify({
-              cliPath: "/trusted/loom",
-              transport: { kind: "direct" },
-            })),
-        ),
-      ).rejects.toThrow("broker transport");
-    });
-  });
-
-  describe("isHiddenFromAgents()", () => {
-    it("returns `false` for a row that declares nothing about who may run it", () => {
-      expect(isHiddenFromAgents({ id: "loom.compose" })).toBe(false);
-    });
-
-    it("returns `true` for a pattern's verb and a developer command", () => {
-      expect(isHiddenFromAgents({ id: "pv.abc", origin: "pattern" })).toBe(
-        true,
-      );
-      expect(isHiddenFromAgents({ id: "dev.x", developer: true })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origin: "builtin" })).toBe(false);
-    });
-
-    it("returns `true` when every declared actor is a person, and `false` when one is an agent", () => {
-      expect(isHiddenFromAgents({ id: "x", actors: ["user"] })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", actors: ["user", "agent:ask"] }))
-        .toBe(false);
-      expect(isHiddenFromAgents({ id: "x", actors: [] })).toBe(false);
-      expect(isHiddenFromAgents({ id: "x", actors: "user" })).toBe(false);
-    });
-
-    it("returns `true` for a row that refuses the `session` origin", () => {
-      expect(
-        isHiddenFromAgents({ id: "x", origins_refused: ["session"] }),
-      ).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origins_refused: ["script"] }))
-        .toBe(false);
-    });
-
-    it("returns `true` for a row requiring an origin other than `session`, and `false` for one requiring it", () => {
-      expect(isHiddenFromAgents({ id: "x", origins_required: ["script"] }))
-        .toBe(true);
-      expect(isHiddenFromAgents({ id: "x", origins_required: ["session"] }))
-        .toBe(false);
-    });
-
-    it("returns `true` for a row that runs only over a consent grant", () => {
-      expect(isHiddenFromAgents({ id: "x", grant: "connector" })).toBe(true);
-      expect(isHiddenFromAgents({ id: "x", grant: true })).toBe(true);
-      for (const grant of [null, false, ""]) {
-        expect(isHiddenFromAgents({ id: "x", grant })).toBe(false);
+    it("throws for an empty run id, or one a header cannot carry", () => {
+      for (const runId of ["", "job 1", "job\n1", "jöb"]) {
+        expect(() =>
+          validateLoomCommandsConfig({ ...configFor(UNREACHABLE), runId })
+        ).toThrow("run id");
       }
     });
   });
@@ -384,29 +258,30 @@ describe("loom-commands", () => {
   });
 
   describe("loomCommandCatalogOf()", () => {
-    it("keeps visible rows in order and counts hidden and unreadable ones", () => {
+    it("keeps every row the host listed, in order, whatever it declares, and counts unreadable ones", () => {
       const catalog = loomCommandCatalogOf([
         { id: "loom.compose" },
-        { id: "share.invite", actors: ["user"] },
+        { id: "share.invite", actors: ["user"], origins_refused: ["session"] },
         "not a row",
         { id: "-bad" },
-        { id: "loom.inspect" },
+        { id: "pv.abc", origin: "pattern" },
       ]);
       expect(catalog.entries.map((entry) => entry.name)).toEqual([
         "loom.compose",
-        "loom.inspect",
+        "share.invite",
+        "pv.abc",
       ]);
-      expect(catalog).toMatchObject({ hidden: 1, malformed: 2, omitted: 0 });
+      expect(catalog).toEqual(expect.objectContaining({ malformed: 2 }));
     });
 
-    it("keeps at most the contract's catalog limit and counts the rest", () => {
+    it("keeps every row past the Weaver's client-command catalog limit", () => {
       const rows = Array.from(
-        { length: HARNESS_COMMAND_CATALOG_LIMIT + 2 },
+        { length: HARNESS_COMMAND_CATALOG_LIMIT + 70 },
         (_, index) => ({ id: `cmd.n${index}` }),
       );
-      const catalog = loomCommandCatalogOf(rows);
-      expect(catalog.entries).toHaveLength(HARNESS_COMMAND_CATALOG_LIMIT);
-      expect(catalog.omitted).toBe(2);
+      expect(loomCommandCatalogOf(rows).entries).toHaveLength(
+        HARNESS_COMMAND_CATALOG_LIMIT + 70,
+      );
     });
   });
 
@@ -440,14 +315,16 @@ describe("loom-commands", () => {
 
   describe("createLoomCommandCatalogSource()", () => {
     /** A manifest of one visible command. */
-    const manifest = JSON.stringify({ commands: [{ id: "loom.compose" }] });
+    const manifest = { commands: [{ id: "loom.compose" }] };
 
     it("reads the host once for any number of uses, concurrent ones included", async () => {
-      const { runner, calls } = runnerAnswering(manifest);
-      const source = createLoomCommandCatalogSource(config, runner);
+      await using host = startCommandHost({
+        list: () => Response.json(manifest),
+      });
+      const source = createLoomCommandCatalogSource(configFor(host.url));
       const reads = await Promise.all([source.current(), source.current()]);
       await source.current();
-      expect(calls).toHaveLength(1);
+      expect(host.requests).toHaveLength(1);
       for (const read of reads) {
         expect(read).toMatchObject({
           status: "ok",
@@ -457,171 +334,186 @@ describe("loom-commands", () => {
     });
 
     it("reads the host again on refresh and holds what it read", async () => {
-      const { runner, calls } = runnerAnswering(manifest);
-      const source = createLoomCommandCatalogSource(config, runner);
+      await using host = startCommandHost({
+        list: () => Response.json(manifest),
+      });
+      const source = createLoomCommandCatalogSource(configFor(host.url));
       await source.current();
       await source.refresh();
       await source.current();
-      expect(calls).toHaveLength(2);
+      expect(host.requests).toHaveLength(2);
     });
 
     it("does not hold a read that failed, so the next use asks again", async () => {
-      const { runner, calls } = runnerAnswering("Error: no broker");
-      const source = createLoomCommandCatalogSource(config, runner);
+      await using host = startCommandHost({
+        list: () => new Response("no", { status: 503 }),
+      });
+      const source = createLoomCommandCatalogSource(configFor(host.url));
       expect(await source.current()).toMatchObject({
         status: "error",
         code: "command_failed",
       });
       await source.current();
-      expect(calls).toHaveLength(2);
+      expect(host.requests).toHaveLength(2);
     });
   });
 
   describe("listLoomCommands()", () => {
-    it("runs `loom command list --json` over the broker queue in a cleared environment", async () => {
-      const { runner, calls } = runnerAnswering(
-        JSON.stringify({ schema: "s", version: 1, commands: [{ id: "a.b" }] }),
-      );
-      expect(await listLoomCommands(config, runner)).toEqual({
+    it("reads `GET <url>/commands` with the run's id", async () => {
+      await using host = startCommandHost({
+        list: () =>
+          Response.json({ schema: "s", version: 1, commands: [{ id: "a.b" }] }),
+      });
+      expect(await listLoomCommands(configFor(`${host.url}/`))).toEqual({
         status: "ok",
         commands: [{ id: "a.b" }],
       });
-      expect(calls).toHaveLength(1);
-      expect(calls[0].command).toBe("/trusted/loom");
-      expect(calls[0].args).toEqual(["command", "list", "--json"]);
-      expect(calls[0].clearEnv).toBe(true);
-      expect(calls[0].env?.LOOM_PAGE_RPC_QUEUE).toBe("/trusted/queue");
-      expect(calls[0].stdinText).toBeUndefined();
+      expect(host.requests).toEqual([
+        { method: "GET", path: "/commands", runId: "job-1" },
+      ]);
     });
 
-    it("returns `command_failed` when the process cannot start or prints no JSON", async () => {
-      expect(await listLoomCommands(config, failingRunner)).toMatchObject({
+    it("returns `command_failed` when nothing answers or the answer is not JSON", async () => {
+      expect(await listLoomCommands(configFor(UNREACHABLE))).toMatchObject({
         status: "error",
         code: "command_failed",
       });
-      const { runner } = runnerAnswering("Error: broker refused", 1);
-      expect(await listLoomCommands(config, runner)).toMatchObject({
+      await using host = startCommandHost({
+        list: () => new Response("Traceback"),
+      });
+      expect(await listLoomCommands(configFor(host.url))).toMatchObject({
         status: "error",
         code: "command_failed",
       });
     });
 
-    it("returns `command_failed` for a manifest the CLI printed but exited nonzero on", async () => {
-      const { runner } = runnerAnswering(
-        JSON.stringify({ commands: [{ id: "a.b" }] }),
-        1,
-      );
-      expect(await listLoomCommands(config, runner)).toMatchObject({
+    it("returns `command_failed` for a manifest the host answered with an error status", async () => {
+      await using host = startCommandHost({
+        list: () =>
+          Response.json({ commands: [{ id: "a.b" }] }, { status: 500 }),
+      });
+      expect(await listLoomCommands(configFor(host.url))).toMatchObject({
         status: "error",
         code: "command_failed",
       });
     });
 
     it("returns `malformed_payload` for a manifest without a command list", async () => {
-      for (const stdout of ["[]", JSON.stringify({ commands: {} })]) {
-        const { runner } = runnerAnswering(stdout);
-        expect(await listLoomCommands(config, runner)).toMatchObject({
+      for (const manifest of [[], { commands: {} }]) {
+        await using host = startCommandHost({
+          list: () => Response.json(manifest),
+        });
+        expect(await listLoomCommands(configFor(host.url))).toMatchObject({
           status: "error",
           code: "malformed_payload",
         });
       }
     });
 
-    it("throws for an invalid configuration before starting a process", async () => {
-      const { runner, calls } = runnerAnswering("{}");
+    it("throws for an invalid configuration before sending anything", async () => {
+      await using host = startCommandHost();
       await expect(
-        listLoomCommands({ ...config, cliPath: "loom" }, runner),
-      ).rejects.toThrow("absolute `cliPath`");
-      expect(calls).toHaveLength(0);
+        listLoomCommands({ ...configFor(host.url), actor: "" }),
+      ).rejects.toThrow("actor");
+      expect(host.requests).toHaveLength(0);
     });
   });
 
   describe("runLoomCommand()", () => {
-    it("passes the id, the loom and the expected version on argv, and the args on stdin", async () => {
+    it("posts the id, the args, the actor, and the loom and expected version as context", async () => {
       const answer = { ok: true, id: "loom.add", outputs: { version: 4 } };
-      const { runner, calls } = runnerAnswering(JSON.stringify(answer));
-      const output = await runLoomCommand(
-        config,
-        {
-          command: "loom.add",
-          args: { ref: "page:A.md" },
-          loomId: "loom-0123456789abcdef",
-          expectedVersion: 3,
-        },
-        runner,
-      );
+      await using host = startCommandHost({ run: () => Response.json(answer) });
+      const output = await runLoomCommand(configFor(host.url), {
+        command: "loom.add",
+        args: { ref: "page:A.md" },
+        loomId: "loom-0123456789abcdef",
+        expectedVersion: 3,
+      });
       expect(output).toEqual({
         status: "ok",
         body: answer,
         bodyBytes: JSON.stringify(answer).length,
       });
-      expect(calls[0].args).toEqual([
-        "command",
-        "run",
-        "loom.add",
-        "--args-json",
-        "-",
-        "--json",
-        "--loom",
-        "loom-0123456789abcdef",
-        "--expect",
-        "3",
-      ]);
-      expect(calls[0].stdinText).toBe(JSON.stringify({ ref: "page:A.md" }));
-      expect(calls[0].env?.LOOM_PAGE_RPC_QUEUE).toBe("/trusted/queue");
+      expect(host.requests).toEqual([{
+        method: "POST",
+        path: "/command",
+        runId: "job-1",
+        body: {
+          id: "loom.add",
+          args: { ref: "page:A.md" },
+          context: { loom_id: "loom-0123456789abcdef", expected_version: 3 },
+          actor: "agent:agent-runner",
+        },
+      }]);
     });
 
-    it("leaves the loom and version flags off when the invocation names neither", async () => {
-      const { runner, calls } = runnerAnswering(JSON.stringify({ ok: false }));
-      const output = await runLoomCommand(
-        config,
-        { command: "search.run", args: {} },
-        runner,
-      );
-      expect(output.status).toBe("ok");
-      expect(calls[0].args).toEqual([
-        "command",
-        "run",
-        "search.run",
-        "--args-json",
-        "-",
-        "--json",
-      ]);
+    it("leaves the context out when the invocation names neither a loom nor a version", async () => {
+      await using host = startCommandHost();
+      await runLoomCommand(configFor(host.url), {
+        command: "search.run",
+        args: {},
+      });
+      expect(host.requests[0].body).toEqual({
+        id: "search.run",
+        args: {},
+        actor: "agent:agent-runner",
+      });
     });
 
-    it("returns an answer that may have landed when the process fails or prints no JSON", async () => {
+    it("returns the host's refusal as its answer, whatever the HTTP status", async () => {
+      const refusal = { ok: false, code: "forbidden", error: "not for agents" };
+      await using host = startCommandHost({
+        run: () => Response.json(refusal, { status: 403 }),
+      });
+      expect(
+        await runLoomCommand(configFor(host.url), { command: "a.b", args: {} }),
+      ).toEqual({
+        status: "ok",
+        body: refusal,
+        bodyBytes: JSON.stringify(refusal).length,
+      });
+    });
+
+    it("returns an answer that may have landed when nothing answers or the answer is not JSON", async () => {
       const invocation = { command: "loom.compose", args: {} };
-      expect(await runLoomCommand(config, invocation, failingRunner)).toEqual({
+      expect(await runLoomCommand(configFor(UNREACHABLE), invocation)).toEqual({
         status: "error",
         code: "command_failed",
         message: "The host command's answer was lost.",
         landed: "unknown",
       });
-      const { runner } = runnerAnswering("Traceback", 1);
-      expect(await runLoomCommand(config, invocation, runner)).toMatchObject({
-        status: "error",
-        code: "command_failed",
-        landed: "unknown",
+      await using host = startCommandHost({
+        run: () => new Response("Traceback", { status: 500 }),
       });
+      expect(await runLoomCommand(configFor(host.url), invocation))
+        .toMatchObject({
+          status: "error",
+          code: "command_failed",
+          landed: "unknown",
+        });
     });
 
-    it("throws for an invalid configuration before starting a process", async () => {
-      const { runner, calls } = runnerAnswering("{}");
+    it("throws for an invalid configuration before sending anything", async () => {
+      await using host = startCommandHost();
       await expect(
         runLoomCommand(
-          { ...config, cliPath: "loom" },
+          { ...configFor(host.url), url: "loom" },
           { command: "a.b", args: {} },
-          runner,
         ),
-      ).rejects.toThrow("absolute `cliPath`");
-      expect(calls).toHaveLength(0);
+      ).rejects.toThrow("endpoint");
+      expect(host.requests).toHaveLength(0);
     });
 
     it("returns `malformed_payload` for JSON that is not a command result", async () => {
-      for (const stdout of ["[]", JSON.stringify({ ok: "yes" })]) {
-        const { runner } = runnerAnswering(stdout);
+      for (const answer of [[], { ok: "yes" }]) {
+        await using host = startCommandHost({
+          run: () => Response.json(answer),
+        });
         expect(
-          await runLoomCommand(config, { command: "a.b", args: {} }, runner),
+          await runLoomCommand(configFor(host.url), {
+            command: "a.b",
+            args: {},
+          }),
         ).toMatchObject({
           status: "error",
           code: "malformed_payload",

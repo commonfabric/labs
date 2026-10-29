@@ -30,6 +30,7 @@ import {
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import FabriChatPlacement from "./placement.tsx";
+import { profileGesture, testRoomProfile } from "./room-test-fixture.ts";
 import { FabriChatMessageRow } from "./message-row.tsx";
 import {
   type ComposerState,
@@ -196,7 +197,8 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 
 // A member with WRITE, the default.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
-  const profile = Writable.of<TestProfile>({ name: "Bob" });
+  const ownProfile = testRoomProfile({});
+  const profile = ownProfile.profile;
   const records = {
     messages: setup.records.messages,
   };
@@ -237,6 +239,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
 
   return {
     [TESTS]: [
+      { action: ownProfile.initialize, trustedUi: profileGesture },
       { await: "alice-sent" },
       {
         assertion: assert(() =>

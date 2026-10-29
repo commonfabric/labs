@@ -34,7 +34,7 @@ import ts from "typescript";
 
 import { isCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
-import { TwoLevelWeakCache } from "@commonfabric/utils/two-level-weak-cache";
+import { TwoLevelWeakCache } from "@commonfabric/collections/two-level-weak-cache";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
 import { isTransparentWrapper, unwrapExpression } from "../utils/expression.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";

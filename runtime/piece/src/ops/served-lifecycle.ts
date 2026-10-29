@@ -38,7 +38,7 @@ import {
   sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
 import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";

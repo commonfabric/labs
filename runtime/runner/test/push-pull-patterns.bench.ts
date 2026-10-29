@@ -15,7 +15,7 @@ import {
   resetAllTimingStats,
   setGlobalLogFloor,
   type TimingStats,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";

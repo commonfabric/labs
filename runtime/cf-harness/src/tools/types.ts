@@ -267,7 +267,7 @@ export interface HarnessToolContext {
   /** Host-owned Loom retrieval routing, absent when the run has no grant. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
-  /** Host-owned command broker routing, absent when the run has no grant. */
+  /** Host-owned command endpoint, absent when the run has no grant. */
   loomCommands?: HarnessLoomCommandsConfig;
 
   /**

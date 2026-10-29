@@ -10,8 +10,8 @@ import {
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { getLogger } from "@commonfabric/logger";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
@@ -207,7 +207,10 @@ import {
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
-import { authorizationError } from "./session-open-auth.ts";
+import {
+  authorizationError,
+  verifySessionOpenProofs,
+} from "./session-open-auth.ts";
 import {
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -945,6 +948,16 @@ type SessionHandle = {
    */
   principal?: string;
   leaseEnd?: number;
+
+  /**
+   * The unix second the proof chain the session's open presented stops
+   * holding (04-protocol.md §4.5.1, "Proof chains"); absent for a session
+   * opened without a chain, or with one that does not expire. Past it the
+   * session is refused every request and sent nothing, since the grant it
+   * acts under came from the chain and the chain is gone; unlike a lease,
+   * nothing renews it short of a new open with a fresh chain.
+   */
+  delegationEnd?: number;
 };
 
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
@@ -1471,9 +1484,23 @@ class Connection {
     this.#send(response, { space, sessionId });
   }
 
-  addSession(space: string, sessionId: string, principal?: string): void {
+  addSession(
+    space: string,
+    sessionId: string,
+    principal?: string,
+    delegationEnd?: number,
+  ): void {
     const key = sessionKey(space, sessionId);
-    if (this.#sessions.has(key)) {
+    const existing = this.#sessions.get(key);
+    if (existing !== undefined) {
+      // Every open re-derives the chain's deadline, as the registry
+      // re-derives the capability principal: a reopen with a later chain
+      // moves it, and a reopen presenting no chain clears it.
+      if (delegationEnd === undefined) {
+        delete existing.delegationEnd;
+      } else {
+        existing.delegationEnd = delegationEnd;
+      }
       return;
     }
     const lease = principal === undefined
@@ -1485,6 +1512,7 @@ class Connection {
       ...(principal === undefined || lease === undefined
         ? {}
         : { principal, leaseEnd: lease.leaseEnd }),
+      ...(delegationEnd === undefined ? {} : { delegationEnd }),
     });
   }
 
@@ -1553,6 +1581,12 @@ class Connection {
   #leaseExpired(handle: SessionHandle): boolean {
     return handle.leaseEnd !== undefined &&
       handle.leaseEnd <= this.#server.nowSeconds();
+  }
+
+  /** Whether the proof chain the session was opened with has expired. */
+  #delegationEnded(handle: SessionHandle): boolean {
+    return handle.delegationEnd !== undefined &&
+      handle.delegationEnd < this.#server.nowSeconds();
   }
 
   /** Ends the authentication of `principal`, if it has one. */
@@ -1766,6 +1800,13 @@ class Connection {
   /** Pushes one presence message to this connection's peer. */
   sendPresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
     if (this.#closed) return;
+    // A recipient whose proof chain has expired is sent nothing, as in the
+    // delivery loop: the grant it joined under is gone, and its next request
+    // ends it and its membership.
+    const handle = this.#sessions.get(
+      sessionKey(message.space, message.sessionId),
+    );
+    if (handle !== undefined && this.#delegationEnded(handle)) return;
     this.#send(message);
   }
 
@@ -1966,6 +2007,23 @@ class Connection {
         type: "response",
         requestId,
         error: toError("SessionRevokedError", "Routed memory authority ended"),
+      });
+      return false;
+    }
+    if (this.#delegationEnded(handle)) {
+      // Not renewable: the grant came from the chain, and only a new open
+      // with a fresh chain brings one. The session is ended so the client
+      // learns that rather than retrying into the same refusal.
+      this.revokeSession(space, sessionId, "unauthorized");
+      this.#server.detachSession(space, sessionId, this.id);
+      this.#send({
+        type: "response",
+        requestId,
+        error: toError(
+          "AuthorizationError",
+          "memory session.open proof chain has expired; open the session " +
+            "again with a current chain",
+        ),
       });
       return false;
     }
@@ -2590,6 +2648,11 @@ class Connection {
       if (this.#leaseExpired(handle)) {
         continue;
       }
+      // A session whose proof chain has expired is sent nothing: the grant
+      // it read under is gone, and its next request ends it.
+      if (this.#delegationEnded(handle)) {
+        continue;
+      }
       // A construction intentionally reuses one authenticated session id in
       // every space. Dirty refresh is still space-specific: syncing that id
       // through a connection mounted in another space would advance the real
@@ -3145,6 +3208,17 @@ export class Server {
          * empty.
          */
         delegatingDids?: readonly string[];
+
+        /**
+         * Whether a `session.open` may present a UCAN proof chain
+         * (04-protocol.md §4.5.1). When it may, the server verifies the
+         * chain and resolves the session's capability, READ, WRITE and
+         * OWNER alike, from the access list's grant to the chain's root
+         * issuer, while the session's principal stays the key that opened
+         * it. On unless set `false`; a server set `false` refuses an open
+         * presenting a chain and does not advertise `sessionOpenProofs`.
+         */
+        delegations?: boolean;
       };
     },
   ) {
@@ -3295,6 +3369,7 @@ export class Server {
       serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
+      sessionOpenProofs: this.#admitsDelegations(),
       routedAuthV1: false,
       routedCompressionV1: false,
     };
@@ -3384,6 +3459,11 @@ export class Server {
     return this.options.acl?.serviceDids?.includes(principal) ?? false;
   }
 
+  /** Whether a `session.open` may present a proof chain (`acl.delegations`). */
+  #admitsDelegations(): boolean {
+    return this.options.acl?.delegations !== false;
+  }
+
   #isDelegatingPrincipal(principal: string): boolean {
     return this.options.acl?.delegatingDids?.includes(principal) ?? false;
   }
@@ -3404,7 +3484,15 @@ export class Server {
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    return resolveSpaceOwnerOf(engine, space);
+    const owner = resolveSpaceOwnerOf(engine, space);
+    // A self-owned space with a declared kind is not a home: a profile owns
+    // itself (docs/specs/profile-delegation.md), and its DID is no user to
+    // act as. The binding then resolves nothing, and the envelope
+    // principal's own capability applies.
+    if (owner === space && this.#spaceKindOf(engine) !== undefined) {
+      return undefined;
+    }
+    return owner;
   }
 
   /**
@@ -3413,21 +3501,24 @@ export class Server {
    * #6209 §4 option (b)): the ensure's creation run carries an
    * owner-resolved per-run CFC trust snapshot — the follow-up OW59's
    * Q3 caveat pre-named — and derives its home-space predicate from
-   * the ACL (self-owned = home), because a serving runtime's
-   * `userIdentityDID` is the SERVICE DID. This is the same resolution
-   * the delegated READ binding uses ({@link #resolveSpaceOwnerBinding}),
-   * exposed as a first-class read: it IS the ruled "ACL can be read
-   * with service identity" (OW31, RULED 2026-08-19). `undefined` means
-   * no valid concrete-owner ACL resolves (missing, invalid, retracted,
-   * or ANYONE-only) — callers fail closed, never substitute the
-   * service DID (OW53's ruled shape; `homeSpacePrincipalFor`'s
-   * posture).
+   * the ACL and the declared kind (self-owned and declaring none =
+   * home), because a serving runtime's `userIdentityDID` is the SERVICE
+   * DID. This is the ACL read the
+   * delegated READ binding ({@link #resolveSpaceOwnerBinding}) starts
+   * from, exposed as a first-class read: it IS the ruled "ACL can be
+   * read with service identity" (OW31, RULED 2026-08-19). A self-owned
+   * space resolves to its own DID whatever kind it declares; only the
+   * binding reads the kind, and a caller deciding whether a space is a
+   * home reads it too. `undefined` means no valid concrete-owner ACL
+   * resolves (missing, invalid, retracted, or ANYONE-only) — callers
+   * fail closed, never substitute the service DID (OW53's ruled shape;
+   * `homeSpacePrincipalFor`'s posture).
    */
   resolveSpaceOwner(
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    return this.#resolveSpaceOwnerBinding(engine, space);
+    return resolveSpaceOwnerOf(engine, space);
   }
 
   #invalidateAclCapabilities(space: string): void {
@@ -3635,9 +3726,13 @@ export class Server {
     // served writes ride the wave's §2b delegated carriage, and a
     // session-plane write by the serving identity stays refused (the
     // observe-mode canary's subject).
-    const principal = requirement === "READ"
-      ? session.actingPrincipal ?? session.principal
-      : session.principal;
+    // A proof chain's root issuer resolves every requirement: it is the
+    // principal whose grant the session acts under, OWNER included
+    // (04-protocol.md §4.5.1).
+    const principal = session.capabilityPrincipal ??
+      (requirement === "READ"
+        ? session.actingPrincipal ?? session.principal
+        : session.principal);
     return this.#authorizeMessageWithEngine(
       engine,
       space,
@@ -3893,7 +3988,8 @@ export class Server {
       const capability = this.#capabilityFor(
         engine,
         space,
-        session.actingPrincipal ?? session.principal,
+        session.capabilityPrincipal ?? session.actingPrincipal ??
+          session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
       if (session.actingPrincipal === undefined) {
@@ -5637,14 +5733,50 @@ export class Server {
             message.space,
           );
       }
+      // A proof chain (04-protocol.md §4.5.1) resolves the session's
+      // capability from the access list's grant to the chain's root issuer.
+      // The chain is verified whatever the ACL mode, so a malformed one is
+      // refused the same way everywhere; a server whose policy admits none
+      // refuses every chain, so no client learns anything from one it
+      // presents to the wrong server.
+      const presentsChain = (isFabricPlainObject(message.authorization) &&
+        message.authorization.proofs !== undefined) ||
+        (isFabricPlainObject(message.invocation) &&
+          message.invocation.prf !== undefined);
+      let capabilityPrincipal: string | undefined;
+      let delegationEnd: number | undefined;
+      if (presentsChain) {
+        if (!this.#admitsDelegations()) {
+          throw authorizationError(
+            "memory session.open proofs refused: this server admits no " +
+              "delegations",
+          );
+        }
+        if (actingAs !== undefined) {
+          throw authorizationError(
+            "memory session.open proofs refused: a chain and an actingAs " +
+              "binding cannot both be presented",
+          );
+        }
+        const chain = await verifySessionOpenProofs(message, {
+          space: message.space,
+          principal,
+          nowSeconds: this.nowSeconds(),
+        });
+        capabilityPrincipal = chain?.rootIssuer;
+        delegationEnd = chain?.expiresAt;
+      }
       const deny = this.#authorizeMessageWithEngine(
         engine,
         message.space,
-        actingPrincipal ?? principal,
+        capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
       );
       if (deny) {
-        if (actingAs === undefined) {
+        // No admission wait for a chain, as for the binding: the grant it
+        // would need is the root issuer's, and the notice names the
+        // connection's principal (04-protocol.md §4.5.1, "Proof chains").
+        if (actingAs === undefined && !presentsChain) {
           this.#awaitAdmission(connection.id, message.space, principal);
         }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
@@ -5702,6 +5834,7 @@ export class Server {
           actingPrincipal,
           connection.routed,
           connection.elidedVerdicts,
+          capabilityPrincipal,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -5722,14 +5855,24 @@ export class Server {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
         }
-        connection.addSession(message.space, opened.sessionId, principal);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          principal,
+          delegationEnd,
+        );
         const admitted = this.#sessions.get(message.space, opened.sessionId)!;
         admitted.routedAuthority = () =>
           connection.allowsRoutedSession(message.space, admitted.id);
       } else {
         // Catch-up awaits below. The connection must already track its
         // session so closing it detaches this owner during that wait.
-        connection.addSession(message.space, opened.sessionId, named);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          named,
+          delegationEnd,
+        );
       }
       if (opened.revokedConnectionId !== undefined) {
         console.warn(
@@ -6439,7 +6582,7 @@ export class Server {
           const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
-            session.principal,
+            session.capabilityPrincipal ?? session.principal,
             message.commit,
           );
           if (deny) {

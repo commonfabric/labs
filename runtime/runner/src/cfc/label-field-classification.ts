@@ -1,5 +1,5 @@
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * Cross-space label-metadata representation classes (inv-12 / SC-14 / SC-25;

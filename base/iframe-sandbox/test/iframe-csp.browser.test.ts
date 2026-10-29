@@ -1,4 +1,4 @@
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import "../src/common-iframe-sandbox.ts";
 

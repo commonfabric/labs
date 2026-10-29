@@ -8,7 +8,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   BRIDGE_PROTOCOL,

@@ -70,8 +70,11 @@ import {
   parsePointer,
   pathsOverlap,
 } from "../../../memory/v2/path.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { applyAccessListChanges, validateStoredAcl } from "../acl-manager.ts";
 import type { SpaceAccessChange } from "../builder/types.ts";
 import { ACL_DOCUMENT_WRITE_REFUSED } from "../scheduler/types.ts";

@@ -15,17 +15,17 @@
  * membership on purpose.
  */
 
-import { isInertArray } from "@commonfabric/utils/arrays";
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { isInertArray } from "@commonfabric/js-values/arrays";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import {
   constructorOfObject,
   isInertPlainObject,
-} from "@commonfabric/utils/objects";
+} from "@commonfabric/js-values/objects";
 import {
   isObjectOrArray,
   isPlainObject,
   unsafeObjectKeyIn,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { BaseFabricInstance } from "@/fabric-bases/BaseFabricInstance.ts";
 import { BaseFabricPrimitive } from "@/fabric-bases/BaseFabricPrimitive.ts";

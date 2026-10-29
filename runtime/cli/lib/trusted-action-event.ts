@@ -18,7 +18,10 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 export interface TrustedUiDescriptor {
   /** `data-ui-pattern` / `data-ui-event-integrity` of the trusted surface. */

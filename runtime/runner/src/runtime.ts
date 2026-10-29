@@ -10,9 +10,10 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { legacySpaceDid } from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity/did";
+import { isDID, isDIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
@@ -33,11 +34,11 @@ import { StaticCache } from "@commonfabric/static";
 import {
   type AsyncLocalStore,
   FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isDeno } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+} from "@commonfabric/async/async-local-store";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isDeno } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
@@ -147,6 +148,7 @@ import {
   PatternManager,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
+import { profileLinkListSchema } from "./profile-order.ts";
 import { snapshotQueryResult } from "./query-result-proxy.ts";
 import { AsyncSemaphoreQueue, type QueueConfig } from "./queue.ts";
 import {
@@ -256,8 +258,8 @@ const isFullNormalizedLinkShape = (
 };
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
+// otherwise. The `await import` stays here (not in `@commonfabric/async`): a
+// top-level await in a widely-imported package stalls Deno module evaluation.
 const WriteDebugContextStorage = (isDeno()
   // deno-lint-ignore cf-imports/no-inline-module-import
   ? (await import("node:async_hooks")).AsyncLocalStorage
@@ -459,12 +461,14 @@ export interface ExperimentalOptions {
    * Defaults to off, which compiles every instance positionally. Turning it on
    * moves every deployed `const`-bound child from its positional identity to a
    * named one. The first setup that names an instance carries its deployed
-   * child over where the pattern the parent last set up loads and names it
-   * too, and the parent's setup record, where it has one, numbers its cell as
-   * this runtime's build of that pattern does; otherwise the instance starts
-   * fresh. It needs every runtime that opens the
-   * same space to run the same naming mode first, so no environment variable
-   * reaches it (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   * child over: the one the pattern the parent last set up places, where that
+   * pattern loads and names it too, and the parent's setup record, where it
+   * has one, numbers its cell as this runtime's build of that pattern does;
+   * and otherwise the one unclaimed positional child of the instance's own
+   * pattern identity. An instance placed by neither starts fresh. It needs every
+   * runtime that opens the same space to run the same naming mode first, so
+   * no environment variable reaches it
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
    */
   instanceNames?: boolean | undefined;
 }
@@ -1203,6 +1207,15 @@ export interface InSpaceCreationRequest {
 
   /** The kind the genesis commit declares. */
   spaceKind?: string;
+
+  /**
+   * Whether the created space owns itself: its access list grants its own
+   * DID OWNER and the creator nothing, and the creator holds instead a
+   * delegation the space's key issued over it
+   * (`docs/specs/profile-delegation.md`), which the calling space records
+   * under {@link delegationsCause} beside the allocation.
+   */
+  selfOwned?: boolean;
 }
 
 /**
@@ -1215,7 +1228,8 @@ const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
-  { grants = {}, root = false, spaceKind }: InSpaceCreationRequest,
+  { grants = {}, root = false, spaceKind, selfOwned = false }:
+    InSpaceCreationRequest,
 ): string =>
   JSON.stringify([
     space,
@@ -1224,7 +1238,26 @@ const inSpaceCreationKey = (
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
     root,
     spaceKind ?? null,
+    selfOwned,
   ]);
+
+/**
+ * The cause of the document in which a space records the delegations its
+ * holder holds over another space, keyed by that space's DID. The document
+ * holds each delegation's bytes as its issuer encoded them; a self-owned
+ * space's creation records the one its key issued, and a later delegation
+ * over the space, with another command or policy, lands beside it.
+ */
+export const delegationsCause = (
+  space: MemorySpace,
+): { delegations: MemorySpace } => ({ delegations: space });
+
+const delegationRecordSchema = {
+  type: "object",
+  properties: {
+    delegations: { type: "array", items: { type: "FabricBytes" } },
+  },
+} as const satisfies JSONSchema;
 
 export interface SpaceCellContents {
   defaultPattern: Cell<unknown>;
@@ -1602,6 +1635,14 @@ export class Runtime {
    * retry's only bound.
    */
   readonly #inSpaceCreated = new Map<string, MemorySpace>();
+
+  /**
+   * The delegation each self-owned space this runtime created issued to its
+   * creator, by space, for the runtime's lifetime: a calling space's record
+   * of it is written from here, and a conflicted commit that retries writes
+   * it again.
+   */
+  readonly #delegationsIssued = new Map<MemorySpace, Uint8Array>();
 
   /**
    * Resolutions in flight, by {@link inSpaceCreationKey}: a second request
@@ -4618,23 +4659,144 @@ export class Runtime {
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
+    const { owner, genesis } = this.#creationOf(options);
+    if (this.storageManager.createSpace === undefined) {
+      throw new Error("This storage manager cannot create spaces");
+    }
+    return await this.storageManager.createSpace(
+      { ...options.grants, [owner]: "OWNER" },
+      genesis,
+    );
+  }
+
+  /**
+   * Creates a space that owns itself, with `options.grants` beside the
+   * space's own OWNER entry and no owner entry for anyone else, and returns
+   * its DID with the delegation the space's key issued to `options.owner`,
+   * the identity this runtime acts as by default, before the key was
+   * dropped (`docs/specs/profile-delegation.md`). The delegation is held
+   * here at once, so this runtime's sessions on the space act under its
+   * grant; the caller records it where a later runtime of the same key
+   * finds it, as `PatternFactory.inSpace(..., { selfOwned: true })` does in
+   * the calling space. Like `createSpace`, except in who owns the space.
+   *
+   * @throws If `options.grants` makes any principal OWNER, if the storage
+   *   manager cannot create such a space, if the memory server does not
+   *   admit a proof chain, or if it refuses the genesis commit.
+   */
+  async createSelfOwnedSpace(
+    options: {
+      owner?: DID;
+      grants?: ACL;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
+    const { owner, genesis } = this.#creationOf(options);
+    if (this.storageManager.createSelfOwnedSpace === undefined) {
+      throw new Error(
+        "This storage manager cannot create a space that owns itself",
+      );
+    }
+    if (!isDIDKey(owner)) {
+      throw new Error(
+        debugStr`A delegation names a did:key, and ${owner} is not one`,
+      );
+    }
+    const created = await this.storageManager.createSelfOwnedSpace({
+      ...(options.grants === undefined ? {} : { grants: options.grants }),
+      delegateTo: owner,
+      ...genesis,
+    });
+    this.#delegationsIssued.set(created.space, created.delegation);
+    return created;
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: the owner the
+   * creation is for and the genesis declarations it makes.
+   */
+  #creationOf(options: {
+    owner?: DID;
+    root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+    spaceKind?: string;
+  }): {
+    owner: DID;
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    };
+  } {
     if (this.servingPosture && options.owner === undefined) {
       throw new Error(
         "A serving runtime creates a space only on behalf of a user, and " +
           "no owner was supplied",
       );
     }
-    if (this.storageManager.createSpace === undefined) {
-      throw new Error("This storage manager cannot create spaces");
-    }
-    const owner = options.owner ?? this.userIdentityDID;
     const { root, spaceKind } = options;
-    return await this.storageManager.createSpace(
-      { ...options.grants, [owner]: "OWNER" },
-      {
+    return {
+      owner: options.owner ?? this.userIdentityDID,
+      genesis: {
         ...(root === undefined ? {} : { root }),
         ...(spaceKind === undefined ? {} : { spaceKind }),
       },
+    };
+  }
+
+  /**
+   * Holds, for the sessions this runtime opens from here on, every
+   * delegation the Home space records for a profile in its `profiles` list,
+   * so that a profile space that owns itself opens under its own grant
+   * (`docs/specs/profile-delegation.md`). Returns how many it held. A
+   * profile with no record, as every profile created before profiles owned
+   * themselves, is passed over.
+   */
+  async loadProfileDelegations(): Promise<number> {
+    if (this.storageManager.addDelegationChain === undefined) return 0;
+    const home = this.getHomeSpaceCell();
+    const profiles = home.key("defaultPattern").key("profiles").asSchema(
+      profileLinkListSchema,
+    );
+    await profiles.sync();
+    const links = profiles.get();
+    if (!Array.isArray(links)) return 0;
+    const spaces = links.flatMap((link) => {
+      if (!isCell(link)) return [];
+      const space = link.getAsNormalizedFullLink().space;
+      return space === home.space ? [] : [space];
+    });
+    // The records are read together, so that their reads reach the server
+    // holding Home as one request rather than as a round trip per profile.
+    const recorded = await Promise.all(
+      spaces.map((space) => this.recordedDelegations(space)),
+    );
+    let held = 0;
+    for (const delegations of recorded) {
+      // Each recorded delegation is one the space issued to this key, so
+      // each is a chain of its own.
+      for (const delegation of delegations) {
+        await this.storageManager.addDelegationChain([delegation]);
+        held += 1;
+      }
+    }
+    return held;
+  }
+
+  /**
+   * The delegations the Home space records over `space`, as their bytes,
+   * oldest first: the one the space issued to this key when it was created
+   * to own itself, and any added beside it since. Empty for a space Home
+   * records none for. Each is a copy, the caller's to keep or change.
+   */
+  async recordedDelegations(space: MemorySpace): Promise<Uint8Array[]> {
+    const record = this.getCell(
+      this.getHomeSpaceCell().space,
+      delegationsCause(space),
+      delegationRecordSchema,
+    );
+    await record.sync();
+    return (record.get()?.delegations ?? []).flatMap((delegation) =>
+      delegation instanceof FabricBytes ? [delegation.slice()] : []
     );
   }
 
@@ -4764,7 +4926,21 @@ export class Runtime {
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
       inSpaceCreationKey(space, name, owner, request),
     );
-    if (created !== undefined) record.set({ did: created });
+    if (created !== undefined) {
+      record.set({ did: created });
+      // A self-owned space's delegation is recorded in the same transaction
+      // as the allocation, keyed by the space, where whoever holds this
+      // space finds it again (`loadProfileDelegations`).
+      const delegation = this.#delegationsIssued.get(created);
+      if (delegation !== undefined) {
+        this.getCell(
+          space,
+          delegationsCause(created),
+          delegationRecordSchema,
+          tx,
+        ).set({ delegations: [new FabricBytes(delegation)] });
+      }
+    }
     return created;
   }
 
@@ -4775,8 +4951,10 @@ export class Runtime {
    *
    * The calling space's allocation record decides when it exists. Otherwise
    * a runtime that creates spaces for names creates one owned by
-   * `options.owner` with `options.grants`, whose DID the next run making the
-   * same request records. Under server execution only the serving runtime
+   * `options.owner` with `options.grants`, or, with `options.selfOwned`,
+   * one that owns itself and delegates to `options.owner`
+   * (`createSelfOwnedSpace`), whose DID the next run making the same
+   * request records. Under server execution only the serving runtime
    * creates them: the run a client makes of the same handler is a
    * speculative echo of the serving runtime's, and a space it created would
    * be one no record ever names, so a client leaves a name with no record
@@ -4828,14 +5006,21 @@ export class Runtime {
       if (this.experimental.serverExecution === true && !this.servingPosture) {
         throw new InSpaceTargetUnresolved([name]);
       }
-      const { root, ...access } = options;
+      const { root, selfOwned, ...access } = options;
+      const creation = {
+        ...access,
+        ...(root
+          ? {
+            root: (created: MemorySpace) => ({
+              cause: inSpaceRootCause(created),
+            }),
+          }
+          : {}),
+      };
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace({
-          ...access,
-          ...(root
-            ? { root: (created) => ({ cause: inSpaceRootCause(created) }) }
-            : {}),
-        });
+        (selfOwned
+          ? (await this.createSelfOwnedSpace(creation)).space
+          : await this.createSpace(creation));
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();

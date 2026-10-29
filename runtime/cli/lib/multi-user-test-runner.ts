@@ -67,8 +67,8 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { isObjectOrArray } from "@commonfabric/utils/types";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type {
   TestResult,
   TestRunnerOptions,

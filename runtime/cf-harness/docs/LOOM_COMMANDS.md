@@ -6,74 +6,61 @@ Status: current implementation reference
 
 A run that acts on the person's data — making a loom, writing a page — needs to
 reach the operations the host offers without the harness naming any of them. The
-host already describes those operations in its command manifest and already
-narrows them per run with a broker. Three generic tools put that in front of the
-model: `list_commands` shows the commands the host lets this run run, each as a
-typed signature; `run_command` runs one or a batch of them, as the agent, with
-write-class authority; and `run_read_command` runs broker-granted reads the same
-way. Which commands those are is the host's decision alone; nothing in
+host already describes those operations in its command manifest and serves them
+from one endpoint. Two generic tools put that in front of the model:
+`list_commands` shows the commands the host offers, each as a typed signature,
+and `run_command` runs one or a batch of them, as the agent, with write-class
+authority. Which commands those are is the host's decision alone; nothing in
 cf-harness names a command.
 
 ## Host configuration
 
-The batch CLI accepts `--loom-commands-config /absolute/host-config.json` or
-`CF_HARNESS_LOOM_COMMANDS_CONFIG`. The file is supplied by the operator, read on
-the host, and never passed into the sandbox. Without it the command tools are
-absent, including when `--allow-tool` names one: naming one without the
-configuration is refused at argument parsing.
+The batch CLI takes the endpoint as three flags that go together:
 
-```json
-{
-  "cliPath": "/opt/loom/src/bin/loom",
-  "jobIdEnvVar": "LOOM_COMMAND_JOB_ID",
-  "transport": {
-    "kind": "broker",
-    "queuePath": "/private/loom/run/command-queue"
-  }
-}
-```
+| Flag                | Meaning                                                                                                      |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `--commands-url`    | Base URL of the host's command endpoint, `http:` or `https:`, with no query or fragment.                     |
+| `--commands-actor`  | The actor every command runs as, sent in each `POST` body as the host wrote it; cf-harness does not read it. |
+| `--commands-run-id` | The host's id for this run, sent on every request as the `X-Loom-Agent-Run-Id` header.                       |
 
-Only the broker transport is accepted. The broker is what makes the grant mean
-something: it lists only the commands its scope admits, refuses every other
-command it is asked to run, and replaces whatever actor a request names with the
-`agent:` actor and run it was started for. A direct transport would leave the
-attribution to the configuration, so it is refused when the file is read.
+The host that starts the run supplies all three; neither the model's arguments
+nor the process environment select any of them. Without them the command tools
+are absent, including when `--allow-tool` names one: naming one without
+`--commands-url` is refused at argument parsing. The agent runner passes them
+from a local-job profile's `commands` entry, with the job's own id as the run
+id, and for a Fabric run from `cf agent runner --commands-url` and
+`--commands-actor`, with an id of the run's own.
 
-Each call runs the host's CLI over a cleared environment with
-`LOOM_PAGE_RPC_QUEUE` set to the queue, the same way the
-[authoring tools](LOOM_AUTHORING.md) and the
-[retrieval tools](LOOM_RETRIEVAL.md) reach the host:
+| Tool            | Request                                                                    |
+| --------------- | -------------------------------------------------------------------------- |
+| `list_commands` | `GET <url>/commands`                                                       |
+| `run_command`   | `POST <url>/command` with `{id, args, context?, actor}` for each call sent |
 
-The optional `jobIdEnvVar` names the variable that carries the current host job
-id. The embedder supplies that id through
-`RunCfHarnessCliDependencies.commandJobId`, independently for each invocation; a
-`jobId` in the configuration file is ignored. Both discovery and execution
-receive the id in their cleared host environment when the variable and id are
-present. Without a supplied id the variable is omitted; the broker decides
-whether such a request is valid. The variable name must use uppercase letters,
-digits, and underscores, starting with a letter or underscore, and cannot
-replace `PATH` or `LOOM_PAGE_RPC_QUEUE`. Neither the model's arguments nor
-ambient process environment select the id.
+A call's `loomId` and `expectedVersion` travel in `context` as `loom_id` and
+`expected_version`, and `context` is left out when the call names neither. The
+host answers with its manifest and with each command's result unchanged. The
+host decides what a run may list and run: it filters its listing for the caller,
+each command's `actors`, `origins_required`, and `origins_refused` apply to this
+caller as to any other, and the run-id header marks the call as an agent's
+session. cf-harness filters nothing itself.
 
-| Tool               | Host command                                                     |
-| ------------------ | ---------------------------------------------------------------- |
-| `list_commands`    | `loom command list --json`                                       |
-| `run_command`      | `loom command run <id> --args-json - --json [--loom] [--expect]` |
-| `run_read_command` | The same invocation, with `--read-only` appended                 |
+The host may also name the commands relevant to a run: `--commands-relevant`,
+repeatable, or `relevant` in a local-job profile's `commands` entry. A hint
+only, it neither adds a command to the listing nor takes one away:
+`list_commands` shows those commands first and marks them `relevant: true`, so a
+listing past the model bound keeps them whole.
 
-`list_commands`, the first `run_command` of a run, and every `run_read_command`
-read the listing. Each call `run_command` or `run_read_command` sends to the
-host, a lone call or one call of a batch, is one `loom command run` process; a
-call refused before it is sent starts none.
+`list_commands` and the first `run_command` of a run read the listing. Each call
+`run_command` sends to the host, a lone call or one call of a batch, is one
+`POST`; a call refused before it is sent sends nothing.
 
 ## The run's catalog
 
 The tools read one catalog, held for the run: the host's listing is read the
 first time a tool needs it and kept for the rest of the run, so a run that calls
-many commands lists once. An explicit `list_commands`, and every
-`run_read_command`, reads the host afresh and holds what it read, so the
-read-only grant `run_read_command` checks is the host's current one. A read that
-fails is not held; the next call asks the host again.
+many commands lists once. An explicit `list_commands` reads the host afresh and
+holds what it read. A read that fails is not held; the next call asks the host
+again.
 
 ## `list_commands`
 
@@ -90,10 +77,9 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
       "description": "…",
-      "readOnlyGranted": true
+      "relevant": true
     }
-  ],
-  "hidden": 1
+  ]
 }
 ```
 
@@ -117,37 +103,18 @@ Each entry's `signature` is one line read from the command's argument schema
   where it declares none). A command whose target is `loom` takes a `loomId`;
   `run_command` passes the one a call names and infers none from the target.
 
-An entry carries `readOnlyGranted: true` where the broker grants read-only
-execution of the command, the grant `run_read_command` requires.
-
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
 command named in `detail` also carries its `inputSchema`: the host's schema with
 its `x-*` extension keywords removed, which every schema the model sees is, or
 `true`, open, where the host's is not an object or is larger than 16 KiB once
 those keywords are removed. A listing larger than the model bound keeps its
 first entries whole and the rest without description; a command named in
-`detail` is always kept whole. `omitted` counts rows that could not be read or
-fell past the catalog limit, and `compacted` the entries shown without
-description.
+`detail` is always kept whole. Every row the host lists is kept, however many;
+`omitted` counts rows that could not be read as a command, and `compacted` the
+entries shown without description.
 
-A manifest row is left out, and counted as `hidden`, when its own declarations
-say an agent may not run it:
-
-- `origin: "pattern"` — a piece's verb, which an agent reaches through the piece
-  it holds;
-- `developer: true`;
-- `actors` naming people only;
-- `origins_refused` holding `session`, or `origins_required` not holding it — a
-  broker-stamped run reaches the command layer with origin `session`;
-- a `grant` — the command runs only over a person's consent grant.
-
-The filter is presentation. The broker's scope is what decides; a row the host
-declares nothing about is shown.
-
-An absent or unknown effect grants no read-only authority. The listing's
-`notice` says to assume such a command may change the person's data. A broker's
-`readOnlyGranted` stamp is separate from the command's declared effect and from
-the consent `grant` that hides a row.
+The listing's `notice` says to assume a command with an absent or unknown effect
+may change the person's data.
 
 ## `run_command`
 
@@ -172,8 +139,8 @@ A batch carries one to sixteen calls, and one that names `command` as well as
 `calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
 anything is sent, each call is checked against the run's catalog: a command the
 catalog does not show is refused, so what a run can call is what it can see. The
-host's command layer checks each call's `args` against the command's schema; the
-broker refuses a command the host has withdrawn since the catalog was read.
+host's command layer checks each call's `args` against the command's schema, and
+refuses a command the host has withdrawn since the catalog was read.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -186,7 +153,7 @@ Each call, alone or in a batch, comes back as one of:
   `mayHaveLanded`, `completed`, and `bodyBytes`, each text cut to an
   identifier's length and `completed` to its first 32 operation ids, so the
   summary stays small beside the answer's measured `entry`. A refusal by the
-  broker (`forbidden`) or by the command layer (`refused`) reads as
+  host (`forbidden`) or by the command layer (`refused`) reads as
   `code: "not_granted"`, with the host's code beside it as `hostCode` and a
   `hint` telling the model to offer the command to the person in its result
   rather than retry it. An answer the command layer refused as `bad-args` — the
@@ -243,32 +210,8 @@ the host declares the command a read. Policy judges a tool call, so a batch is
 authorized or refused whole, as one write. Policy treats it as any other write:
 under `enforce-explicit` and `enforce-strict` a call runs only when the run's
 task is bound as a `direct-command` prompt slot, so a task that arrived as
-`context` — a request a pattern submitted, say — cannot invoke this tool.
-
-## `run_read_command`
-
-Shares `run_command`'s inputs, one call or a batch, its catalog lookup, argument
-checks, output, and confidentiality measurement. Its effect class is `read`, so
-an enforcing context-bound task may invoke it. Before execution it reads the
-host's catalog afresh and requires, for each call, that the selected row has
-both `effect: "read"` and the broker's literal `readOnlyGranted: true`. A
-command the fresh listing does not show returns `unknown_command`; a changed or
-unknown effect, or an absent read-only grant, returns `not_granted` with
-`landed: "no"` and a `hint`, without issuing a command.
-
-At `enforce-strict`, `list_commands` and `run_read_command` are the narrow
-host-broker read exception for an explicitly `context`-bound task. Quoted or
-absent task authority still cannot invoke them, other strict read tools keep
-their existing gate, and `run_command` remains a write. The policy trace names
-this admission `cfc_enforce_strict_host_command_read`; invocation still checks
-the current broker grant rather than treating the policy admission as one.
-
-The invocation appends `--read-only`, outside the model's JSON arguments. A host
-that supports this tool must propagate that demand to its broker and refuse the
-call unless the command's current effect is `read` and the current job's grant
-permits read-only execution. This final check covers changes between discovery
-and execution. The broker supplies the catalog stamp; neither model arguments
-nor source content may supply it. `run_command` sends no read-only demand.
+`context` — a request a pattern submitted through the `agent` built-in, say —
+can list commands but cannot invoke this tool.
 
 ## The answer is Loom data
 

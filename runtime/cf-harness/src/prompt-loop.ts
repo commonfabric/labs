@@ -6,12 +6,12 @@ import {
   evaluateHarnessWriteFileAuthorization,
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { isAbsolute, relative } from "@std/path";
 
 import { isDigestBoundPromptSlot } from "./run-continuation.ts";
@@ -3122,18 +3122,6 @@ const evaluateToolPolicy = (
         }),
       };
     case "enforce-strict":
-      if (
-        promptSlotBinding?.role === "context" && effectClass === "read" &&
-        descriptor.hostGrantedRead === true
-      ) {
-        // The host owns the catalog and the grant: the tool rechecks both on
-        // a fresh listing before it sends, and the broker again when it
-        // executes.
-        return {
-          allowed: true,
-          reasonCodes: ["cfc_enforce_strict_host_command_read"],
-        };
-      }
       if (directCommand) {
         return {
           allowed: true,
@@ -5929,7 +5917,7 @@ export class CfHarnessPromptLoop {
       };
     }
     if (
-      (toolId === "run_command" || toolId === "run_read_command") &&
+      toolId === "run_command" &&
       isObjectNotArray(output)
     ) {
       // A command's answer is measured like a retrieval row: the model sees

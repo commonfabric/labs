@@ -185,6 +185,9 @@ a message another room's rules govern, and what keeps a reply from linking
 the room to a document of another space.
 
 `commitEdit` and `commitDelete` are admitted only for the message's own sender.
+They compare the authenticated event actor with the message's `authored-by`
+attestation. A resolved profile is required, but selecting a profile neither
+grants nor removes the actor's authorship rights.
 `commitEdit` records the new text in place, with the time as `editedAt`.
 `commitDelete` records the deletion, which keeps the author and drops the text
 and the message's link to its reactions, or, when the room's
@@ -197,9 +200,13 @@ room as in a group room or a space's own chat, when the room's policy states
 handler is bound to that setting as a value, the same value that picks which
 policy document `about.policy` links, so a room enforces what it states, and a
 binding without the setting lets no OWNER obliterate. One function,
-`messageRightsOf()`, states who may edit, delete, and obliterate a message: the
-three handlers admit an act by it, and `messageRights` and the rendering's
-controls offer one by it, so what a reader is offered is what the room takes.
+`messageRightsOf()`, states who may edit, delete, and obliterate a message from
+its authorship and moderation facts. Handlers identify the author by the
+authenticated actor. Displayed `messageRights` and controls use the owner of
+the viewer's selected profile, as `profileOwnerOf()` determines from its
+attestation and name-chain ownership. Authenticated actor identity is available
+only inside handlers, so a selected profile can offer a control the handler
+refuses. Obliteration needs no resolved profile.
 `commitObliterate` rewrites the message to its tombstone, which drops its author
 and its link to its reactions. So the message's write policy admits it alongside
 the send handlers, `commitEdit`, and `commitDelete`.
@@ -218,7 +225,9 @@ asked.
 onto it unless the sender already has one there with that emoji.
 `commitDeleteReaction` reads the list, and removes the sender's reaction with
 that emoji by its cell, with `removeByValue()`, the mergeable removal, so a
-reaction added and one removed at the same moment both land. The reactions
+reaction added and one removed at the same moment both land. It checks the
+reaction's `authored-by` attestation against the authenticated actor. Reaction
+addition and tallying identify reactors by profile. The reactions
 are a separately authorized part of the message: the list is a document of
 its own, which the send that made the message made and the message links, so
 the send handlers and `commitEdit` can't write a reaction, and the reaction

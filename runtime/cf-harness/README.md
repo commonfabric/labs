@@ -11,11 +11,11 @@ duplicating them here.
 built as a general Common Fabric agent runtime, with Loom as the first target
 use case.
 
-The package is experimental but already integrated into Loom and Pattern
-Factory. It has a real execution core, bounded batch and interactive prompt/tool
-loops, durable artifacts and resumability, an operator CLI, explicit Agent
-Skills support, constrained delegation profiles, and CFC-aware mediation and
-deny/recovery shaping.
+The package is experimental but already integrated into Loom. It has a real
+execution core, bounded batch and interactive prompt/tool loops, durable
+artifacts and resumability, an operator CLI, explicit Agent Skills support,
+constrained delegation profiles, and CFC-aware mediation and deny/recovery
+shaping.
 
 For a concise status and lifecycle-aware documentation map, start with
 [docs/README.md](docs/README.md) and
@@ -243,15 +243,14 @@ What works today:
     (present only with `--loom-retrieval-config`; read-only, each row measured
     against the run's observation ceiling; a row loom returns without a label is
     given the query's label, and one whose label is malformed is withheld)
-  - `list_commands`, `run_command`, and `run_read_command` (present only with
-    `--loom-commands-config` or `CF_HARNESS_LOOM_COMMANDS_CONFIG`; the commands
-    the host's broker admits for this run, run as the agent; the listing shows
-    each command as a one-line signature and is the host's command metadata,
-    unmeasured; `run_command` refuses a name the listing does not show, takes
-    one call or a batch of up to sixteen, and measures each answer like a
-    retrieval row; `run_read_command` takes the same calls but sends only a
-    command a fresh listing declares a read and the broker grants read-only,
-    while `run_command` remains write-class)
+  - `list_commands` and `run_command` (present only with `--commands-url`,
+    `--commands-actor` and `--commands-run-id` naming the host's command
+    endpoint, which the agent runner passes from a local-job profile's
+    `commands` entry with the job's own id as the run id; the commands the host
+    offers, run as the actor the host names; the listing shows each command as a
+    one-line signature and is the host's command metadata, unmeasured;
+    `run_command` refuses a name the listing does not show, takes one call or a
+    batch of up to sixteen, and measures each answer like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -964,8 +963,8 @@ deno task run -- \
   --print-transcript
 ```
 
-The gateway can also be selected via environment, which lets callers (loom,
-pattern-factory) switch to a local model without threading new flags:
+The gateway can also be selected via environment, which lets callers such as
+Loom switch to a local model without threading new flags:
 
 ```bash
 export CF_HARNESS_GATEWAY_BASE_URL=http://localhost:8080/
@@ -2987,7 +2986,6 @@ Explicit skill preload:
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
-  --cwd pattern-factory \
   --gateway-auth-mode none \
   --skills-root labs/skills \
   --skill pattern-dev \
@@ -3000,15 +2998,14 @@ Sandbox rootfs override, for a rootfs with the tools a run needs:
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
-  --cwd pattern-factory \
   --gateway-auth-mode none \
   --sandbox-rootfs /path/to/deno2-rootfs \
   --prompt "Run deno task cf --help and report whether it works."
 ```
 
 Use this for Deno 2 / Common Fabric CLI validation while keeping the mounted
-workspace as the source of truth for Labs, Pattern Factory, and Loom code. Run
-reports include the rootfs as the `image` of the capability snapshot.
+workspace as the source of truth for Labs and Loom code. Run reports include the
+rootfs as the `image` of the capability snapshot.
 
 Loom-backed batch runs may also pass a retained manifest:
 

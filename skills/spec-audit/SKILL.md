@@ -32,11 +32,12 @@ load-bearing evidence quickly.
   `base/api/index.ts`. Mechanical stage claims are pinned by
   `base/ts-transformers/test/spec-sync.test.ts`.
 - Cross-package contracts with no single home (historically the blind spot):
-  transformer emission ↔ runner sandbox verifier (`@commonfabric/utils` sandbox
-  contract); pattern-coverage ↔ runner line-offset/cache couplings
-  (runner/harness/engine.ts); bare WeakMap boundary with schema-generator
-  (cross-stage-state.ts header); CFC aliases/policy markers ↔ schema generator ↔
-  policy compilation ↔ runner fail-closed IFC validation.
+  transformer emission ↔ runner sandbox verifier
+  (`@commonfabric/pattern-contract/sandbox-contract`); pattern-coverage ↔ runner
+  line-offset/cache couplings (runner/harness/engine.ts); bare WeakMap boundary
+  with schema-generator (cross-stage-state.ts header); CFC aliases/policy
+  markers ↔ schema generator ↔ policy compilation ↔ runner fail-closed IFC
+  validation.
 
 ## Known drift patterns (seeds, not the boundary)
 

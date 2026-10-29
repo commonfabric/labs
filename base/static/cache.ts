@@ -5,7 +5,7 @@ import { join } from "@std/path/posix/join";
 // is shimmed, causing a fail to access `os` from `undefined`.
 import { toFileUrl } from "@std/path/posix/to-file-url";
 
-import { isDeno } from "@commonfabric/utils/env";
+import { isDeno } from "@commonfabric/platform/env";
 
 import { assets } from "./assets.ts";
 import { generateETag } from "./etag.ts";

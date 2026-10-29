@@ -1,10 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 import {
   acceptedMoveProblems,
   compareDumps,
   describeCompileErrors,
   describeFailures,
+  dumperConfig,
+  workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
   assignmentDigest,
@@ -450,5 +453,101 @@ describe("check-cause-assignments", () => {
         `  ambiguous, holds state: [0, 1, 2] -> [0, 1]: ${CHILD} (entry pattern)`,
       );
     });
+  });
+  describe("dumperConfig()", () => {
+    /** Writes `files`, each a path under `root` and its contents. */
+    async function write(root: string, files: Record<string, string>) {
+      for (const [path, text] of Object.entries(files)) {
+        await Deno.mkdir(join(root, path, ".."), { recursive: true });
+        await Deno.writeTextFile(join(root, path), text);
+      }
+    }
+
+    /**
+     * Runs `test` against a base checkout with package `@t/a` and a change
+     * that adds `@t/b`, and removes both afterwards.
+     */
+    async function withCheckouts(
+      test: (checkouts: { base: string; head: string }) => Promise<void>,
+    ): Promise<void> {
+      const scratch = await Deno.makeTempDir({ prefix: "dumper-config-" });
+      const a = {
+        "base/a/deno.jsonc": JSON.stringify({
+          name: "@t/a",
+          exports: { "./m": "./src/m.ts" },
+        }),
+        "base/a/src/m.ts": "export const m = 1;\n",
+      };
+      const base = join(scratch, "base");
+      await write(base, {
+        ...a,
+        "deno.jsonc": JSON.stringify({
+          workspace: ["./base/a"],
+          imports: { "@std/path": "jsr:@std/path@^1" },
+        }),
+      });
+      const head = join(scratch, "head");
+      await write(head, {
+        ...a,
+        "deno.jsonc": JSON.stringify({ workspace: ["./base/a", "./base/b"] }),
+        "base/b/deno.jsonc": JSON.stringify({
+          name: "@t/b",
+          imports: { "@/": "./src/" },
+          exports: { ".": "./src/index.ts", "./n": "./src/n.ts" },
+        }),
+        "base/b/src/index.ts": 'export { n as b } from "@/n.ts";\n',
+        "base/b/src/n.ts": "export const n = 3;\n",
+        "tasks/use.ts":
+          'import { n } from "@t/b/n";\nimport { b } from "@t/b";\n' +
+          "console.log(n, b);\n",
+      });
+      try {
+        await test({ base, head });
+      } finally {
+        await Deno.remove(scratch, { recursive: true });
+      }
+    }
+
+    it("returns the checkout's own configuration where the change adds no package", () =>
+      withCheckouts(async ({ head }) => {
+        expect(await dumperConfig(head, head)).toBe(join(head, "deno.jsonc"));
+      }));
+
+    it("adds an import for each module of a package only the change has, and that package's own imports, and nothing for one both have", () =>
+      withCheckouts(async ({ base, head }) => {
+        const config = JSON.parse(
+          await Deno.readTextFile(await dumperConfig(base, head)),
+        );
+        expect(config.workspace).toEqual(["./base/a"]);
+        expect(config.imports).toEqual({
+          "@std/path": "jsr:@std/path@^1",
+          "@t/b": toFileUrl(join(head, "base/b/src/index.ts")).href,
+          "@t/b/n": toFileUrl(join(head, "base/b/src/n.ts")).href,
+        });
+        expect(config.scopes).toEqual({
+          [toFileUrl(join(head, "base/b/")).href]: {
+            "@/": toFileUrl(join(head, "base/b/src/")).href,
+          },
+        });
+      }));
+
+    it("lets a module of the change name its new package while the base checkout's configuration is in force", () =>
+      withCheckouts(async ({ base, head }) => {
+        const run = (config: string) =>
+          new Deno.Command(Deno.execPath(), {
+            args: ["run", "--config", config, join(head, "tasks/use.ts")],
+            cwd: base,
+            stdout: "piped",
+            stderr: "piped",
+          }).output();
+        const without = await run(join(base, "deno.jsonc"));
+        expect(without.code).not.toBe(0);
+        expect(new TextDecoder().decode(without.stderr)).toContain(
+          'not a dependency and not in import map from "' +
+            toFileUrl(join(head, "tasks/use.ts")).href,
+        );
+        const withAdded = await run(await dumperConfig(base, head));
+        expect(new TextDecoder().decode(withAdded.stdout)).toBe("3 3\n");
+      }));
   });
 });

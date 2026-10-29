@@ -9,7 +9,7 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { type Cell, parseLink } from "@commonfabric/runner";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import {
   buildTopicsFixture,

@@ -3,7 +3,7 @@
  * poisons the whole attempt, including when authored code catches the signal.
  */
 
-import { PathKeyMap } from "@commonfabric/utils/path-key-map";
+import { PathKeyMap } from "@commonfabric/collections/path-key-map";
 
 import type { IMemorySpaceAddress, IStorageTransaction } from "./interface.ts";
 import { transactionLayers } from "./reactivity-log.ts";

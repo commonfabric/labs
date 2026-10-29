@@ -27,7 +27,7 @@ import {
   getLogger,
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { SpaceAccessChange } from "../builder/types.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";

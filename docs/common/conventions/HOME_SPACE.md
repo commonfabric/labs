@@ -133,9 +133,21 @@ most-recently-used (MRU) ordering:
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
-a random DID owned by the creating user and writable by anyone, since its ACL
-grants the wildcard `"*"` WRITE: a runtime showing a profile writes into the
-profile's space, so a visitor needs more than READ. CFC owner-protects the
+a random DID that owns itself (`selfOwned`) and declares the `profile` kind:
+its ACL grants its own DID OWNER and the wildcard `"*"` WRITE, and the
+creating user, who is not in the list, holds instead a delegation the space's
+key issued over it before being destroyed. The home space records that
+delegation beside the allocation, in the list under the cause
+`{ delegations: <space DID> }`, in the commit that appends the profile link;
+the record is a list so that a delegation issued later, with another
+command or policy, has a place beside it. A runtime loads every profile's
+delegations at startup
+(`Runtime.loadProfileDelegations`) so its sessions on the profile space act
+under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
+A profile created before profiles owned themselves names its creator as owner
+and has no delegation; it keeps opening on the creator's grant. The wildcard
+WRITE is there because a runtime showing a profile writes into the profile's
+space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
 a visitor (a *named* `inSpace(name)` would put every

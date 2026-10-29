@@ -20,7 +20,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
   isPlainObject,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   DEFS_KEYS,
@@ -469,7 +469,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
  * Copy one key onto the reduced extension.
  *
  * Uses `defineProperty` rather than `kept[key] = value`, the same way
- * `stripUndefinedProps` in `@commonfabric/utils` does, so that a key named
+ * `stripUndefinedProps` in `@commonfabric/js-values` does, so that a key named
  * `"__proto__"` lands as a plain own data property rather than reaching the
  * prototype setter. A schema read off the wire can carry such a key, because
  * `JSON.parse` makes it an own property, and a key this comparison does not

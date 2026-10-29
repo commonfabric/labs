@@ -7,7 +7,7 @@ import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
   resetAllTimingStats,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,

@@ -15,8 +15,8 @@ import {
   WaitForOptions,
   WaitForSelectorOptions,
 } from "@astral/astral";
-import { sleep } from "@commonfabric/utils/sleep";
-import { Mutable } from "@commonfabric/utils/types";
+import { sleep } from "@commonfabric/async/sleep";
+import { Mutable } from "@commonfabric/js-values/types";
 
 import type {
   ElementHandle,

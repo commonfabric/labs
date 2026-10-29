@@ -34,7 +34,10 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;

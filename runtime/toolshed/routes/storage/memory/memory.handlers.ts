@@ -12,7 +12,7 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type * as Routes from "./memory.routes.ts";
 import { formatMemWriteTrace } from "./memwrite-trace.ts";

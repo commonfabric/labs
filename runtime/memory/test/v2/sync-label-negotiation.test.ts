@@ -5,7 +5,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   decodeMemoryBoundary,

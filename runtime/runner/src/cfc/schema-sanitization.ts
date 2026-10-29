@@ -24,7 +24,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "../fabric-special-object-brand.ts";
 import {

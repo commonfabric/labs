@@ -239,19 +239,28 @@ runtime that set the parent up, and the cause is one this runtime's build of
 the same pattern gives, so the record is held against this runtime's build
 (`compareStoredSetupBuild`): an instance whose cell the record shows holding
 state at another number, or whose description the record's cells cannot be
-matched with, carries nothing over. With no record, this runtime's build
-places the instance. A child is carried over by one instance at most. A start
-loads the pattern last set up by its identity, and syncs the children at the
-positional causes it gives the instances it names, before setup reads them.
+matched with, is not placed this way. With no record, this runtime's build
+places the instance.
+
+An instance that way does not place carries over the one child, among the
+positional spots the parent's manifest records, whose `patternIdentity` is the
+instance's own child pattern identity, leaving out a child that a positional
+node of the pattern still sets up at its own spot under that identity. That
+covers an instance the pattern last set up does not name, which is new or was
+positional there, an instance whose parent's pattern last set up does not load
+or who has none, and an instance the record numbers otherwise. It reads stored
+identities rather than any build's numbers, so a renumbering cannot mislead
+it. More than one such child, or one that two instances would each take, goes
+to neither. A child is carried over by one instance at most. A start loads the
+pattern last set up by its identity, and syncs the children at the positional
+causes it gives the instances it names and at every positional spot the
+parent's manifest records, before setup reads them.
 
 An instance that carries nothing over starts fresh, and the setup logs
-`instance-carry-over` naming it: one the pattern last set up does not name,
-which is new or was positional there; one whose parent's pattern last set up
-does not load, or that the record numbers otherwise; and one whose child at
-that cause another instance already carries. Whatever a version without the
-name set up for it is left where it is. An instance the parent ran under a
-name the pattern no longer gives is reported the same way, and its child is
-left behind.
+`instance-carry-over` naming it, and, where the record numbers it otherwise,
+saying so. Whatever a version without the name set up for it is left where it
+is. An instance the parent ran under a name the pattern no longer gives is
+reported the same way, and its child is left behind.
 
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from

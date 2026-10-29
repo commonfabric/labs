@@ -17,7 +17,7 @@
  * functions below pull the concrete languages in.
  */
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import type {
   Definition,

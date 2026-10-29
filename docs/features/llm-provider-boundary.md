@@ -17,7 +17,7 @@ the providers the toolshed can resolve a name to.
 | Loaded by | a browser tab, the command line, a background service, and the server too, for the request types | the toolshed server process alone |
 | Knows | the request shape and a model **name** | every registered model, its provider, and its capabilities |
 | Holds | no credential | whatever each provider needs to authenticate |
-| Depends on | `@commonfabric/api`, `@commonfabric/utils`, `@commonfabric/pure-json` | the AI SDK and its four provider packages |
+| Depends on | `@commonfabric/api`, `@commonfabric/js-values`, `@commonfabric/json` | the AI SDK and its four provider packages |
 
 A caller builds an `LLMRequest` whose `model` field is a string and posts it to
 `/api/ai/llm`. The string may be a provider-qualified name, a shorter alias, or

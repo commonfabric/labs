@@ -1,4 +1,4 @@
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import { ACL, ACLUser, ANYONE, Capability, DID, DIDKey } from "./interface.ts";
 import { isDID } from "@commonfabric/identity/did";
 

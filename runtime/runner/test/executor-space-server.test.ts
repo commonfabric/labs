@@ -21,7 +21,7 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {

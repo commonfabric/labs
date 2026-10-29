@@ -13,7 +13,7 @@
 
 import { dirname, fromFileUrl, join } from "@std/path";
 import { parseLink } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

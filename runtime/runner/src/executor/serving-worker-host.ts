@@ -12,8 +12,8 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { getLogger } from "@commonfabric/logger";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import {

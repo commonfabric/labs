@@ -41,6 +41,7 @@ import {
   type FabricEpochNsec,
   getEntityId,
   handler,
+  principalOf,
   spaceAccess,
   spaceOf,
   type Stream,
@@ -589,14 +590,10 @@ export const isDeleted = (
 export const isOwnerOf = (cell: Cell<unknown>): boolean =>
   spaceAccess(cell) === "OWNER";
 
-/** Whether `profile` is the profile `record`'s author sent it under. */
-const isAuthorOf = (
-  record: RightsFacts | undefined,
-  profile: ProfileCell | undefined,
-): boolean => {
-  const author = record?.authorProfile;
-  return author !== undefined && profile !== undefined &&
-    equals(author, profile);
+/** Whether the authenticated actor wrote the record's current contents. */
+const isActorAuthor = (record: Cell<unknown>): boolean => {
+  const actor = currentPrincipal();
+  return actor !== undefined && principalOf(record, "authored-by") === actor;
 };
 
 /** What one person may do to one message. */
@@ -619,26 +616,27 @@ export const NO_MESSAGE_RIGHTS: MessageRights = {
 };
 
 /**
- * What the person acting under `profile` may do to the message `record` in a
+ * What a person may do to the message `record`, given `isAuthor`, in a
  * room of `kind`, given whether they hold OWNER in the room's space and
  * whether the room lets its OWNERs obliterate. Only the message's author may
  * edit or delete it, and in a direct room they may obliterate it too. An OWNER
  * may obliterate any message while `ownersMayObliterate` holds, and otherwise
  * gains nothing over anyone else: never an edit or a deletion of someone
  * else's message. A deleted message takes nothing further but obliteration,
- * and an obliterated one, which names no author, takes nothing. The room's
- * handlers admit an act by this, and the room's view and rendering offer one
- * by it.
+ * and an obliterated one, which names no author, takes nothing. Handlers
+ * establish `isAuthor` from the authenticated actor; displayed rights use
+ * the selected profile's verified owner and may differ from what a handler
+ * permits.
  */
 export const messageRightsOf = (
   record: RightsFacts | undefined,
-  profile: ProfileCell | undefined,
+  isAuthor: boolean,
   kind: ChatRoomKind,
   isOwner: boolean,
   ownersMayObliterate: boolean,
 ): MessageRights =>
   rightsOf(
-    isAuthorOf(record, profile),
+    isAuthor,
     !isDeleted(record),
     record?.authorProfile !== undefined,
     kind,
@@ -1225,13 +1223,12 @@ const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
  * `joined` is told. A send that joins a thread with no title yet, carrying a
  * `threadTitle`, gives the thread that title in `threadInfo`.
  *
- * Every handler here takes the event a rendered control of the room sends,
- * and the controls offer only acts the viewer may take, so a handler checks
- * what the element's write policy does not — whose message it is, and that
- * a message acted on or replied to is one of the room's — and refuses
- * anything else by throwing, with a reason a person can read, before it
- * writes: the run fails and writes nothing, and a send that awaits its
- * handling is rejected with the reason. An act that would change nothing,
+ * Every handler here takes the event a rendered control of the room sends.
+ * A handler checks what the element's write policy does not — whose message
+ * it is, and that a message acted on or replied to is one of the room's —
+ * and refuses anything else by throwing, with a reason a person can read,
+ * before it writes: the run fails and writes nothing, and a send that awaits
+ * its handling is rejected with the reason. An act that would change nothing,
  * such as a reaction added twice, writes nothing and succeeds.
  *
  * @throws If the profile hasn't resolved, the send has neither text nor
@@ -1606,7 +1603,7 @@ export const commitEdit = handler<RoomStreamEvent, EditState>(
     const target = messageInRoom(room, event?.message ?? message);
     const current = target.get();
     if (isDeleted(current)) throw new Error(DELETED);
-    if (!isAuthorOf(current, profile)) {
+    if (!isActorAuthor(target)) {
       throw new Error("Only its author can edit a message.");
     }
     const body = textOf(event);
@@ -1638,7 +1635,7 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
     const current = target.get();
     // Deleted already: there is nothing to delete.
     if (isDeleted(current)) return;
-    if (!isAuthorOf(current, profile)) {
+    if (!isActorAuthor(target)) {
       throw new Error("Only its author can delete a message.");
     }
     leaveTombstone(target, !FABRICHAT_POLICY.deletionIsObliteration);
@@ -1651,14 +1648,14 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
  * author, labeled with whoever obliterated it.
  */
 export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
-  (event, { myProfile, room, message, kind, ownersMayObliterate }) => {
+  (event, { room, message, kind, ownersMayObliterate }) => {
     const target = messageInRoom(room, event?.message ?? message);
     const current = target.get();
     // Obliterated already, its author gone: there is nothing to remove.
     if (isDeleted(current) && current?.authorProfile === undefined) return;
     const rights = messageRightsOf(
       current,
-      resolvedProfile(myProfile),
+      isActorAuthor(target),
       kind,
       isOwnerOf(target),
       ownersMayObliterate === true,
@@ -1752,7 +1749,7 @@ export const commitDeleteReaction = handler<
     const record = removed.get();
     // One no longer there, which reads as none, removes nothing.
     if (record === undefined) return;
-    if (!equals(record.reactorProfile, profile)) {
+    if (!isActorAuthor(removed)) {
       throw new Error("Only the person who reacted can remove a reaction.");
     }
     list.removeByValue(removed);

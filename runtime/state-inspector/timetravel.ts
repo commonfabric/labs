@@ -18,8 +18,8 @@ import {
 import { applyPatch } from "@commonfabric/memory/v2/patch";
 import type { PatchOp } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import type { SpaceDb } from "./db.ts";
 import {

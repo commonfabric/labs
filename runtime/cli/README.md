@@ -1802,6 +1802,8 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
 | `--api-url`, `CF_API_URL`   | The toolshed serving that user's home space.                                                                                      |
 | `--local-api-url`           | The toolshed the runner sits beside, recorded as the runner's `host`. Defaults to `--api-url`.                                    |
 | `--loom-retrieval-config`   | The host-owned JSON file backing the read-only Loom tools. Without it the runner offers no `loom_*` tool.                         |
+| `--commands-url`            | The host's command endpoint behind `list_commands` and `run_command` for Fabric runs. Without it the runner offers neither.       |
+| `--commands-actor`          | The actor a Fabric run's commands run as, passed to the host as given. Goes with `--commands-url`.                                |
 | `--tools`                   | Comma-separated tool names the runner offers. Defaults to what its configuration backs.                                           |
 | `--max-concurrent`          | How many runs the process holds at once. Defaults to 1.                                                                           |
 | `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |
@@ -1911,7 +1913,7 @@ authority. A caller enqueues
 `{caller, profile, idempotencyKey, task,
 instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
-browserHost?, inputs?, foreignSpaces?, interactive?}`
+browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
 with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
 `POST /jobs/<id>/cancel`, and watches one with
@@ -1967,17 +1969,38 @@ holds as a handle from its first turn. An address naming another space by DID
 space, under the profile's identity, and may call the verbs of the piece it was
 handed. An input in another space with no host, a `foreignSpaces` entry no input
 names, or a slug address naming another space is refused at enqueue as
-`beyond_profile`. It may set nothing else. A job runs through the same
-`cf-harness` path as an agent run, with the fabric session its profile names, if
-any. Every tool call, including delegated calls, produces progress, as does its
-return. A `step` carries `{turn, tool}`, and the same step again with
-`returned: true` once the calls of that turn have returned and the loop's model
-has the turn. A `command` records each command the host ran for it. Children add
+`beyond_profile`. A request may also narrow `hostMounts` as described below, and
+may set no other profile fields. A job runs through the same `cf-harness` path
+as an agent run, with the fabric session its profile names, if any. Every tool
+call, including delegated calls, produces progress, as does its return. A `step`
+carries `{turn, tool}`, and the same step again with `returned: true` once the
+calls of that turn have returned and the loop's model has the turn. A `command`
+records each command the host ran for it. Children add
 `child: {profile, childRunId, parentToolCallId, depth}` to either body. The
 harness admits one level of delegation, so depth is `1`. Only a child's
 `browser` tool steps carry `action` (such as `click` or `snapshot`), without the
 operation's arguments or page content. Other child tool steps, such as
 `submit_result`, omit `action`.
+
+A profile may grant `hostMounts`, a list of
+`{name, hostPath, sandboxPath, mode}` objects. Each names an existing host
+directory mounted into the job's sandbox, with `mode: "readonly"` or
+`"writable"`. Names start with an alphanumeric character and contain only
+alphanumerics, dots, underscores, or dashes; names must be unique. Host paths
+resolve relative to the profile file's directory and must name existing non-root
+directories. Sandbox paths must be absolute and non-root. The runner uses
+cf-harness's mount validation when reading the profile file, so an invalid grant
+refuses startup. Fields must fit the harness's comma-separated grammar: no
+commas or surrounding whitespace.
+
+A request may narrow that grant with `hostMounts: [{name, mode?}]`, selecting
+only profile mounts and optionally lowering `writable` to `readonly`. An omitted
+mode keeps the granted mode. An ungranted name or a request for `writable` on a
+`readonly` mount is `400 beyond_profile`; requests cannot set mount paths.
+Omitting `hostMounts` retains all profile mounts, while `[]` selects none. The
+selection participates in enqueue idempotency and is retained by follow-ups.
+Every run, including a follow-up, reapplies its effective mounts and advertises
+them in its prompt.
 
 Each root assistant message with nonempty content emits one `text {turn, text}`
 event, whole and without truncation or coalescing, in order with its steps.
@@ -2138,11 +2161,11 @@ admitted host answer, limited to 500 characters. An answer withheld by CFC
 contributes no reason text or outputs. The job snapshot's `commands` array holds
 these same bodies in execution order.
 
-The lane binds each harness invocation to the stored job's `id`. A host command
-configuration may name `jobIdEnvVar`; command discovery and execution then
-receive that job id in the named variable of their cleared host environment. The
-request and model tool arguments cannot select the identity, and concurrent jobs
-have separate bindings.
+The lane binds each harness invocation to the stored job's `id`. When the
+profile names a command endpoint (`commands: {url, actor}`), every request to it
+carries that job id in the `X-Loom-Agent-Run-Id` header. The request and model
+tool arguments cannot select the identity, and concurrent jobs have separate
+bindings.
 
 A caller that can show a browser declares `browserHost: {}` on enqueue, under a
 profile that admits one, and the job browses through it: the lane adds
@@ -2860,11 +2883,11 @@ deno task cf --help
 deno task cf check runtime/cli/fixtures/pattern.tsx --no-run
 ```
 
-From a sibling consumer such as Pattern Factory:
+From a repository checked out beside labs:
 
 ```bash
 deno run --allow-run --allow-env --allow-read ../labs/runtime/cli/launcher.ts \
-  -- check workspace/<run-id>/pattern/main.tsx --no-run
+  -- check pattern/main.tsx --no-run
 ```
 
 From a vendored consumer such as Loom:
@@ -2917,6 +2940,9 @@ The supported output switches are:
   returning an empty successful JSON stream.
 - `cf cell get` and `cf wish` always return JSON. Their `--json` options are
   accepted, documented no-ops for callers that select JSON explicitly.
+- `cf delegation show --json` prints one row per delegation of each chain the
+  file holds; `cf delegation issue --out <file> --json` reports the write as one
+  object naming the file, the space, the audience, and the chain's length.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.
@@ -3377,3 +3403,46 @@ same identity to another client preserves its DID. A receipt with null current
 access means access was removed; retrying cannot restore it. See
 [the service contract](../toolshed/README.md#space-invitations) for the SDK,
 proof, deployment, and storage rules.
+
+## Delegating a space to another key
+
+A space is opened by the key its access list grants, or by a key holding a chain
+of delegations from one it grants, which is how a profile space that owns itself
+is opened at all (`docs/specs/profile-delegation.md`). `cf delegation` issues
+such a chain to another key, an agent's or a daemon's, and holds one when the
+CLI connects.
+
+- `cf delegation issue --to <did> --out <file>` issues a delegation over the
+  space from your identity to the key `--to` names, and writes the chain that
+  key presents: the delegation alone where the access list grants you, and
+  behind the chain you hold yourself where you hold the space through one, as a
+  profile's owner does through the delegation Home records, or as a key
+  delegated to in turn does through the chain `--delegations` names. The server
+  resolves the holder's capability from the chain's root, so the holder acts
+  under the grant you act under. It takes `--identity`, `--api-url`, and
+  `--space` or `--url`, or the corresponding `CF_IDENTITY`, `CF_API_URL`, and
+  `CF_SPACE`. `--expires-in <seconds>` gives the delegation an expiry, which the
+  server holds a session to after admitting it. The file `--out` names must not
+  exist; without `--out`, the chain is written to stdout.
+- `cf delegation show <file>` describes each delegation of each chain the file
+  holds: its CID, issuer, audience, subject, command, expiry, and whether a
+  runtime would hold the chain and present it now, with what is wrong with it
+  where it would not, an expired link among them. `--json` prints the rows as
+  JSON.
+
+A chain file is JSON naming its format, `commonfabric/delegation-chains`, and
+listing chains, each the delegations' envelope bytes root first in base64url.
+The delegations inside are UCAN envelopes, so the file adds nothing a holder has
+to trust beyond them; a chain that does not verify is refused where it is held.
+The format is this repository's own rather than the UCAN working group's
+container, which bundles tokens in no order for the recipient to link; reading
+and writing a container is a later feature, for tooling that speaks it.
+
+The `cf piece` and `cf cell` commands, which carry these options, hold the
+chains in the files `--delegations <path>` names, repeatable, or the one
+`CF_DELEGATIONS` names, before they open any space, Home included, so a session
+on a space a chain is over presents it. A file that cannot be read, a chain in
+it that ends at a key other than the identity, one no session would present
+then, expired or not yet valid, or one the runtime refuses, fails the command
+rather than warning: the caller named the file. The delegations your own Home
+records for your profiles are held without naming anything.

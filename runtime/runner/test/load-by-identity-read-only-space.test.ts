@@ -6,7 +6,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";

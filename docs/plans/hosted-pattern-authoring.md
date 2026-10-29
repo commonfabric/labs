@@ -3,8 +3,8 @@
 Implement the product contract in
 [`../specs/hosted-pattern-authoring.md`](../specs/hosted-pattern-authoring.md).
 The smallest useful system has one hosted agent session, two authoring
-operations, and three thin entry points. It does not require the Pattern
-Factory phase machine or server-primary pattern execution.
+operations, and three thin entry points. It does not require a multi-phase
+authoring pipeline or server-primary pattern execution.
 
 ## Status
 
@@ -283,7 +283,7 @@ Success means Home and the CLI complete the same new-space steel thread.
 
 ## Explicitly outside this plan
 
-Do not add multiple-agent orchestration, mandatory Pattern Factory phases,
+Do not add multiple-agent orchestration, mandatory authoring phases,
 automatic repository following, scheduled source updates, automatic stale
 candidate merging, or an agent-controlled compatibility override. This plan
 can grow only when a concrete product requirement or measured failure of the

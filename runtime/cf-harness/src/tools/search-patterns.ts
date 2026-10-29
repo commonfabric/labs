@@ -18,7 +18,7 @@ import type {
 import type { JSONSchema } from "@commonfabric/api";
 import { TRUSTED_PATTERN_PROPERTIES } from "../contracts/trusted-pattern-schema.ts";
 import { schemaToTypeString } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { TrustedPatternRecord } from "../contracts/trusted-pattern.ts";
 import type { HarnessToolDefinition } from "./types.ts";

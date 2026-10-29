@@ -12,7 +12,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import { cloneIfNecessary, hashOf } from "@";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-common";

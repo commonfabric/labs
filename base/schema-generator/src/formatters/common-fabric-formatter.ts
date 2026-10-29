@@ -8,7 +8,10 @@ import {
   CFC_ATOM_TYPE,
   CFC_CANONICAL_ALIAS_NAMES,
 } from "@commonfabric/api/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";

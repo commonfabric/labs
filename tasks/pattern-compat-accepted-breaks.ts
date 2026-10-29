@@ -2336,6 +2336,62 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
+    // The room's answers about its reader went back to per user when the
+    // per-session change was reverted, so the baseline recorded with that
+    // change reports their scope.
+    pattern: "system/fabrichat/room.tsx",
+    baselines: [
+      "20261029T035049Z-H1WYs_4rIJVXq3N5",
+    ],
+    paths: [
+      "result.$VIEWS.room.canAdd",
+      "result.$VIEWS.room.canSend",
+      "result.$VIEWS.room.messageRights",
+      "result.$VIEWS.room.viewer",
+      "result.canAdd",
+      "result.canSend",
+      "result.messageRights",
+      "result.viewer",
+    ],
+    reason:
+      "a room's `canSend`, `canAdd`, `viewer` and `messageRights` went back to per user when the per-session change was reverted",
+    record: "docs/history/fabrichat-room-viewer-per-session-revert.md",
+  },
+  {
+    // A placement's `canSend`, and its read of the room's, went back to per
+    // user with the room's.
+    pattern: "system/fabrichat/placement.tsx",
+    baselines: [
+      "20261029T012601Z-DvhNFxSKBXqtZjw2",
+    ],
+    paths: [
+      "argument.room.canSend",
+      "result.$VIEWS.chat.canSend",
+      "result.room.canSend",
+    ],
+    reason:
+      "a placement's `canSend`, and its read of the room's, went back to per user with the room's",
+    record: "docs/history/fabrichat-room-viewer-per-session-revert.md",
+  },
+  {
+    // The placement the adapter holds, and its data face the adapter
+    // re-exports, went back to per user with the room's `canSend`.
+    pattern: "system/fabrichat/adapter.tsx",
+    baselines: [
+      "20261029T012601Z-IIPTt7RKzLCix33Y",
+    ],
+    paths: [
+      "argument.placement.$VIEWS.chat.canSend",
+      "argument.placement.room.canSend",
+      "result.$VIEWS.chat.canSend",
+      "result.placement.$VIEWS.chat.canSend",
+      "result.placement.room.canSend",
+    ],
+    reason:
+      "the placement the adapter holds, and its data face the adapter re-exports, went back to per user with the room's `canSend`",
+    record: "docs/history/fabrichat-room-viewer-per-session-revert.md",
+  },
+  {
     // A pick was a required link to a held finished book, so every valid
     // result was five rereads. A pick is the recommended book inline now,
     // with an optional link to the finished book it builds on.

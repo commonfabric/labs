@@ -1,6 +1,6 @@
 import { isDID } from "@commonfabric/identity/did";
 import type { ProgramResolver, Source } from "@commonfabric/js-compiler";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import {
   loadVerifiedSourceClosure,

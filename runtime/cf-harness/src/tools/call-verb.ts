@@ -23,7 +23,7 @@ import { isLink } from "@commonfabric/runner";
 import { describeSinkReleaseRefusal } from "@commonfabric/runner/cfc";
 import { localRefTarget } from "@commonfabric/runner/cfc/schema-sanitization";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HANDLE_TOKEN_PATTERN,
   REFERENT_TOKEN_PATTERN,

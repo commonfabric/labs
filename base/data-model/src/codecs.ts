@@ -15,7 +15,7 @@
  * other half of why the rule above is absolute rather than stylistic.
  */
 
-import { isInstance, isObjectOrArray } from "@commonfabric/utils/types";
+import { isInstance, isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
 import type { LiveEnvironment } from "./codec-interface/interface.ts";

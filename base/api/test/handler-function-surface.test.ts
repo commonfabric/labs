@@ -14,7 +14,7 @@ import type {
   HandlerFunction,
   Stream,
 } from "@commonfabric/api";
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
 
 interface AddTopic {
   title: string;

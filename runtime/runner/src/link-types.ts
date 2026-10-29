@@ -8,9 +8,9 @@ import {
 import {
   decodeJsonPointer,
   encodeJsonPointer,
-} from "@commonfabric/utils/json-pointer";
+} from "@commonfabric/json/json-pointer";
 import type { NonDocumentPath } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { parseCellReference, renderCellReference } from "./cell-reference.ts";
 import {
   type CellScope,

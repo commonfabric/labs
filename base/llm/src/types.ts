@@ -4,8 +4,8 @@ import type {
   JSONSchema,
   JSONValue,
 } from "@commonfabric/api";
-import { isPureJson } from "@commonfabric/pure-json";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isPureJson } from "@commonfabric/json";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * The alias a request names to get whichever model the deployment considers

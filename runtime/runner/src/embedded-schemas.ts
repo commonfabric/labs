@@ -25,7 +25,10 @@ import {
   mapSubschemas,
   type SchemaWalkOptions,
 } from "@commonfabric/data-model-schema/schema-walk";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { decodeJsonPointer, encodeJsonPointer } from "./link-types.ts";
 import { rendererVDOMSchema, vnodeSchema } from "./schemas.ts";

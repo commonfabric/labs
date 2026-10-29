@@ -110,12 +110,12 @@ import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentia
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
   isPlainObject,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -145,6 +145,7 @@ import {
   deriveSelectedValue,
 } from "./cell-selection.ts";
 import { cliCommand } from "./cli-name.ts";
+import { holdDelegationChainFiles } from "./delegation.ts";
 import {
   type ExecCommandSpec,
   type ParsedExecArgs,
@@ -194,6 +195,13 @@ export interface SpaceConfig {
   space: string;
   identity: string;
   jsonOutput?: boolean;
+
+  /**
+   * Delegation chain files the identity holds, as absolute paths, each what
+   * `cf delegation issue` writes. `loadPieces` holds every chain in them
+   * before it returns, so a session on a space one is over presents it.
+   */
+  delegations?: string[];
 
   /**
    * Whether opening the connection defers reading the space cell until an
@@ -607,7 +615,8 @@ async function makeSession(config: SpaceConfig): Promise<Session> {
 export interface ConnectionOutput {
   /**
    * Takes each line the connection writes for itself: the navigate callback's
-   * three, and the two warnings a failed connect's own cleanup writes.
+   * three, the two warnings a failed connect's own cleanup writes, and the
+   * warning that the profile delegations Home records could not be loaded.
    */
   readonly report?: (message: string) => void;
 
@@ -753,7 +762,37 @@ export async function loadPieces(
           memoryHostNote(memoryHost, new URL(config.apiUrl)),
       );
     }
+    // The chains the caller named are held before anything opens a space,
+    // Home included, and a file that holds none the identity can present
+    // fails the connection: the caller named it, so it is not best effort.
+    if (config.delegations !== undefined && config.delegations.length > 0) {
+      const paths = config.delegations;
+      await timeCliPhase(
+        "loadPieces.delegationFiles",
+        () =>
+          holdDelegationChainFiles(
+            runtime.storageManager,
+            paths,
+            session.as.did(),
+          ),
+      );
+    }
 
+    // The delegations Home records for the user's profiles, so a profile
+    // space that owns itself opens under its own grant. Best effort: a
+    // runtime that cannot read them opens the space on its key's own grant.
+    try {
+      await timeCliPhase(
+        "loadPieces.profileDelegations",
+        () => runtime.loadProfileDelegations(),
+      );
+    } catch (error) {
+      (output.report ?? console.warn)(
+        `Could not load the profile delegations: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
     const pieces = await timeCliPhase(
       "loadPieces.controller",

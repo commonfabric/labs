@@ -4,7 +4,7 @@ import type {
   MutableJSONSchema,
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
-import { type Mutable } from "@commonfabric/utils/types";
+import { type Mutable } from "@commonfabric/js-values/types";
 import type { ExpansionBudget } from "./typescript/expanding-recursion.ts";
 
 import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";

@@ -14,7 +14,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { nothing } from "lit";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { markdownTemplate } from "./markdown-template.ts";
 

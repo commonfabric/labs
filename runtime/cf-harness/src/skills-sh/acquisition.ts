@@ -11,8 +11,8 @@
  */
 
 import { sha256 } from "@commonfabric/content-hash";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   defaultHarnessFetch,

@@ -3,7 +3,7 @@
  * Run with `deno run -A --v8-flags=--expose-gc
  * runtime/runner/test/immutable-cell-retention.ts`.
  */
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import { deepFreeze } from "@commonfabric/data-model";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { ImmutableCellStore } from "../src/immutable-cell.ts";

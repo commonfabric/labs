@@ -40,7 +40,7 @@ import {
 } from "@commonfabric/runner/pattern-release-time";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * How an origin URL resolves.

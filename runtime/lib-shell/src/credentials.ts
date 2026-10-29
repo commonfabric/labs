@@ -1,4 +1,4 @@
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 export const AUTH_METHOD_PASSKEY = "passkey" as const;
 export const AUTH_METHOD_PASSPHRASE = "passphrase" as const;
 export const AUTH_METHOD_KEYFILE = "keyfile" as const;

@@ -1,4 +1,4 @@
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import type { CodecEngineConfig } from "./CodecEngineConfig.ts";

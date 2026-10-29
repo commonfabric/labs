@@ -15,7 +15,7 @@ import { deepFreeze } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { toDocumentPath } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { writeDetailValueForTarget } from "../src/cfc/prepare.ts";
 import { normalizeCellScope } from "../src/scope.ts";

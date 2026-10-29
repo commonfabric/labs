@@ -1,5 +1,5 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { getTopFrame } from "../builder/pattern.ts";
 import { type Frame } from "../builder/types.ts";
 import {

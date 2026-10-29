@@ -7,7 +7,7 @@
  * explains why.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { createNodeFactory } from "../builder/module.ts";
 import { pattern } from "../builder/pattern.ts";

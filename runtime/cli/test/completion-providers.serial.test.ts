@@ -277,6 +277,10 @@ Deno.test("live candidates: unmapped slots ask for nothing", async () => {
 const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf piece ls -i ", "files", "*.key"],
   ["cf id did ", "files", "*.key"],
+  // A delegation chain file, wherever the identity holds one and where
+  // `cf delegation show` reads one.
+  ["cf piece ls --delegations ", "files", "*.json"],
+  ["cf delegation show ", "files", "*.json"],
   // Every command whose `--root` is the directory its sources resolve
   // against. The set is hand-maintained, so it is asserted whole.
   ["cf piece new --root ", "dirs", undefined],

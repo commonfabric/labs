@@ -14,7 +14,7 @@ import {
   type LLMRequest,
 } from "@commonfabric/llm/types";
 import { type BuiltInLLMMessage } from "@commonfabric/api";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   LLMRequestError,
   LLMUpstreamError,

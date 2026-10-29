@@ -1,6 +1,6 @@
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 import {

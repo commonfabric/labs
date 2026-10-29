@@ -1,5 +1,8 @@
-import { FRAMEWORK_RESULT_KEYS } from "@commonfabric/utils/framework-result-keys";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { FRAMEWORK_RESULT_KEYS } from "@commonfabric/pattern-contract/framework-result-keys";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type ts from "typescript";
 
 import type { TransformationContext } from "../core/mod.ts";

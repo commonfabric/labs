@@ -5,7 +5,7 @@
  * scripts/ci-gantt.ts.
  */
 
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   type CachedCiGanttJob,
   type CachedCiRun,

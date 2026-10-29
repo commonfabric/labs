@@ -11,7 +11,10 @@
  * instead of going through these helpers.
  */
 
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 /**
  * Projects an outgoing Responses request back into the chat-shaped view these

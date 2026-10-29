@@ -7,7 +7,7 @@ import {
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {

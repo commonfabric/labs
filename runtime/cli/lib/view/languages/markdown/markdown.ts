@@ -14,7 +14,7 @@
 import { decodeHTMLStrict as decodeEntities } from "entities";
 import { Lexer } from "marked";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { cpLen } from "../../ansi.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";

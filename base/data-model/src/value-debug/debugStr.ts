@@ -1,4 +1,4 @@
-import { backtickFence } from "@commonfabric/utils/markdown";
+import { backtickFence } from "@commonfabric/text/markdown";
 
 import { toCompactDebugString, toIndentedDebugString } from "./impl.ts";
 import { DEBUG_STR_SIZE_WORDS, DEBUG_STR_WORDS } from "./interface.ts";

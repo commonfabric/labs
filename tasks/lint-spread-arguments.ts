@@ -38,8 +38,8 @@ const MESSAGE =
   "once a call has more than about a hundred thousand of them. Append in a " +
   "loop (`for (const item of items) out.push(item);`), or to an array cell " +
   "with `pushAll(items)`; take the largest or smallest with `maxOf` or " +
-  "`minOf` from `@commonfabric/utils/math`; and replace a range with " +
-  "`spliceAll` from `@commonfabric/utils/arrays`. See " +
+  "`minOf` from `@commonfabric/collections/math`; and replace a range with " +
+  "`spliceAll` from `@commonfabric/collections/splice`. See " +
   "docs/development/DEVELOPMENT.md, " +
   '"Spreading a collection into a call".';
 

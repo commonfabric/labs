@@ -35,4 +35,4 @@ structured comparisons, per-suite warmup hooks, grouped fixture descriptions,
 and golden updates controlled via the `UPDATE_GOLDENS` environment variable.
 
 For additional examples see `base/schema-generator/test/fixtures-runner.test.ts`
-and `packages/js-runtime/test/fixture-based.test.ts` after migration.
+and `base/ts-transformers/test/fixture-based.test.ts`.

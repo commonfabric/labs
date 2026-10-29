@@ -1,4 +1,4 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { IMemorySpaceAddress, MemorySpace, URI } from "./interface.ts";
 
 export type WriteStackTraceMatchMode = "exact" | "prefix";

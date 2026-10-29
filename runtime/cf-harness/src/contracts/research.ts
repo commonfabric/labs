@@ -5,7 +5,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { TrustedPatternRecord } from "./trusted-pattern.ts";
 

@@ -1,5 +1,8 @@
 import { dirname } from "@std/path";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 // The compiled-module-byte cache, in full. The runtime defines only the
 // `ModuleByteCache` interface it consults during a compile; this module owns

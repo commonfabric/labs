@@ -16,7 +16,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
-import { setGlobalLogFloor } from "@commonfabric/utils/logger";
+import { setGlobalLogFloor } from "@commonfabric/logger";
 
 import {
   resolveEntryIdentity,

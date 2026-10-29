@@ -3,7 +3,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 

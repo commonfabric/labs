@@ -16,8 +16,8 @@ mounts, brokers, and rollout choices remain with their adapters.
 ## Status and interpretation
 
 These documents are an initial draft extracted from the behavior already used by
-Loom, Pattern Factory, `cf-harness`, and the CFC runtime profile. They are not
-yet a claim that every implementation conforms.
+Loom, `cf-harness`, and the CFC runtime profile. They are not yet a claim that
+every implementation conforms.
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY**
 are normative. A conforming implementation publishes a conformance statement as
@@ -62,9 +62,9 @@ An implementation profile owns:
 - test evidence for its conformance claims.
 
 The first [implementation profile](../../../runtime/cf-harness/docs/IMPLEMENTATION_PROFILE.md)
-is maintained with `@commonfabric/cf-harness`. Loom and Pattern Factory
-maintain separate adapter documents because their routing, mounts, brokers, and
-product rollout choices are not universal harness behavior.
+is maintained with `@commonfabric/cf-harness`. Loom maintains a separate
+adapter document because its routing, mounts, brokers, and product rollout
+choices are not universal harness behavior.
 
 ## Non-goals
 

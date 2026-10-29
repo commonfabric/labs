@@ -26,10 +26,13 @@ import {
   toDocumentPath,
   toValuePath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
-import { PathKeyMap } from "@commonfabric/utils/path-key-map";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { getLogger } from "@commonfabric/logger";
+import { PathKeyMap } from "@commonfabric/collections/path-key-map";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { readStatsActive, recordDocumentRead } from "../read-stats.ts";
 import {

@@ -1,5 +1,8 @@
 import { readLoomAuthoringConfig } from "./loom-authoring.ts";
-import { readLoomCommandsConfig } from "./loom-commands.ts";
+import {
+  type HarnessLoomCommandsConfig,
+  validateLoomCommandsConfig,
+} from "./loom-commands.ts";
 import { readLoomRetrievalConfig } from "./loom-retrieval.ts";
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
@@ -264,7 +267,10 @@ const CLI_STRING_FLAGS = [
   "fabric-mount",
   "loom-authoring-config",
   "loom-retrieval-config",
-  "loom-commands-config",
+  "commands-url",
+  "commands-actor",
+  "commands-run-id",
+  "commands-relevant",
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
@@ -303,6 +309,7 @@ const CLI_COLLECT_FLAGS = [
   "host-mount",
   "handle-value-origin",
   "input-cell",
+  "commands-relevant",
 ] as const;
 
 export type CfHarnessCliOutputMode = (typeof CLI_OUTPUT_MODES)[number];
@@ -445,9 +452,6 @@ export interface RunCfHarnessCliDependencies
   extends Omit<SandboxProcess, "homeDir"> {
   cwd?: string;
   env?: Record<string, string | undefined>;
-
-  /** Current host job identity, passed only to brokered command processes. */
-  commandJobId?: string;
 
   /** Trusted, fixed binding supplied only by the dedicated local Loom host. */
   loomLocalHostBinding?: LoomLocalHostBinding;
@@ -632,14 +636,14 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command | run_read_command);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | resolve_piece | call_verb | read_value | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile | list_commands | run_command);
                                 run_pattern, assign_slug, resolve_piece, call_verb, read_value, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
                                 loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
                                 the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG),
-                                and list_commands, run_command, and run_read_command require --loom-commands-config (or CF_HARNESS_LOOM_COMMANDS_CONFIG)
+                                and list_commands and run_command require --commands-url, --commands-actor and --commands-run-id
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -727,8 +731,13 @@ Options:
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
-  --loom-commands-config <path> Absolute host-owned JSON file naming the command broker
-                                behind list_commands and the command execution tools
+  --commands-url <url>          Base URL of the host's command endpoint behind list_commands
+                                and run_command (GET <url>/commands, POST <url>/command)
+  --commands-actor <actor>      The actor each command runs as, passed to the host unread
+  --commands-run-id <id>        The host's id for this run, sent on every command request;
+                                --commands-url, --commands-actor and --commands-run-id go together
+  --commands-relevant <id>      A command relevant to this run, which list_commands shows first
+                                and marks (repeatable; needs --commands-url)
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug, resolve_piece, call_verb, read_value)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -785,7 +794,6 @@ Environment:
                                 with no pasta configured, loopback alone)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
-  CF_HARNESS_LOOM_COMMANDS_CONFIG Default host command broker configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY    Default value for --fabric-identity
   CF_HARNESS_FABRIC_SPACE       Default value for --fabric-space
@@ -854,7 +862,6 @@ const CLI_PARENT_TOOL_IDS = [
   "loom_profile",
   "list_commands",
   "run_command",
-  "run_read_command",
   "run_pattern",
   "assign_slug",
   "resolve_piece",
@@ -1105,6 +1112,50 @@ const parseHandleValueOrigins = (
     origins.push(origin);
   }
   return uniqueStrings(origins);
+};
+
+/**
+ * The command endpoint `--commands-url`, `--commands-actor` and
+ * `--commands-run-id` name, with the commands `--commands-relevant` names as
+ * relevant to the run, or `undefined` when none is given. The three go
+ * together, the relevant commands need them, and the endpoint they name is
+ * checked at parse.
+ */
+const commandsConfigOf = (
+  url: unknown,
+  actor: unknown,
+  runId: unknown,
+  relevant: string | readonly string[] | undefined,
+): HarnessLoomCommandsConfig | undefined => {
+  const named = relevant === undefined
+    ? []
+    : typeof relevant === "string"
+    ? [relevant]
+    : [...relevant];
+  const given = [url, actor, runId].filter((value) => value !== undefined);
+  if (given.length === 0) {
+    if (named.length > 0) {
+      throw new Error("--commands-relevant needs --commands-url.");
+    }
+    return undefined;
+  }
+  if (
+    given.length < 3 ||
+    typeof url !== "string" || typeof actor !== "string" ||
+    typeof runId !== "string"
+  ) {
+    throw new Error(
+      "--commands-url, --commands-actor and --commands-run-id go together.",
+    );
+  }
+  const config = {
+    url,
+    actor,
+    runId,
+    ...(named.length > 0 ? { relevant: named } : {}),
+  };
+  validateLoomCommandsConfig(config);
+  return config;
 };
 
 /**
@@ -1519,9 +1570,6 @@ export const processCfHarnessCliEnv = (): Record<
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG: Deno.env.get(
     "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
   ),
-  CF_HARNESS_LOOM_COMMANDS_CONFIG: Deno.env.get(
-    "CF_HARNESS_LOOM_COMMANDS_CONFIG",
-  ),
   CF_HARNESS_SPACE_DB: Deno.env.get("CF_HARNESS_SPACE_DB"),
   CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: Deno.env.get(
     "CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE",
@@ -1574,7 +1622,6 @@ export const parseCfHarnessCliArgs = async (
     | "readTextFile"
     | "pathExists"
     | "sandboxHomeDir"
-    | "commandJobId"
     | "platform"
     | "arch"
     | "uid"
@@ -1940,12 +1987,11 @@ export const parseCfHarnessCliArgs = async (
       : env.CF_HARNESS_LOOM_RETRIEVAL_CONFIG,
     readTextFile,
   );
-  const loomCommands = await readLoomCommandsConfig(
-    typeof args["loom-commands-config"] === "string"
-      ? args["loom-commands-config"]
-      : env.CF_HARNESS_LOOM_COMMANDS_CONFIG,
-    readTextFile,
-    deps.commandJobId,
+  const loomCommands = commandsConfigOf(
+    args["commands-url"],
+    args["commands-actor"],
+    args["commands-run-id"],
+    args["commands-relevant"] as string | readonly string[] | undefined,
   );
   const inputCells = parseInputCells(
     args["input-cell"] as string | readonly string[] | undefined,
@@ -2175,7 +2221,7 @@ export const parseCfHarnessCliArgs = async (
   );
   if (commandTool !== undefined && loomCommands === undefined) {
     throw new Error(
-      `--allow-tool ${commandTool} requires a host command broker configuration; missing --loom-commands-config`,
+      `--allow-tool ${commandTool} requires a host command endpoint; missing --commands-url`,
     );
   }
   const apiKey = env.CF_HARNESS_API_KEY ?? env.OPENAI_API_KEY;

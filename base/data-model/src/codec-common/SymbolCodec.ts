@@ -1,4 +1,4 @@
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";

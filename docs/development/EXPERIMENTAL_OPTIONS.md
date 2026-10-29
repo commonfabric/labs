@@ -43,6 +43,7 @@ was last checked against the code.
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | carry deployed children over to their names, exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before carry-over and that exclusion exist |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
+| [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
@@ -1033,11 +1034,14 @@ holds the measurements and the conditions for revisiting.
   transformer names no instance, so an instance nothing else names keeps its
   positional identity. A deployed parent's positional child is carried over to
   its instance's name, and recorded in the parent's `instanceChildren` meta, on
-  the first setup that names it, where the pattern the parent last set up loads
-  and names the instance too, and the parent's setup record, where it has one,
-  numbers the instance's cell as this runtime's build of that pattern does.
-  Otherwise the instance starts fresh. With the flag off, nothing is pending,
-  so carry-over and the start's pre-sync for it have nothing to act on.
+  the first setup that names it: the child at the cause the pattern the parent
+  last set up gives the same name, where that pattern loads and names the
+  instance and the parent's setup record, where it has one, numbers the
+  instance's cell as this runtime's build of that pattern does; and otherwise
+  the one unclaimed positional child of the instance's own pattern identity,
+  one that no other instance carries and no positional node of the pattern
+  still sets up at its own spot. Otherwise the instance starts fresh. With the flag off, nothing is pending, so
+  carry-over and the start's pre-sync for it have nothing to act on.
 - **Current default and planned end state.** Off by default. The end state is
   on, with the flag and the positional compile of `const`-bound instances
   deleted.
@@ -1046,9 +1050,12 @@ holds the measurements and the conditions for revisiting.
   the pattern a parent last set up, as a naming runtime builds it, names the
   instance, which it does where that pattern's own source bound the instance
   to a `const`, and where the parent's setup record does not number the
-  instance's cell otherwise. An instance first bound to a `const` by the
-  update that names it is not carried over yet: it starts fresh, and its
-  deployed child's state is left where nothing reaches it. Second, keeping a runtime
+  instance's cell otherwise; and, for any other instance, where its deployed
+  child is the one unclaimed positional child of its pattern identity. An instance
+  placed by neither, such as one of two instances of one pattern first bound
+  to `const`s by the update that names them, is not carried over yet: it
+  starts fresh, and its deployed child's state is left where nothing reaches
+  it. Second, keeping a runtime
   whose naming mode differs from the one a space's data was written under, an
   older runtime or a current one with the flag off, away from that space, by
   one mechanism that covers runtimes already connected (long-lived browser
@@ -1523,6 +1530,34 @@ the per-epic implementation notes).
 - **Status (2026-09-29):** optional. Toolshed advertises it exactly when
   `sharedMemoryConnection` is on; the standalone server advertises it when
   started with `connectionAuth: true`, whatever the flag says.
+
+### `sessionOpenProofs`
+
+- **Added by:** Robin McCollum, 2026-10-26.
+- **Toggle and default:** a Memory hello capability, advertised by a server
+  whose access-list policy admits delegations (`Server` option
+  `acl.delegations`, on unless set `false`). Toolshed sets it from
+  `MEMORY_ACL_DELEGATIONS`, which takes `true`, `1`, `false` or `0` and
+  nothing else, on when unset; the standalone server takes it in its `acl`
+  option. An absent field in a hello means
+  unsupported, and such a server refuses every chain.
+- **Gates:** a `session.open` presenting a UCAN proof chain in
+  `authorization.proofs`, named by `invocation.prf` on a signed open
+  ([`04-protocol.md`](../specs/memory-v2/04-protocol.md), section 4.5.1,
+  "Proof chains"). The server verifies the chain and resolves the session's
+  capability from the access list's grant to the chain's root issuer, while
+  the session's principal stays the key that opened it. The design is
+  [`profile-delegation.md`](../specs/profile-delegation.md).
+- **End state and removal:** retain the negotiation while deployments may
+  contain servers that admit no chain. Remove the capability as part of a
+  protocol version that requires it.
+- **Status (2026-10-27):** implemented end to end and on by default. A
+  profile space is created owning itself, Home records the delegation its
+  key issued to the user, a runtime loads those at startup and presents the
+  chain when it opens a profile space, and it refuses a server that does
+  not advertise the capability rather than open under its own grant. A
+  deployment must therefore admit chains before any self-owned profile is
+  created on it: with the flag off, such a profile's owner cannot open it.
 
 ### `conflictAdmissionMode`
 

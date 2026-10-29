@@ -75,7 +75,7 @@
 // to the last committed result while only the server performs egress
 // (README §3.5).
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   type CellScope,
   type DeliveryAttention,
@@ -83,7 +83,7 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,

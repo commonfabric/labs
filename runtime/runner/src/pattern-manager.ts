@@ -1,7 +1,7 @@
 import type { Source } from "@commonfabric/js-compiler";
-import { getLogger } from "@commonfabric/utils/logger";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   brandTrustedPattern,

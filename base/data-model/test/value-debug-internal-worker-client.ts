@@ -5,8 +5,8 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
-import { defer } from "@commonfabric/utils/defer";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { defer } from "@commonfabric/async/defer";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 
 import type {
   InternalReport,

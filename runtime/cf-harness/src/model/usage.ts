@@ -1,7 +1,7 @@
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   HARNESS_COST_ESTIMATE_WITHHELD_REASONS,

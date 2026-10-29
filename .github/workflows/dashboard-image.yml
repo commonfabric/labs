@@ -12,8 +12,11 @@ on:
       # the deployed dashboard keeps reading manifests by a rule the
       # publisher has stopped writing to.
       - "base/test-support/**"
-      # The dashboard and `test-support` both import `@commonfabric/utils`.
-      - "base/utils/**"
+      # The packages the dashboard and `test-support` import.
+      - "base/bytes/**"
+      - "base/collections/**"
+      - "base/js-values/**"
+      - "base/text/**"
       - "scripts/ci-gantt.ts"
       - "deno.jsonc"
       - "deno.lock"

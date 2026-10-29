@@ -1,7 +1,7 @@
 /** Validates session-owned view interests at the Memory protocol boundary. */
 
 import { cloneIfNecessary } from "@commonfabric/data-model";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   DEFAULT_BRANCH,

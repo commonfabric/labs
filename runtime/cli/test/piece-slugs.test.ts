@@ -13,7 +13,7 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 import { listSpaceSlugs } from "../lib/piece.ts";
 import {
   listSlugsFromCommand,

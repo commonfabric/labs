@@ -20,7 +20,7 @@
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import type { MutableFabricPlainObjectLayer } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { sqlAffinity } from "./columns.ts";
 
 /** A reference to a declared column, handed to the rule as `f.<col>`. */

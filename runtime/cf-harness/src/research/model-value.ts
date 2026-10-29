@@ -1,6 +1,6 @@
 /** Bounded reads of untrusted JSON fields returned by a research model. */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** Returns a bounded string, or empty text for another JSON value. */
 export const stringValue = (value: unknown, max = 2_000): string =>

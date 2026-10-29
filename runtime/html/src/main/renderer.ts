@@ -13,7 +13,7 @@ import type {
   VDomBatchNotification,
   VDomConnection,
 } from "@commonfabric/runtime-client";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { SetPropHandler } from "../render-utils.ts";
 import { DomApplicator } from "./applicator.ts";

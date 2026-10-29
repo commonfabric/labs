@@ -14,8 +14,8 @@
 import { debugStr } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity/did";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
