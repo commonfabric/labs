@@ -1,7 +1,7 @@
 /**
  * Which pattern sources must carry a tier marker, and what that marker says.
  *
- * `packages/patterns/index.md` sorts this package into tiers by how much
+ * `patterns/index.md` sorts this package into tiers by how much
  * authority an example carries. Two of those tiers mean "do not copy": legacy
  * (superseded) and fixture (scaffolding that pins a bug). An index states that
  * where a reader has to go looking for it, and a reader who opened the file
@@ -34,10 +34,10 @@ export type MarkedTier = "legacy" | "fixture";
 export const TIER_MARKERS: Readonly<Record<MarkedTier, string>> = {
   legacy:
     "// PATTERN TIER: legacy — superseded or non-idiomatic; kept for what\n" +
-    "// depends on it. Do not copy from this file. Tiers: packages/patterns/index.md",
+    "// depends on it. Do not copy from this file. Tiers: patterns/index.md",
   fixture:
     "// PATTERN TIER: fixture — scaffolding that pins a bug or drives the\n" +
-    "// runtime. Do not copy from this file. Tiers: packages/patterns/index.md",
+    "// runtime. Do not copy from this file. Tiers: patterns/index.md",
 };
 
 /**
@@ -46,66 +46,37 @@ export const TIER_MARKERS: Readonly<Record<MarkedTier, string>> = {
  * cannot spill into a sibling whose name merely starts the same way.
  */
 export const TIER_DIRECTORIES: Readonly<Record<string, MarkedTier>> = {
-  "collaborative-note/": "legacy",
-  "factory-outputs/": "legacy",
-  "gideon-tests/": "fixture",
-  "loom-chat-room-fixture/": "fixture",
-  "loom-overlay-fixture/": "fixture",
-  "map-captured-object-spread/": "fixture",
-  "plain-array-callback-locals/": "fixture",
-  "scope-bug-computed-vnode-blank/": "fixture",
-  "scope-bug-ct1597-forward/": "fixture",
-  "scope-bug-ct1597-reduce/": "fixture",
-  "test/": "fixture",
+  "dev/collaborative-note/": "legacy",
+  "dev/factory-outputs/": "legacy",
+  "dev/gideon-tests/": "fixture",
+  "dev/loom-chat-room-fixture/": "fixture",
+  "dev/loom-overlay-fixture/": "fixture",
+  "dev/map-captured-object-spread/": "fixture",
+  "dev/plain-array-callback-locals/": "fixture",
+  "dev/scope-bug-computed-vnode-blank/": "fixture",
+  "dev/scope-bug-ct1597-forward/": "fixture",
+  "dev/scope-bug-ct1597-reduce/": "fixture",
+  "dev/test/": "fixture",
 };
 
 /** Individual pattern sources, relative to the patterns root, and their tier. */
 export const TIER_FILES: Readonly<Record<string, MarkedTier>> = {
-  "cell-link.tsx": "fixture",
-  "fabrichat/room-test-fixture.ts": "fixture",
-  "nested-map-ifelse-test.tsx": "fixture",
-  "render-test.tsx": "fixture",
-  "self-reference-test.tsx": "fixture",
-  "vehicles.ts": "legacy",
+  "dev/cell-link/cell-link.tsx": "fixture",
+  "dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx": "fixture",
+  "dev/render-test/render-test.tsx": "fixture",
+  "dev/self-reference-test/self-reference-test.tsx": "fixture",
+  "system/fabrichat/room-test-fixture.ts": "fixture",
+  "dev/factory-outputs/vehicles.ts": "legacy",
 };
 
-/**
- * Files a table would tier that take no marker anyway, each with the reason.
- *
- * This is an escape hatch, and an escape hatch nobody can review is a hole. So
- * an entry carries its reason in the value, the way `check-no-waitfor.ts`'s
- * allowlist does, and `check-pattern-tiers.ts` rejects an entry naming a file
- * no table would have tiered — an exemption that exempts nothing is either a
- * typo or a file that moved. What the check cannot decide is whether a reason
- * is a good one; that is what review is for, and why the reason is here rather
- * than implied.
- */
-export const UNTIERED_FILES: Readonly<Record<string, string>> = {
-  "test/vnode-helpers.ts":
-    "The shared rendered-tree helper that pattern tests are meant to call. " +
-    "Marking it 'do not copy' would say the opposite of what it is for.",
-};
-
-/**
- * The tier the tables give a pattern source, ignoring the exemptions.
- *
- * Kept separate from `tierOf` so the exemption list can be checked against the
- * tables. Folding the two together makes every exemption look untiered, which
- * leaves nothing to test an exemption against.
- */
-export function tableTierOf(key: string): MarkedTier | undefined {
+/** The marked tier a pattern source belongs to, or undefined for the rest. */
+export function tierOf(key: string): MarkedTier | undefined {
   const exact = TIER_FILES[key];
   if (exact !== undefined) return exact;
   for (const [prefix, tier] of Object.entries(TIER_DIRECTORIES)) {
     if (key.startsWith(prefix)) return tier;
   }
   return undefined;
-}
-
-/** The marked tier a pattern source belongs to, or undefined for the rest. */
-export function tierOf(key: string): MarkedTier | undefined {
-  if (key in UNTIERED_FILES) return undefined;
-  return tableTierOf(key);
 }
 
 /** The marked tier a file's own text declares, or undefined if it declares none. */

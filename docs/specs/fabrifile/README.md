@@ -186,7 +186,7 @@ The design depends on runtime capabilities that don't exist yet:
 
 ## Implementation status
 
-The patterns are in `packages/patterns/fabrifile/`: `schemas.tsx` holds the
+The patterns are in `patterns/system/fabrifile/`: `schemas.tsx` holds the
 contracts and records, `names.ts` the name rules, `store.tsx` the store, with
 its stored records and the handlers that write them, and `view.tsx` its
 rendering. `store.tsx` reaches no module that renders, which

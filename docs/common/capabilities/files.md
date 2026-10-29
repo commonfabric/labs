@@ -5,7 +5,7 @@ uploads them to the space's blob store through `cf-file-input`, keeps the small
 descriptor the upload returns, and serves a download as a link to the
 descriptor's URL. The store keeps each blob as a content-addressed document of
 its own in the space, so the pattern's cells stay small however large the file
-is, and the list syncs like any other list of records. `packages/patterns/file-share/main.tsx` is the whole
+is, and the list syncs like any other list of records. `patterns/apps/file-share/main.tsx` is the whole
 shape in one file.
 
 ## Uploading
@@ -111,4 +111,4 @@ can still be too large to rename.
 - The upload and download routes are not authenticated: anyone who holds a
   blob's URL can fetch it, and anyone can upload into a space.
 
-The store is `packages/toolshed/routes/blobs/blobs.index.ts`.
+The store is `runtime/toolshed/routes/blobs/blobs.index.ts`.

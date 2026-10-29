@@ -99,8 +99,8 @@ const COMMENTS_URL =
 const FIRST_COMMENT_URL =
   "https://api.github.com/repos/commonfabric/labs/issues/comments/1";
 
-const regressed = gateComment(4211, false, ["| packages/bakery | rose |"]);
-const resolved = gateComment(4211, true, ["| packages/bakery | no rise |"]);
+const regressed = gateComment(4211, false, ["| runtime/bakery | rose |"]);
+const resolved = gateComment(4211, true, ["| runtime/bakery | no rise |"]);
 
 describe("postCoverageComment()", () => {
   it("posts the comment when no marked comment exists", async () => {

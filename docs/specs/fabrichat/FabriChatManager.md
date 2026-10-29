@@ -8,14 +8,14 @@ This document says how this implementation does it.
 ## Where it lives
 
 `FabriChatManager` is a field of the home pattern
-(`packages/patterns/system/home.tsx`), which is what gives each user exactly
+(`patterns/system/home/home.tsx`), which is what gives each user exactly
 one. The home target `#chatManager` resolves to that field. The spelling follows
 the camel case of the other multi-word targets (`#learnedSummary`,
 `#pieceRegistry`, `#profileName`).
 
 Adding the target takes the same steps `#agent_queue` took: the field and child
 piece in `home.tsx`, a case in `getResolutionKind` and in
-`resolveHomeSpaceTarget` (`packages/runner/src/builtins/wish.ts`), tests beside
+`resolveHomeSpaceTarget` (`runtime/runner/src/builtins/wish.ts`), tests beside
 each, and a row in the built-in targets table of
 [`wish`](../../common/conventions/wish.md) and in
 [`HOME_SPACE.md`](../../common/conventions/HOME_SPACE.md).
@@ -203,14 +203,14 @@ request's id, which the room reads back as the add's `delivery`.
 
 A notice has to reach a principal who may share no space with the sender. Its
 route is the recipient's profile share inbox: a profile's `inbox` field
-(`inbox.piece`, `packages/patterns/system/profile-home.tsx`) points at an inbox
-piece in a space of its own. That is either the private inbox the recipient's
-Home creates ([the private inbox](../../features/private-inbox.md)) or another
-share inbox the profile points at, and both take the same offer envelope. Any
-principal may write to the inbox's space, and its offers are labeled readable by
-the owner alone, a label that binds only an honest runtime. When a request names
-a member's profile, as `openDirect` does with its `profile` and `createGroup`
-with its `profiles`, step 3 offers the
+(`inbox.piece`, `patterns/system/profile-home/profile-home.tsx`) points at an
+inbox piece in a space of its own. That is either the private inbox the
+recipient's Home creates ([the private inbox](../../features/private-inbox.md))
+or another share inbox the profile points at, and both take the same offer
+envelope. Any principal may write to the inbox's space, and its offers are
+labeled readable by the owner alone, a label that binds only an honest runtime.
+When a request names a member's profile, as `openDirect` does with its `profile`
+and `createGroup` with its `profiles`, step 3 offers the
 room there, in that envelope, from an event of its own that follows the room's
 creation, since the offer names the room's space (see
 [`ChatManagerOutput`](ChatManagerOutput.md#offers)). The same event reads the

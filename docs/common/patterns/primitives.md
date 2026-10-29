@@ -3,12 +3,12 @@
 A **primitive** is a pattern designed to be embedded inside other patterns —
 used as a JSX tag, not deployed standalone. Primitives own a slice of *logic
 and model* (a confirm-action gate, a master/detail selection) while leaving
-rendering to the host. They live under `packages/patterns/primitives/` and
+rendering to the host. They live under `patterns/product/primitives/` and
 form the `primitive` tier in
-[`packages/patterns/index.md`](../../../packages/patterns/index.md).
+[`patterns/index.md`](../../../patterns/index.md).
 
 **Status: nine occupants, all adopted by the pattern index** — see
-[`packages/patterns/index.md`](../../../packages/patterns/index.md). An earlier
+[`patterns/index.md`](../../../patterns/index.md). An earlier
 candidate (`EditableList`) was built, proven against real callers, and retired —
 see [Lessons](#lessons-from-the-first-primitive) below, which is required
 reading before building the next one. This document records the composition
@@ -96,8 +96,8 @@ parent's cell, and the change syncs back to the parent automatically. Evidence:
   on a shared reactive cell, not a fresh cell.
 - [`composition.md`](./composition.md): "Both patterns receive the same `items`
   cell — changes sync automatically."
-- `packages/patterns/examples/cf-render.tsx`: the embedded `Counter` mutates the
-  parent's `state.value` via its own handler.
+- `patterns/examples/cf-render/cf-render.tsx`: the embedded `Counter` mutates
+  the parent's `state.value` via its own handler.
 
 Because of this, a primitive does **not** need the parent to pass in Streams or
 handlers. The primitive defines the handlers, binds them to the cell it was

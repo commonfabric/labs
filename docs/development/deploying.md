@@ -248,7 +248,7 @@ entrypoint so queued CI runs cannot race the coordinated release.
 `toolshed` serves a browser shell from the `shell-frontend` directory beside
 it, so <https://estuary.saga-castor.ts.net/> and
 <https://rapids.saga-castor.ts.net/> each serve the shell that the binary they
-run was built with. `tasks/build-binaries.ts` builds `packages/shell` as part
+run was built with. `tasks/build-binaries.ts` builds `runtime/shell` as part
 of the toolshed build and moves the output there. Configuring this shell is
 therefore something the `build-toolshed` job does, and a deploy carries
 whatever that build baked in. It needs no API host: it is served from the same
@@ -258,7 +258,7 @@ origin as the API it calls, which is what the shell falls back to.
 
 The `deploy-shell-staging` job in `.github/workflows/deno.yml` publishes the
 shell on every push to `main`. It does not touch the bastion: it builds
-`packages/shell` and copies the result into the `staging-commontools-dev`
+`runtime/shell` and copies the result into the `staging-commontools-dev`
 bucket, which is served at <https://staging.commontools.dev/>. Each build also
 lands under `builds/<commit>/` so a page that is already open keeps the exact
 module graph it started with.

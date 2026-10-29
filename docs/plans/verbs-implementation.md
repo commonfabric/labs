@@ -63,12 +63,12 @@ a driver needs to know what is already moving before scheduling anything new.
 
 | PR | What | State |
 | --- | --- | --- |
-| #5746 | the `Demand<T>` marker and the foreign-output embedding warning, prototyping the demand substrate in [designing verbs so they can change](verb-evolution.md) | open. It edits `packages/ts-transformers/src/transformers/schema-injection.ts`, which is the file item 11's fourth part edits, so the one-file rule queues the two rather than running them in parallel — a driver picking up item 11 schedules against this branch before starting. It also adds `demand` to `ANNOTATION_KEYS` (`packages/piece/src/schema-compatibility.ts`), the set item 2 derives its tolerated tier from |
+| #5746 | the `Demand<T>` marker and the foreign-output embedding warning, prototyping the demand substrate in [designing verbs so they can change](verb-evolution.md) | open. It edits `base/ts-transformers/src/transformers/schema-injection.ts`, which is the file item 11's fourth part edits, so the one-file rule queues the two rather than running them in parallel — a driver picking up item 11 schedules against this branch before starting. It also adds `demand` to `ANNOTATION_KEYS` (`runtime/piece/src/schema-compatibility.ts`), the set item 2 derives its tolerated tier from |
 
 **Most of the read layer has landed.** #5309, #5459, #5468, #5470, #5497 and
 #5500 are on main. #5458 is closed rather than merged because its rename was
 folded into #5470's squash; the shared read step it factored out is on main as
-`packages/cli/lib/cell-selection.ts`. A reader who goes looking for #5458 should
+`runtime/cli/lib/cell-selection.ts`. A reader who goes looking for #5458 should
 not conclude the step was dropped.
 
 **The invocation pair and call selection are both on main**, re-landed together
@@ -285,7 +285,7 @@ it.
 
 What it removes: a verb whose event declared `Writable<T>` was callable by a
 model and by nothing else. `traverseAndCellify`
-(`packages/runner/src/builtins/llm-dialog.ts`) resolved `{"@link": …}` into a
+(`runtime/runner/src/builtins/llm-dialog.ts`) resolved `{"@link": …}` into a
 live cell before dispatch, so the LLM boundary had a complete round trip while
 the CLI rejected the address and the webhook path forwarded it unresolved.
 
@@ -300,10 +300,10 @@ refuses the two payloads that could only ever be mistakes at the position.
 #5560 carries the original measurements.
 
 *The refusal was drift, not policy, and #5880 removed it.*
-`closedWorldEventRejection` (`packages/runner/src/runner.ts`) has always
+`closedWorldEventRejection` (`runtime/runner/src/runner.ts`) has always
 validated a present event payload with `acceptOpaqueValue` — a link passes
 unjudged, because its target cannot be read at dispatch. `verbInputSchemaError`
-(`packages/cli/lib/callable.ts`) called the same `validateSchemaValue` without
+(`runtime/cli/lib/callable.ts`) called the same `validateSchemaValue` without
 that option, so the outer gate refused what the inner one accepted. It passes
 it now, through `isOpaqueReference`, which additionally requires the envelope's
 payload to be a record: `isLink` answers on shape alone and is true of
@@ -336,13 +336,13 @@ Four parts, three of them landed:
   Confirmed since against a declared field rather than the `any` the probe
   used: the edge that lands reads back as the address that was named.
 - **Lift resolution to a shared home**, beside `parseLink` and the LLM-friendly
-  pair in `packages/runner/src/link-utils.ts`. *Still owed.* The CLI resolves
+  pair in `runtime/runner/src/link-utils.ts`. *Still owed.* The CLI resolves
   the emitted spelling at its own dispatch gate, which serves every caller that
   comes through `cf`; the webhook and ingest paths reach the same handlers
   through no gate at all, and a shared home is what would serve them.
 - **Fix event-schema emission.** *Landed as #5964.* The handler-side stream
   schema was a usage summary — `applyCapabilitySummaryToArgument`
-  (`packages/ts-transformers/src/transformers/schema-injection.ts`) shrank the
+  (`base/ts-transformers/src/transformers/schema-injection.ts`) shrank the
   event parameter to what the body used, so a declared reference field the body
   never read disappeared from the emitted properties and `required`. It now
   serves the authored event, per
@@ -387,7 +387,7 @@ vocabulary for what a refusal says, since a caller meets both through the same
 command, and #5850 carried it to the flag door as well.
 
 *The check has a home already.* `verbInputSchemaError`
-(`packages/cli/lib/callable.ts`) validates a payload against the verb's declared
+(`runtime/cli/lib/callable.ts`) validates a payload against the verb's declared
 event schema before dispatch. What it does not do is treat an undeclared field
 as a reason to refuse — and the schema it validates against names exactly the
 fields the verb declares, so the comparison needs no new source of truth.
@@ -448,7 +448,7 @@ is item 12.
 
 *Two mechanisms on main are left with nothing to do*, and retiring them is a
 question for whoever owns the runtime rather than a step here:
-`closedWorldEventRejection` (`packages/runner/src/runner.ts`) is a dispatch gate
+`closedWorldEventRejection` (`runtime/runner/src/runner.ts`) is a dispatch gate
 no schema can now trigger, and #5302's verb-event-role compatibility rule
 governs an open-to-closed transition that will not happen.
 
@@ -565,12 +565,12 @@ descriptions are absent from it.
 *The obvious explanation is not the explanation.* A `description` beside a
 `$ref` is ignored under JSON Schema's own semantics, so a resolver that
 substitutes the target would drop it. This one does not:
-`resolveCfcSchemaRefsUncached` (`packages/runner/src/cfc/schema-refs.ts`)
+`resolveCfcSchemaRefsUncached` (`runtime/runner/src/cfc/schema-refs.ts`)
 collects ref-site siblings and merges them over the resolved target on purpose.
 That rules out the tidy answer for the verb, and it never explained the event
 field, whose description sits inside the `$def` rather than beside the ref.
 
-*A lead, unverified.* `resolveSchema` (`packages/runner/src/schema.ts`) calls
+*A lead, unverified.* `resolveSchema` (`runtime/runner/src/schema.ts`) calls
 `resolveSchemaRefs(schema)` with one argument, so the document consulted for
 `#/$defs/...` defaults to the property schema itself — and a verb property
 carries the `$ref` while the `$defs` live at the pattern's result-schema root.
@@ -708,11 +708,11 @@ from a plan is one nobody schedules, which is the whole reason for this table.
 | #5523 | two identical `cf cell get` projections in one runtime collide on the transform result cell | **fixed** by #5757 |
 | #5632 | `--show-links` and a `$link` read return different entity ids for the same piece | step 11 — **working as designed**; closes once #5754 lands the documentation |
 | #5498 | `getEntityId()` strips the entity URI scheme, collapsing two kinds to one identity | unscheduled. It rode ordering step 11 while that step was a question about identity; the answer there was that the two routes are aliases by design, which says nothing about a scheme the id itself drops. Independent, and still open |
-| #5589 | a click's `detail` and a `cf-select`'s `target.value` reach a handler as types no pattern declares | carried alongside — it belongs to whoever next touches `packages/html`. The ruling that closed item 9b also removed the only thing that ever compared the renderer's output against an author's declared type, so this has no detector left |
+| #5589 | a click's `detail` and a `cf-select`'s `target.value` reach a handler as types no pattern declares | carried alongside — it belongs to whoever next touches `runtime/html`. The ruling that closed item 9b also removed the only thing that ever compared the renderer's output against an author's declared type, so this has no detector left |
 | #5560 | an address a call returns cannot be passed back as a verb argument | **fixed** by #5880 (the envelope) and row 14's CLI half (the emitted address, and the refusal for the shape-matching copy that used to store a detached document and report success). Not to be confused with ordering step 11, "one piece, one address", which is #5632 and decided |
 | #5534 | a capability probe passes while covering nothing: a dispatch rejection is not a synchronous throw | carried alongside |
 | #5685 | no CI job runs any verb integration script, and one of them says it does | **fixed** — `integration.sh` runs both scripts (`verbs-over-the-cli.sh` since #5289, `verb-session-gaps.sh` since #5793), each in a section of its own, `verbs` and `verb-gaps`. The test topology's `cli-core` suite makes a unit of each section, which every full run runs and a pull request runs when it selects it. The arc's honesty checks gate |
-| #5663 | the compat checker admits a newly required verb event field, breaking every existing caller | **fixed** — the refusal lives in the `verbEvent` context in `packages/piece/src/schema-compatibility.ts`, which is the set item 2 derives its tolerated tier from; the rule reads `required`, not that set, so the tier is unchanged |
+| #5663 | the compat checker admits a newly required verb event field, breaking every existing caller | **fixed** — the refusal lives in the `verbEvent` context in `runtime/piece/src/schema-compatibility.ts`, which is the set item 2 derives its tolerated tier from; the rule reads `required`, not that set, so the tier is unchanged |
 | #5689 | `cf piece call` accepts any name into dispatch; a non-verb fails with no diagnostic | unscheduled. The listing now refuses to offer a non-verb (#5683, #5794); the dispatcher still accepts one |
 | #5684 | `cf cell get --select` returns `{}` for a field path that cannot match | unscheduled. Item 2's shape on the concise path, which item 2 puts out of scope — a projection that answers nothing rather than refusing |
 | #5686 | design rule 1 says input schemas are closed-world; after the #5589 ruling the runtime does the opposite | unscheduled and unowned. Not settled by [designing verbs so they can change](verb-evolution.md), which says nothing about closed-world inputs — searched, not assumed |

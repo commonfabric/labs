@@ -9,7 +9,7 @@ decisions and the CHANGED rows are the mechanisms that do not port
 as-is. It is a live document: when a GAP is ruled or an anchor drifts,
 edit the row in the same PR.
 
-File references are relative to `packages/runner/src/` unless another
+File references are relative to `runtime/runner/src/` unless another
 package is named.
 
 Status legend:
@@ -95,7 +95,7 @@ Status legend:
 
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
-| 40 | Following a piece's source origin: origin resolution, identity lookup, verified closure compile, schema-compat gate, pointer write | `source-reconciler.ts`, called by `packages/piece/src/ops/pieces-controller.ts` and `builtins/wish.ts` on explicit piece opens | serving-loop.md §3e | Opener-owned: ON clients open ordinary pieces; the serving wish builtin opens its runtime-supplied sidecars. Root ensuring does not follow source. The SWAP half is row 41. |
+| 40 | Following a piece's source origin: origin resolution, identity lookup, verified closure compile, schema-compat gate, pointer write | `source-reconciler.ts`, called by `runtime/piece/src/ops/pieces-controller.ts` and `builtins/wish.ts` on explicit piece opens | serving-loop.md §3e | Opener-owned: ON clients open ordinary pieces; the serving wish builtin opens its runtime-supplied sidecars. Root ensuring does not follow source. The SWAP half is row 41. |
 | 41 | `patternIdentity` watcher: live hot-swap of running pieces on pointer change (setup, teardown, reinstantiate); unloadable-pointer roll-forward (CT-1923), and a stop instead where the piece's source history records an update from the running pattern to the unloadable one | `runner.ts` (the `patternIdentity` meta sink `Runner.#startCore()` installs) | serving-loop.md §3e | COVERED (stage F: the swap runs in the SpaceServer — a pointer write is ordinary authored input; the swap's setup write stamps the `bookkeeping` kind; end-to-end test in `executor-serving-loop.test.ts`) |
 | 42 | Piece source lifecycle records (revisions, transitions, provenance) | `runner.ts` (`PieceSourceRevisionOperation` and the types beside it, `getPieceSourceRevisions`) | none (authored data; rides along) | COVERED |
 
@@ -129,7 +129,7 @@ Status legend:
 
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
-| 59 | Persisted scheduler basis index: ids and seqs per (action instance, input instance), overwritten in place inside a wave's derived store transaction | table `packages/memory/v2/engine.ts` (`scheduler_basis`); writer `packages/memory/v2/scheduler-basis.ts` (`replaceSchedulerBasisRows`, from `applyWaveCommit`); rows assembled in `executor/wave.ts` (`basisInstances`) | serving-loop §3b | CHANGED |
+| 59 | Persisted scheduler basis index: ids and seqs per (action instance, input instance), overwritten in place inside a wave's derived store transaction | table `runtime/memory/v2/engine.ts` (`scheduler_basis`); writer `runtime/memory/v2/scheduler-basis.ts` (`replaceSchedulerBasisRows`, from `applyWaveCommit`); rows assembled in `executor/wave.ts` (`basisInstances`) | serving-loop §3b | CHANGED |
 | 60 | Rehydration eligibility by execution-context rank (space/user/session) against `completeActionScopeSummary` | not present on main (deleted with the observation tables; N59/N60/N61) | serving-loop §8 (tripwire identifiers) | GAP |
 | 61 | `completeSchedulerScopeSummary` / `completeActionScopeSummary` emission (transformer marker; runner fills addresses) — two identifiers, one surface | `scheduler/types.ts` (`TelemetryAnnotations.completeSchedulerScopeSummary`), `runner.ts` (`Runner.#instantiateJavaScriptActionNode()`), ts-transformers (4 files); `completeActionScopeSummary` has no occurrence on main | README §5 (delete list), serving-loop §8 | CHANGED |
 | 62 | Incremental observation adoption (adopt another client's committed run instead of re-running) | not present on main (deleted; N62); the sync-path note survives in `scheduler/invalidation.ts` above `shapableWakeGroupKey` | none | GAP |
@@ -138,8 +138,8 @@ Status legend:
 
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
-| 63 | Commit classes / `derivedThrough` / `consequenceOf` metadata | `packages/memory/v2.ts` (`CommitClass`), `executor/engine-wave-sink.ts` (`derivedThrough` set on the wave commit; `executor/watermark.ts` describes it), `packages/memory/v2/engine.ts` (commit-row `annotations`, `consequenceOf` carriage in `applyWaveCommit`) | protocol §1, §7 | COVERED |
-| 64 | `execution_lease` table | `packages/memory/v2/engine.ts` (the `execution_lease` DDL; the derived-class lease check in `applyCommitTransaction`) | serving-loop §Anchors, §2 | COVERED |
+| 63 | Commit classes / `derivedThrough` / `consequenceOf` metadata | `runtime/memory/v2.ts` (`CommitClass`), `executor/engine-wave-sink.ts` (`derivedThrough` set on the wave commit; `executor/watermark.ts` describes it), `runtime/memory/v2/engine.ts` (commit-row `annotations`, `consequenceOf` carriage in `applyWaveCommit`) | protocol §1, §7 | COVERED |
+| 64 | `execution_lease` table | `runtime/memory/v2/engine.ts` (the `execution_lease` DDL; the derived-class lease check in `applyCommitTransaction`) | serving-loop §Anchors, §2 | COVERED |
 | 65 | `externalSinkDisposition` / client egress suppression | not present on main; egress is CFC sink-request verification at release (`verifySinkRequestRelease` in `cfc/sink-request.ts`) | README §3.1, §3.4 | GAP |
 | 66 | Settled-ness watermark; `waitForSettled` | not present today (tests poll `settled()`/text) | protocol §4, testing §3 | COVERED |
 | 67 | Mergeable ops (push/addUnique/increment; op poisoning on whole-value set) | `storage/mergeable-ops.ts`, `cell.ts` (the op poisoning in `Cell.set()`) | README §1 (authored machinery unchanged) | COVERED |
@@ -322,7 +322,7 @@ maps to per-action failure isolation in §3d.
 **N31 (piece-start policy) — RULED 2026-08-02: none exists.** See N22.
 The space root bootstrap
 (`PiecesController.#startEnsuredDefaultPattern()` in
-`packages/piece/src/ops/pieces-controller.ts`) stays a client-era
+`runtime/piece/src/ops/pieces-controller.ts`) stays a client-era
 framing: the SpaceServer never guarantees "root pieces run" — it
 resolves demanded values and queued events, and handler registration
 rides the structure load for exactly those, not a start step
@@ -515,7 +515,7 @@ commit — closing ledger LD3 (the shared `scope_key` vocabulary,
 key-vocabulary.md §3) and LD5 (the lease-holder read row, protocol.md
 §2). scopes.md §7 M3 resolves the same way — `resolveScopeKey`'s
 session-fed admission path (`#decideTransaction()` in
-`packages/memory/v2/server.ts` handing `session.principal` and
+`runtime/memory/v2/server.ts` handing `session.principal` and
 `message.sessionId` to `Engine.applyCommit`) narrows to authored
 commits only; derived admission stays the lease check. Effects still
 run under the capability handle's grant (README §3.8); only quota
@@ -523,10 +523,10 @@ attribution stays open (README §6).
 
 **N59/N60/N61 (persisted observations vs the basis index).** Main
 carries no payload-carrying observation rows, snapshot table, or
-replay table: `packages/memory/v2/engine.ts` drops any it finds (its
+replay table: `runtime/memory/v2/engine.ts` drops any it finds (its
 migration comment holds that history) and creates `scheduler_basis` —
 ids and seqs only, overwritten in place, written by
-`replaceSchedulerBasisRows` (`packages/memory/v2/scheduler-basis.ts`)
+`replaceSchedulerBasisRows` (`runtime/memory/v2/scheduler-basis.ts`)
 from inside `applyWaveCommit`, with the rows assembled as
 `basisInstances` in `executor/wave.ts`. That is serving-loop §3b's
 shape: ids and seqs are the basis index, and payloads or per-run
@@ -564,7 +564,7 @@ lost its reason, so the shaping decision is due a re-check (N10).
 
 **N64 (execution_lease).** serving-loop §Anchors and §2 describe
 `execution_lease` as an existing table, and it is:
-`packages/memory/v2/engine.ts` creates it (one row per space: `space`,
+`runtime/memory/v2/engine.ts` creates it (one row per space: `space`,
 `holder`, `expires_at` — §2's shape), and `applyCommitTransaction`
 there makes the derived-class admission equality check against the
 live row.
@@ -586,14 +586,14 @@ speculation §2) rather than flipping an existing dial. Fix the README
 Directories walked for this mapping, so later readers know what "all"
 meant: every file in `scheduler/` (32 files) and `builtins/` (28);
 `runner.ts`, `runtime.ts`, `pattern-manager.ts`,
-`packages/piece/src/ops/pieces-controller.ts`,
+`runtime/piece/src/ops/pieces-controller.ts`,
 `pattern-source-scheme.ts`, `ensure-piece-running.ts`, `cell.ts`,
 `scope.ts`, `acl-manager.ts`, `cancel.ts`, `queue.ts`,
 `reactive-dependencies.ts`; `builder/` (module/built-in/reactive/
 pattern/factory/types/builtin-replayability); storage seams touched by
 execution (`reactivity-log.ts`, `extended-storage-transaction.ts`,
 `interface.ts`, `rejection.ts`, `mergeable-ops.ts`, `query.ts`) and
-`packages/memory/v2/engine.ts` for the persisted-state tables.
+`runtime/memory/v2/engine.ts` for the persisted-state tables.
 Value-plumbing modules (link resolution, traversal, schema walking,
 data-updating, sigils, slugs) ride along with the hosted runtime and
 carry no placement question; they are deliberately not rowed.

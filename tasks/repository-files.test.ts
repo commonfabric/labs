@@ -33,20 +33,20 @@ describe("repositoryFiles()", () => {
   it("lists tracked and untracked files and leaves out ignored ones", async () => {
     const root = await repository([
       ".claude/scripts/hook.ts",
-      ".claude/worktrees/copy/packages/oven/oven.ts",
-      "packages/oven/node_modules/dep/index.ts",
-      "packages/oven/oven.ts",
+      ".claude/worktrees/copy/runtime/oven/oven.ts",
+      "runtime/oven/node_modules/dep/index.ts",
+      "runtime/oven/oven.ts",
     ]);
     try {
       await Deno.writeTextFile(
         `${root}/.gitignore`,
         ".claude/worktrees/\nnode_modules/\n",
       );
-      await git(root, "add", "packages/oven/oven.ts");
+      await git(root, "add", "runtime/oven/oven.ts");
       expect(await repositoryFiles(root)).toEqual([
         ".claude/scripts/hook.ts",
         ".gitignore",
-        "packages/oven/oven.ts",
+        "runtime/oven/oven.ts",
       ]);
     } finally {
       await Deno.remove(root, { recursive: true });

@@ -16,7 +16,7 @@ Include all maintained pattern programs and their authored dependencies:
 - Pattern tests executed by `cf test`, their shared helpers, and executable
   pattern fixtures under integration directories.
 - Executable generated patterns, including those under
-  `packages/generated-patterns`. Update generators to produce compliant code;
+  `runtime/generated-patterns`. Update generators to produce compliant code;
   their host-side implementation is outside the pattern-source ban.
 - Authored local imports, including JavaScript and JSDoc. Moving an assertion
   into a helper or changing a file extension must not evade the policy.
@@ -63,7 +63,7 @@ a generated schema and its compatibility with stored pieces.
 [`cfcheck`](../../tasks/cfcheck.ts) checks a batch of pattern programs in the
 actual compiler environment, including their local imports. The compiler already
 enables strict checking in
-[`options.ts`](../../packages/js-compiler/typescript/options.ts).
+[`options.ts`](../../base/js-compiler/typescript/options.ts).
 [`pattern-files.ts`](../../tasks/pattern-files.ts) excludes test entries and
 integration directories. Its current entry list is therefore a starting point
 for this migration, not the complete scope.
@@ -79,13 +79,13 @@ The following source sites identify useful first investigations. They establish
 where assertions exist, not whether each assertion is redundant or which API
 change is correct.
 
-| Family                 | Source evidence                                                                                                                                                                                                                           | Investigation                                                                                                                                                                     |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JSX composition        | [`send-publish-examples.tsx`](../../packages/patterns/cfc-trusted-component-examples/send-publish-examples.tsx) casts child screens to `never`.                                                                                           | Remove a representative cast and check the actual compiler diagnostic. Correct the producer or JSX contract if needed. Verify nested controls remain bound to their owning piece. |
-| Reference operations   | [`reference-address.ts`](../../packages/patterns/notes/reference-address.ts) accesses runtime cell methods through `any`; [`daily-journal.tsx`](../../packages/patterns/notes/daily-journal.tsx) casts around navigation and composition. | Provide the smallest supported public reference operation and preserve identity, paths, scopes, and cross-space addresses.                                                        |
-| CFC and cell metadata  | [`trusted.tsx`](../../packages/patterns/cfc-group-chat-demo/trusted.tsx) casts reads, snapshots, writes, and handler inputs.                                                                                                              | Distinguish plain values, defaults, cell capabilities, and policy metadata in the shared types. Establish which conversions the runtime authorizes.                               |
-| Provider and open data | The [agent debug view](../../packages/connectors/agents/debug-view/main.tsx) contains open data typed with `any`.                                                                                                                         | Validate external data and retain a recursive data type where the view intentionally accepts arbitrary data.                                                                      |
-| Test helpers           | [`vnode-helpers.ts`](../../packages/patterns/test/vnode-helpers.ts) walks rendered values and casts callable properties.                                                                                                                  | Give tests checked traversal and event-dispatch APIs so test migrations do not duplicate conversions.                                                                             |
+| Family                 | Source evidence                                                                                                                                                                                                                       | Investigation                                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JSX composition        | [`send-publish-examples.tsx`](../../patterns/examples/cfc-trusted-component-examples/send-publish-examples.tsx) casts child screens to `never`.                                                                                       | Remove a representative cast and check the actual compiler diagnostic. Correct the producer or JSX contract if needed. Verify nested controls remain bound to their owning piece. |
+| Reference operations   | [`reference-address.ts`](../../patterns/system/notes/reference-address.ts) accesses runtime cell methods through `any`; [`daily-journal.tsx`](../../patterns/system/notes/daily-journal.tsx) casts around navigation and composition. | Provide the smallest supported public reference operation and preserve identity, paths, scopes, and cross-space addresses.                                                        |
+| CFC and cell metadata  | [`trusted.tsx`](../../patterns/examples/cfc-group-chat-demo/trusted.tsx) casts reads, snapshots, writes, and handler inputs.                                                                                                          | Distinguish plain values, defaults, cell capabilities, and policy metadata in the shared types. Establish which conversions the runtime authorizes.                               |
+| Provider and open data | The [agent debug view](../../connectors/agents/debug-view/main.tsx) contains open data typed with `any`.                                                                                                                              | Validate external data and retain a recursive data type where the view intentionally accepts arbitrary data.                                                                      |
+| Test helpers           | [`vnode-helpers.ts`](../../patterns/tools/test-support/vnode-helpers.ts) walks rendered values and casts callable properties.                                                                                                         | Give tests checked traversal and event-dispatch APIs so test migrations do not duplicate conversions.                                                                             |
 
 ## Stage 1: inventory and prevent new debt
 
@@ -148,9 +148,9 @@ and regression prevention before the unconditional lint ban is enabled.
       Prove its schema generation and reads before replacing open payload types
       in the debug view or provider patterns.
 - [ ] Change the authored API definitions and regenerate
-      [`commonfabric.d.ts`](../../packages/static/assets/types/commonfabric.d.ts)
+      [`commonfabric.d.ts`](../../base/static/assets/types/commonfabric.d.ts)
       with the
-      [existing generator](../../packages/static/scripts/generate-commonfabric-types.ts).
+      [existing generator](../../base/static/scripts/generate-commonfabric-types.ts).
       Verify the compiler's served types and the runtime implementation agree.
 
 Exit for each family: a representative pattern compiles without its assertions,

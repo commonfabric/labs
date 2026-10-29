@@ -293,7 +293,7 @@ only id
 and scope would read the right cell only for a reader configured for the same
 space.
 
-`packages/cli/README.md` has the grammar and the supported schema subset.
+`runtime/cli/README.md` has the grammar and the supported schema subset.
 
 ### A result that points back at its container
 
@@ -587,10 +587,10 @@ update. Read the pattern's own documentation for what a verb returns, and check
 Everything above is asserted by a walkthrough that lives with the integration
 tests, not with this document:
 
-- **`packages/cli/integration/verbs-over-the-cli.sh`** — the runnable
+- **`runtime/cli/integration/verbs-over-the-cli.sh`** — the runnable
   walkthrough. Each step names the property it asserts, so a failure says which
   one broke. A fresh space per run, no prior state.
-- **`packages/cli/integration/pattern/verb-results.tsx`** — the pattern it
+- **`runtime/cli/integration/pattern/verb-results.tsx`** — the pattern it
   deploys, which exists for this walkthrough alone. Nothing else deploys it, so
   a change to a pattern the product ships can never break a demonstration of how
   the verb surface works.
@@ -598,7 +598,7 @@ tests, not with this document:
 Run it against any host:
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/verbs-over-the-cli.sh
+API_URL=http://localhost:8000 runtime/cli/integration/verbs-over-the-cli.sh
 ```
 
 CI runs it as the `integration.sh verbs-walkthrough` unit of the `cli-core`

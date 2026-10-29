@@ -635,7 +635,7 @@ outright, since the update is what names the pair, and every other module in
 the old and new recursive closures matches by canonical filename — directly,
 or under the root substitution the two entry names define when they share a
 tail (the same authored tree served under `/api/patterns` and supplied from a
-checkout under `/packages/patterns`) — persisting a cumulative
+checkout under `/patterns`) — persisting a cumulative
 successor-to-predecessor delegation; an ambiguous match derives none.
 `writeAuthorizedBy` accepts the current module hash or a predecessor reachable
 through the delegation map authenticated in the target document's space, but
@@ -961,7 +961,7 @@ owner-only until granted. This discharges the open questions recorded in
 time" is represented; what changes automatically for future vs existing data).
 Runtime prerequisites already shipped: grant records with `policyState`
 guards, reserved-path storage and single-use commit-precondition receipts
-(`packages/runner/src/cfc/grants.ts`, #4627/#4649), and label-carried
+(`runtime/runner/src/cfc/grants.ts`, #4627/#4649), and label-carried
 `referenced` record selection with home-clause locality (CT-1874, #4652) —
 SC-30 is the spec-side profile plus the reserved grant kind.
 
@@ -1311,7 +1311,7 @@ complete result projection, so the copy lands at the ROOT of each sub-piece's
 result document, where a covering entry covers `$UI` and the §8.10.6 display
 ceiling denies the piece's whole user interface rather than the confidential
 field inside it. Measured on
-`packages/patterns/integration/cfc-render-policy-demo.test.ts` at the strict
+`patterns/integration/cfc-render-policy-demo.test.ts` at the strict
 dials: the clause reached the flow join through one observation, a `followRef`
 read at the sigil interior carrying the wiring marker. Such a read would
 put its clause in the derived stamp at `path: []` of each rewritten result,
@@ -1405,9 +1405,9 @@ Proposed edit: add the plaintext module-policy subject to §4.9.3's
 candidate-discovery sentence, with the commitment-form carve-out; and add
 subject-space ACL documents and unverified manifest documents to §18.4.5's
 reactive re-render paragraph. Implemented in
-`packages/runner/src/cfc/render-ceiling.ts`
+`runtime/runner/src/cfc/render-ceiling.ts`
 (`membershipSpacesInConfidentiality`) and
-`packages/html/src/worker/reconciler.ts` (`#watchCellMembership`).
+`runtime/html/src/worker/reconciler.ts` (`#watchCellMembership`).
 
 ## From the stored write-requirement enforcement (#8024, 2026-09-24)
 
@@ -1537,9 +1537,9 @@ established. In `Cfc/Membership.lean`, drop the `p = space` disjunct from
 `readerRoleB` and its description. The soundness, completeness, and
 conjunctive cross-space theorems reason about `readerOf` generically and should
 not depend on the disjunct; building the model confirms it. Implemented in
-`packages/memory/v2/server.ts` (`#resolveCapability`),
-`packages/runner/src/cfc/space-membership.ts` (`spaceReaderRole`), and
-`packages/runner/src/cfc/custody-seal.ts` (`roomReaders`).
+`runtime/memory/v2/server.ts` (`#resolveCapability`),
+`runtime/runner/src/cfc/space-membership.ts` (`spaceReaderRole`), and
+`runtime/runner/src/cfc/custody-seal.ts` (`roomReaders`).
 
 ## From authored-by without a gesture (2026-10-01)
 
@@ -1575,7 +1575,7 @@ Proposed edit: state the authority reading, the declared-writer
 precondition, and the actor-less refusal where the chain is written, and name
 a separate intent atom (the registered and unminted `UserSurfaceInput`) as
 what a reader would consult for a gesture. Implemented in
-`packages/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
+`runtime/runner/src/cfc/prepare.ts` (`currentPrincipalIntegrityReason`);
 described in [`current-principal.md`](../features/current-principal.md).
 
 ## From the display ceiling's prompt-caveat family (2026-10-01)
@@ -1604,9 +1604,9 @@ requires for admitting a caveat kind.
 its `InjectionSafe` requirement for discharge untouched. A channel that reads
 rendered output back into a model (a screenshot, an accessibility tree, the
 page's text) is a model sink and a new boundary context (§8.10.5.2), not a
-display. Implemented in `packages/runner/src/cfc/prompt-caveat-kinds.ts`
+display. Implemented in `runtime/runner/src/cfc/prompt-caveat-kinds.ts`
 (`PROMPT_CAVEAT_FAMILY_KINDS`), which `defaultRenderConfidentialityCeiling` in
-`packages/lib-shell/src/runtime.ts` admits: the family expands into the
+`runtime/lib-shell/src/runtime.ts` admits: the family expands into the
 ceiling's enumerated `caveatKinds` from that one constant, so the wire carries
 kinds, not a family token. Labs admits the screening-gradient tiers and
 `prompt-influence` in both spellings, and not the unsuffixed
@@ -1719,10 +1719,10 @@ A refused prop is not set, or is removed, and is reported as the
 when it holds a `url`, an image function, `src(`, `@import`, a backslash, or
 a custom property definition. An object is decided entry by entry.
 
-Implemented in `packages/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
+Implemented in `runtime/html/src/worker/reconciler.ts` (`REMOTE_LOAD_PROPS`,
 `#remoteLoadPolicyOf`). Tested in
-`packages/html/test/worker-reconciler-remote-loads.test.ts`.
-`packages/html/test/remote-load-props.test.ts` holds every ui component that
+`runtime/html/test/worker-reconciler-remote-loads.test.ts`.
+`runtime/html/test/remote-load-props.test.ts` holds every ui component that
 shows a way to load to the table, or to a reason it loads nothing a value
 chooses.
 
@@ -1789,7 +1789,7 @@ other reader, the appender's own included, still misfits. Proposed edit: state
 the parent rule where the spec describes binding a reader-private declaration
 to its creator, define "beneath" as the link placement above, and say that the
 parent is read as stored before the transaction. Implemented in
-`packages/runner/src/cfc/prepare.ts` (`creatorBinding`, through
+`runtime/runner/src/cfc/prepare.ts` (`creatorBinding`, through
 `bindCurrentPrincipalToStoredConfidentiality` in
-`packages/runner/src/cfc/current-principal-confidentiality.ts`); described in
+`runtime/runner/src/cfc/current-principal-confidentiality.ts`); described in
 [`current-principal.md`](../features/current-principal.md).

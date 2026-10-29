@@ -64,7 +64,8 @@ conversion layer (Section 8) and represented in `FabricValue` trees as
 `FabricInstance` wrapper classes (Section 1.4).
 
 > **Package note:** The data model implementation lives in
-> `packages/data-model/`. The `FabricValue` union and the types beside it are
+> `base/data-model/`. The `FabricValue` union and the types
+  beside it are
 > declared in `api.ts`, together with the pattern-visible declarations of the
 > special-object classes (`FabricInstance`, `FabricPrimitive`) and their union
 > `FabricSpecialObject`. The classes themselves, the layer types, and the
@@ -99,20 +100,21 @@ conversion layer (Section 8) and represented in `FabricValue` trees as
 > where to import it from.
 >
 > Type declarations visible to patterns are in
-> `packages/data-model/src/api.ts` (the `interface` + `declare const` pattern),
-> which `packages/api/index.ts` re-exports as part of the `commonfabric`
+> `base/data-model/src/api.ts` (the `interface` +
+  `declare const` pattern),
+> which `base/api/index.ts` re-exports as part of the `commonfabric`
 > surface. They must agree with the implementations they mirror, and the
 > agreement is asserted at compile time: `api-agreement.ts`, a module nothing
 > imports, asserts that each of the three base classes and its declaration are
 > mutually assignable, and each concrete class asserts beside its own
 > definition that it satisfies its declaration. The second kind of check runs
 > one way only -- a public member an implementation gains without a declaration
-> is unreachable from a pattern, and no gate reports it. `packages/runner/`
+> is unreachable from a pattern, and no gate reports it. `runtime/runner/`
 > wires concrete implementations into builder exports.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/api.ts
+// file: base/data-model/src/api.ts
 
 /**
  * The complete set of values that can flow through the runtime, be stored
@@ -250,7 +252,7 @@ convertible JS object types that the conversion layer can handle:
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/interface.ts
+// file: base/data-model/src/interface.ts
 
 /**
  * Union of convertible JS object types that the conversion layer can translate
@@ -445,7 +447,7 @@ to convertible JS form:
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-instances/FabricNativeWrapper.ts
+// file: base/data-model/src/fabric-instances/FabricNativeWrapper.ts
 
 /**
  * Abstract base class for `FabricInstance` wrappers that bridge convertible JS
@@ -541,7 +543,7 @@ instance is frozen, when it can no longer go stale).
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-instances/FabricError.ts
+// file: base/data-model/src/fabric-instances/FabricError.ts
 
 /**
  * Structured state for constructing a `FabricError`. Spec slots are
@@ -735,7 +737,7 @@ the projection is rebuilt on each access; once frozen it is cached.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-instances/FabricMap.ts
+// file: base/data-model/src/fabric-instances/FabricMap.ts
 // (Normative target -- the live codec is currently a throwing stub.)
 
 /**
@@ -799,7 +801,7 @@ export class FabricMap
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-instances/FabricSet.ts
+// file: base/data-model/src/fabric-instances/FabricSet.ts
 // (Normative target -- the live codec is currently a throwing stub.)
 
 /**
@@ -860,7 +862,7 @@ members.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-primitives/FabricRegExp.ts
+// file: base/data-model/src/fabric-primitives/FabricRegExp.ts
 
 import { FabricPrimitive } from './interface';
 
@@ -946,14 +948,14 @@ The brands are what make the annotation carry information.
 Each brand is a symbol so that it can never be mistaken for data: a
 symbol-keyed member has no place in a schema, where a string-keyed one has to
 be skipped by name. Each is interned so that every realm and every copy of the
-module agree on its value. `packages/data-model/src/api.ts` declares the
-identical members; the two must agree exactly, since a value branded by one
-would otherwise not satisfy the other, and `api-agreement.ts` stops compiling
-when they stop agreeing.
+module agree on its value. `base/data-model/src/api.ts`
+declares the identical members; the two must agree exactly, since a value
+branded by one would otherwise not satisfy the other, and `api-agreement.ts`
+stops compiling when they stop agreeing.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/api.ts
+// file: base/data-model/src/api.ts
 
 /**
  * The two kinds of `FabricValue` beyond the JavaScript built-ins, as one type.
@@ -985,7 +987,7 @@ that form the `FabricPrimitive` arm of `FabricValue`.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/interface.ts
+// file: base/data-model/src/interface.ts
 
 import type { FabricPrimitiveSchemaType } from "./api.ts";
 import { FABRIC_INSTANCE_PLUS_BRAND, FABRIC_PRIMITIVE_BRAND } from "./api.ts";
@@ -1051,7 +1053,7 @@ out each class's codecs.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricEpochNsec.ts
+// file: base/data-model/src/fabric-primitives/FabricEpochNsec.ts
 
 /**
  * Temporal type representing nanoseconds from the POSIX Epoch
@@ -1085,7 +1087,7 @@ export class FabricEpochNsec extends FabricPrimitive {
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricEpochDay.ts
+// file: base/data-model/src/fabric-primitives/FabricEpochDay.ts
 
 /**
  * Temporal type representing a particular day, as a count of days from the
@@ -1116,7 +1118,7 @@ export class FabricEpochDay extends FabricPrimitive {
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricHash.ts
+// file: base/data-model/src/fabric-primitives/FabricHash.ts
 
 /**
  * A content-addressed identifier: a hash digest paired with an algorithm tag.
@@ -1253,7 +1255,7 @@ refuses a state that is not a record of two strings, and `decode()` produces a
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-primitives/FabricBytes.ts
+// file: base/data-model/src/fabric-primitives/FabricBytes.ts
 
 /**
  * Immutable byte sequence in the fabric type system. Extends `FabricPrimitive`
@@ -1344,7 +1346,7 @@ field, a cell — has nothing to narrow.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-primitives/FabricKeyPair.ts
+// file: base/data-model/src/fabric-primitives/FabricKeyPair.ts
 
 export class FabricKeyPair extends FabricPrimitive {
   readonly #algorithm: string;
@@ -1436,7 +1438,7 @@ could have produced it.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/api.ts
+// file: base/data-model/src/api.ts
 
 /**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
@@ -1483,7 +1485,7 @@ service from a violated data contract without parsing a message:
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricUnavailable.ts
+// file: base/data-model/src/fabric-primitives/FabricUnavailable.ts
 
 /**
  * A marker standing in for data that is not available, saying why.
@@ -1609,7 +1611,7 @@ specified where those consumers are.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricDurationNsec.ts
+// file: base/data-model/src/fabric-primitives/FabricDurationNsec.ts
 
 /**
  * Temporal type representing a span of time, as a count of nanoseconds.
@@ -1641,7 +1643,7 @@ export class FabricDurationNsec extends FabricPrimitive {
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/fabric-primitives/FabricDurationDay.ts
+// file: base/data-model/src/fabric-primitives/FabricDurationDay.ts
 
 /**
  * Temporal type representing a span of time, as a count of days. Extends
@@ -1709,7 +1711,7 @@ in Section 4 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-instances/FabricLink.ts
+// file: base/data-model/src/fabric-instances/FabricLink.ts
 
 /**
  * A link value: a `FabricInstance` wrapping a plain-object addressing
@@ -1758,12 +1760,14 @@ owned class to host a `[CODEC]`); see Section 4.5.
 > **File organization.** Each `FabricInstance` and `FabricPrimitive` class lives
 > in its own file: the `FabricInstance` subclasses `FabricError`, `FabricLink`,
 > `FabricMap`, `FabricSet` and `FabricNativeWrapper` under
-> `packages/data-model/src/fabric-instances/`, with `UnknownValue` and
-> `ProblematicValue` (Section 3) under `packages/data-model/src/codec-common/`;
+> `base/data-model/src/fabric-instances/`, with `UnknownValue`
+  and
+> `ProblematicValue` (Section 3) under
+  `base/data-model/src/codec-common/`;
 > the `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
 > `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
 > `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) under
-> `packages/data-model/src/fabric-primitives/`.
+> `base/data-model/src/fabric-primitives/`.
 
 ### 1.5 Plain Containers
 
@@ -1987,7 +1991,7 @@ to `Symbol()` is a description, for debugging; it is not a key anything can look
 the symbol up by.
 
 ```typescript
-// file: packages/data-model/src/codec-interface/interface.ts
+// file: base/data-model/src/codec-interface/interface.ts
 
 /**
  * Well-known symbol for binding the getter
@@ -2008,7 +2012,7 @@ export const JSON_CODEC: unique symbol =
 ```
 
 ```typescript
-// file: packages/data-model/src/fabric-bases/BaseFabricInstance.ts
+// file: base/data-model/src/fabric-bases/BaseFabricInstance.ts
 
 /**
  * Well-known symbol for deeply freezing a `FabricInstance` in place. The
@@ -2061,7 +2065,7 @@ class-side `[CODEC]` (Section 2.4).
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/interface.ts
+// file: base/data-model/src/interface.ts
 
 import { FABRIC_INSTANCE_PLUS_BRAND, FABRIC_PRIMITIVE_BRAND } from "./api.ts";
 
@@ -2133,7 +2137,7 @@ export abstract class FabricInstance extends BaseFabricSpecialObject {
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/fabric-bases/BaseFabricInstance.ts
+// file: base/data-model/src/fabric-bases/BaseFabricInstance.ts
 
 /**
  * Abstract base class providing shared scaffolding for `FabricInstance`
@@ -2247,7 +2251,8 @@ export abstract class BaseFabricInstance extends FabricInstance {
 > **Why a separate `BaseFabricInstance`?** Keeping `FabricInstance` pure
 > abstract (no implementations) gives the protocol surface a clean, minimal
 > definition for external consumers: the pattern-visible declaration in
-> `packages/data-model/src/api.ts`, which `packages/api/` re-exports, exposes
+> `base/data-model/src/api.ts`, which `base/api/` re-exports,
+  exposes
 > `FabricInstance` with just its protocol members, and `BaseFabricInstance`
 > stays an internal implementation detail of the data-model package. External
 > code written against `FabricInstance` is therefore stable against changes to
@@ -2322,7 +2327,7 @@ into.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/codec-interface/interface.ts
+// file: base/data-model/src/codec-interface/interface.ts
 
 /**
  * Interface for codecs (encoder-decoder objects). These are objects which
@@ -2695,7 +2700,7 @@ Key contracts:
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/codec-interface/interface.ts
+// file: base/data-model/src/codec-interface/interface.ts
 
 /**
  * The minimal interface that codec `encode()` and `decode()` implementations
@@ -2714,7 +2719,8 @@ export interface LiveEnvironment {
 }
 ```
 
-> **Why an interface rather than a named class?** `packages/data-model/` is a
+> **Why an interface rather than a named class?**
+  `base/data-model/` is a
 > standalone low-level package, and a requirement it states as an interface is
 > one any client can satisfy. It has several already -- `memory` builds one,
 > as do tests in `data-model` and `runner` -- and more are expected. Future
@@ -3026,7 +3032,7 @@ all.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/codec-common/UnknownValue.ts
+// file: base/data-model/src/codec-common/UnknownValue.ts
 
 import { DEEP_FREEZE, type FabricValue, IS_DEEP_FROZEN } from '../interface';
 import {
@@ -3139,7 +3145,7 @@ example, a type whose codec `decode()` throws can be preserved as a
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/codec-common/ProblematicValue.ts
+// file: base/data-model/src/codec-common/ProblematicValue.ts
 
 import { DEEP_FREEZE, type FabricValue, IS_DEEP_FROZEN } from '../interface';
 import {
@@ -3293,7 +3299,7 @@ decoding. This type is internal to the JSON implementation — it is not part of
 the public boundary interface.
 
 ```typescript
-// file: packages/data-model/src/codec-json/interface.ts
+// file: base/data-model/src/codec-json/interface.ts
 
 /**
  * JSON-compatible codec value. This is the intermediate tree
@@ -3337,7 +3343,7 @@ are the same object.
 
 ```typescript
 // Shown at module scope.
-// file: packages/data-model/src/codec-common/BaseCodecEngine.ts
+// file: base/data-model/src/codec-common/BaseCodecEngine.ts
 
 abstract class ExampleEngine {
   protected abstract newEncodeAct(env: LiveEnvironment): ExampleEncodeAct;
@@ -3430,7 +3436,7 @@ and a registry given one of each separately could be given a mismatched pair.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/codec-common/CodecRegistry.ts
+// file: base/data-model/src/codec-common/CodecRegistry.ts
 
 /**
  * Sentinel returned by `CodecRegistry.codecFromValue()` for a
@@ -3713,14 +3719,14 @@ requirements.
 The storage boundary routes through functions that bridge between the
 storage layer (JSON strings) and the runtime layer (`FabricValue`). These
 functions live in the package's codec-defaults module
-(`packages/data-model/src/codecs.ts`), which pairs the JSON format with the
-set of fabric classes this package defines. The format itself, and the
+(`base/data-model/src/codecs.ts`), which pairs the JSON format
+with the set of fabric classes this package defines. The format itself, and the
 recognizer for text in it, live one layer down in
-`packages/data-model/src/codec-json/`.
+`base/data-model/src/codec-json/`.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/codecs.ts
+// file: base/data-model/src/codecs.ts
 
 /**
  * Encodes a `FabricValue` to a JSON string in the standard `FabricValue`
@@ -3751,7 +3757,7 @@ export function plainObjectFromJson<T extends object = object>(
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/codec-json/JsonCodecEngine.ts
+// file: base/data-model/src/codec-json/JsonCodecEngine.ts
 
 declare class ExampleJsonCodecEngine {
   /**
@@ -3766,7 +3772,7 @@ declare class ExampleJsonCodecEngine {
 time and reuses it for all encode/decode operations.
 
 The `memory` package wraps these at its encoding boundary
-(`packages/memory/v2.ts`):
+(`runtime/memory/v2.ts`):
 
 - **Write path:** `encodeMemoryBoundary(value)` calls
   `jsonFromFabricValue(value)`.
@@ -3776,7 +3782,7 @@ The `memory` package wraps these at its encoding boundary
 ### 4.9 Fabric Value Conversion
 
 The JS-to-`FabricValue` boundary is managed by
-`packages/data-model/src/convertible-js.ts`. This module provides
+`base/data-model/src/convertible-js.ts`. This module provides
 `fabricFromConvertibleJsValue()` / `convertibleJsFromFabricValue()` functions
 that bridge the left layer (JS wild west) and the middle layer (`FabricValue`)
 at the `Cell` read/write boundary.
@@ -3788,7 +3794,7 @@ The module also provides a shallow conversion function
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/convertible-js.ts
+// file: base/data-model/src/convertible-js.ts
 
 /**
  * Convert a convertible JS value to fabric form (deep, recursive). Wraps
@@ -3934,7 +3940,7 @@ regardless of nibble range.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/value-hash/impl.ts
+// file: base/data-model/src/value-hash/impl.ts
 
 /**
  * Compute a hash for a `FabricValue`. The hash is encoding-independent:
@@ -4388,7 +4394,7 @@ There are two directions:
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/convertible-js.ts
+// file: base/data-model/src/convertible-js.ts
 
 /**
  * Convert a value to `FabricValue` without recursing into nested values.
@@ -4456,7 +4462,8 @@ export function fabricFromConvertibleJsValue(
 
 > **Implementation: tag-based type dispatch.** The conversion functions
 > classify a value through `tagOfConvertibleJsValueElseNull()` (in
-> `packages/data-model/src/types/`), which returns a tag string from the
+> `base/data-model/src/types/`), which returns a tag string
+  from the
 > `VALUE_TAGS` vocabulary -- the JS type tags of `JS_TYPE_VALUE_TAGS` (the
 > `typeof` name of each primitive and of a function, plus `"null"`),
 > `"Array"`, `"Object"`, `"JsError"`, `"JsMap"`, `"JsSet"`, `"JsDate"`,
@@ -4507,7 +4514,8 @@ export function fabricFromConvertibleJsValue(
 
 > **Implementation: centralized shallow-clone utility.** The conversion
 > functions use a centralized `cloneIfNecessary()` utility (in
-> `packages/data-model/src/value-clone.ts`) to handle frozenness adjustment for
+> `base/data-model/src/value-clone.ts`) to handle frozenness
+  adjustment for
 > values that are already valid `FabricValue` but whose freeze state does not
 > match the requested `freeze` argument. This function dispatches on the same
 > tag to clone primitives (no-op), arrays (shallow copy preserving sparse
@@ -4538,16 +4546,16 @@ constructed by the conversion function, so freezing them is not a mutation of
 caller state.)
 
 **`deepFreeze` at schema merge/combine sites.** The `deepFreeze()` utility (in
-`packages/data-model/src/deep-freeze.ts`) recursively freezes an object tree in
-place; see Section 8.6 for its full protocol, dispatch shape, and the
-boundary-crossing egress contracts. At sites where schema objects are merged or
-combined (e.g., schema `merge()` and `combine()` functions), pass-through paths
-— where the input is returned as the result without structural modification —
-must copy the value before freezing to avoid mutating caller-owned schema
-objects. The general principle: `deepFreeze()` freezes in place, so if the
-caller retains a reference to a mutable object, the function must not freeze
-that object as a side effect. Callers at these sites should copy before freezing
-rather than relying on the input being "safe to freeze."
+`base/data-model/src/deep-freeze.ts`) recursively freezes an
+object tree in place; see Section 8.6 for its full protocol, dispatch shape, and
+the boundary-crossing egress contracts. At sites where schema objects are merged
+or combined (e.g., schema `merge()` and `combine()` functions), pass-through
+paths — where the input is returned as the result without structural
+modification — must copy the value before freezing to avoid mutating
+caller-owned schema objects. The general principle: `deepFreeze()` freezes in
+place, so if the caller retains a reference to a mutable object, the function
+must not freeze that object as a side effect. Callers at these sites should copy
+before freezing rather than relying on the input being "safe to freeze."
 
 **Always-frozen types bypass the `freeze` option.** JS primitives (`null`,
 `boolean`, `number`, `string`, `undefined`, `bigint`) are inherently immutable
@@ -4593,7 +4601,7 @@ returned value is always a valid `FabricValue` regardless of its frozen state.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/convertible-js.ts
+// file: base/data-model/src/convertible-js.ts
 
 /**
  * Type predicate: returns `true` if `fabricFromConvertibleJsValue()` would
@@ -4608,7 +4616,7 @@ returned value is always a valid `FabricValue` regardless of its frozen state.
  * and allocation).
  *
  * Relationship to other functions and checks:
- * - `isValidFabricValue(x)` (in `packages/data-model/src/types/validation.ts`):
+ * - `isValidFabricValue(x)` (in `base/data-model/src/types/validation.ts`):
  *   the narrower check — "is `x` already a `FabricValue`?" — which does NOT
  *   accept JS types like `Error` or `Map`.
  * - `isValidFabricConvertibleJsValue(x)`: "Could `x` be converted to a
@@ -4655,7 +4663,7 @@ symbols.
 
 ```typescript
 // Shown for illustration only.
-// file: packages/data-model/src/convertible-js.ts
+// file: base/data-model/src/convertible-js.ts
 
 /**
  * Deep unwrap: recursively walk a `FabricValue` tree, unwrapping any
@@ -4851,9 +4859,9 @@ its shared cycle-detection state through implementations transparently.
 
 #### `deepFreeze()` and the 4-arm dispatch
 
-The generic top-level utility (`packages/data-model/src/deep-freeze.ts`)
-recursively freezes a `FabricValue` in place. It dispatches on four arms in
-order:
+The generic top-level utility
+(`base/data-model/src/deep-freeze.ts`) recursively freezes a
+`FabricValue` in place. It dispatches on four arms in order:
 
 1. **Necessarily- or already-known-deep-frozen value** — primitives (`null` and
    `typeof !== "object"`) and objects already recorded in the internal

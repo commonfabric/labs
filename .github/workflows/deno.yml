@@ -238,7 +238,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .ci-cache/compile
-          key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('packages/patterns/**', 'packages/generated-patterns/**') }}
+          key: cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-${{ github.job }}-${{ matrix.lane }}-${{ hashFiles('patterns/**', 'runtime/generated-patterns/**') }}
           restore-keys: |
             cc-lane-${{ steps.compile-cache-key.outputs.fingerprint }}-
 
@@ -786,7 +786,7 @@ jobs:
           fi
 
       - name: 🏗️ Build shell with staging API URL
-        working-directory: packages/shell
+        working-directory: runtime/shell
         run: |
           deno task production
 
@@ -811,10 +811,10 @@ jobs:
       - name: 📤 Upload shell assets to Staging GCS
         run: |
           # Retain the complete immutable module graph for long-lived pages.
-          gsutil -m rsync -r packages/shell/dist gs://staging-commontools-dev/builds/${{ github.sha }}/
+          gsutil -m rsync -r runtime/shell/dist gs://staging-commontools-dev/builds/${{ github.sha }}/
 
           # Upload to bucket root as "latest" (-d removes orphaned files)
-          gsutil -m rsync -r -d packages/shell/dist gs://staging-commontools-dev/
+          gsutil -m rsync -r -d runtime/shell/dist gs://staging-commontools-dev/
 
           echo "📦 Staging Shell deployed"
           echo "https://staging.commontools.dev/"

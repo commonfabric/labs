@@ -16,16 +16,13 @@
  * running it, and a text search cannot tell those from the real thing.
  *
  * This is the half a diff can settle. What a file's benchmarks are called is
- * decided when they run, which is where `packages/dashboard/bench-report.ts`
+ * decided when they run, which is where `dashboard/bench-report.ts`
  * reads it.
  */
 
 import { fromFileUrl } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
-import {
-  CALIBRATION_FILE,
-  KEY_BENCHMARKS,
-} from "../packages/dashboard/bench-report.ts";
+import { CALIBRATION_FILE, KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
 
 const WORKFLOW = ".github/workflows/benchmarks.yml";
 const JOB = "benchmarks";
@@ -125,7 +122,7 @@ export function main(root: string = repoRoot()): number {
         ...problems.map((problem) => `  ${problem}`),
         "",
         "The names are CALIBRATION_FILE and KEY_BENCHMARKS in",
-        "packages/dashboard/bench-report.ts. A benchmark that moved takes its",
+        "dashboard/bench-report.ts. A benchmark that moved takes its",
         "dashboard history with it, so move the name with the file or leave",
         "the file where it is. See docs/development/BENCHMARKS.md.",
         "",

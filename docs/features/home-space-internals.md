@@ -47,7 +47,7 @@ session to write `{ [space]: "OWNER" }`. It closes that bootstrap session and
 mounts a fresh normal session so local sequence numbers and user/session scope
 partitions are not shared with bootstrap work. `session.open` remains
 read-only; the claim is an ordinary, conflict-checked ACL transaction. See
-`packages/runner/src/storage/v2.ts`.
+`runtime/runner/src/storage/v2.ts`.
 
 A populated Home space with no ACL document is left as it stands: the memory
 server grants a space's own DID OWNER only while the space has no history, so

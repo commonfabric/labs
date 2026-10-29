@@ -196,9 +196,9 @@ committed through another channel need a stable identity or another way to make
 them idempotent.
 
 Retryability is an **allow-list**: `isRetryableCommitRejection`, defined in the
-shared rejection vocabulary (`packages/runner/src/storage/rejection.ts`) and
+shared rejection vocabulary (`runtime/runner/src/storage/rejection.ts`) and
 consumed only by `editWithRetry()`. The scheduler's commit classifier
-(`classifyCommitDisposition`, `packages/runner/src/scheduler/events.ts`) draws
+(`classifyCommitDisposition`, `runtime/runner/src/scheduler/events.ts`) draws
 its predicates from that same module but composes them itself, so the two
 classifiers are independent and can disagree — the scheduler retries only a
 stale basis (`ConflictError`, `StorageTransactionInconsistent`) and drops

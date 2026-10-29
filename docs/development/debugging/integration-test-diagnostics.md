@@ -1,6 +1,6 @@
 # Browser Integration Test Diagnostics
 
-The browser integration tests (`packages/patterns/integration/`) are
+The browser integration tests (`patterns/integration/`) are
 **self-diagnosing on failure**: a `Timed out filling cf input …` or
 `waitForCondition` timeout prints a probe that names the stuck layer. Read that
 output before adding any instrumentation of your own.
@@ -8,7 +8,7 @@ output before adding any instrumentation of your own.
 What the failure probe contains, and where each piece lives:
 
 - **The wait's own report** (`describeConditionWaitFailure`, in
-  [`utils.ts`](../../../packages/integration/utils.ts)) — the source the page
+  [`utils.ts`](../../../runtime/integration/utils.ts)) — the source the page
   ran, the arguments it was given one to a line, the last throw the predicate
   itself made, and the page it ran out against: document URL and title, response
   status, the view and identity `globalThis.app` holds, the messages the runtime
@@ -18,7 +18,7 @@ What the failure probe contains, and where each piece lives:
   this, in every suite; the rest of this list is what the patterns suite adds on
   top of it.
 - **Fill phase ledger** (`__cfFillDiag`, in
-  [`cfc-browser-helpers.ts`](../../../packages/patterns/integration/cfc-browser-helpers.ts))
+  [`cfc-browser-helpers.ts`](../../../patterns/integration/cfc-browser-helpers.ts))
   — per-selector progress through the fill (settled → found → visible → filled
   → committed), naming the exact await that hung. A fill on a page that never
   exposes `commonfabric.viewSettled` stops at the settle and says so.
@@ -26,11 +26,11 @@ What the failure probe contains, and where each piece lives:
   `cf-input` host has a bound cell and a pending commit, alongside DOM
   value/visibility/disabled.
 - **Main-thread pending IPC** (`RuntimeClient.getPendingRequests()`,
-  [`runtime-client.ts`](../../../packages/runtime-client/src/runtime-client.ts))
+  [`runtime-client.ts`](../../../runtime/runtime-client/src/runtime-client.ts))
   — the runtime-client requests still awaiting a worker response; works even
   while the worker is wedged.
 - **Worker request ledger** (`runtime-worker.ipc` counts, wired through
-  [`connection.ts`](../../../packages/runtime-client/src/client/connection.ts))
+  [`connection.ts`](../../../runtime/runtime-client/src/client/connection.ts))
   — received/responded counts per request type. Because `postMessage` is
   FIFO, one failed run triangulates *never sent* vs *delivery starved* vs
   *response lost*.
@@ -52,7 +52,7 @@ lanes upload the same file as an artifact, named for the job that wrote it.
 Local full-stack repro for CI-only integration failures (see
 [LOCAL_DEV_SERVERS](../LOCAL_DEV_SERVERS.md) for the dev-server details):
 run toolshed on an offset port, `SHELL_PORT=… TOOLSHED_PORT=… deno task
-dev-local` in `packages/shell`, then point the test at both with
+dev-local` in `runtime/shell`, then point the test at both with
 `API_URL=… FRONTEND_URL=… deno test -A integration/<file>`. Without
 `FRONTEND_URL` the shell is missing and every tree fails identically at
 `goto` — a misleading non-repro.

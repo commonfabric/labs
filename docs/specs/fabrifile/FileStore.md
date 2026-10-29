@@ -29,7 +29,7 @@ one.
 
 Two roots keep one this way: a FabriChat room that is its space's root
 ([`FabriChatRoom`](../fabrichat/FabriChatRoom.md)), in its `fileStore` input,
-and the Loom (`packages/patterns/loom/`), in its own. The two offer the same
+and the Loom (`patterns/system/loom/`), in its own. The two offer the same
 shape: each links the store as `fileStore`, creates it with `ensureFileStore`,
 and offers the record itself as `fileStoreRecord`, which FabriChat's
 `ChatContainer` declares. A FabriChat room that isn't its space's root uses the
@@ -75,7 +75,7 @@ a free name, store the entry's bytes again under its new name with
 
 ## Modules
 
-The store's patterns are in `packages/patterns/fabrifile/`:
+The store's patterns are in `patterns/system/fabrifile/`:
 
 - `schemas.tsx`: `FileEntry`, `BlobRef`, `FileProfile`, the requests and
   their outcomes, `FileStoreFiles`, the store's files group, and
@@ -89,7 +89,7 @@ The store's patterns are in `packages/patterns/fabrifile/`:
 
 `schemas.tsx`, `names.ts` and `store.tsx`, and every module they import, MUST
 NOT import `view.tsx`, any other module that renders, or anything from
-`packages/ui`. A root that offers file storage imports `store.tsx`, and imports
+`runtime/ui`. A root that offers file storage imports `store.tsx`, and imports
 `view.tsx` only from its own rendering. A client that draws natively
 instantiates the store, or reads it through a root, with no rendering code
 loaded.

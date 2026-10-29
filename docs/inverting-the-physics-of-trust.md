@@ -51,7 +51,7 @@ microkernel for networked software in the AI era.
 - a reactive, multiplayer-by-default storage layer with keypair identity
 - well over a hundred running patterns, including a live demonstration
   of prompt injection being structurally contained
-  (`packages/patterns/cfc-agent-prompt-injection-demo/`)
+  (`patterns/examples/cfc-agent-prompt-injection-demo/`)
 - the verifiable-execution spec the attestation mesh will follow, and
   signed build provenance for every binary built on main
 
@@ -282,5 +282,5 @@ peer refuse an unproven runtime is specified in
 in place; robustness and performance are not yet, and they are the
 current work. That is the ordinary condition of a young kernel.
 
-`docs/tutorial/` walks the mechanisms; `packages/patterns/` is where to
+`docs/tutorial/` walks the mechanisms; `patterns/` is where to
 start.

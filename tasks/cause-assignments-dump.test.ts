@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { createRuntime } from "../packages/cli/lib/dev.ts";
+import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
   buildAssignment,
   type DumpRuntime,

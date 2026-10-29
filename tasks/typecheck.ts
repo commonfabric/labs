@@ -17,85 +17,170 @@ import { expandGlob, walkSync } from "@std/fs";
 import { parse as parseJsonc } from "@std/jsonc";
 import * as path from "@std/path";
 import { FragmentWriter } from "@commonfabric/test-support/records";
+import { packageDirOf, withoutPackageParent } from "./package-layout.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 // Directory paths (no glob expansion needed).
 const DIRS = [
   ".claude/scripts",
   "docs",
-  "packages/agent-runner",
-  "packages/api",
-  "packages/cf-harness",
-  "packages/cli",
-  "packages/connectors/agents/connector",
-  "packages/connectors/agents/debug-view",
-  "packages/connectors/agents/host",
-  "packages/connectors/github/activity-view",
-  "packages/connectors/github/connector",
-  "packages/connectors/github/host",
-  "packages/content-hash",
-  "packages/dashboard",
-  "packages/data-model",
-  "packages/data-model-schema",
-  "packages/deno-web-test",
-  "packages/felt",
-  "packages/fuse",
-  "packages/generated-patterns",
-  "packages/home-schemas",
-  "packages/html",
-  "packages/identity",
-  "packages/iframe-sandbox",
-  "packages/integration",
-  "packages/js-compiler",
-  "packages/leb128",
-  "packages/lib-shell",
-  "packages/llm",
-  "packages/memory",
-  "packages/navigation",
-  "packages/patterns/battleship",
-  "packages/patterns/budget-tracker",
-  "packages/patterns/contacts",
-  "packages/patterns/examples",
-  "packages/patterns/gideon-tests",
-  "packages/patterns/integration",
-  "packages/patterns/notes",
-  "packages/patterns/scrabble",
-  "packages/patterns/system",
-  "packages/patterns/test",
-  "packages/patterns/tools",
-  "packages/patterns/topics/tools",
-  "packages/patterns/weekly-calendar",
-  "packages/pattern-index",
-  "packages/piece",
-  "packages/pure-json",
-  "packages/runner",
-  "packages/runtime-client",
-  "packages/schema-generator/src",
-  "packages/shell",
-  "packages/spec-model",
-  "packages/state-inspector",
-  "packages/static/scripts",
-  "packages/static/test",
-  "packages/test-support",
-  "packages/toolshed",
-  "packages/ts-transformers/lint-plugins",
-  "packages/ts-transformers/src",
-  "packages/ts-transformers/test/diagnostics",
-  "packages/ts-transformers/test/reactive",
-  "packages/ui",
-  "packages/utils",
+  "runtime/agent-runner",
+  "base/api",
+  "runtime/cf-harness",
+  "runtime/cli",
+  "connectors/agents/connector",
+  "connectors/agents/debug-view",
+  "connectors/agents/host",
+  "connectors/github/activity-view",
+  "connectors/github/connector",
+  "connectors/github/host",
+  "base/content-hash",
+  "dashboard",
+  "base/data-model",
+  "base/data-model-schema",
+  "runtime/deno-web-test",
+  "base/felt",
+  "runtime/fuse",
+  "runtime/generated-patterns",
+  "base/home-schemas",
+  "runtime/html",
+  "base/identity",
+  "base/iframe-sandbox",
+  "runtime/integration",
+  "base/js-compiler",
+  "base/leb128",
+  "runtime/lib-shell",
+  "base/llm",
+  "runtime/memory",
+  "runtime/navigation",
+  "patterns/apps/annotation",
+  "patterns/apps/annotation-manager",
+  "patterns/apps/bookmarks",
+  "patterns/apps/budget-tracker",
+  "patterns/apps/cheeseboard",
+  "patterns/apps/contacts",
+  "patterns/apps/deep-research",
+  "patterns/apps/image-analysis",
+  "patterns/apps/self-improving-classifier",
+  "patterns/apps/shopping-list",
+  "patterns/apps/store-mapper",
+  "patterns/apps/topics/tools",
+  "patterns/apps/weekly-calendar",
+  "patterns/dev/cell-link",
+  "patterns/dev/default-app-ben",
+  "patterns/dev/checks",
+  "patterns/dev/factory-outputs/vehicles.ts",
+  "patterns/dev/gideon-tests",
+  "patterns/dev/nested-map-ifelse-test",
+  "patterns/dev/render-test",
+  "patterns/dev/self-reference-test",
+  "patterns/dev/test",
+  "patterns/examples/arbitrary-wish-example",
+  "patterns/examples/array-in-cell-with-remove-editable",
+  "patterns/examples/aside",
+  "patterns/examples/cf-chart-demo",
+  "patterns/examples/cf-checkbox-cell",
+  "patterns/examples/cf-code-editor-cell",
+  "patterns/examples/cf-picker",
+  "patterns/examples/cf-render",
+  "patterns/examples/cf-render-subpath",
+  "patterns/examples/cf-tags",
+  "patterns/examples/clock",
+  "patterns/examples/compiler",
+  "patterns/examples/drag-drop-demo",
+  "patterns/examples/examples.test.tsx",
+  "patterns/examples/fetch-json",
+  "patterns/examples/fetch-program-test",
+  "patterns/examples/form-demo",
+  "patterns/examples/group-chat-lobby",
+  "patterns/examples/group-chat-room",
+  "patterns/examples/image",
+  "patterns/examples/instantiate-pattern",
+  "patterns/examples/link-preview",
+  "patterns/examples/llm",
+  "patterns/examples/map-demo",
+  "patterns/examples/mobile-app-demo",
+  "patterns/examples/multi-option-selection",
+  "patterns/examples/nested-counter",
+  "patterns/examples/nested-mentionables",
+  "patterns/examples/output_schema",
+  "patterns/examples/pattern-index",
+  "patterns/examples/phonetic-speller",
+  "patterns/examples/profile-aware-writer",
+  "patterns/examples/profile-roster-live-demo",
+  "patterns/examples/queue-test",
+  "patterns/examples/reactive-now",
+  "patterns/examples/suggestion-test",
+  "patterns/examples/summary-index-tester",
+  "patterns/examples/text-swapper",
+  "patterns/examples/ui-variants",
+  "patterns/examples/wish-note-example",
+  "patterns/examples/write-and-run",
+  "patterns/integration",
+  "patterns/showcase/battleship",
+  "patterns/showcase/dice",
+  "patterns/showcase/scrabble",
+  "patterns/system/agent-queue",
+  "patterns/system/agent-run",
+  "patterns/system/backlinks-index",
+  "patterns/system/chatbot",
+  "patterns/system/common-fabric",
+  "patterns/system/default-app",
+  "patterns/system/favorites-manager",
+  "patterns/system/home",
+  "patterns/system/journal",
+  "patterns/system/knowledge-graph",
+  "patterns/system/link-tool",
+  "patterns/system/mentionables-inspector",
+  "patterns/system/notes",
+  "patterns/system/omnibox-fab",
+  "patterns/system/piece-grid",
+  "patterns/system/private-inbox",
+  "patterns/system/profile-create",
+  "patterns/system/profile-embed",
+  "patterns/system/profile-home",
+  "patterns/system/profile-look",
+  "patterns/system/profile-picker",
+  "patterns/system/quick-capture",
+  "patterns/system/self",
+  "patterns/system/shared-space",
+  "patterns/system/space-overview",
+  "patterns/system/suggestion",
+  "patterns/system/suggestion-history",
+  "patterns/system/summary-index",
+  "patterns/system/system-patterns.test.tsx",
+  "patterns/tools",
+  "runtime/pattern-index",
+  "runtime/piece",
+  "base/pure-json",
+  "runtime/runner",
+  "runtime/runtime-client",
+  "base/schema-generator/src",
+  "runtime/shell",
+  "base/spec-model",
+  "runtime/state-inspector",
+  "base/static/scripts",
+  "base/static/test",
+  "base/test-support",
+  "runtime/toolshed",
+  "base/ts-transformers/lint-plugins",
+  "base/ts-transformers/src",
+  "base/ts-transformers/test/diagnostics",
+  "base/ts-transformers/test/reactive",
+  "runtime/ui",
+  "base/utils",
   "skills",
+  "scripts/implementation-progress",
+  "scripts/server-execution-topics",
   "tasks",
-  "tools",
 ];
 
 // Paths reached by pattern rather than named outright.
 const GLOBS = [
-  "packages/connectors/*.ts",
+  "connectors/*.ts",
   "scripts/*.ts",
-  "packages/static/*.ts",
-  "packages/patterns/*.ts",
-  "packages/patterns/*.tsx",
+  "base/static/*.ts",
+  "patterns/*.ts",
   // Iframe guests and the contracts they are written against compile as
   // ordinary browser modules, and `isPatternSource()` excludes them for
   // exactly that reason, so this task is what checks them. Their generated
@@ -105,14 +190,14 @@ const GLOBS = [
   // is the condition under which the exclusion applies. A file of the same
   // name elsewhere is a pattern source cfcheck compiles, and checking it here
   // as well would put one file through two incompatible JSX environments.
-  "packages/patterns/iframe-*/**/guest.ts",
-  "packages/patterns/iframe-*/**/guest.tsx",
-  "packages/patterns/iframe-*/**/contract.ts",
+  "patterns/*/iframe-*/**/guest.ts",
+  "patterns/*/iframe-*/**/guest.tsx",
+  "patterns/*/iframe-*/**/contract.ts",
   // The tests of the pattern tree's plain modules. A `.test.ts` runs under
   // `deno test --no-check`, and a `.browser.test.ts` reaches its browser
   // through `deno bundle`, which transpiles rather than type-checks, so this
   // task is the only thing that opens either.
-  "packages/patterns/**/*.test.ts",
+  "patterns/**/*.test.ts",
   // `deno check` takes no exclusion, so a tree holding a `test/fixtures`
   // subtree it must not open is reached by glob rather than as one directory
   // entry: per tree, a pattern for the test files at any depth and another
@@ -120,10 +205,10 @@ const GLOBS = [
   // fixtures needs none of that and is named in `DIRS` above, which is where
   // the transformer's `test/diagnostics` and `test/reactive` sit;
   // `UNCHECKED_TREES` records the fixtures these patterns leave behind.
-  "packages/ts-transformers/test/*.ts",
-  "packages/ts-transformers/test/**/*.test.ts",
-  "packages/schema-generator/test/*.ts",
-  "packages/schema-generator/test/**/*.test.ts",
+  "base/ts-transformers/test/*.ts",
+  "base/ts-transformers/test/**/*.test.ts",
+  "base/schema-generator/test/*.ts",
+  "base/schema-generator/test/**/*.test.ts",
 ];
 
 /** Whether a repository-relative path is a test rather than a source file. */
@@ -160,7 +245,7 @@ export interface UncheckedTree {
  */
 export const UNCHECKED_TREES: readonly UncheckedTree[] = [
   {
-    tree: "packages/patterns",
+    tree: "patterns",
     matches: (file) => !isTestModule(file),
     because:
       "authored patterns compile under the classic-`h` JSX runtime rather " +
@@ -171,7 +256,7 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "a claim that coverage lives elsewhere cannot drift from where it is.",
   },
   {
-    tree: "packages/patterns",
+    tree: "patterns",
     matches: (file) => file.endsWith(".test.tsx"),
     because: "a pattern test: a pattern driven through `action(...)` that " +
       "`cf test` compiles through the runtime harness, as a pattern is " +
@@ -182,7 +267,7 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "so `deno task cfcheck` walks none of them.",
   },
   {
-    tree: "packages/schema-generator/test/fixtures",
+    tree: "base/schema-generator/test/fixtures",
     because:
       "the generator's fixture corpus: inputs the tests feed it, and the " +
       "outputs they compare against. These are data for the tests beside " +
@@ -193,13 +278,13 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "earns the exemption is being corpus, not being uncompilable.",
   },
   {
-    tree: "packages/ts-transformers/test/fixtures",
+    tree: "base/ts-transformers/test/fixtures",
     because: "the transformer's fixture corpus, exempt for the reason the " +
       "generator's is: inputs and expected outputs that are data for the " +
       "tests beside them, not modules the repository builds.",
   },
   {
-    tree: "packages/runner/test/fixtures/compile-cache-corpus",
+    tree: "runtime/runner/test/fixtures/compile-cache-corpus",
     because: "the compile-cache version's corpus: frozen copies of pattern " +
       "sources that a build compiles through the runtime harness, under " +
       "the classic-`h` JSX runtime patterns compile under, to hash what the " +
@@ -208,32 +293,31 @@ export const UNCHECKED_TREES: readonly UncheckedTree[] = [
       "rather than as the tree now authors them.",
   },
   {
-    tree: "packages/static/assets/types",
+    tree: "base/static/assets/types",
     because:
       "the declaration bundles handed to the in-memory pattern compiler. " +
       "The set is the ambient environment a pattern compiles against rather " +
       "than modules this repository builds, and it does not compile beside " +
-      "the tree it describes, since it redeclares what `packages/html` " +
+      "the tree it describes, since it redeclares what `runtime/html` " +
       "declares.",
   },
 ];
 
 /**
  * The owning scope of a checked path: the workspace member's name, or the
- * top-level directory of a path no member owns.
+ * top-level directory of a path no package owns.
  */
 export function scopeOfPath(checkPath: string): string {
+  const dir = packageDirOf(checkPath);
+  if (dir === undefined) return checkPath.split("/")[0] || "repo";
+  // A connector's members sit two levels under `connectors`. A module directly
+  // under it belongs to no member, and all such modules share the `connectors`
+  // scope.
   const parts = checkPath.split("/");
-  if (parts[0] === "packages") {
-    // A connector's members sit two levels under `packages/connectors`. A
-    // module directly under it belongs to no member, and all such modules
-    // share the `connectors` scope.
-    if (parts[1] === "connectors" && parts.length >= 4) {
-      return parts.slice(1, 4).join("/");
-    }
-    return parts[1] ?? "repo";
+  if (dir === "connectors" && parts.length >= 3) {
+    return parts.slice(0, 3).join("/");
   }
-  return parts[0] ?? "repo";
+  return withoutPackageParent(dir);
 }
 
 /** Every checked path, repository-relative, grouped by owning scope. */

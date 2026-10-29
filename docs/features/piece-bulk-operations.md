@@ -8,7 +8,7 @@ before a write, what a stop leaves behind, what a resume may claim, and which
 refusal fires at which moment.
 
 Command spellings, flags, and output modes are in
-[`packages/cli/README.md`](../../packages/cli/README.md). The operating loop
+[`runtime/cli/README.md`](../../runtime/cli/README.md). The operating loop
 for rehearsing a run against a copy of real data is
 [`space-clone-rehearsal.md`](../development/space-clone-rehearsal.md).
 
@@ -28,7 +28,7 @@ Every operation walks it, and only the apply step differs.
 | restore | a revision of the piece's own retained source log | the pair the retarget produced | the survey diff | a second retarget |
 
 Retarget and restore run on the shared engine in
-[`bulk-apply.ts`](../../packages/piece/src/ops/bulk-apply.ts), each supplying
+[`bulk-apply.ts`](../../runtime/piece/src/ops/bulk-apply.ts), each supplying
 one write step. Repair runs its own pass over the same survey selection,
 because its rows are classified from a document rather than from a reference.
 
@@ -501,7 +501,7 @@ about — a run whose cost per piece is unknown cannot be improved.
 
 ## What the drill guarantees
 
-[`bulk-survey-drill.sh`](../../packages/cli/integration/bulk-survey-drill.sh)
+[`bulk-survey-drill.sh`](../../runtime/cli/integration/bulk-survey-drill.sh)
 runs in continuous integration under the CLI integration suite's `piece-call`
 section, against a fresh space with no prior state and no store access. It
 deploys a checked-in fixture pair — a trimmed prior-generation member pattern
@@ -537,44 +537,44 @@ while exercising none of what the step is for. A repair stopped midway — by a
 row whose fixed document the schema refuses — is completed the same way, by
 re-invoking with an amended fixer, and the rows that landed are not rewritten.
 
-[`bulk-ops-demo.sh`](../../packages/cli/integration/bulk-ops-demo.sh) shows the
+[`bulk-ops-demo.sh`](../../runtime/cli/integration/bulk-ops-demo.sh) shows the
 same surface live, narrating each command and then running it. Run it against
 any host:
 
 ```bash
-API_URL=http://localhost:8000 packages/cli/integration/bulk-ops-demo.sh
+API_URL=http://localhost:8000 runtime/cli/integration/bulk-ops-demo.sh
 ```
 
 ## Where the code lives
 
-Under [`packages/piece/src/ops/`](../../packages/piece/src/ops/):
+Under [`runtime/piece/src/ops/`](../../runtime/piece/src/ops/):
 
-- [`bulk-plan.ts`](../../packages/piece/src/ops/bulk-plan.ts) — the plan's
+- [`bulk-plan.ts`](../../runtime/piece/src/ops/bulk-plan.ts) — the plan's
   types, its codec and shared validator, the acceptance rule for unretained
   rows, and the rollback derivation
-- [`bulk-survey.ts`](../../packages/piece/src/ops/bulk-survey.ts) — the
+- [`bulk-survey.ts`](../../runtime/piece/src/ops/bulk-survey.ts) — the
   selectors, the per-piece pin read, the containment check, the validator
   pass, and the tally
-- [`bulk-apply.ts`](../../packages/piece/src/ops/bulk-apply.ts) — the shared
+- [`bulk-apply.ts`](../../runtime/piece/src/ops/bulk-apply.ts) — the shared
   engine: classification, preflight, grouped sessions, the stop, and the
   report
-- [`bulk-retarget.deno.ts`](../../packages/piece/src/ops/bulk-retarget.deno.ts)
+- [`bulk-retarget.deno.ts`](../../runtime/piece/src/ops/bulk-retarget.deno.ts)
   — the retarget's write step
-- [`bulk-local.deno.ts`](../../packages/piece/src/ops/bulk-local.deno.ts) —
+- [`bulk-local.deno.ts`](../../runtime/piece/src/ops/bulk-local.deno.ts) —
   resolving a row's source from disk and computing the identity it produces
   without compiling it
-- [`bulk-rollback.ts`](../../packages/piece/src/ops/bulk-rollback.ts) — the
+- [`bulk-rollback.ts`](../../runtime/piece/src/ops/bulk-rollback.ts) — the
   restore write step the reversal runs on
-- [`bulk-repair.ts`](../../packages/piece/src/ops/bulk-repair.ts) — the fixer
+- [`bulk-repair.ts`](../../runtime/piece/src/ops/bulk-repair.ts) — the fixer
   contract, its guards, and the transactional apply
-- [`bulk-diff.ts`](../../packages/piece/src/ops/bulk-diff.ts) — the survey
+- [`bulk-diff.ts`](../../runtime/piece/src/ops/bulk-diff.ts) — the survey
   diff
-- [`piece-restore.ts`](../../packages/piece/src/ops/piece-restore.ts) —
+- [`piece-restore.ts`](../../runtime/piece/src/ops/piece-restore.ts) —
   reading a piece's restorable revisions and resolving a reference to one
 
-Under [`packages/cli/`](../../packages/cli/):
+Under [`runtime/cli/`](../../runtime/cli/):
 
-- [`lib/unreported-run.ts`](../../packages/cli/lib/unreported-run.ts) — the
+- [`lib/unreported-run.ts`](../../runtime/cli/lib/unreported-run.ts) — the
   process-end guard a run that writes arms over itself, and the summary it
   reports when the process ends first
 
@@ -588,7 +588,7 @@ Under [`packages/cli/`](../../packages/cli/):
   the origin-following lane it specifies: one piece moving at its user's next
   open, on an origin a retarget detaches. That lane is specified there and
   not built; the document's logical-state table carries what has landed
-- [`packages/cli/README.md`](../../packages/cli/README.md) — the commands,
+- [`runtime/cli/README.md`](../../runtime/cli/README.md) — the commands,
   their flags, and the reference forms their selections take
 - [`space-clone-rehearsal.md`](../development/space-clone-rehearsal.md) — the
   procedure for rehearsing a run against a writable copy of a real space

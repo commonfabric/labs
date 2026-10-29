@@ -132,7 +132,7 @@ report's §5.1 flip-decision question) is discharged as recorded: the
 no-server pattern-tests lane resolves the AMBIENT baseline (OFF) by
 construction — the `patternTest` preset does not read the constant
 (conformance-golden-pinned) — verified live at the flipped head
-(`topics/multi-user.test.tsx` 7/7 with env unset); "grow the in-process
+(`apps/topics/multi-user.test.tsx` 7/7 with env unset); "grow the in-process
 serving role" stays the not-taken alternative. testing.md §2,
 EXPERIMENTAL_OPTIONS.md, and the register's FLIP PR block re-tensed
 with it. The OFF path is NOT removed — it is the soak's rollback lever;
@@ -182,7 +182,7 @@ honest classification. PROBE 6 VERDICT (run 33222653635 at 1a5f3e66e,
 settle-confirmed): GREEN AT THE SURFACE — all ten ON shards succeeded,
 shard 7 RUNNING lunch-poll-vote; the lift STANDS and B1's list-EMPTY
 precondition is MET (the register's PROBE 6 block carries the full
-reading, including the board's sole red — a packages/cli view test this
+reading, including the board's sole red — a runtime/cli view test this
 diff cannot reach, second observation with the merge gate). The deltas
 below are the prior PRs' records.**
 
@@ -309,7 +309,7 @@ strictly-older replications registered INTO its origin space before
 reading it (`pattern-manager.ts` `replicationsIntoSpace`, monotonic
 tickets — acyclic by construction; genuine absence still fails loud and
 settles). Red-first pin
-`packages/runner/test/pattern-replication-sibling-race.test.ts`
+`runtime/runner/test/pattern-replication-sibling-race.test.ts`
 (deterministic-by-construction race; watched red pre-fix with the exact
 production error; mutation-killed), plus a working-tree fault injection
 that reproduced the FULL CI signature locally (80 stuck warns over 40
@@ -724,7 +724,7 @@ the render-stall mechanisms with fix seats S-A..S-J:
 [`stage-c/on-render-stall-rootcause.md`](../history/plans/server-execution-v2/stage-c/on-render-stall-rootcause.md).
 The coordinator merges on green.** The merge's conflict ledger, the five tx-boundary
 interaction findings (lead: the all-no-op wave is safe-by-construction,
-pinned green by `packages/runner/test/executor-no-op-wave.test.ts`),
+pinned green by `runtime/runner/test/executor-no-op-wave.test.ts`),
 the full suite counts, the reproduced ON gates (lunch 3/3 {1:16}, chat
 n=20, note n=20), and the W4-lite re-anchor live in
 [the land-off reconciliation report](../history/plans/server-execution-v2/stage-c/land-off-reconciliation-report.md).
@@ -1263,7 +1263,7 @@ Tasks:
       CLOSED as a row — its flagged residuals, the served-host wish
       pin, the sidecar per-demander refinement, and the unstamped
       non-sqlite effect writebacks, stay owed THERE, as refinements to
-      the built mechanism; `packages/runner/src/scheduler/fan-out.ts`).
+      the built mechanism; `runtime/runner/src/scheduler/fan-out.ts`).
       What the scopes review itself still owes is session-data GC
       (scopes.md §8 item 2), a deferred design, not a blocker. Q6's
       non-quota remainder —
@@ -1295,7 +1295,7 @@ Tasks:
       of the server-driven commit variant — a protocol change, and
       the intended one) and LD3 (the `scope_key` format is PROTOCOL
       vocabulary, defined once in the wire-shape module
-      `packages/memory/v2.ts` beside `CellScope`, imported by engine
+      `runtime/memory/v2.ts` beside `CellScope`, imported by engine
       and runner alike; the runner constructs keys from demand-/
       `firedAt`-supplied identity and never resolves them from
       ambient state — key-vocabulary.md §3). Phase 1 stage E is
@@ -1307,7 +1307,7 @@ Tasks:
       and register it in `EXPERIMENTAL_OPTIONS.md` with both states
       defined; OFF is today byte-for-byte. REGISTERED 2026-08-04
       (stage A): env → runtime → ambient control point in
-      `packages/memory/v2.ts`, both states defined in the registry.
+      `runtime/memory/v2.ts`, both states defined in the registry.
 - [x] CI runs a flag-ON arm of the integration suites from the first PR
       that has anything to test (v1 lesson: the flags-on branch never went
       through CI) — STOOD UP 2026-08-04 (stage A): the pattern and package
@@ -1414,7 +1414,7 @@ Stages, one PR each except C, which is a three-PR train (below):
       enforced in-process. LANDED 2026-08-04: the table is
       `(space, holder, expires_at)` — exactly three fields, the v1
       shape reduced away; acquire/renew/release are direct engine-table
-      writes (`packages/memory/v2/execution-lease.ts` — a renewal is
+      writes (`runtime/memory/v2/execution-lease.ts` — a renewal is
       never a commit), the in-memory tenure counter makes a reacquire
       unreachable without first ending the lapsed tenure, and admission
       enforces the one equality check under the flag, judged by the
@@ -1428,7 +1428,7 @@ Stages, one PR each except C, which is a three-PR train (below):
         `completeSchedulerScopeSummary` /
         `completeActionScopeSummary` emission (ts-transformers) and
         every consumer (runner), and REGENERATE the ~110 fixtures
-        under `packages/ts-transformers/test/fixtures/` in the same
+        under `base/ts-transformers/test/fixtures/` in the same
         PR. Deleting at the source collapses the rest (spec §4's
         measured lesson).
   - [x] **C.2 — protocol + engine + client + tools**: replace the
@@ -1438,7 +1438,7 @@ Stages, one PR each except C, which is a three-PR train (below):
         `scheduler_action_state`, which drop with the rest
         (serving-loop.md §3b). Drive the migration off §3b's
         SEVEN-table list, not off `CORE_SCHEDULER_TABLES`
-        (`packages/memory/v2/engine.ts:1275-1282`), which enumerates
+        (`runtime/memory/v2/engine.ts:1275-1282`), which enumerates
         six and omits `scheduler_context_floor`. NO BACKFILL — the
         new table starts empty and opted-in stores lose warm start
         once (§3b). Carry the protocol-layer deletions that fall out
@@ -1447,11 +1447,11 @@ Stages, one PR each except C, which is a three-PR train (below):
         `scheduler.snapshot.list` RPC, and
         `CommitData.schedulerObservation`; old-client compat is the
         existing hello-degrade path
-        (`packages/runner/src/storage/v2.ts:2142`). Collateral that
-        no byte-identical gate covers: `packages/state-inspector`
+        (`runtime/runner/src/storage/v2.ts:2142`). Collateral that
+        no byte-identical gate covers: `runtime/state-inspector`
         (`scheduler.ts:15-19`, `246-281`), the `cf inspect` surface
         that renders it, and
-        `packages/memory/v2/sqlite/guard.ts:16-33` — drop the dead
+        `runtime/memory/v2/sqlite/guard.ts:16-33` — drop the dead
         names from the `CORE_TABLE_NAMES` blocklist and ADD
         `scheduler_basis`.
   - [x] **C.3 — flag retirement + doc archival**: retire the
@@ -1483,14 +1483,14 @@ Stages, one PR each except C, which is a three-PR train (below):
       it — which is why it is its own stage rather than a task
       inside F. LD3 is RULED (owner 2026-08-03, key-vocabulary.md
       §3): the `scope_key` format moves to the wire-shape module
-      (`packages/memory/v2.ts`) as ONE shared definition imported by
+      (`runtime/memory/v2.ts`) as ONE shared definition imported by
       engine and runner alike; the nine sites construct keys from
       demand-/`firedAt`-supplied identity, never from ambient state
       (OFF arm: the identity is the runtime's own authenticated
       session — key-vocabulary.md §3). The stage LEADS with that
       definition move. LANDED 2026-08-04: the vocabulary (constructor
       + parse/inspect helpers + `ProtocolError`) lives in
-      `packages/memory/v2.ts` beside `CellScope`, and the engine
+      `runtime/memory/v2.ts` beside `CellScope`, and the engine
       re-exports the same objects — no twin exists; all nine sites
       (plus the server's query/watch doc keys, which share the
       tracker strings with sites 5–6) construct instance keys from an
@@ -1600,7 +1600,7 @@ Success criteria (flag OFF — the ON gates are Phase 2's):
 - [x] Stage E lands with the OFF arm byte-identical: the re-keyed
       vocabulary partitions state exactly as the scope-NAME form did
       at cardinality 1 (2026-08-04: partition equivalence pinned by
-      `packages/runner/test/scope-key-rekeying.test.ts` against the
+      `runtime/runner/test/scope-key-rekeying.test.ts` against the
       name-keyed form; full runner + memory unit suites green; the
       runner package integration suite run in BOTH arms —
       flag-OFF and flag-ON toolshed — 14/14 each, ON-arm skip list
@@ -1621,7 +1621,7 @@ Tasks:
 - [x] Remove the client's derivation-commit path under the flag (by
       construction, not firewall). LANDED 2026-08-07: the speculation
       overlay is the DEFAULT seal destination of every non-serving
-      flag-ON runtime (`packages/runner/src/speculation/
+      flag-ON runtime (`runtime/runner/src/speculation/
       overlay-destination.ts`) — a stamped derivation-kind run's
       writes redirect into the replica's pending layer and no code
       path from a derivation run to the wire exists; serving runtimes
@@ -1664,7 +1664,7 @@ W):
       a frame parked on the loop's OWN sealed commit from foreign
       novelty, so a foreign authored frame in that position can be
       claimed by W one wave early (self-healing next wave — the
-      documented residual at `packages/runner/src/storage/v2.ts`,
+      documented residual at `runtime/runner/src/storage/v2.ts`,
       `inputSynced`). Either distinguish parked-on-own-seal frames
       from foreign novelty, or exclude unapplied frames' seqs from
       the wave's `batchHead`. RESOLVED 2026-08-07 via the exclusion
@@ -1940,7 +1940,7 @@ Tasks:
       2026-08-14: two-phase fan-out (derived-subscribed sessions
       before bulk-only, across every connection), `servingLoop.push`
       counters; ordering pinned in
-      `packages/memory/test/v2-push-priority.test.ts`
+      `runtime/memory/test/v2-push-priority.test.ts`
       (verification-coverage OW8).
 - [x] Per-space budgets in the executor (CPU per wave, outstanding LLM
       calls, egress rate); a runaway pattern degrades only its own
@@ -2055,7 +2055,7 @@ Tasks:
 - [x] **The flip — landed by #6535 (2026-08-28); the default has since
       been a data-only toggle, each flip a dated delta in the coordination
       block above.** The ONE first-party default `SERVER_EXECUTION_DEFAULT_ENABLED`
-      (`packages/memory/v2/server-execution-default.ts`; the registry's
+      (`runtime/memory/v2/server-execution-default.ts`; the registry's
       summary table states its current value) is resolved by the
       `productionServer` / `remoteClient`
       presets, the shell define fallback, and toolshed's serving-host

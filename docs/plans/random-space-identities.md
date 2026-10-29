@@ -18,7 +18,7 @@ Creating a space and opening a space are separate operations.
 
 - **Creating a space.**
   `StorageManager.createSpace(acl, { root?, spaceKind? })`
-  ([`packages/runner/src/storage/v2.ts`](../../packages/runner/src/storage/v2.ts))
+  ([`runtime/runner/src/storage/v2.ts`](../../runtime/runner/src/storage/v2.ts))
   generates a key pair from the platform random source, opens one session as
   that key through the same route every later session for the DID takes, and
   commits `acl` as the space's genesis document against a confirmed absent one,
@@ -40,7 +40,7 @@ Creating a space and opening a space are separate operations.
   whether a DID has an ACL document or a space cell.
   `PiecesController.ensureDefaultPattern` throws `SpaceNotFoundError`
   (defined in
-  [`packages/runner/src/ensure-space-root.ts`](../../packages/runner/src/ensure-space-root.ts))
+  [`runtime/runner/src/ensure-space-root.ts`](../../runtime/runner/src/ensure-space-root.ts))
   for a non-Home space that does not exist, and it crosses the worker boundary
   as `RuntimeErrorCode.SpaceNotFound`; the serving loop's root ensure already
   skips a space with no owner. The
@@ -48,7 +48,7 @@ Creating a space and opening a space are separate operations.
   `cf piece new` reports it and names `cf space create`; the FUSE mount answers
   `ENOENT`.
 - **Legacy names.** `legacySpaceDid(name)`
-  ([`packages/identity/src/legacy-space.ts`](../../packages/identity/src/legacy-space.ts))
+  ([`base/identity/src/legacy-space.ts`](../../base/identity/src/legacy-space.ts))
   returns the DID a legacy name resolves to, and never a key. `createSession`
   takes a DID only. The shell's `resolveSpaceDid`, the CLI's ingest-channel
   resolver, `PiecesController.initialize`, the connectors, and `cellFromUrl`
@@ -81,7 +81,7 @@ Creating a space and opening a space are separate operations.
   behind it.
 - **Home space list.** An entry with a `did` opens that space and is keyed by
   it, and its `name` is only its label
-  ([`packages/home-schemas/spaces.ts`](../../packages/home-schemas/spaces.ts));
+  ([`base/home-schemas/spaces.ts`](../../base/home-schemas/spaces.ts));
   the Home pattern's streams are `addSpace`, `removeSpace`, `adoptSpace` and
   `renameSpace`. The runtime worker adopts each name-only legacy entry once per
   worker, keyed by the DID the name resolves to and labeled with the name, and
@@ -160,29 +160,29 @@ describes.
 Covered by automated tests:
 
 - Two creations differ, and one creation's ACL names its creator alone plus its
-  grants: `packages/runner/test/memory-v2-acl-bootstrap.test.ts`,
-  `packages/piece` controller tests.
+  grants: `runtime/runner/test/memory-v2-acl-bootstrap.test.ts`,
+  `runtime/piece` controller tests.
 - A refused genesis returns no DID and leaves the space uninitialized; a root
   reservation lands in the genesis commit and binds later root intents:
   `memory-v2-acl-bootstrap.test.ts`.
 - Opening a DID with no history writes nothing, and nothing can be written to
   it: `memory-v2-acl-bootstrap.test.ts`; `ensureDefaultPattern` refuses a
-  missing space: `packages/piece` tests; the FUSE mount answers `ENOENT`.
+  missing space: `runtime/piece` tests; the FUSE mount answers `ENOENT`.
 - Allocation records: named and anonymous targets, two calls in one handler,
   two events with identical inputs, one name from two calling spaces, a later
   process reading the record, a record never overwritten, a record naming no
   space reported, monotonic resolution, and two processes converging on one
-  record: `packages/runner/test/in-space-allocation.test.ts`.
+  record: `runtime/runner/test/in-space-allocation.test.ts`.
 - The narrowed server rule, in `enforce` and `observe`, Home spaces, repair by
   service DIDs only, and `foreignWriteAuthorityFor`:
-  `packages/memory/test/v2-server-acl.test.ts`, `v2-invites.test.ts`.
+  `runtime/memory/test/v2-server-acl.test.ts`, `v2-invites.test.ts`.
 - The Home space list, labels, renaming, removal and adoption:
-  `packages/patterns/system/home.test.tsx`.
+  `patterns/system/home/home.test.tsx`.
 
 Covered by integration tests, which run against live servers: the shell's
 no-space alert and its create button, two identities navigating to an unused
 name, legacy name URLs opening the space the name has always named
-(`createLegacyTestSpace` in `packages/integration`), and every browser flow that
+(`createLegacyTestSpace` in `runtime/integration`), and every browser flow that
 creates its own space with `createTestSpace`.
 
 Needing a deployment: routing through the production frontends, process

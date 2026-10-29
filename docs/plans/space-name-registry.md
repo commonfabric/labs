@@ -65,7 +65,7 @@ random space identities use existing DID routes without this registry.
   consumes the ASP and DID produced by Common Fabric URL resolution. The move
   redirect proposed here preserves old browser URLs. Replacing an open storage
   session remains part of the separate space-transfer and runtime-routing work.
-- [Shell routes](../../packages/shell/README.md#routes) and the
+- [Shell routes](../../runtime/shell/README.md#routes) and the
   [navigation guide](../common/patterns/navigation.md) consume the shared URL
   parser. Higher-priority application and embed routes stay outside the
   catch-all resolver.
