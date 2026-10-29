@@ -1979,8 +1979,11 @@ export async function runTestPattern(
           await withPhase(
             ["runTestPattern", "step", actionName, "send"],
             async () => {
-              // Demand the payload's lazy fields before snapshotting the
-              // event, including links produced by an unread projection.
+              // Pull the payload before snapshotting links supplied by
+              // patterns or computations. The true schema also recursively
+              // reads accessible linked data, so this step can preload the
+              // handler's inputs; see docs/common/workflows/pattern-testing.md
+              // for that limitation.
               const event = await stepCell.key("event").asSchema(true).pull();
               actionStream.send(
                 buildActionEvent(event, stepValue.trustedUi),

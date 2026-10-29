@@ -633,9 +633,10 @@ const handlers: Record<
     const meta = stepCell.asSchema(stepPeekSchema).get() as {
       trustedUi?: unknown;
     };
-    // Pull the payload itself so its lazy fields demand their producers before
-    // the event is snapshotted. A true schema at the root makes pull traverse
-    // the payload, including links from otherwise unread projections.
+    // Pull the payload before snapshotting links supplied by patterns or
+    // computations. The true schema also recursively reads accessible linked
+    // data, so this step can preload the handler's inputs; see the event-link
+    // guidance in docs/common/workflows/pattern-testing.md.
     const event = await stepCell.key("event" as never).asSchema(true).pull();
     stream.send(buildActionEvent(event, meta?.trustedUi));
     await settle();

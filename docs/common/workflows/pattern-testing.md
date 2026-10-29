@@ -265,10 +265,6 @@ and exporting it would only serve the test.
 
 ### Putting a cell link in an event
 
-Before dispatching an action step, both test runners pull its `event` payload,
-including computed fields that supply cell links. A projected link needs no
-earlier assertion or render to make it ready for the action.
-
 A step's `event` may carry a link to a cell, such as one element of a stored
 list. The steps are part of the test pattern's own result, and that result's
 schema comes from the types of what the test returns. So where the linked
@@ -318,6 +314,16 @@ passes to that pattern or returns. A `.key()` link into a cell the test uses
 nowhere else fails the build with `Cell not found in pattern aliases`.
 
 `cf test --cfc-denials` prints a setup refusal like this one with its reason.
+
+Before dispatching an action step, both test runners pull its `event` payload.
+This demands fields whose links another pattern or a computation produces;
+an earlier assertion or render is unnecessary.
+
+The pull recursively reads accessible linked data, including profiles,
+reactions, or thread roots reachable from a message. Those values can be loaded
+before the handler runs, so an action step does not test how a handler behaves
+when those linked documents arrive cold. The work grows with the reachable
+data.
 
 ## Writing Assertions
 
