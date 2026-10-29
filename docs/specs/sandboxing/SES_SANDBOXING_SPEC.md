@@ -704,7 +704,7 @@ fallback path described in Section 5.4. It is not the normal invocation path.
 ### 5.1 Lockdown Configuration
 
 The runtime's sandbox surface is `SESRuntimeOptions`
-(`packages/runner/src/sandbox/ses-runtime.ts`):
+(`runtime/runner/src/sandbox/ses-runtime.ts`):
 
 ```typescript
 export interface SESRuntimeOptions {
@@ -718,7 +718,7 @@ export interface SESRuntimeOptions {
 endowments of §5.3.1; `hideInternalStackFrames` gates the runner-frame collapse
 described in §8.6. All three default to off/empty at this type, and the Runtime
 threads its own defaults down through `Engine` (see
-`packages/runner/src/runtime-presets.ts` for which are core-defaulted).
+`runtime/runner/src/runtime-presets.ts` for which are core-defaulted).
 
 Lockdown options are a fixed constant, `DEFAULT_LOCKDOWN_OPTIONS`, applied
 unconditionally — they are not derived from a debug flag, and no caller varies
@@ -763,7 +763,7 @@ Notes:
   constructors need the restoration, not one: `%InitialError%` for the host
   realm and `%SharedError%` for compartments, the latter reachable only as
   `Error.prototype.constructor`. See
-  `packages/runner/src/sandbox/error-taming.ts`. The phase call reveals
+  `runtime/runner/src/sandbox/error-taming.ts`. The phase call reveals
   `globalThis.hardenIntrinsics`, which the runtime deletes afterwards so the
   host realm's global surface matches the one-call form.
 - An engine that does not provide `Error.isError` before lockdown has no
@@ -773,7 +773,7 @@ Notes:
   cross-realm error recognition requires the native method.
 - `overrideTaming: "severe"` remains the compatibility default.
 - `localeTaming: "unsafe"` is load-bearing only together with the pre-lockdown
-  vetted shim in `packages/runner/src/sandbox/locale-taming.ts`, which replaces
+  vetted shim in `runtime/runner/src/sandbox/locale-taming.ts`, which replaces
   every method SES's `"safe"` mode would amputate with a pinned-default
   wrapper: omitted locale → `"en-US"`, omitted Date `timeZone` → `"UTC"`, and
   the ECMA-402 unsupported-tag locale fallback → `"en-US"` (appended to every
@@ -929,14 +929,14 @@ Ambient globals available to authored module code in v1 MUST NOT include:
   or compilation effects immediately when called
 
 Whatever this surface ends up being, the type libraries the pattern compiler
-serves from `packages/static/assets/types` MUST NOT declare a global the
+serves from `base/static/assets/types` MUST NOT declare a global the
 Compartment does not install. A name the compiler declares but the sandbox
 lacks type checks, compiles and deploys, and then throws a `TypeError` in the
 user's hands, which is the one failure mode every gate lets through.
-`SANDBOX_WITHHELD_GLOBALS` in `packages/utils/src/sandbox-contract.ts` records
+`SANDBOX_WITHHELD_GLOBALS` in `base/utils/src/sandbox-contract.ts` records
 the names held back and why; `deno task strip-withheld-globals` in
-`packages/static` removes their declarations, and
-`packages/runner/test/sandbox-global-contract.test.ts` checks both directions
+`base/static` removes their declarations, and
+`runtime/runner/test/sandbox-global-contract.test.ts` checks both directions
 against a real Compartment. Endowing one of these globals means dropping it
 from that list and restoring its declaration together.
 
@@ -996,7 +996,7 @@ as the authored modules. This is the primary way authored code receives builder
 and graph-construction capabilities.
 
 In the current implementation, the trusted runtime module identifiers are
-(`RuntimeModuleIdentifiers`, `packages/runner/src/sandbox/runtime-module-policy.ts`):
+(`RuntimeModuleIdentifiers`, `runtime/runner/src/sandbox/runtime-module-policy.ts`):
 
 - `commonfabric`
 - `commonfabric/cfc`
@@ -1084,7 +1084,7 @@ The rules that keep this true:
   before its transaction commits, when the frame is gone, and `sinkMeta()`,
   which the runtime's own code calls on a run's cells within the frame.
 
-`packages/runner/test/cell-authority.test.ts` runs these attacks from a pattern
+`runtime/runner/test/cell-authority.test.ts` runs these attacks from a pattern
 in the real sandbox. It also walks everything a cell, a stream, a `Reactive`
 proxy, and a query result reach, calling each method with callbacks and with a
 forged transaction in each argument position, and fails on reaching a runtime
@@ -1141,7 +1141,7 @@ Future v2 requirements, if dynamic imports are reintroduced:
 2. fetched modules must be verified under an equivalent policy before execution
 3. downloaded code may be cached only if that caching does not weaken isolation
 4. the import-hook implementation should live in a dedicated sandbox subsystem,
-   likely under `packages/runner/src/sandbox/`
+   likely under `runtime/runner/src/sandbox/`
 
 ---
 
@@ -1442,7 +1442,7 @@ The hoisting transformer must generate accurate source maps:
 ```typescript
 // Shown for illustration only.
 // illustrative; the shipped stage is
-// packages/ts-transformers/src/transformers/builder-call-hoisting.ts
+// base/ts-transformers/src/transformers/builder-call-hoisting.ts
 
 class HoistingTransformer {
   private sourceMapGenerator: SourceMapGenerator;
@@ -1470,8 +1470,8 @@ class HoistingTransformer {
 #### 8.3.3 js-compiler Source Map Chaining
 
 js-compiler emits one map per module, parsed alongside the body
-(`parseSourceMap`, `packages/js-compiler/typescript/compiler.ts`). The relevant
-options are in `packages/js-compiler/typescript/options.ts`:
+(`parseSourceMap`, `base/js-compiler/typescript/compiler.ts`). The relevant
+options are in `base/js-compiler/typescript/options.ts`:
 
 ```typescript
 // Shown for illustration only.
@@ -1493,8 +1493,8 @@ source-map bytes — which the compile cache stores and syncs — by roughly 65%
 ### 8.4 Error Mapping Implementation
 
 **What exists today.** The shipped surface is `SESRuntime`
-(`packages/runner/src/sandbox/ses-runtime.ts`) over `SourceMapParser`
-(`packages/js-compiler/source-map.ts`): `loadSourceMapLazy` registers a map by
+(`runtime/runner/src/sandbox/ses-runtime.ts`) over `SourceMapParser`
+(`base/js-compiler/source-map.ts`): `loadSourceMapLazy` registers a map by
 filename as a provider that runs on first lookup, `mapPosition` resolves one
 coordinate, `parseStack` rewrites a whole stack, and `mapThrownError` does that
 once per error — `materializeHostVisibleStack`, then `parseStack`, then a
@@ -1677,7 +1677,7 @@ Not built; the module below is a proposed one.
 
 ```typescript
 // Shown for illustration only.
-// proposed: packages/runner/src/sandbox/error-display.ts
+// proposed: runtime/runner/src/sandbox/error-display.ts
 
 interface ErrorDisplayOptions {
   readonly verbose?: boolean;
@@ -1733,7 +1733,7 @@ Not built; §8.6.5 records what the runtime does instead. The module below is a
 proposed one.
 
 ```typescript
-// proposed: packages/runner/src/sandbox/frame-classifier.ts
+// proposed: runtime/runner/src/sandbox/frame-classifier.ts
 
 type FrameType = "pattern" | "runtime" | "external" | "ses";
 
@@ -1825,7 +1825,7 @@ Not built; see §8.6.5. The module below is a proposed one.
 
 ```typescript
 // Shown at module scope.
-// proposed: packages/runner/src/sandbox/stack-filter.ts
+// proposed: runtime/runner/src/sandbox/stack-filter.ts
 
 interface StackFilterOptions {
   showRuntimeFrames: boolean;  // false for pattern authors, true for runtime devs
@@ -1947,7 +1947,7 @@ frame line with a marker rather than classifying it into a type:
    which is what keeps host and external frames intact.
 2. **Runner-frame collapse** — when `hideInternalStackFrames` is set,
    `sanitizeInternalFrames` (`ses-runtime.ts`) replaces any remaining frame whose
-   path lies under `packages/runner/src/` with `    at <CF_INTERNAL>`.
+   path lies under `runtime/runner/src/` with `    at <CF_INTERNAL>`.
 
 So the layering goal of §8.6 is met, by marker substitution rather than by a
 `FrameType` union: authored frames survive with authored coordinates, runtime and
@@ -2016,8 +2016,8 @@ These hints are performance aids only. The runner must be able to reject the
 module even if the hints are wrong or missing.
 
 **Files to modify:**
-- `packages/ts-transformers/src/transformers/module-scope-validation.ts`
-- `packages/ts-transformers/src/hoisting/*`
+- `base/ts-transformers/src/transformers/module-scope-validation.ts`
+- `base/ts-transformers/src/hoisting/*`
 - compiler pipeline entrypoints that preserve the hints into emitted JS
 
 #### 1.2 Hoist computed/action when useful (Priority: High)
@@ -2074,13 +2074,13 @@ If the output deviates from the canonical wrapper language, the verifier should
 fail closed.
 
 **Files:**
-- `packages/runner/src/sandbox/compiled-bundle-verifier.ts`
+- `runtime/runner/src/sandbox/compiled-bundle-verifier.ts`
   (`classifyModuleItems`, the format-agnostic classification core)
-- `packages/runner/src/sandbox/module-record-verifier.ts`
+- `runtime/runner/src/sandbox/module-record-verifier.ts`
   (`verifyCompiledModuleBody`, `verifyModuleGraph`)
-- `packages/runner/src/sandbox/compiled-js-parser.ts` (the delimiter/trivia
+- `runtime/runner/src/sandbox/compiled-js-parser.ts` (the delimiter/trivia
   scanner the classifier is built on)
-- `packages/runner/src/harness/engine.ts` (calls the body verifier per module)
+- `runtime/runner/src/harness/engine.ts` (calls the body verifier per module)
 
 #### 2.2 Add custom module-safe-data checker/freezer (Priority: High)
 
@@ -2098,10 +2098,10 @@ acceptable if they are only observed as part of constructing the final inert
 snapshot that escapes module load.
 
 **Likely files:**
-- new `packages/runner/src/sandbox/plain-data.ts`
-- `packages/runner/src/sandbox/mod.ts`
-- `packages/memory/interface.ts` (contract reference only)
-- tests under `packages/runner/test/sandbox/`
+- new `runtime/runner/src/sandbox/plain-data.ts`
+- `runtime/runner/src/sandbox/mod.ts`
+- `runtime/memory/interface.ts` (contract reference only)
+- tests under `runtime/runner/test/sandbox/`
 
 #### 2.3 Harden approved functions immediately after load (Priority: High)
 
@@ -2179,11 +2179,11 @@ Build a new sandbox subsystem that separates:
 - minimal ambient globals for Compartments
 - trusted runtime-module exports registered as `cf:runtime/` records
 
-The target module split should live under `packages/runner/src/sandbox/`.
+The target module split should live under `runtime/runner/src/sandbox/`.
 
 **Likely files:**
-- new `packages/runner/src/sandbox/runtime-modules.ts`
-- new `packages/runner/src/sandbox/compartment-globals.ts`
+- new `runtime/runner/src/sandbox/runtime-modules.ts`
+- new `runtime/runner/src/sandbox/compartment-globals.ts`
 
 ### Phase 4: Runner Integration
 
@@ -2193,7 +2193,7 @@ Replace direct eval with the authoritative verified SES execution path:
 
 ```typescript
 // Shown for illustration only.
-// packages/runner/src/runner.ts
+// runtime/runner/src/runner.ts
 
 private instantiateJavaScriptNode(
   tx: IExtendedStorageTransaction,
@@ -2253,7 +2253,7 @@ Ambient construction context must not register callbacks into either registry.
 Being created while a verified load is active is not sufficient.
 
 **Files to modify:**
-- `packages/runner/src/runner.ts`
+- `runtime/runner/src/runner.ts`
 
 #### 4.1.1 Explicit Unsafe Host Trust API
 
@@ -2323,16 +2323,16 @@ fn = evaluateInCallbackCompartment(module.implementation);
 ```
 
 **Implemented in:**
-- `packages/runner/src/harness/engine.ts`
-- `packages/runner/src/sandbox/ses-runtime.ts`
-- `packages/runner/test/runtime.test.ts`
-- `packages/runner/test/stack-trace.test.ts`
+- `runtime/runner/src/harness/engine.ts`
+- `runtime/runner/src/sandbox/ses-runtime.ts`
+- `runtime/runner/test/runtime.test.ts`
+- `runtime/runner/test/stack-trace.test.ts`
 
 ### Phase 5: Dynamic Imports (Deferred)
 
 Dynamic imports are not implemented in v1. The verifier should reject authored
 `import()` expressions outright. If this scope is reopened later, it should
-introduce a dedicated import-hook subsystem under `packages/runner/src/sandbox/`
+introduce a dedicated import-hook subsystem under `runtime/runner/src/sandbox/`
 and must preserve fresh-instantiation and verification guarantees.
 
 ### Phase 6: Testing & Hardening
@@ -2341,7 +2341,7 @@ and must preserve fresh-instantiation and verification guarantees.
 
 ```typescript
 // Shown at module scope.
-// packages/runner/test/sandbox/security.test.ts
+// runtime/runner/test/sandbox/security.test.ts
 
 describe('SES Sandbox Security', () => {
   it('prevents closure state leakage between invocations', async () => {
@@ -2476,18 +2476,18 @@ describe('SES Sandbox Security', () => {
 ```
 
 **Files:**
-- `packages/runner/test/security.test.ts`
-- `packages/runner/test/compiled-module-verifier.test.ts`
-- `packages/runner/test/esm-module-body-verifier.test.ts`
-- `packages/runner/test/esm-verifier-adversarial.test.ts`
-- `packages/runner/test/module-item-classifier.test.ts`
-- `packages/runner/test/plain-data.test.ts`
+- `runtime/runner/test/security.test.ts`
+- `runtime/runner/test/compiled-module-verifier.test.ts`
+- `runtime/runner/test/esm-module-body-verifier.test.ts`
+- `runtime/runner/test/esm-verifier-adversarial.test.ts`
+- `runtime/runner/test/module-item-classifier.test.ts`
+- `runtime/runner/test/plain-data.test.ts`
 
 #### 6.2 Performance Tests
 
 ```typescript
 // Shown inside a pattern body.
-// packages/runner/test/sandbox/performance.test.ts
+// runtime/runner/test/sandbox/performance.test.ts
 
 describe('SES Sandbox Performance', () => {
   it('reuses Compartment for multiple invocations', async () => {
@@ -2695,5 +2695,5 @@ in review or incident work should be added here with a class and a status.
 2. [Hardened JavaScript](https://hardenedjs.org/)
 3. [Compartment API](https://github.com/tc39/proposal-compartments)
 4. [Common Fabric Pattern Documentation](../../common/README.md)
-5. [ts-transformers Package](../../../packages/ts-transformers/)
-6. [js-compiler Package](../../../packages/js-compiler/)
+5. [ts-transformers Package](../../../base/ts-transformers/)
+6. [js-compiler Package](../../../base/js-compiler/)

@@ -53,7 +53,7 @@ const RESULT_WITHOUT_TITLE: JSONSchema = {
 describe("checkPattern", () => {
   it("rejects a result schema that drops a previously promised field", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
     ]);
 
@@ -61,7 +61,7 @@ describe("checkPattern", () => {
     expect(incompatible.length).toBe(1);
     expect(incompatible[0]).toMatchObject({
       kind: "incompatible",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       baseline: "v1",
     });
   });
@@ -119,18 +119,18 @@ describe("checkPattern", () => {
 
   it("reports a missing baseline for a contract no file records", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITH_TITLE);
-    const findings = checkPattern("system/home.tsx", current, []);
+    const findings = checkPattern("system/home/home.tsx", current, []);
 
     expect(findings).toEqual([{
       kind: "missing-baseline",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       hash: contractHash(current),
     }]);
   });
 
   it("passes a contract that is recorded and compatible with every baseline", () => {
     const current = contract(EMPTY_ARGUMENT, RESULT_WITH_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
     ]);
 
@@ -141,7 +141,7 @@ describe("checkPattern", () => {
     // v2 dropped `title` behind a declared break; v3 must still be proven
     // against v1, which is what a piece that has not opened since v1 holds.
     const current = contract(EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE);
-    const findings = checkPattern("system/home.tsx", current, [
+    const findings = checkPattern("system/home/home.tsx", current, [
       baseline("v1", EMPTY_ARGUMENT, RESULT_WITH_TITLE),
       baseline("v2", EMPTY_ARGUMENT, RESULT_WITHOUT_TITLE),
     ]);
@@ -160,13 +160,13 @@ describe("checkPattern", () => {
       type: "undefined",
       scope: "bogus",
     } as unknown as JSONSchema);
-    const findings = checkPattern("system/home.tsx", current, []);
+    const findings = checkPattern("system/home/home.tsx", current, []);
 
     const invalid = findings.filter((f) => f.kind === "invalid-schema");
     expect(invalid.length).toBe(1);
     expect(invalid[0]).toMatchObject({
       kind: "invalid-schema",
-      pattern: "system/home.tsx",
+      pattern: "system/home/home.tsx",
       role: "result",
     });
   });
@@ -255,7 +255,7 @@ describe("baselineFileName", () => {
 
 describe("baseline encoding", () => {
   const stored = {
-    pattern: "system/home.tsx",
+    pattern: "system/home/home.tsx",
     argumentSchema: EMPTY_ARGUMENT,
     resultSchema: RESULT_WITH_TITLE,
   };
@@ -320,7 +320,7 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       const name = await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date("2026-07-28T15:45:00Z"),
       );
@@ -328,7 +328,7 @@ describe("baseline store", () => {
         `20260728T154500Z-${contractHash(contractOf())}.json`,
       );
 
-      const read = await readBaselines(baselines, "system/home.tsx");
+      const read = await readBaselines(baselines, "system/home/home.tsx");
       expect(read.length).toBe(1);
       expect(contractHash(read[0].contract)).toBe(contractHash(contractOf()));
     });
@@ -356,21 +356,21 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date(),
       );
       await writeBaseline(
         baselines,
-        "notes/note.tsx",
+        "system/notes/note.tsx",
         contractOf(),
         new Date(),
       );
       await writeBaseline(baselines, "top.ts", contractOf(), new Date());
 
       expect(await collectBaselineKeys(baselines)).toEqual([
-        "notes/note.tsx",
-        "system/home.tsx",
+        "system/home/home.tsx",
+        "system/notes/note.tsx",
         "top.ts",
       ]);
     });
@@ -380,7 +380,7 @@ describe("baseline store", () => {
     await withTree(async ({ baselines }) => {
       await writeBaseline(
         baselines,
-        "system/home.tsx",
+        "system/home/home.tsx",
         contractOf(),
         new Date(),
       );
@@ -390,10 +390,10 @@ describe("baseline store", () => {
         contractOf(),
         new Date(),
       );
-      const files = ["packages/patterns/system/home.tsx"];
+      const files = ["patterns/system/home/home.tsx"];
       expect(await collectCompatibilityPaths(files, baselines, [])).toEqual([
-        "packages/patterns/system/home.tsx",
-        "packages/patterns/system/gone.tsx",
+        "patterns/system/home/home.tsx",
+        "patterns/system/gone.tsx",
       ]);
     });
   });
@@ -406,16 +406,16 @@ describe("baseline store", () => {
         contractOf(),
         new Date(),
       );
-      const files = ["packages/patterns/system/home.tsx"];
+      const files = ["patterns/system/home/home.tsx"];
       const paths = await collectCompatibilityPaths(files, baselines, [
-        "system/home.tsx",
+        "system/home/home.tsx",
         "system/gone.tsx",
         "system/removed.tsx",
       ]);
       expect(paths).toEqual([
-        "packages/patterns/system/home.tsx",
-        "packages/patterns/system/gone.tsx",
-        "packages/patterns/system/removed.tsx",
+        "patterns/system/home/home.tsx",
+        "patterns/system/gone.tsx",
+        "patterns/system/removed.tsx",
       ]);
     });
   });
@@ -444,10 +444,10 @@ describe("baseline store", () => {
 
 describe("selectItems", () => {
   const ITEMS = [
-    "packages/patterns/notes/extra.tsx",
-    "packages/patterns/notes/gone.tsx",
-    "packages/patterns/notes/note.tsx",
-    "packages/patterns/notes/other.tsx",
+    "patterns/system/notes/extra.tsx",
+    "patterns/system/notes/gone.tsx",
+    "patterns/system/notes/note.tsx",
+    "patterns/system/notes/other.tsx",
   ];
 
   it("selects every item when unfiltered", () => {
@@ -458,11 +458,11 @@ describe("selectItems", () => {
     expect(
       selectItems(ITEMS, ["notes/gone.tsx", "notes/other.tsx"]),
     ).toEqual([
-      "packages/patterns/notes/gone.tsx",
-      "packages/patterns/notes/other.tsx",
+      "patterns/system/notes/gone.tsx",
+      "patterns/system/notes/other.tsx",
     ]);
-    expect(selectItems(ITEMS, ["notes/note.tsx"])).toEqual([
-      "packages/patterns/notes/note.tsx",
+    expect(selectItems(ITEMS, ["system/notes/note.tsx"])).toEqual([
+      "patterns/system/notes/note.tsx",
     ]);
   });
 });

@@ -64,6 +64,7 @@ import {
   unholdableSuites,
 } from "./test-selection/plan.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
+import { packageDirOf } from "./package-layout.ts";
 
 const USAGE = `usage: test-selection <mode>
 
@@ -223,7 +224,7 @@ export async function gatedMembers(): Promise<string[]> {
   const root = repositoryRoot() ?? Deno.cwd();
   return (await readWorkspaceMembers(join(root, "deno.jsonc")))
     .map((member) => member.replace(/^\.\//, ""))
-    .filter((member) => member.startsWith("packages/"))
+    .filter((member) => packageDirOf(member) !== undefined)
     .sort();
 }
 

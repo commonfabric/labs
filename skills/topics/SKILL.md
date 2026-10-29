@@ -10,11 +10,11 @@ description: Search, read, file, and update Topics on the Common Fabric team's
 
 Topics is the team's minimal issue tracker: a board piece on Estuary holding one
 Topic piece per issue, each a title, a body, a comment thread, and links.
-`deno task -q topics`, the client in `packages/patterns/topics/tools/`, reads
-and writes it with one command per operation. This file is the map. That
-directory's `README.md` says how the client keeps its local copy and how a write
-is recovered; the pattern's canonical semantics are
-`packages/patterns/topics/README.md`.
+`deno task -q topics`, the client in `patterns/apps/topics/tools/`, reads and
+writes it with one command per operation. This file is the map. That directory's
+`README.md` says how the client keeps its local copy and how a write is
+recovered; the pattern's canonical semantics are
+`patterns/apps/topics/README.md`.
 
 ## Where, and as whom
 

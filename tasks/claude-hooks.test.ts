@@ -91,7 +91,7 @@ describe("claude-hooks", () => {
     });
 
     it("refuses a run on the second line of a command", async () => {
-      await refuses("cd packages/ui\nnpm install");
+      await refuses("cd runtime/ui\nnpm install");
     });
 
     it("refuses an indented run", async () => {
@@ -158,7 +158,7 @@ describe("claude-hooks", () => {
     });
 
     it("allows `ct` as an argument to another program", async () => {
-      await allows("grep ct packages/runner/src/index.ts");
+      await allows("grep ct runtime/runner/src/index.ts");
     });
 
     it("allows a filename ending in `ct`", async () => {
@@ -187,37 +187,52 @@ describe("claude-hooks", () => {
     };
 
     it("names the pattern documentation for a pattern", async () => {
-      expect(await contextFor("packages/patterns/lunch-poll/main.tsx"))
+      expect(await contextFor("patterns/apps/lunch-poll/main.tsx"))
         .toContain("pattern-dev");
     });
 
     it("says nothing for a `.tsx` file outside the pattern trees", async () => {
       expect(
-        await contextFor("packages/ts-transformers/test/fixtures/a.tsx"),
+        await contextFor("base/ts-transformers/test/fixtures/a.tsx"),
       ).toBe("");
+    });
+
+    it("says nothing for a `.tsx` file in a directory named for patterns elsewhere", async () => {
+      expect(
+        await contextFor("runtime/toolshed/routes/patterns/fixture.tsx"),
+      ).toBe("");
+      expect(
+        await contextFor("runtime/generated-patterns/integration/x.tsx"),
+      ).toBe("");
+    });
+
+    it("names the pattern documentation for a pattern named by its absolute path", async () => {
+      expect(
+        await contextFor(`${REPO_ROOT}/patterns/apps/lunch-poll/main.tsx`),
+      ).toContain("pattern-dev");
     });
 
     it("names the pattern documentation for a connector pattern", async () => {
       expect(
-        await contextFor("packages/connectors/github/activity-view/main.tsx"),
+        await contextFor("connectors/github/activity-view/main.tsx"),
       ).toContain("pattern-dev");
     });
 
     it("says nothing for a connector test fixture", async () => {
       expect(
         await contextFor(
-          "packages/connectors/agents/host/test/fixtures/raw-session-view.tsx",
+          "connectors/agents/host/test/fixtures/raw-session-view.tsx",
         ),
       ).toBe("");
     });
 
-    it("names the component documentation under `packages/ui`", async () => {
-      expect(await contextFor("packages/ui/src/v2/cf-button.ts"))
+    it("names the component documentation under `runtime/ui`", async () => {
+      expect(await contextFor("runtime/ui/src/v2/cf-button.ts"))
         .toContain("lit-component");
     });
 
     it("says nothing for source outside either area", async () => {
-      expect(await contextFor("packages/runner/src/builder.ts")).toBe("");
+      expect(await contextFor("runtime/runner/src/builder.ts")).toBe("");
     });
   });
 });

@@ -36,7 +36,7 @@ async function inTempDir(body: (root: string) => Promise<void>) {
 /** Makes `root` a repository with one binary source and one other file. */
 async function initRepository(root: string) {
   await git(root, "init", "--quiet");
-  await stage(root, "packages/toolshed/index.ts", "export {};\n");
+  await stage(root, "runtime/toolshed/index.ts", "export {};\n");
   await stage(root, "tasks/other.ts", "export {};\n");
 }
 
@@ -54,7 +54,7 @@ describe("binary-cache-key", () => {
     await inTempDir(async (root) => {
       await initRepository(root);
       const before = await binaryCacheKey(root);
-      await stage(root, "packages/toolshed/index.ts", "export const x = 1;\n");
+      await stage(root, "runtime/toolshed/index.ts", "export const x = 1;\n");
       expect(await binaryCacheKey(root)).not.toBe(before);
     });
   });
@@ -65,7 +65,7 @@ describe("binary-cache-key", () => {
     await inTempDir(async (root) => {
       await initRepository(root);
       const before = await binaryCacheKey(root);
-      await stage(root, "packages/shell/public/sw.js", "self;\n");
+      await stage(root, "runtime/shell/public/sw.js", "self;\n");
       const withWorker = await binaryCacheKey(root);
       expect(withWorker).not.toBe(before);
       await stage(root, "mise.toml", '[tools]\ndeno = "2.0.0"\n');

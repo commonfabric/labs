@@ -177,7 +177,7 @@ A client satisfies the rule in either of two ways:
   right before building that space's read set.
 
 The runner takes the checking form: `claim()` in
-`packages/runner/src/storage/transaction/attestation.ts`, run by every commit
+`runtime/runner/src/storage/transaction/attestation.ts`, run by every commit
 path of `v2-transaction.ts`, and the local rejection is
 `StorageTransactionInconsistent`, which those paths' callers classify as
 retryable. The two forms are equivalent in what reaches the server; they

@@ -66,7 +66,7 @@ identical to a handler that never ran.
 
 ### A sub-pattern's cell reads as `undefined` at the id you have
 
-`instantiatePatternNode` (`packages/runner/src/runner.ts`) binds a sub-pattern
+`instantiatePatternNode` (`runtime/runner/src/runner.ts`) binds a sub-pattern
 node's output spot twice, from the same cause, so both mints share a hash:
 
 - the **identity bind** never sees the pattern's `derivedInternalCells`

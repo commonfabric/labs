@@ -203,7 +203,7 @@ as the canonical grammar's context rule already works:
   and at `@session` names two different cells. Denoting is not reaching,
   either: a connection serves one space, so a reference naming a different
   space than the place's is refused rather than followed —
-  `validateEmbeddedSpaces` (`packages/cli/lib/llm-friendly-ref.ts`) already
+  `validateEmbeddedSpaces` (`runtime/cli/lib/llm-friendly-ref.ts`) already
   holds `cf` to that, and shuttle v1 holds one connection.
 - `//did:key:…/of:…@scope` — a **fully qualified** reference: every level
   is its own and nothing is read from the place, so it denotes the same
@@ -217,14 +217,14 @@ as the canonical grammar's context rule already works:
   than trusting it to be inferred.
 
   A piece position is written by the shared renderer, `renderCellReference`
-  (`packages/runner/src/cell-reference.ts`), against the empty context, which
+  (`runtime/runner/src/cell-reference.ts`), against the empty context, which
   writes the space as `//<space>/` and the scope after the piece.
-  `renderPosition` (`packages/cli/lib/shuttle/place.ts`) is where shuttle
+  `renderPosition` (`runtime/cli/lib/shuttle/place.ts`) is where shuttle
   hands it a position, and the one place shuttle writes a complete reference.
 - `#…` — a wish target (entry point), resolvable from anywhere within
   the connected space. A target anchored elsewhere — profile and
   favorites resolve against the reading identity's home space regardless
-  of the connected space (`packages/cli/lib/wish.ts`) — is refused with
+  of the connected space (`runtime/cli/lib/wish.ts`) — is refused with
   the reason in v1, which holds one connection to one space.
 - `/` — the space's own root, the leading `/` of a rooted reference
   with nothing following it; `cd -` — the previous place.
@@ -238,7 +238,7 @@ as the canonical grammar's context rule already works:
   a key or index inside a piece.
 
 The distinction is the parser's, not shuttle's: `parseCellReference`
-(`packages/runner/src/cell-reference.ts`) takes the space from a context and
+(`runtime/runner/src/cell-reference.ts`) takes the space from a context and
 uses it whenever the reference carries no `//did:key:…/` prefix, overriding
 it with the embedded space when one is present. A rooted reference is
 therefore exactly as space-dependent as a relative one; it is the piece and
@@ -336,7 +336,7 @@ redundant cases cost nothing.
 
 **Every door holds the piece to the two vocabularies** besides, and the check
 is the canonical parse's own — `validatePieceSegment`
-(`packages/cli/lib/llm-friendly-ref.ts`), called rather than copied, so that a
+(`runtime/cli/lib/llm-friendly-ref.ts`), called rather than copied, so that a
 name in neither vocabulary is refused with one sentence whichever door read
 it. The doors are the reference, a walk into a piece, a target the fabric
 resolved, a settled move, and the piece a read resolved, which is every door
@@ -406,7 +406,7 @@ Three questions, each asked only where there is one to ask:
 
 - **The piece**, where the move reaches one it is not already standing on.
   A slug resolves through the space's index (`resolvePieceReference`,
-  `packages/piece/src/slugs.ts`) — the same resolution a read makes, given
+  `runtime/piece/src/slugs.ts`) — the same resolution a read makes, given
   the same path, so a slug naming a *collection* spends leading segments
   reaching its member and `cd /tasks/first/title` lands where
   `get /tasks/first/title` reads. Two verbs disagreeing about whether a
@@ -469,7 +469,7 @@ line that was wrong; aimed one level up it reads a cell that is there, and
 what it finds is data.
 
 The lookup is a server capability, and there the promise stops. A server
-that does not advertise it (`entityIdLookup`, `packages/memory/v2.ts`)
+that does not advertise it (`entityIdLookup`, `runtime/memory/v2.ts`)
 answers neither yes nor no, and a handle read against one is taken as
 written — the one spelling `cd` adopts without having settled it. Every
 current server advertises the lookup; the bound is what an older one
@@ -496,7 +496,7 @@ too large for a flat root. The starting facet set:
 - `pieces/` — pieces by id, each showing what it calls itself.
 
 A `fuse/` facet mirroring the FUSE layout is designed and deferred past v1
-([`futures.md`](futures.md)); shuttle leverages `packages/fuse`'s naming
+([`futures.md`](futures.md)); shuttle leverages `runtime/fuse`'s naming
 and hydration work regardless of when that facet lands.
 
 Facet names are reserved wherever a walk from the root begins: as a
@@ -523,7 +523,7 @@ is the canonical way to name a cell — the runner's `parseCellReference`,
 the same structure in patterns, in the shell and at every `cf` intake
 seam — and this CLI, which opens a session before it reads anything,
 resolves that piece segment by slug as well as by handle
-(`packages/cli/lib/llm-friendly-ref.ts`). `slugs/` and `pieces/` are the
+(`runtime/cli/lib/llm-friendly-ref.ts`). `slugs/` and `pieces/` are the
 shuttle-only half: facets, a browsing overlay on the space root. So a
 rooted reference whose first segment is a slug is the canonical grammar
 and predates shuttle, and reserving two values in that position means
@@ -545,7 +545,7 @@ above is, and **an operand that would be rooted only once its leading
 whitespace came off is refused**. Such an operand has two readings that
 name different cells: as written it is a relative walk whose first segment
 is whitespace, and to the reference grammar — which trims the string it is
-given (`isReference`, `packages/cli/lib/llm-friendly-ref.ts`) — it is
+given (`isReference`, `runtime/cli/lib/llm-friendly-ref.ts`) — it is
 rooted. Left to fall through, the rooted reading takes it, and the facet
 names a rooted spelling reserves are not reserved in that one, so
 `cd " /slugs/todo"` would reach a piece slugged `slugs`. Reaching it is
@@ -598,7 +598,7 @@ will not take.
 A listing says what it is a listing of wherever its rows are not everything
 standing there. `slugs/` is the case that has such a bound: the index names
 slugs assigned since it existed, so a slug it never recorded still resolves
-and is not listed (`listSlugs`, `packages/piece/src/slugs.ts`), and a listing
+and is not listed (`listSlugs`, `runtime/piece/src/slugs.ts`), and a listing
 that implied completeness would be false.
 
 **Every name a listing prints is one `cd` takes back to that row**, and a row
@@ -812,7 +812,7 @@ it means to every other reader of that grammar.
 
 The canonical grammar bounds what a qualifier on a reference can say
 (`parsePieceSegment` and `parseRelativeReference` in
-`packages/runner/src/cell-reference.ts`):
+`runtime/runner/src/cell-reference.ts`):
 
 - The scope qualifier is a scope word — `@space`, `@user`, `@session`, and
   `@inherit` — with no identity component; identities are never spelled in a
@@ -823,7 +823,7 @@ The canonical grammar bounds what a qualifier on a reference can say
 - `@space` is a canonical scope value, not shuttle's addition: the reader
   takes it beside the others, its refusal names all four, and
   `piece1@space/path` parses to `scope: "space"` distinct from an omitted
-  qualifier (`packages/cli/test/piece.test.ts`). The base is therefore
+  qualifier (`runtime/cli/test/piece.test.ts`). The base is therefore
   nameable, and `cd .@space` sets the ambient scope back to it.
 - The grammar registers `@pin=` besides, a version of a piece. A place holds
   no pin, so shuttle refuses one on a head and on a piece segment it reads.
@@ -833,7 +833,7 @@ The canonical grammar bounds what a qualifier on a reference can say
 - Standing in **another** identity's overlay (an `@session:<sid>`-shaped
   spelling) is not in the grammar and is out of v1. It is a
   canonical-grammar extension first — "the alias must not grow a
-  capability the canonical form lacks" (`packages/cli/lib/llm-friendly-ref.ts`)
+  capability the canonical form lacks" (`runtime/cli/lib/llm-friendly-ref.ts`)
   — and a permission question besides; `cf inspect scopes <space>` remains the
   offline way to see other identities' overlays.
 
@@ -927,7 +927,7 @@ Three bounds, each of them a decision:
 - **A read that failed offers nothing.** A `tab` is not a request for an
   answer about the fabric, so where `ls` reports a failed read as the failure
   it is, a completion writes nothing and says nothing. That is what
-  `packages/cli`'s own completion does, and the one thing shuttle's takes
+  `runtime/cli`'s own completion does, and the one thing shuttle's takes
   from it.
 
 The token being completed is the last one the split reads, off the same scan
@@ -1004,7 +1004,7 @@ A typed path ending in a callable — `call topics/3/add-reply` — is
 refused, and the error names the `<ref> <name>` form to use instead.
 
 All three land on the resolution that exists. `resolvePieceCallable`
-(`packages/cli/lib/piece.ts`) takes a receiver and a callable *name*,
+(`runtime/cli/lib/piece.ts`) takes a receiver and a callable *name*,
 resolving it against the piece's result cell, then its input cell, then
 its handlers. A handle that carries the name rather than a path is what
 keeps every form on that one resolution, so none of them needs a

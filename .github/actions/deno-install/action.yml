@@ -28,8 +28,8 @@ runs:
         fi
 
         binary_entrypoints=(
-          packages/toolshed/index.ts
-          packages/cli/mod.ts
+          runtime/toolshed/index.ts
+          runtime/cli/mod.ts
         )
 
         if deno install --cached-only "${frozen_arg[@]}" &&

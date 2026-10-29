@@ -8,7 +8,7 @@ commit precondition.
 
 ## Native snapshots
 
-`packages/runner/src/immutable-cell.ts` owns the native representation. An
+`runtime/runner/src/immutable-cell.ts` owns the native representation. An
 `ImmutableCellStore` retains a frozen `FabricValue` and, optionally, the origin
 against which links inside it resolve. The identifier contains the value's
 standard Fabric content hash and, when present, the origin's hash:
@@ -148,7 +148,8 @@ disposal. These explicit string boundaries pay the encoding cost.
 
 ## Self-contained data URIs
 
-`packages/data-model/src/codec-data-uri.ts` implements the portable encoding:
+`base/data-model/src/codec-data-uri.ts` implements the portable
+encoding:
 
 ```text
 data:application/vnd.common-fabric.data,<payload>

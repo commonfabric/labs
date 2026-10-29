@@ -59,7 +59,7 @@ describe("the package integration suites", () => {
     // stated here rather than read from the repository, which holds an
     // empty one whenever the ON arm is complete.
 
-    const file = "packages/runner/integration/reconnection.test.ts";
+    const file = "runtime/runner/integration/reconnection.test.ts";
     const skips = {
       patterns: [],
       runner: [{
@@ -91,9 +91,7 @@ describe("the package integration suites", () => {
   it("runs the shell's integration tests without a visible browser", async () => {
     const suites = await suitesWith(serverExecutionCiLane("default").enabled);
     const suite = byId(suites, "package-integration");
-    const unit = suite.units.find((name) =>
-      name.startsWith("packages/shell/")
-    )!;
+    const unit = suite.units.find((name) => name.startsWith("runtime/shell/"))!;
     const [invocation] = await suite.command([{ unit, skip: [] }], {
       root,
       outputDir: await Deno.makeTempDir({ prefix: "package-integration-" }),

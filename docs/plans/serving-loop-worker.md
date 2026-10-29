@@ -242,7 +242,7 @@ between the two.
    replaces one that dies. A unit test runs a host in a Worker against a
    file-backed memory server and settles an authored commit through it.
 3. [x] **Toolshed wiring under `SERVER_EXECUTION_WORKER`.** The bootstrap
-   (`packages/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
+   (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
    is `true`, the in-process host otherwise, and hands the routes a
    `ServingLoop` either way; the pattern-lifecycle verbs cross as the

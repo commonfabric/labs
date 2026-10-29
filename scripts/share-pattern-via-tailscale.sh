@@ -72,7 +72,7 @@ if [ "$DOWN" = "1" ]; then
   exit 0
 fi
 
-[ -n "$PATTERN" ] || { echo "error: pass a pattern, e.g. packages/patterns/lunch-poll/main.tsx" >&2; exit 2; }
+[ -n "$PATTERN" ] || { echo "error: pass a pattern, e.g. patterns/apps/lunch-poll/main.tsx" >&2; exit 2; }
 PATTERN_ABS="$(cd "$(dirname "$PATTERN")" 2>/dev/null && pwd)/$(basename "$PATTERN")"
 [ -f "$PATTERN_ABS" ] || { echo "error: pattern not found: $PATTERN" >&2; exit 2; }
 [ -n "$SPACE" ] || SPACE="$(basename "$(dirname "$PATTERN_ABS")")-demo"
@@ -93,7 +93,7 @@ echo "Public:  $PUBLIC_URL  (toolshed :$TOOLSHED_PORT, shell :$SHELL_PORT, inspe
 # SHELL_URL tells the toolshed where to proxy the shell from. It has no default,
 # and our shell is on an OFFSET port — without this the toolshed serves
 # "Shell app not available" and the shared URL is broken.
-cd "$REPO_ROOT/packages/toolshed"
+cd "$REPO_ROOT/runtime/toolshed"
 [ -f .env ] || printf 'ENV=development\nLOG_LEVEL=info\nCFTS_AI_GATEWAY_URL=\n' > .env
 echo "Starting toolshed..."
 nohup env SHELL_URL="http://localhost:$SHELL_PORT" \
@@ -102,11 +102,11 @@ nohup env SHELL_URL="http://localhost:$SHELL_PORT" \
 echo $! >> "$PIDFILE"
 
 # ---------- shell (API_URL = the public ts.net URL, NOT localhost) ----------
-cd "$REPO_ROOT/packages/shell"
+cd "$REPO_ROOT/runtime/shell"
 rm -rf dist
 echo "Starting shell (API_URL=$PUBLIC_URL)..."
 nohup env SHELL_PORT="$SHELL_PORT" API_URL="$PUBLIC_URL" \
-  deno run -A ../felt/cli.ts dev . > /tmp/cf-share-shell.log 2>&1 &
+  deno run -A ../../base/felt/cli.ts dev . > /tmp/cf-share-shell.log 2>&1 &
 echo $! >> "$PIDFILE"
 
 # ---------- wait for both to come up ----------
@@ -129,7 +129,7 @@ cd "$REPO_ROOT" || exit 1   # cf.key is minted/resolved relative to here
 # This piece is your work, and the toolshed accepts any identity; deploying as
 # the operator key collapses you into the local server principal (and into one
 # identity for user counting). See docs/features/shared-identity.md.
-cf_cli() { deno run -A packages/cli/mod.ts "$@"; }
+cf_cli() { deno run -A runtime/cli/mod.ts "$@"; }
 
 # Mint via a temp file and move into place only on success — a failed keygen
 # must never leave an empty/partial cf.key that the guard below would then trust.

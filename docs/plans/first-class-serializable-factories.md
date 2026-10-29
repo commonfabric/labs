@@ -102,10 +102,10 @@ Reference commits: `3b028c786`, `39b213e63`, and `ede6c5a7d`.
 
 Expected implementation files:
 
-- `packages/runner/src/pattern-binding.ts`
-- `packages/runner/src/runner.ts`
-- `packages/runner/src/builtins/op-pattern-ref.ts`
-- `packages/runner/src/harness/executable-registry.ts` only if the current
+- `runtime/runner/src/pattern-binding.ts`
+- `runtime/runner/src/runner.ts`
+- `runtime/runner/src/builtins/op-pattern-ref.ts`
+- `runtime/runner/src/harness/executable-registry.ts` only if the current
   executable lookup still needs the generic artifact path
 
 ### WP0.2 — Bind nested pattern values by reference
@@ -124,8 +124,8 @@ Expected implementation files:
 
 Tests to port or extend:
 
-- `packages/runner/test/pattern-binding.test.ts`
-- `packages/runner/test/pattern-node-patternref.test.ts` (new if still absent)
+- `runtime/runner/test/pattern-binding.test.ts`
+- `runtime/runner/test/pattern-node-patternref.test.ts` (new if still absent)
 
 ### WP0.3 — Resolve a sentinel passed directly to setup/run
 
@@ -139,16 +139,16 @@ Tests to port or extend:
 
 Tests to port or extend:
 
-- `packages/runner/test/pattern-tool-invoke-boundary.test.ts`
-- `packages/runner/test/pattern-ref-boundary.test.ts`
-- `packages/runner/test/stored-pattern-rehydration.test.ts`
+- `runtime/runner/test/pattern-tool-invoke-boundary.test.ts`
+- `runtime/runner/test/pattern-ref-boundary.test.ts`
+- `runtime/runner/test/stored-pattern-rehydration.test.ts`
 
 ### Stage 0 completion gate
 
 - [ ] The three reference commits are not ancestors of this work by accident;
   only reviewed prerequisite behavior has been reproduced.
 - [ ] `deno test` passes for the focused Stage 0 runner tests.
-- [ ] `deno task test` passes in `packages/runner`.
+- [ ] `deno task test` passes in `runtime/runner`.
 - [ ] No Stage 0 code depends on reactive-interpreter-only types or flags.
 - [ ] Commit the stage as a standalone, revertible prerequisite.
 
@@ -157,7 +157,8 @@ Tests to port or extend:
 ### WP1.1 — Define the dependency-light factory protocol
 
 - [ ] Add the `FabricFactory` callable arm to the `FabricValue` union in
-  `packages/data-model/src/api.ts`, which `packages/api/index.ts` re-exports.
+  `base/data-model/src/api.ts`, which `base/api/index.ts`
+  re-exports.
 - [ ] Define the `FactoryStateV1` discriminated union with exactly the fields in
   the specification: shared `ref`; pattern schemas/params/scope/space selector;
   module schemas/scope; and handler context/event schemas.
@@ -173,31 +174,31 @@ Tests to port or extend:
 - [ ] Export only the minimum protocol surface needed by the runner and codec;
   do not expose `.curry` or state mutation to pattern authors.
 - [ ] Re-export the runner-facing protocol through
-  `packages/data-model/src/index.ts` without creating a dependency from the
-  data model back into the runner.
+  `base/data-model/src/index.ts` without creating a dependency
+  from the data model back into the runner.
 
 Expected implementation files:
 
-- `packages/data-model/src/api.ts`
+- `base/data-model/src/api.ts`
 - a new dependency-light module such as
-  `packages/data-model/src/fabric-factory.ts`
-- `packages/data-model/deno.jsonc` export map
-- `packages/api/index.ts`
+  `base/data-model/src/fabric-factory.ts`
+- `base/data-model/deno.jsonc` export map
+- `base/api/index.ts`
 
 ### WP1.2 — Add `Factory@1` codec dispatch
 
 - [ ] Add the `Factory@1` constant to
-  `packages/data-model/src/codec-interface/codec-type-tags.ts`.
+  `base/data-model/src/codec-interface/codec-type-tags.ts`.
 - [ ] Implement a `FactoryCodec` with wire tag `Factory@1`.
 - [ ] Validate discriminant, exact allowed fields, content-addressed ref shape,
   schemas, modifiers, and pattern-only params fields during decode.
 - [ ] Decode to a frozen branded callable shell whose body throws
   `factory requires runner materialization` and whose state can be re-encoded.
 - [ ] Add a dedicated callable-factory codec slot to
-  `packages/data-model/src/codec-common/CodecRegistry.ts`; do not classify all
-  functions as primitives or match `Function` by constructor.
+  `base/data-model/src/codec-common/CodecRegistry.ts`; do not
+  classify all functions as primitives or match `Function` by constructor.
 - [ ] Register the codec where the class rosters are applied, in
-  `packages/data-model/src/codecs.ts`.
+  `base/data-model/src/codecs.ts`.
 - [ ] Route callable factories through codec lookup before the generic function
   rejection.
 - [ ] Include callable factories in JSON encoder cycle tracking.
@@ -206,32 +207,35 @@ Expected implementation files:
 
 Expected implementation and test files:
 
-- `packages/data-model/src/codec-common/` for the codec/state validator
-- `packages/data-model/src/codec-common/CodecRegistry.ts`
-- `packages/data-model/src/codec-json/JsonCodecEngine.ts`
-- `packages/data-model/src/codecs.ts`
-- `packages/data-model/test/codec-common/FactoryCodec.test.ts`
-- `packages/data-model/test/codec-common/CodecRegistry.test.ts`
-- `packages/data-model/test/codec-json/JsonCodecEngine.test.ts`
-- a focused `packages/data-model/test/fabric-factory.test.ts`
+- `base/data-model/src/codec-common/` for the codec/state
+  validator
+- `base/data-model/src/codec-common/CodecRegistry.ts`
+- `base/data-model/src/codec-json/JsonCodecEngine.ts`
+- `base/data-model/src/codecs.ts`
+- `base/data-model/test/codec-common/FactoryCodec.test.ts`
+- `base/data-model/test/codec-common/CodecRegistry.test.ts`
+- `base/data-model/test/codec-json/JsonCodecEngine.test.ts`
+- a focused `base/data-model/test/fabric-factory.test.ts`
 
 ### WP1.3 — Make every Fabric operation see the same factory state
 
-- [ ] Update `packages/data-model/src/convertible-js.ts` so admitted
-  factories are recognized through `tryFactoryState()`, and unbranded functions
-  remain invalid. Codec dispatch remains the serialization layer's job.
-- [ ] Update `packages/data-model/src/types/validation.ts` and compatibility
-  guards so `FabricFactory` is the only valid function-shaped `FabricValue`.
-- [ ] Update `packages/data-model/src/deep-freeze.ts` to seal/freeze canonical
-  state and then freeze the callable. Factory handling must precede the current
-  shortcut that treats functions as already frozen.
-- [ ] Update `packages/data-model/src/value-clone.ts` so canonical factories are
-  immutable logical atoms and both mutable/frozen clone requests preserve the
-  same canonical factory.
-- [ ] Update `packages/data-model/src/valueEqual.ts` to compare canonical codec
-  state rather than function identity, before any same-reference shortcut that
-  could accidentally admit an arbitrary function.
-- [ ] Update `packages/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
+- [ ] Update `base/data-model/src/convertible-js.ts` so
+  admitted factories are recognized through `tryFactoryState()`, and unbranded
+  functions remain invalid. Codec dispatch remains the serialization layer's
+  job.
+- [ ] Update `base/data-model/src/types/validation.ts` and
+  compatibility guards so `FabricFactory` is the only valid function-shaped
+  `FabricValue`.
+- [ ] Update `base/data-model/src/deep-freeze.ts` to
+  seal/freeze canonical state and then freeze the callable. Factory handling
+  must precede the current shortcut that treats functions as already frozen.
+- [ ] Update `base/data-model/src/value-clone.ts` so canonical
+  factories are immutable logical atoms and both mutable/frozen clone requests
+  preserve the same canonical factory.
+- [ ] Update `base/data-model/src/valueEqual.ts` to compare
+  canonical codec state rather than function identity, before any same-reference
+  shortcut that could accidentally admit an arbitrary function.
+- [ ] Update `base/data-model/src/value-hash/ValueHasher.ts` to hash the `Factory@1` tag
   and recursively hashed canonical state.
 - [ ] Ensure all of these paths call the shared state/codec visitor rather than
   independently enumerating hidden fields.
@@ -241,15 +245,15 @@ Expected implementation and test files:
 
 Focused tests:
 
-- `packages/data-model/test/convertible-js.test.ts`
-- `packages/data-model/test/types/validation.test.ts`
-- `packages/data-model/test/deep-freeze.test.ts`
-- `packages/data-model/test/cloneIfNecessary.test.ts`
-- `packages/data-model/test/cloneForMutation.test.ts`
-- `packages/data-model/test/shallowMutableClone.test.ts`
-- `packages/data-model/test/value-clone.test.ts`
-- `packages/data-model/test/valueEqual.test.ts`
-- `packages/data-model/test/value-hash/impl.test.ts`
+- `base/data-model/test/convertible-js.test.ts`
+- `base/data-model/test/types/validation.test.ts`
+- `base/data-model/test/deep-freeze.test.ts`
+- `base/data-model/test/cloneIfNecessary.test.ts`
+- `base/data-model/test/cloneForMutation.test.ts`
+- `base/data-model/test/shallowMutableClone.test.ts`
+- `base/data-model/test/value-clone.test.ts`
+- `base/data-model/test/valueEqual.test.ts`
+- `base/data-model/test/value-hash/impl.test.ts`
 
 Each suite must cover all three factory kinds, nested factory state, independent
 but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
@@ -257,7 +261,7 @@ but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
 ### WP1.4 — Attach canonical state in runner builders
 
 - [ ] Brand the function returned by `pattern()` in
-  `packages/runner/src/builder/pattern.ts` as kind `pattern`.
+  `runtime/runner/src/builder/pattern.ts` as kind `pattern`.
 - [ ] Brand functions returned by `createNodeFactory()`, including `lift()`,
   `byRef()`, raw/builtin factories, and equivalent helpers, as kind `module`.
 - [ ] Brand `handler()` results as kind `handler` while retaining separate
@@ -266,7 +270,7 @@ but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
 - [ ] Populate state from the complete builder descriptor, never from
   `moduleToEncodableForm(...).$implRef`.
 - [ ] Reuse or generalize the derivation/root tracking in
-  `packages/runner/src/builder/pattern-metadata.ts` so `asScope()`, `inSpace()`,
+  `runtime/runner/src/builder/pattern-metadata.ts` so `asScope()`, `inSpace()`,
   later `.curry()`, and traversal copies share one root token and late ref.
 - [ ] Make `asScope()` and every `inSpace()` selector form create a new branded
   factory whose canonical state includes the modifier without resolving a raw
@@ -283,20 +287,20 @@ but equal decoded shells, pre-seal failure, and arbitrary-function rejection.
 
 Focused tests:
 
-- `packages/runner/test/factory-input-types.test.ts`
-- `packages/runner/test/pattern-provenance.test.ts`
-- `packages/runner/test/pattern-scope.test.ts`
-- `packages/runner/test/host-pseudo-module.test.ts`
-- new `packages/runner/test/factory-state.test.ts`
+- `runtime/runner/test/factory-input-types.test.ts`
+- `runtime/runner/test/pattern-provenance.test.ts`
+- `runtime/runner/test/pattern-scope.test.ts`
+- `runtime/runner/test/host-pseudo-module.test.ts`
+- new `runtime/runner/test/factory-state.test.ts`
 
 ### WP1.5 — Traverse hidden factory state during graph construction
 
 - [ ] Adapt the shared visitor/accessor from
-  `packages/data-model/src/fabric-factory.ts` for builder traversal; runner code
-  supplies alias mapping and derived-callable construction but does not define
-  a second state view.
-- [ ] Integrate it into `packages/runner/src/builder/traverse-utils.ts` and
-  `packages/runner/src/builder/to-encodable-form.ts` before generic function handling.
+  `base/data-model/src/fabric-factory.ts` for builder
+  traversal; runner code supplies alias mapping and derived-callable
+  construction but does not define a second state view.
+- [ ] Integrate it into `runtime/runner/src/builder/traverse-utils.ts` and
+  `runtime/runner/src/builder/to-encodable-form.ts` before generic function handling.
 - [ ] Preserve live, pre-ref factory state during internal graph serialization;
   sealing belongs at a later durable Fabric boundary, after artifact indexing.
 - [ ] Convert captured Cells/Reactives to aliases inside factory state.
@@ -306,12 +310,12 @@ Focused tests:
   serialization, hashing, and equality.
 - [ ] Verify two references to the same factory do not cause false cycle errors,
   while an actual cycle through params is rejected.
-- [ ] Review graph payload fields in `packages/runner/src/builder/types.ts` and
-  static-data walks in `packages/runner/src/cell.ts` so hidden factory state is
+- [ ] Review graph payload fields in `runtime/runner/src/builder/types.ts` and
+  static-data walks in `runtime/runner/src/cell.ts` so hidden factory state is
   neither flattened nor skipped.
-- [ ] Verify `packages/runner/src/storage/differential.ts`,
-  `packages/runner/src/storage/v2-transaction.ts`, and
-  `packages/memory/v2/patch.ts` treat factories atomically through the shared
+- [ ] Verify `runtime/runner/src/storage/differential.ts`,
+  `runtime/runner/src/storage/v2-transaction.ts`, and
+  `runtime/memory/v2/patch.ts` treat factories atomically through the shared
   equality/clone protocol.
 - [ ] Once canonical factory traversal is available, switch durable
   factory-valued binding from Stage 0's `$patternRef` sentinel to `Factory@1`.
@@ -344,12 +348,12 @@ Focused tests:
 
 Expected files and tests:
 
-- `packages/runner/src/pattern-manager.ts`
+- `runtime/runner/src/pattern-manager.ts`
 - a focused runner module such as
-  `packages/runner/src/factory-materialization.ts`
-- `packages/runner/test/pattern-manager.test.ts`
-- `packages/runner/test/fabric-imports-pattern-manager.test.ts`
-- new `packages/runner/test/factory-materialization.test.ts`
+  `runtime/runner/src/factory-materialization.ts`
+- `runtime/runner/test/pattern-manager.test.ts`
+- `runtime/runner/test/fabric-imports-pattern-manager.test.ts`
+- new `runtime/runner/test/factory-materialization.test.ts`
 
 ### WP1.7 — Prove context-free and runner-aware round trips
 
@@ -388,8 +392,9 @@ Expected files and tests:
 - [ ] Arbitrary functions and pseudo refs are still rejected.
 - [ ] Context-free decode is inert; runner materialization is the only path to
   executable behavior.
-- [ ] `deno task test` passes in `packages/data-model` and `packages/runner`.
-- [ ] `deno check packages/api/index.ts` (or the package's standard type-check)
+- [ ] `deno task test` passes in `base/data-model` and
+  `runtime/runner`.
+- [ ] `deno check base/api/index.ts` (or the package's standard type-check)
   passes with `.curry` absent from public `PatternFactory`.
 - [ ] Commit Stage 1 in protocol, builder-state, and materialization slices.
 
@@ -397,7 +402,7 @@ Expected files and tests:
 
 ### WP2.1 — Add `asFactory` to the public schema vocabulary
 
-- [ ] Extend `JSONSchemaObj` in `packages/api/index.ts` with a discriminated
+- [ ] Extend `JSONSchemaObj` in `base/api/index.ts` with a discriminated
   `asFactory` definition for `pattern`, `module`, and `handler`.
 - [ ] Use `argumentSchema`/`resultSchema` for pattern and module kinds and
   `contextSchema`/`eventSchema` for handler kind.
@@ -406,17 +411,17 @@ Expected files and tests:
 - [ ] Update schema validation/resolution utilities that copy, merge, sanitize,
   or format Common Fabric extensions so `asFactory` is preserved.
 - [ ] Teach `Schema<T>` / `SchemaWithoutCell<T>` in
-  `packages/api/schema.ts` to materialize `asFactory` as the matching generic
+  `base/api/schema.ts` to materialize `asFactory` as the matching generic
   `PatternFactory`, `ModuleFactory`, or `HandlerFactory`.
 - [ ] Ensure `asFactory` composes correctly with refs/definitions and does not
   silently become `asCell`.
-- [ ] Add public type assertions in `packages/api/test/factory-input-types.test.ts`
-  and `packages/api/index.test.ts` proving factories are `FabricValue`s, schema
+- [ ] Add public type assertions in `base/api/test/factory-input-types.test.ts`
+  and `base/api/index.test.ts` proving factories are `FabricValue`s, schema
   inference preserves their generics, and `.curry` is unavailable.
 
 ### WP2.2 — Generate schemas for all factory kinds
 
-- [ ] Teach `packages/schema-generator/src/formatters/object-formatter.ts` to
+- [ ] Teach `base/schema-generator/src/formatters/object-formatter.ts` to
   recognize `PatternFactory`, `ModuleFactory`, and `HandlerFactory` before its
   generic callable and callable-return-wrapper cases.
 - [ ] Prefer one dedicated factory detector/formatter, registered before union,
@@ -436,14 +441,14 @@ Expected files and tests:
 
 Expected tests:
 
-- a new `packages/schema-generator/test/schema/factory-types.test.ts`
-- paired fixtures under `packages/schema-generator/test/fixtures/schema/`
-- `packages/schema-generator/test/schema/factory-input-real-api.test.ts`
-- `packages/schema-generator/test/fixtures-runner.test.ts`
+- a new `base/schema-generator/test/schema/factory-types.test.ts`
+- paired fixtures under `base/schema-generator/test/fixtures/schema/`
+- `base/schema-generator/test/schema/factory-input-real-api.test.ts`
+- `base/schema-generator/test/fixtures-runner.test.ts`
 
 ### WP2.3 — Lower symbolic factory calls
 
-- [ ] Add a type-directed callee classifier in `packages/ts-transformers` that
+- [ ] Add a type-directed callee classifier in `base/ts-transformers` that
   distinguishes live imported/module-scoped factories from symbolic/reactive
   factory values.
 - [ ] Follow local aliases, property access, and statically typed element access
@@ -462,15 +467,15 @@ Expected tests:
 
 Expected transformer seams:
 
-- `packages/ts-transformers/src/ast/call-kind.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
 - a centralized factory-kind/origin classifier under
-  `packages/ts-transformers/src/ast/`
+  `base/ts-transformers/src/ast/`
 - the expression-site/type policy modules under
-  `packages/ts-transformers/src/policy/`
-- `packages/ts-transformers/src/transformers/structural-reactive-factory.ts`
-- `packages/ts-transformers/src/transformers/schema-injection.ts`
-- `packages/ts-transformers/src/cf-pipeline.ts`
-- `packages/ts-transformers/src/core/commonfabric-runtime-registry.ts`
+  `base/ts-transformers/src/policy/`
+- `base/ts-transformers/src/transformers/structural-reactive-factory.ts`
+- `base/ts-transformers/src/transformers/schema-injection.ts`
+- `base/ts-transformers/src/cf-pipeline.ts`
+- `base/ts-transformers/src/core/commonfabric-runtime-registry.ts`
 - helper registration/emission alongside existing `__cfHelpers`
 
 Golden coverage must show exact direct-versus-symbolic output for aliases,
@@ -488,7 +493,7 @@ passes cannot undo the lowering.
 - [ ] Extend `NodeRef.module`/serialized node typing only as narrowly as needed;
   do not add another public factory wrapper.
 - [ ] Complete the dynamic-module arm currently marked `TODO` in
-  `packages/runner/src/runner.ts`.
+  `runtime/runner/src/runner.ts`.
 - [ ] Resolve the factory cell value through `materializeFactory`, validate kind
   and trusted normalized schemas, then tail-call the existing pattern,
   JavaScript-module, or handler instantiation path.
@@ -523,14 +528,14 @@ passes cannot undo the lowering.
 
 Expected runtime tests:
 
-- new `packages/runner/test/dynamic-factory-node.test.ts`
-- `packages/runner/test/patterns-dynamic.test.ts`
-- `packages/runner/test/patterns-handlers.test.ts`
-- `packages/runner/test/by-identity-handler-exec.test.ts`
-- `packages/runner/test/map-op-by-identity.test.ts`
+- new `runtime/runner/test/dynamic-factory-node.test.ts`
+- `runtime/runner/test/patterns-dynamic.test.ts`
+- `runtime/runner/test/patterns-handlers.test.ts`
+- `runtime/runner/test/by-identity-handler-exec.test.ts`
+- `runtime/runner/test/map-op-by-identity.test.ts`
 
-Likely supervision seams include `packages/runner/src/cancel.ts` and the action,
-subscription, and scheduler modules under `packages/runner/src/scheduler/`.
+Likely supervision seams include `runtime/runner/src/cancel.ts` and the action,
+subscription, and scheduler modules under `runtime/runner/src/scheduler/`.
 
 ### WP2.6 — Materialize factories at runner exposure boundaries
 
@@ -543,9 +548,9 @@ subscription, and scheduler modules under `packages/runner/src/scheduler/`.
   boundaries.
 - [ ] Verify memory v1/v2 storage, patch/diff, and sync paths treat a canonical
   factory as an atomic codec value while still traversing its encoded state.
-- [ ] Cover `packages/memory/v2.ts` `encodeMemoryBoundary` /
+- [ ] Cover `runtime/memory/v2.ts` `encodeMemoryBoundary` /
   `decodeMemoryBoundary` with a focused
-  `packages/memory/test/v2-factory-boundary.test.ts` round trip.
+  `runtime/memory/test/v2-factory-boundary.test.ts` round trip.
 - [ ] Add a fresh-runtime client/server round trip in which one runtime writes a
   factory, another decodes it, and a runner materializes/invokes it.
 - [ ] Add typed factory round trips through Cells, query-result proxies, pieces,
@@ -554,12 +559,12 @@ subscription, and scheduler modules under `packages/runner/src/scheduler/`.
 
 Concrete seams and focused tests:
 
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/query-result-proxy.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/query-result-proxy.ts`
 - the query/runtime adapters that expose decoded values
-- `packages/runner/test/cell-proxy.test.ts`
-- `packages/runner/test/query-result-proxy-fabric-primitive.test.ts`
-- `packages/runner/test/query.test.ts`
+- `runtime/runner/test/cell-proxy.test.ts`
+- `runtime/runner/test/query-result-proxy-fabric-primitive.test.ts`
+- `runtime/runner/test/query.test.ts`
 
 ### Stage 2 completion gate
 
@@ -570,8 +575,8 @@ Concrete seams and focused tests:
 - [ ] Dynamic replacement cancels/fences the prior generation without changing
   the stable output spot.
 - [ ] Warm and cold resolution fail closed on kind or schema mismatch.
-- [ ] `deno task test` passes in `packages/api`, `packages/schema-generator`,
-  `packages/ts-transformers`, and `packages/runner` using each package's
+- [ ] `deno task test` passes in `base/api`, `base/schema-generator`,
+  `base/ts-transformers`, and `runtime/runner` using each package's
   available task names.
 
 ## Stage 3 — Pattern closure conversion
@@ -599,10 +604,10 @@ Concrete seams and focused tests:
 
 Expected files/tests:
 
-- `packages/runner/src/builder/pattern.ts`
-- `packages/runner/src/builder/factory.ts` and builder helper types
-- `packages/runner/test/pattern.test.ts`
-- `packages/runner/test/factory-input-types.test.ts`
+- `runtime/runner/src/builder/pattern.ts`
+- `runtime/runner/src/builder/factory.ts` and builder helper types
+- `runtime/runner/test/pattern.test.ts`
+- `runtime/runner/test/factory-input-types.test.ts`
 - a compile-time API test proving authored `.curry` is unavailable
 
 ### WP3.2 — Implement the internal one-shot curry derivation
@@ -659,16 +664,16 @@ Expected files/tests:
 
 Primary transformer seams:
 
-- `packages/ts-transformers/src/closures/transformer.ts`
-- `packages/ts-transformers/src/closures/capture-collector.ts`
-- `packages/ts-transformers/src/closures/utils/pattern-builder.ts`
-- `packages/ts-transformers/src/transformers/builder-call-hoisting.ts`
-- `packages/ts-transformers/src/transformers/schema-injection.ts`
-- `packages/ts-transformers/src/transformers/pattern-context-validation.ts`
-- `packages/ts-transformers/src/policy/callback-boundary.ts`
-- `packages/ts-transformers/src/ast/scope-analysis.ts`
-- `packages/ts-transformers/src/core/cross-stage-state.ts`
-- `packages/ts-transformers/src/core/context.ts`
+- `base/ts-transformers/src/closures/transformer.ts`
+- `base/ts-transformers/src/closures/capture-collector.ts`
+- `base/ts-transformers/src/closures/utils/pattern-builder.ts`
+- `base/ts-transformers/src/transformers/builder-call-hoisting.ts`
+- `base/ts-transformers/src/transformers/schema-injection.ts`
+- `base/ts-transformers/src/transformers/pattern-context-validation.ts`
+- `base/ts-transformers/src/policy/callback-boundary.ts`
+- `base/ts-transformers/src/ast/scope-analysis.ts`
+- `base/ts-transformers/src/core/cross-stage-state.ts`
+- `base/ts-transformers/src/core/context.ts`
 
 Builder hoisting must recognize the generated `pattern(...).curry(captures)`
 shape, hoist/register the inner base factory, and preserve the curry at the
@@ -681,7 +686,7 @@ and an authored second callback argument.
 
 At minimum, add focused `nested-pattern-capture`, capture-free, and
 nested-wrapper fixture pairs; extend
-`packages/ts-transformers/test/closures/module-scope-helper-hoisting.test.ts`
+`base/ts-transformers/test/closures/module-scope-helper-hoisting.test.ts`
 and the transformer pipeline regression suite.
 
 ### WP3.4 — Add the hidden params root and invocation-owned cell
@@ -719,14 +724,14 @@ and the transformer pipeline regression suite.
 
 Expected runtime seams/tests:
 
-- `packages/runner/src/sigil-types.ts`
-- `packages/runner/src/link-utils.ts`
-- `packages/runner/src/pattern-binding.ts`
-- `packages/runner/src/result-utils.ts`
-- `packages/runner/src/runner.ts`
+- `runtime/runner/src/sigil-types.ts`
+- `runtime/runner/src/link-utils.ts`
+- `runtime/runner/src/pattern-binding.ts`
+- `runtime/runner/src/result-utils.ts`
+- `runtime/runner/src/runner.ts`
 - result metadata helpers used by `getMetaLink`
-- new `packages/runner/test/pattern-closure-params.test.ts`
-- `packages/runner/test/pattern-node-alias-schema.test.ts`
+- new `runtime/runner/test/pattern-closure-params.test.ts`
+- `runtime/runner/test/pattern-node-alias-schema.test.ts`
 - reload/rehydration, `cfc-boundary.test.ts`, and cross-space CFC-focused runner
   tests
 
@@ -744,8 +749,8 @@ Expected runtime seams/tests:
   during the compatibility window.
 - [ ] Keep old public overloads only until source migration and stored-data
   gates pass; mark them deprecated rather than teaching them new semantics.
-- [ ] Keep `packages/runner/src/builtins/op-pattern-ref.ts` and
-  `packages/runner/src/builtins/list-op-argument-usage.ts` only on the named
+- [ ] Keep `runtime/runner/src/builtins/op-pattern-ref.ts` and
+  `runtime/runner/src/builtins/list-op-argument-usage.ts` only on the named
   legacy adaptation path; new `Factory@1` nodes go through generic
   materialization.
 - [ ] Isolate the legacy branch in `Runner.#substituteOpPatternRefs()` so it
@@ -757,13 +762,13 @@ Expected runtime seams/tests:
 
 Primary files:
 
-- `packages/ts-transformers/src/closures/strategies/array-method-transform.ts`
-- `packages/ts-transformers/src/ast/call-kind.ts`
-- `packages/runner/src/cell.ts`
-- `packages/runner/src/builtins/map.ts`
-- `packages/runner/src/builtins/filter.ts`
-- `packages/runner/src/builtins/flatmap.ts`
-- mirrored overloads in `packages/api/index.ts`
+- `base/ts-transformers/src/closures/strategies/array-method-transform.ts`
+- `base/ts-transformers/src/ast/call-kind.ts`
+- `runtime/runner/src/cell.ts`
+- `runtime/runner/src/builtins/map.ts`
+- `runtime/runner/src/builtins/filter.ts`
+- `runtime/runner/src/builtins/flatmap.ts`
+- mirrored overloads in `base/api/index.ts`
 
 Focused runner coverage includes
 `list-builtin-edge-paths.test.ts`, `list-result-schema.test.ts`,
@@ -792,13 +797,13 @@ the one-argument form.
 
 Expected tests:
 
-- `packages/api/test/framework-provided.test.ts`
-- `packages/runner/test/cfc-agent-tool-input-integrity.test.ts`
-- `packages/runner/test/sandbox-id-auto-provision.test.ts`
+- `base/api/test/framework-provided.test.ts`
+- `runtime/runner/test/cfc-agent-tool-input-integrity.test.ts`
+- `runtime/runner/test/sandbox-id-auto-provision.test.ts`
 - transformer fixtures for framework-input synthesis and rejection
 
 Replace the hard-coded framework-field handling in
-`packages/runner/src/builtins/llm-dialog.ts` only after the generic trusted
+`runtime/runner/src/builtins/llm-dialog.ts` only after the generic trusted
 metadata path has equivalent fail-closed coverage.
 
 ### Stage 3 completion gate
@@ -817,7 +822,7 @@ metadata path has equivalent fail-closed coverage.
 
 ### WP4.1 — Teach tools and external adapters the new factory value
 
-- [ ] Update `BuiltInLLMTool` in `packages/api/index.ts` to accept a direct
+- [ ] Update `BuiltInLLMTool` in `base/api/index.ts` to accept a direct
   `PatternFactory` and `{ pattern: PatternFactory, ...metadata }` as canonical
   authored shapes, while retaining the legacy tool object as a deprecated
   compatibility input.
@@ -827,18 +832,18 @@ metadata path has equivalent fail-closed coverage.
   wrapper with a `pattern` field and no `extraParams`.
 - [ ] Invoke through the same `materializeFactory`/dynamic path as ordinary
   pattern composition.
-- [ ] Update `packages/runner/src/schema-format.ts` and LLM schema formatting to
+- [ ] Update `runtime/runner/src/schema-format.ts` and LLM schema formatting to
   understand `asFactory` without subtracting closure params.
-- [ ] Update `packages/runner/src/builtins/llm-schemas.ts` and
-  `packages/runner/src/builtins/llm-dialog.ts` to write/read the new shape while
+- [ ] Update `runtime/runner/src/builtins/llm-schemas.ts` and
+  `runtime/runner/src/builtins/llm-dialog.ts` to write/read the new shape while
   retaining the legacy reader.
 - [ ] Preserve `description` and `useResultSchemaForObservation` in the metadata
   wrapper, while sending only reduced `{ description, inputSchema }` data to
-  `packages/llm`; factory state never crosses into a provider request.
-- [ ] Update `packages/cli/lib/callable.ts` to discover/materialize canonical
+  `base/llm`; factory state never crosses into a provider request.
+- [ ] Update `runtime/cli/lib/callable.ts` to discover/materialize canonical
   factories and keep legacy `{ pattern, extraParams }` reads.
-- [ ] Update `packages/fuse/callables.ts`, `packages/fuse/callable-path.ts`,
-  `packages/fuse/tree-builder.ts`, and `packages/fuse/cell-bridge.ts` likewise.
+- [ ] Update `runtime/fuse/callables.ts`, `runtime/fuse/callable-path.ts`,
+  `runtime/fuse/tree-builder.ts`, and `runtime/fuse/cell-bridge.ts` likewise.
 - [ ] Replace FUSE's plain `JSON.stringify`/function-source fallback for factory
   leaves with Fabric codec projection; otherwise callable values would be
   dropped or exposed as source text.
@@ -851,15 +856,15 @@ metadata path has equivalent fail-closed coverage.
 
 Focused tests:
 
-- `packages/runner/test/generate-object-tools.test.ts`
-- `packages/runner/test/llm-dialog.test.ts`
-- `packages/runner/test/schema-format.test.ts`
+- `runtime/runner/test/generate-object-tools.test.ts`
+- `runtime/runner/test/llm-dialog.test.ts`
+- `runtime/runner/test/schema-format.test.ts`
 - CLI callable/integration tests
-- `packages/cli/test/exec.test.ts` and the real
-  `packages/cli/integration/fuse-exec.sh` flow
-- `packages/fuse/callable-path.test.ts`
-- `packages/fuse/tree-builder.test.ts`
-- `packages/fuse/cell-bridge.test.ts`
+- `runtime/cli/test/exec.test.ts` and the real
+  `runtime/cli/integration/fuse-exec.sh` flow
+- `runtime/fuse/callable-path.test.ts`
+- `runtime/fuse/tree-builder.test.ts`
+- `runtime/fuse/cell-bridge.test.ts`
 
 ### WP4.2 — Install explicit compatibility readers
 
@@ -884,21 +889,21 @@ For every caller, replace
 input contains only the caller-supplied fields and whose closure invokes the
 original pattern with `entries`.
 
-- [ ] Migrate `packages/patterns/cfc-agent-prompt-injection-demo/main.tsx`.
-- [ ] Migrate `packages/patterns/deep-research.tsx`.
-- [ ] Migrate `packages/patterns/notes/note.tsx`.
-- [ ] Migrate `packages/patterns/shopping-list.tsx`.
-- [ ] Migrate the affected files under `packages/patterns/system/`, including
+- [ ] Migrate `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`.
+- [ ] Migrate `patterns/apps/deep-research/deep-research.tsx`.
+- [ ] Migrate `patterns/system/notes/note.tsx`.
+- [ ] Migrate `patterns/apps/shopping-list/shopping-list.tsx`.
+- [ ] Migrate the affected files under `patterns/system/`, including
   default app, knowledge graph, omnibox, quick capture, space overview,
   suggestion, suggestion history, and summary index.
-- [ ] Migrate `packages/cli/integration/pattern/fuse-exec.tsx` and any current
+- [ ] Migrate `runtime/cli/integration/pattern/fuse-exec.tsx` and any current
   non-test caller found by the inventory command below.
 - [ ] Replace the old structural `PatternToolResult` type in
-  `packages/patterns/examples/summary-index-tester.tsx`, if still present when
-  this stage begins.
-- [ ] Update `packages/patterns/index.md` only where generated summaries or
+  `patterns/examples/summary-index-tester/summary-index-tester.tsx`, if still
+  present when this stage begins.
+- [ ] Update `patterns/index.md` only where generated summaries or
   public examples change.
-- [ ] Update `packages/patterns/test/source-coverage/commonfabric-stub.test.ts`
+- [ ] Update `patterns/dev/test/source-coverage/commonfabric-stub.test.ts`
   so source coverage models the new public API while retaining an explicitly
   named legacy fixture if needed.
 - [ ] Verify every wrapper remains readable at the call site and does not expose
@@ -967,7 +972,7 @@ alone authorizes deleting readers for durable values.
 ### WP5.2 — Remove legacy APIs and readers
 
 - [ ] Remove `patternTool`, `PatternToolFunction`, and `PatternToolResult` from
-  `packages/api/index.ts`, runner builder exports, and trusted builder factory
+  `base/api/index.ts`, runner builder exports, and trusted builder factory
   wiring.
 - [ ] Remove transformer `patternTool` call-kind, boundary, validation, and
   hoisting special cases.
@@ -979,7 +984,7 @@ alone authorizes deleting readers for durable values.
   separately scoped migration proves all of its non-factory users have moved;
   first-class factories alone do not authorize its removal.
 - [ ] Remove the runtime's artifact walk
-  (`packages/runner/src/encodable-form.ts`) and the `toEncodableForm()` /
+  (`runtime/runner/src/encodable-form.ts`) and the `toEncodableForm()` /
   `toJSON()` members it reads only after every Fabric boundary uses registered
   codec dispatch.
 - [ ] Keep negative fixtures that prove deleted writers/readers stay deleted.
@@ -989,16 +994,16 @@ alone authorizes deleting readers for durable values.
 - [ ] Update `docs/common/README.md` and the relevant pattern composition,
   reactivity, types/schema, LLM, CLI, and FUSE docs for first-class factories.
 - [ ] Update live transformer behavior/inventory docs and
-  `packages/ts-transformers/docs/array-method-callback-pipeline.md` so they show
+  `base/ts-transformers/docs/array-method-callback-pipeline.md` so they show
   bound factories rather than sibling params.
 - [ ] Reconcile `docs/specs/sandboxing/SES_SANDBOXING_SPEC.md`,
   `docs/specs/ts-transformer/ts_transformers_current_behavior_spec.md`,
   `docs/specs/ts-transformer/ts_transformers_type_driven_behavior_inventory.md`,
   `docs/specs/ts-transformer/ts_transformers_design_deltas.md`, and
-  `packages/ts-transformers/docs/derive-to-lift-design.md` with the shipped
+  `base/ts-transformers/docs/derive-to-lift-design.md` with the shipped
   closure and factory-call behavior.
 - [ ] Update `docs/specs/fuse-filesystem/2-path-scheme.md` and
-  `packages/fuse/README.md` for direct factory `.tool` projection and tagged
+  `runtime/fuse/README.md` for direct factory `.tool` projection and tagged
   factory JSON.
 - [ ] Document the author-facing inline-pattern closure model with examples for
   passing, returning, storing, and invoking all factory kinds.
@@ -1078,13 +1083,13 @@ alone authorizes deleting readers for durable values.
 Use the package's current task names if they change while this live plan is in
 progress.
 
-- [ ] `deno task test` in `packages/data-model`
-- [ ] `deno task test` in `packages/schema-generator`
-- [ ] `deno task test` in `packages/ts-transformers`
-- [ ] `deno task test` in `packages/runner`
-- [ ] `deno task test` in `packages/llm`
-- [ ] `deno task test` in `packages/cli`
-- [ ] `deno task test` in `packages/fuse`
+- [ ] `deno task test` in `base/data-model`
+- [ ] `deno task test` in `base/schema-generator`
+- [ ] `deno task test` in `base/ts-transformers`
+- [ ] `deno task test` in `runtime/runner`
+- [ ] `deno task test` in `base/llm`
+- [ ] `deno task test` in `runtime/cli`
+- [ ] `deno task test` in `runtime/fuse`
 - [ ] Root `deno task check`
 - [ ] Focused API type tests, including the negative public `.curry` assertion
 - [ ] A representative `deno task cf check ... --show-transformed --no-run`

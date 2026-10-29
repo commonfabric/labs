@@ -105,7 +105,7 @@ never re-reads them. The scheduler is part of the information-flow surface.
 
 **P1 — One change channel.** All invalidation flows from the storage
 notification stream: local commits (emitted synchronously at local apply,
-value-bearing — see `packages/runner/src/storage/v2.ts` `notifyOptimistic`),
+value-bearing — see `runtime/runner/src/storage/v2.ts` `notifyOptimistic`),
 remote pulls/integrations, and reverts. The scheduler never propagates changes
 through a second, in-process side channel. (v1 has both, plus watermark
 machinery to reconcile them.)
@@ -721,7 +721,7 @@ event in telemetry.
 An external ingress id never enters the queue raw. The send surface binds
 the caller's `{id, session}` pair to the resolved stream link with a
 type-tagged content hash (`scopeCallerEventId`,
-`packages/runner/src/scheduler/event-identity.ts`), and the scoped result is
+`runtime/runner/src/scheduler/event-identity.ts`), and the scoped result is
 the durable delivery id. The session is required — a send naming an id
 without one is refused — because the id is the caller's own word and only
 the pair names one invocation: the same pair on the same stream is the same

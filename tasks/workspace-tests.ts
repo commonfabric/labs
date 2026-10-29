@@ -18,6 +18,7 @@ import {
   recordsDir,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { withoutPackageParent } from "./package-layout.ts";
 import { DENO_TEST_TASK } from "./run-member-tests.ts";
 import {
   type FailedCommand,
@@ -29,8 +30,7 @@ import {
 } from "./test-summary.ts";
 
 export function getPackageName(memberPath: string): string {
-  const relativePath = memberPath.replace(/^\.\//, "");
-  return relativePath.replace(/^packages\//, "");
+  return withoutPackageParent(memberPath.replace(/^\.\//, ""));
 }
 
 export async function initializeDb(cwd: string = Deno.cwd()): Promise<boolean> {
@@ -371,7 +371,7 @@ export async function assertMemberTestTasksDefined(
       `Missing from: ${named}.`,
       `Add a \`test\` entry to that manifest's \`tasks\` — one running`,
       `\`tasks/run-member-tests.ts\` over a \`deno-test\` entry where the`,
-      `package has tests, as \`packages/utils/deno.jsonc\` shows, or`,
+      `package has tests, as \`base/utils/deno.jsonc\` shows, or`,
       `\`echo 'No tests defined.'\` where it has none yet. Put it in the file`,
       `named above rather than in a second manifest beside it: where a member`,
       `carries both a \`deno.json\` and a \`deno.jsonc\`, Deno takes the`,
@@ -553,7 +553,7 @@ export async function runTests(
   }
   // Resolve to an absolute path: each package's test subprocess runs with its
   // own cwd, so a relative DENO_COVERAGE_DIR would land under
-  // packages/<pkg>/... instead of the shared workspace coverage directory.
+  // the package directory instead of the shared workspace coverage directory.
   const coverageRootRaw = Deno.env.get("DENO_COVERAGE_DIR");
   const coverageRoot = coverageRootRaw
     ? path.resolve(workspaceCwd, coverageRootRaw)

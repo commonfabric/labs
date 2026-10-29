@@ -185,9 +185,9 @@ function parseArgs(args: readonly string[]): {
 async function main() {
   const { root, out, files } = parseArgs(Deno.args);
   // Loaded from under `root`, so that the compiler is that checkout's.
-  const { createRuntime } = await import(`${root}/packages/cli/lib/dev.ts`);
+  const { createRuntime } = await import(`${root}/runtime/cli/lib/dev.ts`);
   const { resolveLocalProgram } = await import(
-    `${root}/packages/runner/src/harness/local-program.deno.ts`
+    `${root}/runtime/runner/src/harness/local-program.deno.ts`
   );
   const runtime = await createRuntime();
   const output: DumpOutput = { assignments: [], errors: [] };

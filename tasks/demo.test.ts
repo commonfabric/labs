@@ -134,7 +134,7 @@ Deno.test("demo CLI help exits successfully", async () => {
 Deno.test("resolveDemoTest requires exactly one file", async () => {
   const root = await Deno.makeTempDir();
   try {
-    const dir = `${root}/packages/patterns/integration`;
+    const dir = `${root}/patterns/integration`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/demo.test.ts`, "");
     await Deno.writeTextFile(`${dir}/one-demo.test.ts`, "");
@@ -425,7 +425,7 @@ async function withDemoFixture(
 ): Promise<void> {
   const root = await Deno.makeTempDir();
   try {
-    const dir = `${root}/packages/patterns/integration`;
+    const dir = `${root}/patterns/integration`;
     await Deno.mkdir(dir, { recursive: true });
     await Deno.writeTextFile(`${dir}/one-demo.test.ts`, "");
     if (includeSecond) {

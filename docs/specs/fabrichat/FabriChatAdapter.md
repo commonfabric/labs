@@ -23,7 +23,7 @@ surface, so the room's own `[UI]` keeps the draft and the reply target (see
 ## How a container holds it
 
 A container holds the adapter, the way it holds any piece it renders. For
-example, the `loom` pattern (`packages/patterns/loom/`) holds it as a piece
+example, the `loom` pattern (`patterns/system/loom/`) holds it as a piece
 panel. The adapter links to its placement, and the placement to its room:
 
 ```text

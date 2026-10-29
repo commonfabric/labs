@@ -271,7 +271,7 @@ and silently dropped side effects in the OFF arm.
 
 ### 3.5 Built-in coverage — every one, placed
 
-The full inventory (from `packages/runner/src/builtins/`), so nothing is
+The full inventory (from `runtime/runner/src/builtins/`), so nothing is
 discovered mid-rebuild. Five placement classes:
 
 | class | built-ins | runs on | client speculation |
@@ -405,7 +405,7 @@ session-scoped client act. The wiring:
   another stream's sends (no cross-stream head-of-line hold), while
   each stream's own fired order stays exact. The default posture 20/s
   sustained, 20 burst, is a dial —* `DEFAULT_EVENT_APPEND_PACING` *in
-  `packages/runner/src/storage/event-append-queue.ts` — flagged for the
+  `runtime/runner/src/storage/event-append-queue.ts` — flagged for the
   owner. The OFF arm never constructs the queue.*
 
 ## 4. Measured constraints (what the learning run bought)

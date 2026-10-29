@@ -27,32 +27,32 @@ import { PATTERN_TREES } from "./pattern-files.ts";
 Deno.test("selectPatternTestFiles returns the files slash-separated and sorted", () => {
   assertEquals(
     selectPatternTestFiles([
-      "packages\\patterns\\notes\\note.test.tsx",
-      "packages/patterns/dice.test.tsx",
+      "patterns\\system\\notes\\note.test.tsx",
+      "patterns/showcase/dice/dice.test.tsx",
     ]),
     [
-      "packages/patterns/dice.test.tsx",
-      "packages/patterns/notes/note.test.tsx",
+      "patterns/showcase/dice/dice.test.tsx",
+      "patterns/system/notes/note.test.tsx",
     ],
   );
 });
 
 Deno.test("readPatternTestList reads each path and the cost written after it", () => {
   const text = [
-    patternTestListLine("packages/patterns/dice.test.tsx", 12.5),
+    patternTestListLine("patterns/showcase/dice/dice.test.tsx", 12.5),
     "",
-    patternTestListLine("packages\\patterns\\notes\\note.test.tsx"),
-    patternTestListLine("packages/patterns/chat.test.tsx", 0),
+    patternTestListLine("patterns\\system\\notes\\note.test.tsx"),
+    patternTestListLine("patterns/chat.test.tsx", 0),
   ].join("\n") + "\n";
   const { files, costs } = readPatternTestList(text);
   assertEquals(files, [
-    "packages/patterns/dice.test.tsx",
-    "packages/patterns/notes/note.test.tsx",
-    "packages/patterns/chat.test.tsx",
+    "patterns/showcase/dice/dice.test.tsx",
+    "patterns/system/notes/note.test.tsx",
+    "patterns/chat.test.tsx",
   ]);
   assertEquals([...costs], [
-    ["packages/patterns/dice.test.tsx", 12.5],
-    ["packages/patterns/chat.test.tsx", 0],
+    ["patterns/showcase/dice/dice.test.tsx", 12.5],
+    ["patterns/chat.test.tsx", 0],
   ]);
 });
 
@@ -395,11 +395,11 @@ Deno.test("runFilteredIntegration uses the generated-patterns subdir", async () 
 Deno.test("runPackageIntegration returns false when a filtered run matches nothing", async () => {
   const rootDir = await Deno.makeTempDir();
   try {
-    await Deno.mkdir(`${rootDir}/packages/runner/integration`, {
+    await Deno.mkdir(`${rootDir}/runtime/runner/integration`, {
       recursive: true,
     });
     await Deno.writeTextFile(
-      `${rootDir}/packages/runner/integration/counter.test.ts`,
+      `${rootDir}/runtime/runner/integration/counter.test.ts`,
       "",
     );
     const outcome = await runPackageIntegration(
@@ -421,7 +421,7 @@ Deno.test("runPackageIntegration returns false when a filtered run matches nothi
 // report goes, or writes nothing for no `xml`, and fails.
 async function makeReportingPackage(xml?: string): Promise<string> {
   const rootDir = await Deno.makeTempDir();
-  const packageDir = `${rootDir}/packages/runner`;
+  const packageDir = `${rootDir}/runtime/runner`;
   await Deno.mkdir(packageDir, { recursive: true });
   await Deno.writeTextFile(
     `${packageDir}/deno.json`,
@@ -469,13 +469,13 @@ Deno.test("runPackageIntegration reads each test, and how to rerun a failing one
       [{
         name: "counts",
         outcome: "pass",
-        file: "packages/runner/integration/counter.test.ts",
+        file: "runtime/runner/integration/counter.test.ts",
         message: undefined,
         rerun: undefined,
       }, {
         name: "resets",
         outcome: "fail",
-        file: "packages/runner/integration/counter.test.ts",
+        file: "runtime/runner/integration/counter.test.ts",
         message: "Uncaught Error: still 3",
         rerun: "deno task integration runner counter",
       }],
@@ -509,7 +509,7 @@ Deno.test("integrationRerun names the test file where it is known", () => {
   assertEquals(
     integrationRerun(
       "patterns",
-      "packages/patterns/integration/cf-render.test.ts",
+      "patterns/integration/cf-render.test.ts",
     ),
     "deno task integration patterns cf-render",
   );
@@ -518,13 +518,13 @@ Deno.test("integrationRerun names the test file where it is known", () => {
   assertEquals(
     integrationRerun(
       "patterns-reload",
-      "packages/patterns/integration/x.test.ts",
+      "patterns/integration/x.test.ts",
     ),
     "deno task integration patterns-reload",
   );
   assertEquals(
-    integrationRerun("pattern-tests", "packages/patterns/a b/c.test.tsx"),
-    "deno task integration pattern-tests 'packages/patterns/a b/c.test.tsx'",
+    integrationRerun("pattern-tests", "patterns/a b/c.test.tsx"),
+    "deno task integration pattern-tests 'patterns/a b/c.test.tsx'",
   );
 });
 
@@ -632,7 +632,7 @@ type Ran = Awaited<
 
 const PRECOMPILE_ROOT = "/repo";
 const PATTERN_FILES = "abcdefghijkl".split("").map((name) =>
-  `packages/patterns/${name}/main.test.tsx`
+  `patterns/${name}/main.test.tsx`
 );
 const CONNECTOR_FILE = `${PATTERN_TREES[1].directory}/main.test.tsx`;
 
@@ -679,7 +679,7 @@ Deno.test("precompilePatternTests cuts the shard into runs of neighbors that sha
   assertEquals(
     groups.map((group) => group.root),
     [
-      ...Array(4).fill(`${PRECOMPILE_ROOT}/packages/patterns`),
+      ...Array(4).fill(`${PRECOMPILE_ROOT}/patterns`),
       PRECOMPILE_ROOT,
     ],
   );

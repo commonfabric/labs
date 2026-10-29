@@ -653,23 +653,23 @@ describe("report", () => {
     // the change touched that rose with the whole.
     it("names the touched source groups that rose as well", () => {
       const rise = coverageRise(input({
-        touched: new Set(["tasks", "packages/memory", "packages/runner"]),
+        touched: new Set(["tasks", "runtime/memory", "runtime/runner"]),
         coverageBefore: figures([
           ["workspace", 1000],
           ["tasks", 40],
-          ["packages/memory", 10],
-          ["packages/runner", 90],
+          ["runtime/memory", 10],
+          ["runtime/runner", 90],
         ]),
         coverage: figures([
           ["workspace", 1000 + COVERAGE_COMMENT_LINES],
           ["tasks", 40],
-          ["packages/memory", 24],
-          ["packages/runner", 101],
+          ["runtime/memory", 24],
+          ["runtime/runner", 101],
         ]),
       }));
       expect(rise?.groups).toEqual([
-        { group: "packages/memory", from: 10, to: 24 },
-        { group: "packages/runner", from: 90, to: 101 },
+        { group: "runtime/memory", from: 10, to: 24 },
+        { group: "runtime/runner", from: 90, to: 101 },
       ]);
     });
 
@@ -725,7 +725,7 @@ describe("report", () => {
   });
 
   describe("measuredSetRises()", () => {
-    const gated = "packages/memory";
+    const gated = "runtime/memory";
     const excluded = [...EXCLUDED_FROM_COVERAGE_GATE.keys()][0]!;
     /** The plan for the change having chosen the gates of these sets. */
     const over = (...members: string[]) => ({
@@ -1203,11 +1203,11 @@ describe("report", () => {
         }),
         coverageBefore: both(
           figures([["workspace", 100]]),
-          ownTests([["packages/memory", 10]]),
+          ownTests([["runtime/memory", 10]]),
         ),
         coverage: both(
           figures([["workspace", 100 + COVERAGE_COMMENT_LINES]]),
-          ownTests([["packages/memory", 18]]),
+          ownTests([["runtime/memory", 18]]),
         ),
         touched: new Set(["tasks"]),
       });
@@ -1226,7 +1226,7 @@ describe("report", () => {
         "A known flaky test that failed every time it ran",
       );
       expect(body).toContain("Coverage debt");
-      expect(body).toContain("packages/memory");
+      expect(body).toContain("runtime/memory");
       expect(body).toContain("A new test that turned out to be flaky");
       expect(body).toContain("A rename that discarded a test's history");
       expect(body).toContain("kneads the dougk");
@@ -1557,17 +1557,17 @@ describe("report", () => {
     it("names where a test would go when a touched group rose", () => {
       const body = renderReport(
         buildReport(input({
-          touched: new Set(["packages/memory"]),
-          coverageBefore: figures([["workspace", 100], ["packages/memory", 5]]),
+          touched: new Set(["runtime/memory"]),
+          coverageBefore: figures([["workspace", 100], ["runtime/memory", 5]]),
           coverage: figures([
             ["workspace", 100 + COVERAGE_COMMENT_LINES],
-            ["packages/memory", 30],
+            ["runtime/memory", 30],
           ]),
         })),
         context,
       )!;
       expect(body).toContain("these source groups the change touched rose");
-      expect(body).toContain("`packages/memory`: 5 to 30, a rise of 25");
+      expect(body).toContain("`runtime/memory`: 5 to 30, a rise of 25");
     });
 
     // Most of a repository-wide movement is often somewhere the change
@@ -1576,11 +1576,11 @@ describe("report", () => {
     it("says so when the rise is not in anything the change touched", () => {
       const body = renderReport(
         buildReport(input({
-          touched: new Set(["packages/memory"]),
-          coverageBefore: figures([["workspace", 100], ["packages/memory", 5]]),
+          touched: new Set(["runtime/memory"]),
+          coverageBefore: figures([["workspace", 100], ["runtime/memory", 5]]),
           coverage: figures([
             ["workspace", 100 + COVERAGE_COMMENT_LINES],
-            ["packages/memory", 5],
+            ["runtime/memory", 5],
           ]),
         })),
         context,
@@ -1593,21 +1593,21 @@ describe("report", () => {
       const body = renderReport(
         buildReport(input({
           touched: new Set([
-            "packages/memory",
-            "packages/ui",
-            "packages/html",
+            "runtime/memory",
+            "runtime/ui",
+            "runtime/html",
             "tasks",
           ]),
           coverageGate: {
             reached: [
-              "workspace-unit/packages/memory",
-              "workspace-unit/packages/ui",
-              "workspace-unit/packages/html",
+              "workspace-unit/runtime/memory",
+              "workspace-unit/runtime/ui",
+              "workspace-unit/runtime/html",
             ],
-            chosen: ["workspace-unit/packages/ui"],
+            chosen: ["workspace-unit/runtime/ui"],
           },
-          coverageBefore: ownTests([[excluded, 10], ["packages/memory", 4]]),
-          coverage: ownTests([[excluded, 14], ["packages/memory", 9]]),
+          coverageBefore: ownTests([[excluded, 10], ["runtime/memory", 4]]),
+          coverage: ownTests([[excluded, 14], ["runtime/memory", 9]]),
         })),
         context,
       )!;

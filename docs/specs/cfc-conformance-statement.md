@@ -4,7 +4,7 @@ The Contextual Flow Control specification in `commonfabric/specs` under `cfc/`
 says, in §18.6.4 of `18-runtime-implementation-profiles.md`, that a deployment
 claiming the reactive-runtime profile MUST document eight things. This document
 is this runtime's answer, one section per item. Each section names the adapter
-code under `packages/runner/src/` that implements the item, by file and
+code under `runtime/runner/src/` that implements the item, by file and
 symbol, and states every known non-conformance with its direction: an
 _over-taint_ refuses or labels more than the specification would, which is the
 fail-closed direction; an _under-taint_ admits or labels less, which is a
@@ -12,7 +12,7 @@ soundness defect. Where neither the code nor a labs document establishes an
 answer, the section says "not established" and what would establish it.
 
 The statement is written against the specification at the commit the spec
-snapshot at `packages/runner/src/cfc/kernel/spec-snapshot.json` records,
+snapshot at `runtime/runner/src/cfc/kernel/spec-snapshot.json` records,
 `0c12ccf3`. It describes the runtime's shipped defaults: the dial values
 `RUNTIME_CFC_DIAL_DEFAULTS` in `cfc/posture-report.ts` applies to every
 `Runtime`, and `presetCfcOptions` in `runtime-presets.ts` pins for every host
@@ -20,7 +20,7 @@ preset. A host that sets a dial lower is described by
 [`cfc-enforcement-matrix.md`](cfc-enforcement-matrix.md) rather than here.
 
 The runtime holds no kernel function yet: every row of
-`packages/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
+`runtime/runner/src/cfc/kernel/manifest.ts` reads `missing`, and the symbols
 named below are the adapters that make each decision today. The procedure for
 changing any of it is
 [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md);
@@ -29,7 +29,7 @@ this document changes in the same pull request as the behavior it describes.
 ## Maintaining this statement
 
 This is a live document pinned to the specs commit
-`packages/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
+`runtime/runner/src/cfc/kernel/spec-snapshot.json` records. It is re-read,
 and changed in the same pull request, whenever an adapter symbol it cites is
 renamed, moved or changes what it decides; whenever a dial default in
 `RUNTIME_CFC_DIAL_DEFAULTS` or a preset's pin moves; whenever a §18.6.4 bullet
@@ -186,7 +186,7 @@ content arrives through ordinary reads. For label views,
 `cfcLabelViewForDereferenceTraces` in `cfc/label-view-state.ts` carry the
 class-less confidentiality of every entry resolving at the slot, wildcard
 templates included, and the render path reads them through
-`cfcLabelViewForResolvedTarget` in `packages/html/src/worker/reconciler.ts`.
+`cfcLabelViewForResolvedTarget` in `runtime/html/src/worker/reconciler.ts`.
 
 **What a link write persists.** `linkSlotLabel` in `cfc/prepare.ts` persists
 at the receiving slot the reference's own label as §8.2.3 and §8.12.8 state
@@ -245,7 +245,7 @@ document claims it, and the following is not established:
 - The remaining §18.7 rows at every boundary: row-set retention under
   §8.17.6, a target changing between verification and commit, deletion and
   inaccessible-target normalization, cross-space multi-hop, and rewrite or
-  removal of a reference. `packages/runner/test/cfc-probe-slot-anchoring.test.ts`
+  removal of a reference. `runtime/runner/test/cfc-probe-slot-anchoring.test.ts`
   covers the "private query selects public targets" case for the flow join,
   dereferenced alone and after resolving the container.
 
@@ -286,7 +286,7 @@ statement.
   form of it: an under-claim of integrity, which §15.1.1 holds sound.
 - The release gates (`verifyInputRequirements` and
   `verifySinkRequestCeilings` in `cfc/prepare.ts`, `readRefusal` in
-  `packages/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
+  `runtime/html/src/worker/display-fit.ts`) evaluate the value-intrinsic
   rules at each location an access consumed and the other rules over the
   join (`evaluateAccessExchange`, and `exchangeEachObservation` in
   `cfc/access-integrity.ts`), per §5.3, §4.6.3 and §8.10.1.1. An observation
