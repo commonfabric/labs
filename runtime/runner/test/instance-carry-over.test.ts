@@ -186,37 +186,12 @@ const NAMED_WITH_SIBLING_NODE_CHILD = parentProgram(
   COUNTER_WITH_NODE,
 );
 
-// `NAMED` under a newer version of `Counter`'s own source.
-const NAMED_WITH_NEWER_COUNTER = parentProgram(
-  [
-    "  const a = Counter({ label: 'a' });",
-    "  return { views: [a], aCount: a.count };",
-  ].join("\n"),
-  `${COUNTER}// A newer version.\n`,
-);
-
 // `DEPLOYED` with a second child of the same pattern, `n`, added after `a`
 // and bound to a `const`.
 const DEPLOYED_WITH_NAMED_ADDED = parentProgram([
   "  const [a] = [Counter({ label: 'a' })];",
   "  const n = Counter({ label: 'n' });",
   "  return { views: [a, n], aCount: a.count, nCount: n.count };",
-].join("\n"));
-
-// The parent as deployed with an `Other` child ahead of two `Counter`
-// children.
-const DEPLOYED_THREE = parentProgram([
-  "  const [o, c1, c2] = [",
-  "    Other({ label: 'o' }),",
-  "    Counter({ label: '1' }),",
-  "    Counter({ label: '2' }),",
-  "  ];",
-  "  return {",
-  "    views: [o, c1, c2],",
-  "    oCount: o.count,",
-  "    c1Count: c1.count,",
-  "    c2Count: c2.count,",
-  "  };",
 ].join("\n"));
 
 describe("instance-carry-over", () => {
