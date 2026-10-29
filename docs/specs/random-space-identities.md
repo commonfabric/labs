@@ -173,7 +173,10 @@ leaves it in place.
 - Deletion is one access-list-only commit, which replaces the access list
   with a tombstone naming the deleting principal. It writes the
   access-control document and never removes it.
-- A Home space is never deleted. Its DID is its user's identity DID.
+- A Home space is never deleted, whoever asks. Its DID is its user's identity
+  DID, so its access list grants its own DID OWNER, and it declares no kind,
+  which is how the Memory server tells it from a self-owned space of a declared
+  kind such as a profile's.
 - From that commit on, wherever the Memory server checks access, the space
   refuses every principal, a deployment's service identities included, and takes
   no further commit, so deletion is not undone. The refusal says that the space

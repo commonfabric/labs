@@ -713,14 +713,14 @@ one by `runtime/memory/test/v2-client-holdings.test.ts`.
 > A commit that replaces a space's ACL document with a tombstone,
 > `{ "deleted": { "by": <principal> } }`, is admitted only if it satisfies
 > INV-12's shape clauses; the tombstone holds nothing else and its `by` is the
-> committing principal; the space is the Home neither of that principal nor of
-> the principal its session's capability resolves to, a Home's DID being its
-> principal's own; and the stored ACL is valid and its one entry is at OWNER and
-> is either the committing principal or the principal the session's capability
-> resolves to through a proof chain. `by` names the committing principal in both
-> cases. Once one is admitted the space is
-> deleted: every command any principal sends it, a service DID's included, is
-> refused, and no commit to it is admitted again, an ACL commit included.
+> committing principal; the space is not a Home, that is, not a space whose
+> stored list grants its own DID OWNER and that declares no kind; and the stored
+> ACL is valid and its one entry is at OWNER and is either the committing
+> principal or the principal the session's capability resolves to through a
+> proof chain. `by` names the committing principal in both cases. Once one is
+> admitted the space is deleted: every command any principal sends it, a service
+> DID's included, is refused, and no commit to it is admitted again, an ACL
+> commit included.
 
 Deleting a space ends it for everyone. It writes the space's ACL document and
 never removes it: a document `delete` of the ACL stays refused under INV-12. The
@@ -729,9 +729,16 @@ remove every other entry, one ordinary ACL commit at a time. What it adds is
 that each other member's loss of access is a commit of its own, made before the
 space is deleted, rather than a side effect of deleting it. A service DID's
 implicit OWNER does not satisfy it: the stored list has to name the principal.
-The Home clause keeps a principal from deleting the space its own identity
-names, which nothing could then replace, whether it acts as itself or through a
-chain.
+The Home clause keeps anyone from deleting a Home, which nothing could replace.
+It turns on the space rather than on who commits, so it holds whether the
+deleting session acts as itself or through a chain. A Home's DID is its user's
+own, so its list grants its own DID OWNER, and it declares no kind; that is the
+test the server already applies when it resolves the `actingAs` binding, which
+takes a space that owns itself and declares no kind for a home. A self-owned
+space that declares a kind, such as a profile's space, which declares
+`profile`, is not a Home, and the chain clause below admits deleting it. The
+kind is read from the space's genesis receipt, which never changes once
+written ([`space-kinds.md`](../../features/space-kinds.md)).
 
 The chain clause serves a self-owned space, whose list names the space's own DID
 at OWNER and whose owner acts through a delegation the space issued. A session
@@ -747,14 +754,17 @@ a clause that required it to would leave any such space impossible to delete.
 Those other holders lose access with no commit of their own first, as they do
 when an owner replaces the list. `by` names the committing principal, not the
 root issuer, so for such a space the tombstone is the one place the identity
-that acted for the space appears.
+that acted for the space appears. The clause counts a `"*"` entry like any
+other, so a self-owned profile's space, whose list also grants `"*"` WRITE, is
+deleted after one ordinary list replacement through the chain removes that
+entry.
 
 The clauses are checked after INV-12's shape clauses, in this order:
 
 | Clause | Rejection |
 | --- | --- |
 | the tombstone holds `by` alone, naming the committing principal | `ProtocolError`: `A tombstone must name the deleting principal and nothing else` |
-| the space is the Home neither of the committing principal nor of the principal its capability resolves to | `AuthorizationError`: `A Home space cannot be deleted` |
+| the space is not a Home: its stored list does not grant its own DID OWNER, or it declares a kind | `AuthorizationError`: `A Home space cannot be deleted` |
 | the stored ACL's one entry is at OWNER, and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
 
 A command sent to a deleted space is refused with an `AuthorizationError`,
@@ -779,7 +789,9 @@ such key left, but a legacy space's key can be recomputed from its name.
 
 Layer: server admission (`#validateAclCommit` and the capability check in
 `runtime/memory/v2/server.ts`, with the ACL state a tombstone gives in
-`readAclState`, and the session's `capabilityPrincipal`, which
+`readAclState`, the home test `#resolveSpaceOwnerBinding` applies, over
+`resolveSpaceOwnerOf()` and the declared kind `#spaceKindOf()` reads, and the
+session's `capabilityPrincipal`, which
 `verifySessionOpenProofs` in `runtime/memory/v2/session-open-auth.ts` sets to a
 verified chain's root issuer); client emission (`writeAcl()` in
 `runtime/runner/src/acl-manager.ts`). The chain clause applies only where the

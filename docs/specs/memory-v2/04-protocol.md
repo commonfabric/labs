@@ -1837,16 +1837,19 @@ there only an entry naming the committing principal admits a deletion. A
 delegation is not an entry in the list, so another holder of one loses access
 with no commit of its own first, as it does when an owner replaces the list; and
 since `by` still names the committing principal, the tombstone is the one place
-such a space records the identity that acted for it. A principal never deletes
-its own Home space, whose DID is the principal's own identity, through a chain
-or without one. From the deletion commit on, the server refuses every command
-any principal sends the space, a service DID's included, with a permanent
-`AuthorizationError` carrying `deleted: true`, revokes the sessions open on it,
-as it revokes those any ACL commit deauthorizes but with the `session/revoked`
-reason `deleted`, and admits no further commit to it, so no principal can undo
-the deletion. A tombstone is not an access list, so a server rolled back to a
-release that does not know tombstones finds the ACL malformed, and refuses the
-space to every principal but a service DID.
+such a space records the identity that acted for it. A self-owned profile's
+space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
+list replacement through the chain before it is deleted. No one deletes a Home
+space, through a chain or without one: a space whose list grants its own DID
+OWNER and that declares no kind, which is how the server already tells a home
+when it resolves the `actingAs` binding. From the deletion commit on, the server
+refuses every command any principal sends the space, a service DID's included,
+with a permanent `AuthorizationError` carrying `deleted: true`, revokes the
+sessions open on it, as it revokes those any ACL commit deauthorizes but with
+the `session/revoked` reason `deleted`, and admits no further commit to it, so
+no principal can undo the deletion. A tombstone is not an access list, so a
+server rolled back to a release that does not know tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
