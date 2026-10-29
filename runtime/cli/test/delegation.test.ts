@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join, resolve } from "@std/path";
 
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   decodeDelegation,
   type DIDKey,
@@ -10,8 +11,13 @@ import {
   issueDelegation,
   verifyDelegation,
 } from "@commonfabric/identity";
+import { isDIDKey } from "@commonfabric/identity/did";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
+import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { Runtime } from "@commonfabric/runner";
+import { StorageManager } from "@commonfabric/runner/storage/v2";
 
+import { delegationsCause } from "../../runner/src/runtime.ts";
 import { parseSpaceOptions } from "../commands/piece.ts";
 import {
   DELEGATED_COMMAND,
@@ -524,6 +530,171 @@ describe("delegation", () => {
           `${path} is not a delegation chain file`,
         );
       });
+    });
+  });
+
+  describe("against a memory server", () => {
+    // A server whose access lists are enforced, a profile space on it that
+    // owns itself and grants nobody else, its owner, whose Home records the
+    // delegation the space issued to it as the runtime records one, and two
+    // keys delegated to in turn. Each `cf` runs as a process of its own
+    // against the server's address.
+    let server: StandaloneMemoryServer;
+    let dir: string;
+    let profile: DIDKey;
+    let profileToOwner: Uint8Array;
+    let keys: Record<"owner" | "agent" | "third", Identity>;
+
+    /** The key file of `name`, written in `beforeEach`. */
+    const keyFile = (name: keyof typeof keys) => join(dir, `${name}.key`);
+
+    /** A new key, written to `name`'s key file. */
+    const newKey = async (name: keyof typeof keys) => {
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(keyFile(name), pkcs8);
+      return await Identity.fromPkcs8(pkcs8);
+    };
+
+    /** Runs `cf` with `args`, then the identity and target flags of `as`. */
+    const cfAs = (as: keyof typeof keys, args: readonly string[]) =>
+      cf([
+        ...args,
+        ...argv`-i ${keyFile(as)} -a ${server.url.href} -s ${profile}`,
+      ]);
+
+    /** The output of a `cf` run, without its colors, as one string. */
+    const textOf = (lines: readonly string[]) =>
+      lines.map(stripAnsi).join("\n");
+
+    beforeEach(async () => {
+      server = StandaloneMemoryServer.start({
+        acl: { mode: "enforce", delegations: true },
+      });
+      dir = await Deno.makeTempDir({ prefix: "cf-delegation-server-" });
+      keys = {
+        owner: await newKey("owner"),
+        agent: await newKey("agent"),
+        third: await newKey("third"),
+      };
+      const owner = keys.owner;
+      const manager = StorageManager.open({
+        as: owner,
+        memoryHost: server.url,
+      });
+      const runtime = new Runtime({
+        apiUrl: server.url,
+        storageManager: manager,
+      });
+      try {
+        const created = await manager.createSelfOwnedSpace({
+          delegateTo: owner.did(),
+        });
+        if (!isDIDKey(created.space)) {
+          throw new Error(`The profile ${created.space} is not a did:key`);
+        }
+        profile = created.space;
+        profileToOwner = created.delegation;
+        const { error } = await runtime.editWithRetry((tx) => {
+          runtime.getHomeSpaceCell(tx).key("defaultPattern").set({
+            profiles: [runtime.getCell(profile, "profile", undefined, tx)],
+          });
+          runtime.getCell(
+            owner.did(),
+            delegationsCause(profile),
+            undefined,
+            tx,
+          ).set({ delegations: [new FabricBytes(profileToOwner)] });
+        });
+        expect(error).toBeUndefined();
+        await runtime.storageManager.synced();
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    afterEach(async () => {
+      await server.close();
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    it("issues the agent a chain behind the delegation the owner's Home records, with which the agent opens the profile it is refused without", async () => {
+      const agentFile = join(dir, "agent.json");
+      const issued = await cfAs(
+        "owner",
+        argv`delegation issue --to ${keys.agent.did()} --out ${agentFile} --json`,
+      );
+      expect(issued.code).toBe(0);
+      expect(JSON.parse(issued.stdout.join("\n"))).toEqual({
+        out: agentFile,
+        space: profile,
+        to: keys.agent.did(),
+        links: 2,
+      });
+      const [chain] = await readDelegationChainFile(agentFile);
+      expect((await decodeDelegation(chain[0])).payload).toMatchObject({
+        iss: profile,
+        aud: keys.owner.did(),
+      });
+
+      const refused = await cfAs("agent", argv`piece ls`);
+      expect(refused.code).not.toBe(0);
+      expect(textOf(refused.stderr)).toContain("lacks READ");
+      const opened = await cfAs(
+        "agent",
+        argv`piece ls --delegations ${agentFile}`,
+      );
+      expect(opened.code).toBe(0);
+    });
+
+    it("lets the agent issue onward from its chain file, and the third key opens the profile with the chain it is handed", async () => {
+      const agentFile = join(dir, "agent.json");
+      const thirdFile = join(dir, "third.json");
+      expect(
+        (await cfAs(
+          "owner",
+          argv`delegation issue --to ${keys.agent.did()} --out ${agentFile}`,
+        )).code,
+      ).toBe(0);
+      const onward = await cfAs(
+        "agent",
+        argv`delegation issue --to ${keys.third.did()} --out ${thirdFile} --delegations ${agentFile}`,
+      );
+      expect(onward.code).toBe(0);
+      const [chain] = await readDelegationChainFile(thirdFile);
+      expect(chain.slice(0, 2)).toEqual(
+        (await readDelegationChainFile(agentFile))[0],
+      );
+      expect(chain).toHaveLength(3);
+
+      const opened = await cfAs(
+        "third",
+        argv`piece ls --delegations ${thirdFile}`,
+      );
+      expect(opened.code).toBe(0);
+    });
+
+    it("fails a command naming a chain file whose chain has expired, naming the file", async () => {
+      const expired = await issueDelegation(keys.owner, {
+        aud: keys.agent.did(),
+        sub: profile,
+        cmd: "/memory",
+        pol: [],
+        exp: Math.floor(Date.now() / 1000) - 1,
+      });
+      const expiredFile = join(dir, "expired.json");
+      await Deno.writeTextFile(
+        expiredFile,
+        encodeDelegationChains([[profileToOwner, expired.bytes]]),
+      );
+
+      const failed = await cfAs(
+        "agent",
+        argv`piece ls --delegations ${expiredFile}`,
+      );
+      expect(failed.code).not.toBe(0);
+      expect(textOf(failed.stderr)).toContain(
+        `Chain 0 of ${expiredFile} cannot be held: no session presents the chain now`,
+      );
     });
   });
 
