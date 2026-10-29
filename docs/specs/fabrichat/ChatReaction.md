@@ -43,14 +43,28 @@ and removed only through its `deleteReaction` stream, on the same surface (see
 
 ## Uniqueness
 
-A message shows at most one reaction per reactor and emoji. The room adds none
-where the sender already has one with that emoji, so adding a reaction that's
-already there, or removing one that isn't, changes nothing, and either can be
-sent again safely. Adding or removing one never changes anyone else's, and two
-people reacting at once both land. Two sessions of one person reacting with one
-emoji at the same moment can each add one; a client tallies by reactor and
-emoji, so the pair shows once, and removing takes the one the room finds. A
-reaction is part of its message, but a separately authorized part: only its
-reactor writes it, and it goes only by its reactor, or out of reach with its
-message when the message is deleted or obliterated (see
-[`ChatMessage`](ChatMessage.md#who-wrote-what)).
+Reaction deduplication and tallying identify a reactor by profile.
+This limits uniqueness to a profile and emoji: one authenticated actor using
+different profiles can appear more than once.
+
+FabriChat's reaction rows identify the viewer's reactions and offer removal
+controls by comparing `reactorProfile` with the viewer's profile. Unlike message
+rights, these controls are based on profile identity. Changing profiles hides
+the removal control for an earlier reaction; selecting another actor's profile
+can offer a removal that the stream refuses.
+
+The room adds none where the sender's profile already has one with
+that emoji, so adding a reaction that's already there, or removing one that
+isn't, changes nothing, and either can be sent again safely. Adding or removing
+one never changes anyone else's, and two people reacting at once both land.
+Two sessions of one person reacting with one emoji at the same moment can each
+add one; a client tallies by profile and emoji, so the pair shows once, and
+removing takes the one the room finds. A reaction is part of its message, but a
+separately authorized part: only its reactor writes it, and it goes only by its
+reactor, or out of reach with its message when the message is deleted or
+obliterated (see [`ChatMessage`](ChatMessage.md#who-wrote-what)).
+
+The `deleteReaction` stream checks the authenticated actor against the reaction's
+`authored-by` attestation. Selecting the same profile as another actor does not
+grant the right to remove their reaction; its author can use this stream to
+remove it after changing profiles.

@@ -7,9 +7,8 @@
  * runtime error, so a refusal that went back to a silent return, or gave
  * another reason, fails it. An act that would change nothing, such as a
  * reaction added twice or a message deleted twice, is no refusal and raises
- * nothing. Alice, Bob and Carol run as this lane's one principal, which holds
- * OWNER in every space it creates, so what tells them apart is their profiles;
- * Carol's has not resolved.
+ * nothing. The profiles here share one authenticated actor; ownership across
+ * actors is exercised by the message and reaction ownership tests.
  */
 import {
   type AddIntegrity,
@@ -104,20 +103,6 @@ export default pattern(() => {
   );
   const bob = FabriChatRoomCore({ myProfile: bobProfile, ...group } as RoomArg);
   const carol = FabriChatRoomCore({ ...group } as RoomArg);
-  // A direct room, whose OWNERs may not obliterate, with a message of
-  // Alice's.
-  const directMessages = Writable.of<MessagesValue>([] as MessagesValue);
-  const direct = {
-    about: { kind: "direct" as const },
-    ownersMayObliterate: false,
-    messages: directMessages,
-  };
-  const aliceDirect = FabriChatRoomCore(
-    { myProfile: aliceProfile, ...direct } as RoomArg,
-  );
-  const bobDirect = FabriChatRoomCore(
-    { myProfile: bobProfile, ...direct } as RoomArg,
-  );
   const curator = FabriChatRoomCore(
     { myProfile: bobProfile, ...group, ownersMayObliterate: true } as RoomArg,
   );
@@ -127,8 +112,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      // Sends: from a profile that hasn't resolved, and with the text where a
-      // room before pushed messages read it (`version.body`), not in `body`.
+      // Sends from an unresolved profile and with text in an invalid field.
       { action: carol.sendMessage, event: typed("Hi"), trustedUi: sendGesture },
       {
         action: alice.sendMessage,
@@ -143,13 +127,7 @@ export default pattern(() => {
       },
       { assertion: assert(() => bodies(messages) === "Hello") },
 
-      // Edits: someone else's message, an event naming no message, and no
-      // text.
-      {
-        action: bob.editMessage,
-        event: { message: first, target: { value: "Bob's words" } },
-        trustedUi: editGesture,
-      },
+      // Edits naming no message or carrying no text.
       {
         action: alice.editMessage,
         event: { target: { value: "Named nothing" } },
@@ -160,14 +138,7 @@ export default pattern(() => {
         event: { message: first, target: { value: "   " } },
         trustedUi: editGesture,
       },
-      // A deletion of someone else's message. Then an edit and a deletion
-      // from a profile that hasn't resolved, which can't tell whose message
-      // it is.
-      {
-        action: bob.deleteMessage,
-        event: { message: first },
-        trustedUi: deleteGesture,
-      },
+      // An edit and a deletion from a profile that has not resolved.
       {
         action: carol.editMessage,
         event: { message: first, target: { value: "Carol's words" } },
@@ -205,14 +176,9 @@ export default pattern(() => {
       },
       { assertion: assert(() => reactionCount(messages) === 1) },
 
-      // Removals: someone else's reaction, from a profile that hasn't
-      // resolved, and an event naming no reaction. Then Bob's own, twice: the
+      // Removals from an unresolved profile and an event naming no reaction.
+      // Then Bob's own, twice: the
       // second names one no longer there, and removes nothing.
-      {
-        action: alice.deleteReaction,
-        event: { message: first, reaction: firstReaction },
-        trustedUi: unreactGesture,
-      },
       {
         action: carol.deleteReaction,
         event: { message: first, reaction: firstReaction },
@@ -294,19 +260,6 @@ export default pattern(() => {
         trustedUi: obliterateGesture,
       },
       { assertion: assert(() => bodies(messages) === "<obliterated>") },
-
-      // In a direct room, Bob can't obliterate Alice's message.
-      {
-        action: aliceDirect.sendMessage,
-        event: typed("Just us"),
-        trustedUi: sendGesture,
-      },
-      {
-        action: bobDirect.obliterateMessage,
-        event: { message: messageOf(directMessages.key(0)) },
-        trustedUi: obliterateGesture,
-      },
-      { assertion: assert(() => bodies(directMessages) === "Just us") },
     ],
     // The reason for each refused act above, in the order the acts run.
     expectRuntimeErrors: [
@@ -314,18 +267,15 @@ export default pattern(() => {
       "Your profile hasn't loaded yet.",
       "This send has no text in `body`, and no attachments.",
       // Edits.
-      "Only its author can edit a message.",
       "That message isn't in this chat.",
       "This edit has no text in `body`.",
-      // The deletion, then the edit and deletion from Carol.
-      "Only its author can delete a message.",
+      // The edit and deletion from Carol.
       "Your profile hasn't loaded yet.",
       "Your profile hasn't loaded yet.",
       // Reactions.
       "Your profile hasn't loaded yet.",
       "A reaction is a single emoji.",
       // Removals.
-      "Only the person who reacted can remove a reaction.",
       "Your profile hasn't loaded yet.",
       "This names no reaction.",
       // The obliteration in a room whose OWNERs may not obliterate.
@@ -334,8 +284,6 @@ export default pattern(() => {
       "That message was deleted.",
       "That message was deleted.",
       "That message was deleted.",
-      // Bob's obliteration in the direct room.
-      "Only its author can remove a message in this chat.",
     ],
   };
 });

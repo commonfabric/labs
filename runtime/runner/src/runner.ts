@@ -1117,7 +1117,8 @@ type UncarriedInstance = { name: string; recordDisagrees?: true };
 
 /**
  * The named instances of `pattern` that `parent` has not yet run under their
- * names, with the parent's recorded `instanceChildren`, or `undefined` when
+ * names, with the parent's recorded manifest and `instanceChildren`, or
+ * `undefined` when
  * there are none, or when the parent's manifest records no positional spot
  * for any of them to carry a child over from.
  */
@@ -1127,6 +1128,7 @@ function pendingInstances(
 ):
   | {
     pending: DerivedInternalCellDescriptor[];
+    manifest: InternalCellDescriptor[];
     recordedChildren: Map<string, NormalizedFullLink>;
   }
   | undefined {
@@ -1143,7 +1145,9 @@ function pendingInstances(
     return name !== undefined && !recordedChildren.has(name) &&
       !recordedNames.has(name);
   });
-  return pending.length === 0 ? undefined : { pending, recordedChildren };
+  return pending.length === 0
+    ? undefined
+    : { pending, manifest, recordedChildren };
 }
 
 /**
@@ -15446,11 +15450,14 @@ export class Runner {
    * pattern the parent last set up gives the same name, where that pattern is
    * loaded in this runtime and names the instance. The pattern last set up is
    * the one the parent's setup record describes, or, with no record of the
-   * current version, the one `patternSetupIdentity` names. Where the record
-   * says that pattern's build numbered the instance's cell otherwise than this
-   * runtime's build of it does, the instance carries nothing over. A child is
-   * carried over by one instance at most, and an instance that finds none
-   * starts fresh.
+   * current version, the one `patternSetupIdentity` names. An instance that
+   * pattern does not name or place, which is new or was positional there, or
+   * whose cell the record says that pattern's build numbered otherwise than
+   * this runtime's build of it does, carries over the one child, among the
+   * positional spots the parent's manifest records, that runs the instance's
+   * own child pattern identity and that no positional node of `pattern` sets
+   * up at its own spot. A child is carried over by one instance at most, and
+   * an instance that finds none starts fresh.
    */
   #planInstanceCarryOver(
     resultCell: Cell<any>,
@@ -15465,7 +15472,7 @@ export class Runner {
     const parent = tx === undefined ? resultCell : resultCell.withTx(tx);
     const found = pendingInstances(parent, pattern);
     if (found === undefined) return { carried, uncarried };
-    const { pending, recordedChildren } = found;
+    const { pending, manifest, recordedChildren } = found;
 
     const claimed = new Set<string>(
       [...recordedChildren.values()].map(documentKey),
@@ -15478,28 +15485,106 @@ export class Runner {
         previous.pattern,
         previous.ref,
       );
+    const nodes = subPatternNodes(pattern);
+    // The instances the exact match does not place, which the match by
+    // pattern identity places where it can.
+    const unmatched: {
+      name: string;
+      module: Module;
+      recordDisagrees?: true;
+    }[] = [];
     for (const descriptor of pending) {
       const name = instanceNameOfPartialCause(descriptor.partialCause)!;
-      if (disagreeing.has(name)) {
-        uncarried.push({ name, recordDisagrees: true });
+      const node = nodes.find((candidate) =>
+        deepEqual(candidate.partialCause, descriptor.partialCause)
+      );
+      if (node === undefined) {
+        uncarried.push({ name });
         continue;
       }
-      // TODO(danfuzz): An instance the pattern last set up does not name,
-      // and every instance where that pattern does not load, starts fresh
-      // here. Matching such an instance by order among that pattern's
-      // positional children, and by its own pattern identity among the
-      // parent's positional children, carries its deployed child over. The
-      // carry-over tests that expect a fresh child for these two cases carry
-      // a `TODO(danfuzz)` naming this one, and change with it.
-      const child = previous === undefined
-        ? undefined
-        : this.#previousInstanceChild(tx, parent, previous.pattern, descriptor);
+      if (disagreeing.has(name)) {
+        unmatched.push({ name, module: node.module, recordDisagrees: true });
+        continue;
+      }
+      if (
+        previous === undefined ||
+        !previous.pattern.derivedInternalCells?.some((candidate) =>
+          deepEqual(candidate.partialCause, descriptor.partialCause)
+        )
+      ) {
+        unmatched.push({ name, module: node.module });
+        continue;
+      }
+      const child = this.#previousInstanceChild(
+        tx,
+        parent,
+        previous.pattern,
+        descriptor,
+      );
       if (child === undefined || claimed.has(documentKey(child))) {
         uncarried.push({ name });
         continue;
       }
       claimed.add(documentKey(child));
       carried.set(name, child);
+    }
+    // A child that a positional node of `pattern` sets up at its own spot,
+    // under that node's own pattern identity, stays that node's child.
+    for (const node of nodes) {
+      if (!isPositionalPartialCause(node.partialCause)) continue;
+      const child = this.#childAtPartialCause(
+        tx,
+        parent,
+        node.module,
+        node.partialCause,
+      );
+      const held = getPatternIdentityRef(child);
+      const own = this.#runtime.patternManager.getArtifactEntryRef(
+        node.module.implementation as Pattern,
+      );
+      if (
+        held !== undefined && own !== undefined && samePatternRef(held, own)
+      ) {
+        claimed.add(documentKey(child.getAsNormalizedFullLink()));
+      }
+    }
+    // An instance the exact match does not place carries over the one child,
+    // among the positional spots the parent's manifest records, whose pattern
+    // identity is the instance's own child pattern identity. A child two
+    // instances would each take goes to neither.
+    const picks = unmatched.map((entry) => ({
+      entry,
+      child: this.#soleRecordedChild(
+        tx,
+        parent,
+        manifest,
+        entry.module,
+        claimed,
+      ),
+    }));
+    for (const { entry, child } of picks) {
+      // TODO(danfuzz): An instance placed by neither the exact match nor
+      // its pattern identity starts fresh here. Matching an instance the
+      // pattern last set up left positional by order among that pattern's
+      // positional children, and taking the child at an instance's own
+      // positional spot where no move shows, carry more deployed children
+      // over. The carry-over tests that expect a fresh child for these cases
+      // carry a `TODO(danfuzz)` naming this one, and change with it.
+      if (
+        child === undefined ||
+        picks.some((other) =>
+          other.entry !== entry && other.child !== undefined &&
+          documentKey(other.child) === documentKey(child)
+        )
+      ) {
+        uncarried.push({
+          name: entry.name,
+          ...(entry.recordDisagrees && { recordDisagrees: true }),
+        });
+        continue;
+      }
+      claimed.add(documentKey(child));
+      carried.set(entry.name, child);
     }
     return { carried, uncarried };
   }
@@ -15594,6 +15679,41 @@ export class Runner {
   }
 
   /**
+   * The one unclaimed child, among the positional spots the parent
+   * `resultCell`'s manifest records, that runs the pattern identity of the
+   * child of `module`; `undefined` when no spot or more than one does.
+   */
+  #soleRecordedChild(
+    tx: IExtendedStorageTransaction | undefined,
+    resultCell: Cell<any>,
+    manifest: readonly InternalCellDescriptor[],
+    module: Module,
+    claimed: ReadonlySet<string>,
+  ): NormalizedFullLink | undefined {
+    const wanted = this.#runtime.patternManager.getArtifactEntryRef(
+      module.implementation as Pattern,
+    );
+    if (wanted === undefined) return undefined;
+    let found: NormalizedFullLink | undefined;
+    for (const entry of manifest) {
+      if (!isPositionalPartialCause(entry.partialCause)) continue;
+      const child = this.#childAtPartialCause(
+        tx,
+        resultCell,
+        module,
+        entry.partialCause,
+      );
+      const ref = getPatternIdentityRef(child);
+      if (ref === undefined || !samePatternRef(ref, wanted)) continue;
+      const link = child.getAsNormalizedFullLink();
+      if (claimed.has(documentKey(link))) continue;
+      if (found !== undefined) return undefined;
+      found = link;
+    }
+    return found;
+  }
+
+  /**
    * The set-up child the instance `descriptor` names sits at under `previous`,
    * the pattern the parent `resultCell` last set up: the child under the
    * positional cause `previous` gives the same instance name.
@@ -15626,9 +15746,10 @@ export class Runner {
   /**
    * Makes what `#planInstanceCarryOver()` reads on `resultCell` local before
    * setup reads it synchronously, and keeps the plan for the pre-sync's node
-   * binding: the pattern the parent last set up, loaded by its identity, and
-   * the children at the positional causes that pattern gives the instances
-   * it names.
+   * binding: the pattern the parent last set up, loaded by its identity, the
+   * children at the positional causes that pattern gives the instances it
+   * names, and the children at every positional spot the parent's manifest
+   * records, which the match by pattern identity reads.
    */
   async #prepareInstanceCarryOver(
     resultCell: Cell<any>,
@@ -15660,10 +15781,26 @@ export class Runner {
     }
     const previous = this.#previouslySetUpPattern(resultCell, pattern)
       ?.pattern;
+    // Each candidate child, once per document. A module changes which
+    // document a cause names only through its target space, a space-root
+    // reservation and its scope, so most modules name the same one, and what
+    // carry-over reads of it is its own metadata, whatever schema it is
+    // synced under.
+    const children = new Map<string, Cell<any>>();
+    const manifest = storedManifestOf(resultCell);
+    for (const { module } of subPatternNodes(pattern)) {
+      for (const entry of manifest) {
+        if (!isPositionalPartialCause(entry.partialCause)) continue;
+        const child = this.#childAtPartialCause(
+          undefined,
+          resultCell,
+          module,
+          entry.partialCause,
+        );
+        children.set(documentKey(child.getAsNormalizedFullLink()), child);
+      }
+    }
     if (previous !== undefined) {
-      // Each candidate child, once per document: what carry-over reads of it
-      // is its own metadata, whatever schema it is synced under.
-      const children = new Map<string, Cell<any>>();
       for (const descriptor of previous.derivedInternalCells ?? []) {
         if (descriptor.legacyPartialCause === undefined) continue;
         const node = subPatternNodes(previous).find((candidate) =>
@@ -15678,8 +15815,8 @@ export class Runner {
         );
         children.set(documentKey(child.getAsNormalizedFullLink()), child);
       }
-      await Promise.all([...children.values()].map((child) => child.sync()));
     }
+    await Promise.all([...children.values()].map((child) => child.sync()));
     const { carried } = this.#planInstanceCarryOver(resultCell, pattern);
     const key = this.#getDocKey(resultCell);
     if (carried.size > 0) {

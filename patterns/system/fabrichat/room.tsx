@@ -30,6 +30,7 @@ import {
   pattern,
   type PerSession,
   type PerUser,
+  principalOf,
   profileOwnerOf,
   SELF,
   spaceAccess,
@@ -56,7 +57,6 @@ import {
   type ParticipantRosterCell,
   rosterProfiles,
 } from "../loom/participants.tsx";
-import { profileKeyOf } from "../private-inbox/private-inbox.tsx";
 import {
   type ShownIn,
   threadExcerpt,
@@ -1577,19 +1577,16 @@ export const FabriChatRoomCore = pattern<
       ...(role === undefined ? {} : { role }),
     };
   });
-  // Every message's rights for the reader, by the rule the handlers admit an
-  // act by, derived once for the whole list from each entry's author and
-  // whether it is live. The reader is the author of a message whose author's
-  // key is the reader's profile's: both are Home's `profileKeyOf()` of the
-  // profile's resolved link, which is what `equals()` compares.
+  // Display rights use the selected profile's owner. Handlers check
+  // the authenticated actor, whose identity is available only in a handler.
   const messageRights = computed((): ChatMessageRights[] => {
     const profile = viewerProfileOf(myProfile);
-    const readerKey = profile === undefined ? undefined : profileKeyOf(profile);
+    const reader = profile === undefined ? undefined : profileOwnerOf(profile);
     return facts.entries.map((entry) => ({
       message: entry.cell,
-      ...(canSend && readerKey !== undefined
+      ...(canSend && reader !== undefined
         ? rightsOf(
-          entry.authorKey === readerKey,
+          principalOf(entry.cell, "authored-by") === reader,
           entry.live,
           entry.authorKey !== undefined,
           kind,
