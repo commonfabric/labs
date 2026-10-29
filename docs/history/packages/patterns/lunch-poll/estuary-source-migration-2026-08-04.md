@@ -9,7 +9,7 @@ reason: "Record of the rehearsal and live source update that moved the Estuary l
 
 Record of a `setsrc` against a populated production space, rehearsed on a clone
 first. The live counterpart is
-[`packages/patterns/lunch-poll/DEPLOY-AND-SHARE.md`](../../../../../packages/patterns/lunch-poll/DEPLOY-AND-SHARE.md).
+[`packages/patterns/lunch-poll/DEPLOY-AND-SHARE.md`](../../../../../patterns/apps/lunch-poll/DEPLOY-AND-SHARE.md).
 
 ## What was changed
 

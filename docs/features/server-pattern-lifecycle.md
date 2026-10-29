@@ -31,7 +31,7 @@ stack in memory and is untouched either way.
 ## The route
 
 Three POST endpoints under `/api/pattern-lifecycle`, mounted by
-`packages/toolshed/routes/pattern-lifecycle/`. Every body carries `space`, the
+`runtime/toolshed/routes/pattern-lifecycle/`. Every body carries `space`, the
 DID of the space acted in. A verb that takes a pattern takes it one of two ways,
 and exactly one: `program` — the program as the client resolved it, every file
 by name, with `main`, an optional `mainExport`, optional `sourceRoots`, and
@@ -193,7 +193,7 @@ runtime seals into a wave cannot mint a durability receipt of its own, so the
 runtime refuses `runSyncedWithCommit` while a seal destination is installed
 unless the caller asks for a direct commit; and the storage manager's full
 `synced()` waits on the wave commit the verb is inside of and would deadlock.
-The served operations in `packages/piece/src/ops/served-lifecycle.ts` therefore
+The served operations in `runtime/piece/src/ops/served-lifecycle.ts` therefore
 compose the lower runner calls — `compileAndSavePattern`, and `setup` with a
 transaction the verb stamps — and mint their receipts from what they wrote; the
 source update is the exception, below.
@@ -201,7 +201,7 @@ source update is the exception, below.
 ### Direct commits
 
 A transaction the serving runtime stamps `directCommit` (a `bookkeeping` run's,
-`ServerRunInfo` in `packages/runner/src/runtime.ts`) does not seal into the
+`ServerRunInfo` in `runtime/runner/src/runtime.ts`) does not seal into the
 wave. The `SpaceServer` commits it to the store on its own, as a derived-class
 commit under the space's lease, serialized with the wave's seals; the
 transaction's `commit().verdict` then resolves with the store's verdict, and the receipt
@@ -287,30 +287,30 @@ it moves onto.
 
 ## Tests
 
-- `packages/runner/test/executor-lifecycle-verbs.test.ts` — the queue: a verb
+- `runtime/runner/test/executor-lifecycle-verbs.test.ts` — the queue: a verb
   activates a sessionless space and resolves once its write is durable, a failed
   run or a failed confirmation rejects and is counted, queued verbs run in
   order, and an inactive server refuses; and a direct commit is durable when its
   `commit().settled` resolves, refuses a document that moved past its stamp, and lets a
   piece it stages derive.
-- `packages/runner/test/runner.test.ts` — `runSyncedWithCommit` issues a receipt
+- `runtime/runner/test/runner.test.ts` — `runSyncedWithCommit` issues a receipt
   while sealing when asked for a direct commit, and leaves the piece unstarted
   when told to.
-- `packages/piece/test/served-lifecycle.test.ts` — the served operations against
+- `runtime/piece/test/served-lifecycle.test.ts` — the served operations against
   a real memory server and serving host, read back through a client runtime
   opened afterwards; for `setsrc`, the successor's authority over the
   predecessor registered on the serving runtime and stored in the closure a
   later runtime reads.
-- `packages/piece/test/ops/pieces-controller.test.ts` — `startPiece()` given
+- `runtime/piece/test/ops/pieces-controller.test.ts` — `startPiece()` given
   `awaitSetupCommit` rejects when storage refuses the start's setup commit,
   and a plain `startPiece()` resolves over the same refusal;
-  `packages/cli/test/piece.test.ts` checks that a served `setsrc` refreshes
+  `runtime/cli/test/piece.test.ts` checks that a served `setsrc` refreshes
   the piece through that option.
-- `packages/toolshed/routes/pattern-lifecycle/` — the writer check against a
+- `runtime/toolshed/routes/pattern-lifecycle/` — the writer check against a
   real ACL document, the status each refusal maps to, and the middleware order
   in front of the handler.
-- `packages/cli/test/pattern-lifecycle.test.ts` — the client's signing and
+- `runtime/cli/test/pattern-lifecycle.test.ts` — the client's signing and
   refusal handling against a stubbed fetch;
-  `packages/cli/test/piece-integration.test.ts` and
-  `packages/cli/integration/integration.sh` drive the real verbs against a
+  `runtime/cli/test/piece-integration.test.ts` and
+  `runtime/cli/integration/integration.sh` drive the real verbs against a
   toolshed in both CI arms.

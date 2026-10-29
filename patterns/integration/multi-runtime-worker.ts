@@ -1,0 +1,1655 @@
+/**
+ * Worker-side runtime host for the multi-runtime harness.
+ *
+ * Each worker owns ONE full client stack — Identity, StorageManager, Runtime,
+ * PiecesController — in its own JS realm, exactly like one browser tab. The
+ * main thread orchestrates via a tiny request/response protocol, whose shapes
+ * and conversions live in `./multi-runtime-ipc.ts`.
+ *
+ * This is a worker entry point: loading it installs a `self.onmessage`
+ * handler. Nothing outside a worker may import a value from here, which is
+ * what the protocol module is for.
+ */
+
+import { cfcAtom } from "@commonfabric/api/cfc";
+import {
+  agentQueueIndexCell,
+  AgentRunRecordSchema,
+} from "@commonfabric/runner/agent-run";
+import { WorkerReconciler } from "@commonfabric/html/worker";
+import { patternCoverageCollector } from "@commonfabric/integration/pattern-coverage";
+import { rowKeyOf } from "@commonfabric/integration/row-key";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  debugVDOMSchema,
+  rendererVDOMSchema,
+} from "@commonfabric/runner/schemas";
+import type { MultiRuntimeCfcOptions } from "./multi-runtime-harness.ts";
+
+import {
+  type FabricValue,
+  isValidFabricValue,
+  toShortQuotedDebugString,
+} from "@commonfabric/data-model";
+import {
+  fabricFromRealmValue,
+  realmFromFabricValue,
+} from "@commonfabric/data-model/codecs";
+import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import type { JSONSchema } from "@commonfabric/api";
+import type {
+  Cell,
+  MemorySpace,
+  NormalizedFullLink,
+} from "@commonfabric/runner";
+import {
+  cellRuntime,
+  convertCellsToLinks,
+  createSpaceRootIfAbsent,
+  isCell,
+  markUiInputBlindWriteTx,
+  parseLink,
+  type RuntimeTelemetry,
+  type RuntimeTelemetryEvent,
+  sendEvent,
+  setBlindStructuralTarget,
+  unmarkUiInputBlindWriteTx,
+} from "@commonfabric/runner";
+import {
+  cfcLabelViewForCell,
+  type CfcWriteFloorMode,
+  hostGestureProvenance,
+  markRendererTrustedEvent,
+  reviewedActionProvenance,
+} from "@commonfabric/runner/cfc";
+import { type DID, Identity } from "@commonfabric/identity";
+import {
+  ensurePrivateInboxOf,
+  inboxPieceLinkSchema,
+  requestPrivateInboxOf,
+  type ShareIntake,
+  startShareIntakeOf,
+} from "@commonfabric/piece/ops";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+} from "@commonfabric/runner/cfc/share-snapshot";
+import {
+  initializePiecesController,
+  type PieceController,
+  PiecesController,
+} from "./pieces-controller.ts";
+import {
+  type CommitRejection,
+  type PieceAddress,
+  type RuntimeDiagnosticsSnapshot,
+  type TrustedUiDescriptor,
+  type WorkerRequest,
+  type WorkerResponse,
+} from "./multi-runtime-ipc.ts";
+import { writeOwnProfile } from "./own-profile-fixture.ts";
+import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  clearTimingMeasures,
+  getLoggerCountsBreakdown,
+  TIMING_MEASURE_PREFIX,
+} from "@commonfabric/utils/logger";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { authenticatedOwnerFromLabel } from "../../runtime/ui/src/v2/components/cf-owner-view/owner-predicate.ts";
+
+let cc: PiecesController | undefined;
+let piece: PieceController | undefined;
+let resultSchema: unknown;
+let resultSinkCancel: (() => void) | undefined;
+let boundedReads = false;
+let watchPaths: readonly (readonly (string | number)[])[] = [[]];
+
+/**
+ * Whether this session holds a rendered view of the piece, as a mounted
+ * browser does: the worker reconciler's recursive demand over `$UI`, its
+ * operations discarded. Without it a session derives only what its watched
+ * paths read, and the view's own derivations never run on this client.
+ */
+let renderView = false;
+
+let viewMountCancel: (() => void) | undefined;
+let viewMounts = 0;
+
+/**
+ * What the rendered view's reconciler reported since `renderErrors` last
+ * read them: a view that fails to mount or to reconcile is otherwise a view
+ * that silently derives nothing, and a measurement over it measures the
+ * data alone.
+ */
+const viewRenderErrors: string[] = [];
+
+/**
+ * The result cells of the pieces other than the attached one that a command
+ * has addressed, keyed by {@link addressKey}. A piece enters on the first
+ * command to reach it, once it has opened, so one that could not be opened is
+ * opened afresh by the next command naming it.
+ */
+const addressedResults = new Map<string, Cell<any>>();
+
+/** The share intakes `startShareIntake` started, which `dispose` stops. */
+const shareIntakes: ShareIntake[] = [];
+
+/**
+ * Every commit this runtime had refused since the last `clearRejections`,
+ * oldest first, or absent when this runtime was not asked to record them. A
+ * caller brackets the window it wants to read: an entry holds one commit's
+ * whole conflict set, so a contention-heavy run left unbracketed accumulates
+ * megabytes of addresses.
+ */
+let rejections: CommitRejection[] | undefined;
+
+/** Record every refused commit `telemetry` reports into {@link rejections}. */
+function recordRejectionsInto(telemetry: RuntimeTelemetry): void {
+  const recording: CommitRejection[] = [];
+  rejections = recording;
+  telemetry.addEventListener("telemetry", (event) => {
+    const marker = (event as RuntimeTelemetryEvent).marker;
+    if (marker.type !== "storage.push.error") return;
+    recording.push({
+      error: marker.error,
+      message: marker.message,
+      reads: marker.reads,
+      writes: marker.writes,
+    });
+  });
+}
+
+/** The recorded refusals, or a loud failure when nothing is recording them. */
+function recorded(): CommitRejection[] {
+  if (!rejections) {
+    throw new Error(
+      "no refused commits are being recorded; create the harness with " +
+        "`recordRejections: true`",
+    );
+  }
+  return rejections;
+}
+
+function controller(): PiecesController {
+  if (!cc) throw new Error("worker not initialized");
+  return cc;
+}
+
+function currentPiece(): PieceController {
+  if (!piece) throw new Error("no piece attached");
+  return piece;
+}
+
+// Read through the pattern's declared result schema, like the UI does —
+// schema defaults and scope annotations only apply on schema-aware reads.
+function result(): Cell<any> {
+  const raw = controller().getResult(currentPiece().getCell());
+  return resultSchema !== undefined ? raw.asSchema(resultSchema as never) : raw;
+}
+
+/** The key {@link addressedResults} holds the piece at `address` under. */
+function addressKey(address: PieceAddress): string {
+  return `${address.space} ${address.id}`;
+}
+
+/**
+ * The value `path` reaches inside `value`, reading through every cell along
+ * it, so a field held as a link resolves to what it links to.
+ */
+function valueAt(value: unknown, path: readonly (string | number)[]): unknown {
+  let current = value;
+  for (const segment of path) {
+    if (isCell(current)) current = current.get();
+    current = (current as Record<string | number, unknown> | undefined)
+      ?.[segment];
+  }
+  return isCell(current) ? current.get() : current;
+}
+
+/**
+ * The result cell of the piece at `address`, or of the attached piece when
+ * `address` is absent, read through its pattern's result schema either way.
+ * Opening a piece other than the attached one starts it in this runtime, as
+ * the attached piece was started, and syncs it from the space it lives in.
+ * Throws the server's refusal when this runtime's identity may not read that
+ * space, on the first command to address the piece and on every later one.
+ */
+async function resultAt(address: unknown): Promise<Cell<any>> {
+  if (address === undefined) return result();
+  const { id, space } = address as PieceAddress;
+  const key = addressKey({ id, space });
+  const { runtime } = controller();
+  // A denied space reads as one holding no data, or as whatever this runtime
+  // held of it before the denial, so the refusal is asked for rather than
+  // waited on.
+  const refusal = () =>
+    runtime.storageManager.authorizationError?.(space as MemorySpace);
+  let opened = addressedResults.get(key);
+  if (!opened) {
+    try {
+      // An explicit open is a host event, as navigation into a refused space
+      // is in the shell. Reconsider its prior denial once; the server still
+      // decides admission, and a client-update refusal remains terminal.
+      await runtime.retrySpaceAccess(space as MemorySpace);
+      opened = await controller().getPieceCell(
+        runtime.getCellFromEntityId(space as MemorySpace, id),
+        true,
+      );
+    } catch (error) {
+      throw refusal() ?? error;
+    }
+    addressedResults.set(key, opened);
+  }
+  const refused = refusal();
+  if (refused) throw refused;
+  return opened;
+}
+
+async function idle(): Promise<void> {
+  await controller().runtime.idle();
+  await controller().synced();
+}
+
+async function attachPiece(next: PieceController): Promise<void> {
+  piece = next;
+  resultSchema = (await next.getPattern() as { resultSchema?: unknown })
+    .resultSchema;
+  resultSinkCancel?.();
+  // Keep only the paths the test observes active. A real UI does not read
+  // private sibling outputs merely because they belong to the same piece.
+  const cancels = watchPaths.map((path) => {
+    let cell = result();
+    for (const segment of path) cell = cell.key(segment);
+    return cell.sink(() => {});
+  });
+  resultSinkCancel = () => {
+    for (const cancel of cancels) cancel();
+  };
+  viewMountCancel?.();
+  viewMountCancel = renderView ? await mountView() : undefined;
+}
+
+/**
+ * Mounts the rendered view the way the browser worker does: under view-scoped
+ * replication the mount is first registered as a view interest on the piece's
+ * result, so the server selects the documents this session receives for it
+ * and the plan admits the actions it may run, and the reconciler's demand
+ * follows; otherwise the reconciler's demand is the whole of the view.
+ */
+async function mountView(): Promise<() => void> {
+  const { runtime } = controller();
+  const onError = (error: Error) => {
+    viewRenderErrors.push(error.message);
+  };
+  const cancelView = runtime.viewScopedReplicationRequested
+    ? await runtime.viewReplication.mount(
+      controller().getResult(currentPiece().getCell()),
+      `harness-view-${++viewMounts}`,
+      onError,
+    )
+    : undefined;
+  const cancelRender = new WorkerReconciler({ onOps: () => {}, onError })
+    .mount(result().key("$UI").asSchema(rendererVDOMSchema));
+  return () => {
+    cancelRender();
+    cancelView?.();
+  };
+}
+
+/**
+ * Test-only network shaping: wraps this realm's WebSocket so that every
+ * inbound frame is handed to `inbound` as a thunk that delivers it, and every
+ * outbound frame to `outbound` as a thunk that sends it. Installed BEFORE the
+ * runtime opens its storage session, the shim reaches the whole client stack.
+ * A second install wraps the first.
+ */
+function installWsShim(
+  inbound: (deliver: () => void) => void,
+  outbound: (send: () => void) => void,
+): void {
+  const Native = globalThis.WebSocket;
+  const Shimmed = function (
+    this: WebSocket,
+    url: string | URL,
+    protocols?: string | string[],
+  ): WebSocket {
+    const ws = protocols !== undefined
+      ? new Native(url, protocols)
+      : new Native(url);
+    const listeners = new Set<EventListenerOrEventListenerObject>();
+    const nativeAdd = ws.addEventListener.bind(ws);
+    const nativeRemove = ws.removeEventListener.bind(ws);
+    ws.addEventListener = (
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      if (type === "message" && listener) listeners.add(listener);
+      else if (listener) nativeAdd(type, listener, options);
+    };
+    // Mirror removal for the diverted message listeners, preserving
+    // WebSocket semantics for callers that unsubscribe/re-subscribe.
+    ws.removeEventListener = (
+      type: string,
+      listener: EventListenerOrEventListenerObject | null,
+      options?: boolean | EventListenerOptions,
+    ) => {
+      if (type === "message" && listener) listeners.delete(listener);
+      else if (listener) nativeRemove(type, listener, options);
+    };
+    let onmessage: ((this: WebSocket, ev: MessageEvent) => unknown) | null =
+      null;
+    Object.defineProperty(ws, "onmessage", {
+      configurable: true,
+      get: () => onmessage,
+      set: (fn) => {
+        onmessage = fn;
+      },
+    });
+    nativeAdd("message", (ev: Event) => {
+      const deliver = () => {
+        onmessage?.call(ws, ev as MessageEvent);
+        for (const listener of listeners) {
+          const fn = typeof listener === "function"
+            ? listener
+            : listener.handleEvent.bind(listener);
+          fn.call(ws, ev);
+        }
+      };
+      inbound(deliver);
+    });
+    const nativeSend = ws.send.bind(ws);
+    ws.send = (data: Parameters<WebSocket["send"]>[0]) => {
+      outbound(() => {
+        try {
+          nativeSend(data);
+        } catch {
+          // Socket closed while the frame was in flight; same as a network drop.
+        }
+      });
+    };
+    return ws;
+  } as unknown as typeof WebSocket;
+  Shimmed.prototype = Native.prototype;
+  for (const k of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] as const) {
+    (Shimmed as unknown as Record<string, unknown>)[k] = Native[k];
+  }
+  globalThis.WebSocket = Shimmed;
+}
+
+/**
+ * Delays every storage WebSocket frame, both directions, by `delayMs`: the
+ * in-process equivalent of the browser-harness WS shim used to reproduce
+ * multiplayer contention (starvation / wedge) without a network.
+ */
+function installWsDelay(delayMs: number): void {
+  if (delayMs <= 0) return;
+  installWsShim(
+    (deliver) => setTimeout(deliver, delayMs),
+    (send) => setTimeout(send, delayMs),
+  );
+}
+
+/** Whether `installInboundHold` has run in this realm. */
+let inboundHoldInstalled = false;
+
+/**
+ * Inbound frames held since a `send` with `thenHoldInbound`, in arrival
+ * order, or absent while inbound frames are delivered as they arrive.
+ */
+let heldInbound: (() => void)[] | undefined;
+
+/**
+ * Makes the storage WebSocket's inbound frames holdable: while a hold is in
+ * effect, frames queue in arrival order, and `releaseInbound` delivers them.
+ * Outbound frames are never held.
+ */
+function installInboundHold(): void {
+  inboundHoldInstalled = true;
+  installWsShim(
+    (deliver) => {
+      if (heldInbound !== undefined) heldInbound.push(deliver);
+      else deliver();
+    },
+    (send) => send(),
+  );
+}
+
+// When the harness process runs under Deno's native OpenTelemetry
+// (`OTEL_DENO=true deno run --unstable-otel …` — the harness has no SDK setup
+// of its own), `@opentelemetry/api`'s globals resolve to Deno's providers, so
+// bridging the runtime's existing telemetry bus exports scheduler spans and
+// ct.* metrics with zero configuration. Inert otherwise: without a registered
+// provider the API hands the bridge no-op instruments. Also flips the
+// preflight-telemetry gate, which is what runtime-client's
+// setTelemetryEnabled(true) does for browser sessions — without it the
+// scheduler.event.preflight markers never fire.
+async function maybeAttachOtelBridge(identity: Identity): Promise<void> {
+  const env = (name: string): string | undefined =>
+    typeof Deno !== "undefined" ? Deno.env.get(name) : undefined;
+  const otelActive = env("OTEL_DENO") === "true" || env("OTEL_DENO") === "1" ||
+    env("OTEL_ENABLED") === "true";
+  if (!otelActive) return;
+  const [{ attachRuntimeTelemetryOtelBridge }, { metrics, trace }] =
+    await Promise.all([
+      // The OpenTelemetry bridge loads only for a run that reports.
+      // deno-lint-ignore cf-imports/no-inline-module-import
+      import("@commonfabric/runner/telemetry-otel-bridge"),
+      // deno-lint-ignore cf-imports/no-inline-module-import
+      import("@opentelemetry/api"),
+    ]);
+  const pieces = controller();
+  const runtime = pieces.runtime;
+  attachRuntimeTelemetryOtelBridge(runtime.telemetry, {
+    tracer: trace.getTracer("ct-runner-bridge"),
+    meter: metrics.getMeter("ct-runner-bridge"),
+    attributes: {
+      "ct.runtime": "harness",
+      "space.did": pieces.getSpace(),
+      "user.did": identity.did(),
+    },
+  });
+  runtime.scheduler.setEventPreflightTelemetryEnabled(true);
+}
+
+/** Finds a rendered native component without inspecting unrelated props. */
+async function elementProps(
+  value: unknown,
+  tag: string,
+): Promise<Cell<unknown> | Record<string, unknown> | undefined> {
+  if (isCell(value)) {
+    await value.pull();
+    return elementProps(value.get(), tag);
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = await elementProps(child, tag);
+      if (found) return found;
+    }
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const node = value as Record<string, unknown>;
+  if ("$UI" in node) return elementProps(node.$UI, tag);
+  const name = isCell(node.name) ? node.name.get() : node.name;
+  if (name === tag) {
+    return isCell(node.props)
+      ? node.props
+      : node.props as Record<string, unknown>;
+  }
+  return elementProps(node.children, tag);
+}
+
+/** Resolves the cell a native component receives through a renderer binding. */
+function componentBinding(
+  props: Cell<unknown> | Record<string, unknown> | undefined,
+  name: string,
+): unknown {
+  if (!isCell(props)) return props?.[name];
+  const prop = props.key(name).asSchema(true);
+  if (name.startsWith("on")) return prop.resolveAsCell();
+  const raw = props.getRawUntyped({ frozen: false }) as Record<string, unknown>;
+  const link = parseLink(raw[name], props.getAsNormalizedFullLink());
+  return link?.id && link.space
+    ? cellRuntime(props).getCellFromLink(link)
+    : prop.resolveAsCell();
+}
+
+/** The trusted host gesture used after the test confirms the exact preview. */
+function shareClick() {
+  const event = {
+    type: "click",
+    provenance: hostGestureProvenance("ShareSnapshot"),
+  };
+  markRendererTrustedEvent(event);
+  return event;
+}
+
+const handlers: Record<
+  string,
+  (args: Record<string, unknown>) => Promise<FabricValue>
+> = {
+  async init(
+    {
+      identity: keyPair,
+      spaceDid,
+      apiUrl,
+      diagnostics,
+      recordRejections,
+      wsDelayMs,
+      inboundHold,
+      cfcWriteFloor,
+      cfc,
+      watchPaths: requestedWatchPaths,
+      renderView: requestedRenderView,
+      clientClass,
+    },
+  ) {
+    const identity = await Identity.fromKeyPair(
+      keyPair as FabricKeyPair,
+    );
+    if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
+    if (inboundHold === true) installInboundHold();
+    boundedReads =
+      (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
+        undefined;
+    if (Array.isArray(requestedWatchPaths)) watchPaths = requestedWatchPaths;
+    renderView = requestedRenderView === true;
+    cc = await initializePiecesController({
+      apiUrl: new URL(apiUrl as string),
+      identity,
+      space: spaceDid as string,
+      ...(cfc as MultiRuntimeCfcOptions | undefined),
+      ...(cfcWriteFloor !== undefined
+        ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
+        : {}),
+      ...(clientClass === "web" ? { clientClass } : {}),
+    });
+    if (recordRejections === true) {
+      recordRejectionsInto(controller().runtime.telemetry);
+    }
+    if (diagnostics === true) {
+      const scheduler = controller().runtime.scheduler;
+      scheduler.enableSettleStats();
+      scheduler.setActionRunTraceEnabled(true);
+      scheduler.setTriggerTraceEnabled(true);
+    }
+    await maybeAttachOtelBridge(identity);
+    return { did: identity.did() };
+  },
+
+  async createPiece({ programPath, rootPath, dataFilePaths, input }) {
+    // Each runtime compiles the pattern in its own worker, so data files have
+    // to cross this boundary with the paths rather than be attached where the
+    // worker was spawned.
+    const program = await resolveLocalProgram(
+      (resolver) => controller().runtime.harness.resolve(resolver),
+      {
+        main: programPath as string,
+        root: rootPath as string,
+        ...(Array.isArray(dataFilePaths)
+          ? { dataFilePaths: dataFilePaths as string[] }
+          : {}),
+      },
+    );
+    const created = await controller().create(program, {
+      input: isObjectNotArray(input) ? input : undefined,
+      start: true,
+    });
+    await attachPiece(created);
+    await idle();
+    return { pieceId: created.id };
+  },
+
+  async openPiece({ pieceId }) {
+    await attachPiece(await controller().get(pieceId as string, true));
+    await idle();
+    return {};
+  },
+
+  async send(
+    { handler, event, trustedUi, idle: doIdle, thenHoldInbound, piece },
+  ) {
+    // Refused before the event goes out, rather than after it has committed.
+    // A send waits on the store confirming the event's commit, which a
+    // runtime holding its inbound frames never hears.
+    if (heldInbound !== undefined) {
+      throw new Error(
+        "cannot send while inbound frames are held; `releaseInbound` first",
+      );
+    }
+    if (thenHoldInbound === true && !inboundHoldInstalled) {
+      throw new Error(
+        "inbound frames are not holdable in this session; create it with " +
+          "`inboundHold: true`",
+      );
+    }
+    if (thenHoldInbound === true && doIdle === false) {
+      throw new Error(
+        "`thenHoldInbound` holds after the event has run, which `idle: false` " +
+          "does not wait for",
+      );
+    }
+    const trusted = trustedUi as TrustedUiDescriptor | undefined;
+    let eventValue: unknown = event ?? {};
+    if (trusted) {
+      // Equivalent of a genuine user interaction on a trusted surface: DOM
+      // provenance plus the renderer-trusted mark the html worker reconciler
+      // applies when delivering real DOM events.
+      eventValue = {
+        type: "click",
+        ...(isObjectNotArray(event) ? event : {}),
+        provenance: reviewedActionProvenance("dom", trusted),
+      };
+      markRendererTrustedEvent(eventValue);
+    }
+    const target = await resultAt(piece);
+    const { error } = await controller().runtime.editWithRetry(
+      (tx) => {
+        target.key(handler as never).withTx(tx).send(eventValue as never);
+      },
+    );
+    if (error) {
+      throw new Error(`send "${handler}" failed: ${error.message}`);
+    }
+    // `idle: false` returns as soon as the event is queued, leaving the action
+    // run + commit in flight — lets a test stack several sends into a deep
+    // optimistic pipeline (the multiplayer-contention shape) instead of
+    // serializing one settled commit per event.
+    if (doIdle !== false) await idle();
+    // Held from the turn the event's run here settles: every consequence the
+    // server has yet to send back, the event's own among them, stays out of
+    // this runtime until `releaseInbound`. The event cannot run here with
+    // inbound frames held, since its run waits on the store confirming its
+    // commit, so the hold can only start after it.
+    if (thenHoldInbound === true) heldInbound = [];
+    return {};
+  },
+
+  // One attempt of the write a UI binding's `set` makes, which the runtime
+  // makes through `Runtime.commitUiCellWrite()` with `blind: true`: ONE fresh
+  // edit tx, marked as a blind leaf write, committed once. Unlike that method,
+  // this does not retry a retryable rejection, keeps no supersede lane, and
+  // sets no renderer-input mark, so that a test sees the outcome of the single
+  // commit (a conflict surfaces as a Result error). A `set` is ALWAYS blind
+  // (last-write-wins), whatever the value's shape. Pass `idle: false` to leave
+  // this runtime un-settled, so its local replica stays stale
+  // (own-write-race repro).
+  async set({ path, value, idle: doIdle, piece }) {
+    const runtime = controller().runtime;
+    let cell = await resultAt(piece);
+    const tx = runtime.edit();
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never) as Cell<any>;
+    }
+    markUiInputBlindWriteTx(tx);
+    // As `commitUiCellWrite()` does, thread the cell's PARENT address as the
+    // structural existence/shape precondition for the blind write.
+    const link = cell.withTx(tx).resolveAsCell().getAsNormalizedFullLink();
+    setBlindStructuralTarget(tx, {
+      id: link.id,
+      space: link.space,
+      scope: link.scope,
+      path: link.path.slice(0, -1),
+    });
+    cell.withTx(tx).set(value as never);
+    unmarkUiInputBlindWriteTx(tx);
+    runtime.prepareTxForCommit(tx);
+    const res = await tx.commit().settled as {
+      error?: { name?: string; message?: string };
+    };
+    if (doIdle !== false) await idle();
+    return {
+      ok: !res?.error,
+      error: res?.error
+        ? { name: res.error.name, message: res.error.message }
+        : undefined,
+    };
+  },
+
+  // A read-modify-write append, NOT blind: it `set`s the whole new array, and
+  // that set's diff read of the current array is kept as a commit
+  // precondition (compare-and-set), so a concurrent push aborts rather than
+  // being clobbered by a blind overwrite. Reads the current value from the
+  // local replica (no pull). This is not the path a UI's `CellHandle.push()`
+  // takes: that sends only the appended members, and the runtime appends them
+  // through `Cell.push()`'s mergeable operation.
+  // TODO(danfuzz): Append through `Cell.push()` as the runtime does, once the
+  // tests that pin this compare-and-set are reworked to that path.
+  async push({ path, value, idle: doIdle, piece }) {
+    const runtime = controller().runtime;
+    let cell = await resultAt(piece);
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never) as Cell<any>;
+    }
+    const currentRaw = cell.get();
+    const current = Array.isArray(currentRaw) ? currentRaw : [];
+    const tx = runtime.edit();
+    cell.withTx(tx).set([...current, value] as never);
+    runtime.prepareTxForCommit(tx);
+    const res = await tx.commit().settled as {
+      error?: { name?: string; message?: string };
+    };
+    if (doIdle !== false) await idle();
+    return {
+      ok: !res?.error,
+      error: res?.error
+        ? { name: res.error.name, message: res.error.message }
+        : undefined,
+    };
+  },
+
+  /** Supplies the reader's test home queue without changing profile selections. */
+  async seedAgentQueue() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("agentQueue").set({ entries: [] });
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    await idle();
+    return true;
+  },
+
+  /** Reads queued requests in this authenticated reader's own test home. */
+  async agentQueue() {
+    const runtime = controller().runtime;
+    const home = runtime.getHomeSpaceCell();
+    const queue = agentQueueIndexCell(runtime, home.space);
+    await queue.pull();
+    const entries = await Promise.all(
+      (queue.get()?.entries ?? []).map(async (entry) => {
+        const run = entry.run.asSchema(AgentRunRecordSchema);
+        await run.pull();
+        const record = run.get();
+        return {
+          state: record.state,
+          inputs: Object.fromEntries(
+            Object.entries(record.inputs).map(([name, cell]) => {
+              const link = cell.resolveAsCell().getAsNormalizedFullLink();
+              return [name, {
+                id: link.id,
+                space: link.space,
+                path: link.path,
+                scope: link.scope,
+              }];
+            }),
+          ),
+        };
+      }),
+    );
+    return { principal: home.space, entries };
+  },
+
+  /** Publishes the owner's explicitly reviewed test shelf to this invitation. */
+  async publishLibrary({ value }) {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const source = runtime.getCell(currentPiece().getCell().space, {
+      testLibrary: crypto.randomUUID(),
+    }, {
+      ifc: { confidentiality: [cfcAtom.user(runtime.userIdentityDID)] },
+    }, tx);
+    source.set(value);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    const prepared = prepareSnapshotShare(source.withTx(undefined), {
+      space: result().key("originator"),
+    });
+    const shared = await commitSnapshotShare(prepared.consent, shareClick());
+    const published = await runtime.commitUiCellWrite(
+      result().key("library", "value"),
+      shared.getAsLink(),
+      { blind: true },
+    );
+    if (published.error) throw published.error;
+    await idle();
+    return { value: prepared.value, audience: prepared.audience };
+  },
+
+  /** Sends through the first rendered matching element's event binding. */
+  async sendRenderedEvent({ tag, event }) {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    const props = await elementProps(view, tag as string);
+    const target = isCell(props)
+      ? props.key(event as string).resolveAsCell()
+      : props?.[event as string];
+    if (!isCell(target)) throw new Error("Rendered event binding is absent");
+    target.send({});
+    await idle();
+    return true;
+  },
+
+  /** Mirrors a reviewed, renderer-trusted snapshot confirmation in this host. */
+  async shareSnapshot() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-share-snapshot");
+    const source = componentBinding(props, "$source");
+    const audience = componentBinding(props, "$recipient");
+    const recommended = componentBinding(props, "$recommended");
+    const received = componentBinding(props, "$received");
+    const eventBinding = componentBinding(props, "oncf-shared");
+    const onShared = isCell(eventBinding)
+      ? eventBinding.resolveAsCell()
+      : eventBinding;
+    if (
+      !isCell(source) || !isCell(audience) || !isCell(recommended) ||
+      !isCell(received) ||
+      !isCell(onShared)
+    ) {
+      throw new Error(
+        `The native sharing surface requires held source, recipient, append targets, and completion bindings: ${
+          JSON.stringify({
+            found: props !== undefined,
+            source: isCell(source),
+            audience: isCell(audience),
+            recommended: isCell(recommended),
+            received: isCell(received),
+            completion: isCell(onShared),
+          })
+        }`,
+      );
+    }
+    const prepared = prepareSnapshotShare(source, { user: audience }, {
+      recommended,
+      received,
+    });
+    const event = shareClick();
+    const shared = await commitSnapshotShare(prepared.consent, event);
+    onShared.send({});
+    await idle();
+    return {
+      value: prepared.value,
+      audience: prepared.audience,
+      link: shared.getAsNormalizedFullLink(),
+    };
+  },
+
+  /** Tries the removed authored acceptance path with an unreviewed draft. */
+  async spoofShareSnapshot() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("sharedSelection").withTx(tx).set({
+      value: result().key("selected"),
+    });
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit().settled;
+    if (written.error) throw written.error;
+    await idle();
+    const sent = await runtime.editWithRetry((eventTx) => {
+      result().key("acceptShared").withTx(eventTx).send({});
+    });
+    if (sent.error) throw sent.error;
+    await idle();
+    return true;
+  },
+
+  /** Tries a raw inbox append using an unreleased private draft book. */
+  async spoofRawInbox() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("received").withTx(tx).push(
+      result().key("selected").key("books", 0),
+    );
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit().settled;
+    if (written.error) throw written.error;
+    await idle();
+    return true;
+  },
+
+  /** Mirrors the native owner's attested presentation check in this worker. */
+  async syncOwnerView() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-owner-view");
+    const originator = componentBinding(props, "$originator");
+    const ownerResult = componentBinding(props, "$result");
+    if (!isCell(originator) || !isCell(ownerResult)) {
+      throw new Error(
+        "The native owner view needs held origin and result bindings",
+      );
+    }
+    const isOwner = authenticatedOwnerFromLabel(
+      cfcLabelViewForCell(originator),
+      controller().runtime.userIdentityDID,
+    );
+    const { error } = await controller().runtime.commitUiCellWrite(
+      ownerResult,
+      isOwner,
+      { blind: true },
+    );
+    if (error) throw error;
+    await idle();
+    return isOwner;
+  },
+
+  /**
+   * Read the value of the cell reached from the piece result by `path`,
+   * through the result schema.
+   *
+   * A schema-aware read hands back a live `Cell` wherever the schema says
+   * `asCell`, and a pattern's result schema says that all over its `[UI]`
+   * tree: every view node's props and children are cells. A live cell belongs
+   * to this realm and cannot cross to the harness, so each one becomes the
+   * link that reaches it — the sigil form `readRaw` leaves nested links in.
+   * Read a path below such a cell, or `readRaw`, to get its contents.
+   *
+   * `doNotConvertCellResults` limits the conversion to the cells the schema
+   * asked for. The same read annotates each container it returns with the cell
+   * it came from, and that annotation is machinery rather than content: the
+   * container's own entries are what the reader asked for.
+   */
+  async read({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
+    return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
+  },
+
+  /**
+   * Resolve once the list the piece result holds at `path`, read as a map
+   * from each element's values at the `keys` paths to its value at the
+   * `valueKey` path, equals `expected`: the same keys and no others, each at
+   * its expected value in its string form. A path descends through a cell
+   * where an element holds one, so a key may name a field of the row's author.
+   * Read at this runtime's quiescence and woken by the cell's own changes.
+   * Visible rows can include speculation; this does not assert that the
+   * serving runtime has committed their consequences.
+   */
+  async waitForRows({ path, piece, keys, valueKey, expected }) {
+    const target = await resultAt(piece);
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    const keyPaths = keys as (string | number)[][];
+    const valuePath = valueKey as (string | number)[];
+    const wanted = expected as Record<string, string>;
+    const wantedKeys = Object.keys(wanted);
+    await waitForCellValue<unknown>(controller().runtime, cell, (value) => {
+      if (!Array.isArray(value) || value.length !== wantedKeys.length) {
+        return false;
+      }
+      const found = new Map<string, string>();
+      for (const element of value) {
+        found.set(
+          rowKeyOf(keyPaths.map((keyPath) => valueAt(element, keyPath))),
+          String(valueAt(element, valuePath)),
+        );
+      }
+      return found.size === wantedKeys.length &&
+        wantedKeys.every((key) => found.get(key) === wanted[key]);
+    }, { stuckLabel: `waitForRows at ${JSON.stringify(path)}` });
+    return {};
+  },
+
+  /**
+   * Read the value of the cell reached from the piece result by `path`,
+   * through `schema` alone. The walk starts from the result's raw link, with
+   * no result schema, and nothing above `path` is pulled, so neither shapes
+   * what `schema` reads; links are converted as `read` converts them.
+   */
+  async readAs({ path, schema, piece }) {
+    const { schema: _resultSchema, ...link } = (await resultAt(piece))
+      .getAsNormalizedFullLink();
+    let cell = controller().runtime.getCellFromLink(link);
+    for (const segment of path as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    cell = cell.asSchema(schema as JSONSchema);
+    await cell.pull();
+    return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
+  },
+
+  /**
+   * Read the RAW stored value of the cell reached from the piece result by
+   * `path` (links resolved to the target cell, NO result-schema shaping) —
+   * for state the declared schema does not carry, e.g. a query result's
+   * `requestHash`. Nested links in the raw value stay sigils.
+   */
+  async readRaw({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
+    return cell.resolveAsCell().getRaw();
+  },
+
+  /** Selects the held profile as this test reader's home profile. */
+  async selectProfile({ path }) {
+    let profile = result();
+    for (const segment of path as (string | number)[]) {
+      profile = profile.key(segment);
+    }
+    profile = profile.resolveAsCell();
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("profiles").set([profile]);
+    defaultPattern.key("defaultProfile").set({ profile });
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit().settled;
+    if (error) throw error;
+    await idle();
+    return {};
+  },
+
+  /** Reads visible VNode children, following the reader's reactive cell views. */
+  async viewText({ path }) {
+    let cell = result();
+    for (const segment of (path ?? ["$UI"]) as (string | number)[]) {
+      cell = cell.key(segment);
+    }
+    cell = cell.asSchema(debugVDOMSchema);
+    await cell.pull();
+    const text = async (value: unknown): Promise<string> => {
+      if (isCell(value)) {
+        await value.pull();
+        return text(value.get());
+      }
+      if (Array.isArray(value)) {
+        return (await Promise.all(value.map(text))).join(" ");
+      }
+      if (value !== null && typeof value === "object") {
+        if ("$UI" in value) return text(value.$UI);
+        if ("children" in value) return text(value.children);
+      }
+      return typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : "";
+    };
+    return text(cell.get());
+  },
+
+  /**
+   * Mint a cell in this runtime's space holding `value`, and answer with the
+   * link that reaches it.
+   *
+   * `cause` names the cell, so two sessions asking for the same cause in the
+   * same space get the same cell and two causes get two cells. The answer is
+   * ordinary fabric data, so a later `send` can carry it into a handler input
+   * declared `asCell` — which is how a headless caller hands a pattern a cell
+   * it did not create, the way a browser viewer's resolved `#profile` reaches
+   * one.
+   */
+  async createCell({ cause, value }) {
+    const runtime = controller().runtime;
+    const space = currentPiece().getCell().getAsNormalizedFullLink().space;
+    const cell = runtime.getCell<FabricValue>(space, cause);
+    const { error } = await runtime.editWithRetry((tx) => {
+      cell.withTx(tx).set(value as never);
+    });
+    if (error) {
+      throw new Error(`createCell failed: ${error.message}`);
+    }
+    await idle();
+    return cell.getAsLink();
+  },
+
+  /**
+   * Mint a profile of this session's own, holding `name`, in a space created
+   * for it that admits this session's identity alone, and answer with the
+   * link that reaches it. Its label attests this identity with
+   * `represents-principal`, as a Fabric profile's does, so a session the
+   * space refuses can't read whom it attests.
+   */
+  async createOwnProfile({ name }) {
+    if (typeof name !== "string") {
+      throw new TypeError("createOwnProfile takes a string name.");
+    }
+    const runtime = controller().runtime;
+    const profile = await writeOwnProfile(
+      runtime,
+      await runtime.createSpace(),
+      "own profile",
+      name,
+    );
+    await idle();
+    return profile.getAsLink();
+  },
+
+  /**
+   * Make this runtime reconsider a space it was refused, as the shell's Retry
+   * does (`Runtime.retrySpaceAccess()`). A permanent refusal is retained
+   * until an ACL notice, the server's `session/admissible` hint, or an
+   * explicit retry; with one connection per space the hint comes on the
+   * connection of another space this runtime holds, if it holds one.
+   */
+  async retrySpaceAccess({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("retrySpaceAccess takes a space DID.");
+    }
+    await controller().runtime.retrySpaceAccess(space as MemorySpace);
+    await idle();
+    return {};
+  },
+
+  /** Whether this runtime retains a refusal of `space`, without opening it. */
+  async spaceRefused({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("spaceRefused takes a space DID.");
+    }
+    await idle();
+    return controller().runtime.storageManager.authorizationError?.(
+      space as MemorySpace,
+    ) !== undefined;
+  },
+
+  /**
+   * Inspect the normalized link (id, space, scope) of a cell reached from
+   * the piece result by `path`, resolving links along the way. Lets tests
+   * assert the storage addressing (e.g. scope) of pattern state.
+   */
+  async link({ path, piece }) {
+    const target = await resultAt(piece);
+    if (!boundedReads) await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    if (boundedReads) await cell.sync();
+    const resolved = cell.resolveAsCell();
+    const link = resolved.getAsNormalizedFullLink();
+    return {
+      id: link.id,
+      space: link.space,
+      scope: link.scope,
+      path: link.path,
+    };
+  },
+
+  // Raw replica read: a storage-transaction read at an explicit address,
+  // bypassing the piece result / schema / link-following path entirely. Lets a
+  // test distinguish "this runtime's replica never received the doc" from
+  // "the doc is in the replica but the schema-aware read fails to resolve it".
+  async rawRead({ id, space, path, scope }) {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const res = tx.read({
+      space: space as never,
+      id: id as never,
+      type: "application/json",
+      path: (path ?? []) as string[],
+      ...(scope !== undefined ? { scope: scope as never } : {}),
+    } as never) as {
+      ok?: { value?: FabricValue };
+      error?: { message?: string };
+    };
+    await tx.commit().settled;
+    return {
+      ok: res.error === undefined,
+      value: res.ok?.value,
+      error: res.error?.message,
+    };
+  },
+
+  /**
+   * Has the host give the Home stand-in reached from the piece result by
+   * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
+   * the identity's Home its own, and answers what the host found, naming an
+   * adopted or refused inbox, and the profile that decided it, by its link.
+   */
+  async ensurePrivateInbox({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const found = await ensurePrivateInboxOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    await idle();
+    const inbox = "inbox" in found
+      ? found.inbox.getAsNormalizedFullLink()
+      : undefined;
+    const profile = "profile" in found
+      ? found.profile?.getAsNormalizedFullLink()
+      : undefined;
+    return {
+      outcome: found.outcome,
+      ...("reason" in found ? { reason: found.reason } : {}),
+      ...(inbox === undefined
+        ? {}
+        : { inbox: { id: inbox.id, space: inbox.space } }),
+      ...(profile === undefined
+        ? {}
+        : { profile: { id: profile.id, space: profile.space } }),
+    };
+  },
+
+  /**
+   * Requests, as a loom daemon does, the private inbox of the Home stand-in
+   * reached from the piece result by `path`, naming its profile reached from
+   * that result by `profile`, and answers with Home's answer, naming the inbox
+   * by its link, and the link that profile's pointer holds once Home has
+   * answered, read after a sync.
+   */
+  async requestPrivateInbox({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const answer = await requestPrivateInboxOf(
+      controller().runtime,
+      home,
+      named,
+    );
+    const pointer = await named.key("inbox").asSchema({
+      type: "object",
+      properties: { piece: inboxPieceLinkSchema },
+    }).pull();
+    const addressOf = (cell: Cell<unknown>) => {
+      const { id, space } = cell.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    return {
+      status: answer.status,
+      ...("inbox" in answer ? { inbox: addressOf(answer.inbox) } : {}),
+      ...(isCell(pointer?.piece) ? { pointer: addressOf(pointer.piece) } : {}),
+    };
+  },
+
+  /**
+   * Sends the request `requestPrivateInbox` does, and answers with the
+   * receipt's address and the document and path it holds a link to, as it
+   * stands once the send has completed, or nothing when it holds no link.
+   */
+  async requestReceipt({ path, profile, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    const cellAt = async (segments: unknown) => {
+      let cell = target;
+      for (const segment of (segments ?? []) as (string | number)[]) {
+        cell = cell.key(segment as never);
+      }
+      await cell.sync();
+      return cell.resolveAsCell();
+    };
+    const home = await cellAt(path);
+    const named = await cellAt(profile);
+    const link = await new Promise<NormalizedFullLink>((resolve, reject) =>
+      sendEvent(home.key("requestPrivateInbox"), { from: named }, (tx) => {
+        const receipt = tx.handlingReceiptLink;
+        if (tx.status().status === "error" || receipt === undefined) {
+          reject(new Error("The request's handling wrote no receipt"));
+        } else resolve(receipt);
+      })
+    );
+    const receipt = controller().runtime.getCellFromLink(link);
+    await receipt.sync();
+    const linked = parseLink(receipt.getRaw());
+    return linked === undefined ? undefined : {
+      receipt: { id: link.id, space: link.space },
+      id: linked.id,
+      path: [...linked.path],
+    };
+  },
+
+  /**
+   * Reads the status the receipt at `receipt` holds, following the link it
+   * holds, as a client of `requestPrivateInbox` reads it.
+   */
+  async readReceiptStatus({ receipt }) {
+    const { id, space } = receipt as { id: string; space: MemorySpace };
+    const cell = controller().runtime.getCellFromLink({
+      id: id as `${string}:${string}`,
+      space,
+      path: [],
+      type: "application/json",
+    } as never, {
+      type: "object",
+      properties: { status: { type: "string" } },
+    });
+    const answer = await cell.pull() as { status?: string } | undefined;
+    return answer?.status;
+  },
+
+  /**
+   * Starts the host's share intake over the Home stand-in reached from the
+   * piece result by `path`, as `PiecesController.startShareIntake()` starts
+   * the identity's own Home's, following it until the session is disposed.
+   * Answers whether it started.
+   */
+  async startShareIntake({ path, piece }) {
+    const target = await resultAt(piece);
+    await target.pull();
+    let cell = target;
+    for (const segment of (path ?? []) as (string | number)[]) {
+      cell = cell.key(segment as never);
+    }
+    await cell.sync();
+    const runtime = controller().runtime;
+    const intake = startShareIntakeOf(
+      runtime,
+      cell.resolveAsCell(),
+      runtime.userIdentityDID,
+    );
+    if (intake !== undefined) shareIntakes.push(intake);
+    return { started: intake !== undefined };
+  },
+
+  /**
+   * Answers what the share intakes `startShareIntake` started last decided
+   * about each row naming `from` and `id`, once each has taken up the changes
+   * it was told of.
+   */
+  async shareIntakeDecisions({ from, id }) {
+    const decisions: string[] = [];
+    for (const intake of shareIntakes) {
+      await intake.idle();
+      for (
+        const decision of intake.accessForTestingOnly.decisionsFor(
+          from as string,
+          id as string,
+        )
+      ) decisions.push(decision);
+    }
+    return { decisions };
+  },
+
+  /**
+   * Links the root of this session's home space to the result of the piece at
+   * `piece`, or of the session's own piece when absent, so that the piece
+   * stands in for the identity's Home: a home target such as `#chatManager`
+   * resolves to its fields.
+   */
+  async linkHomeRoot({ piece }) {
+    const runtime = controller().runtime;
+    const target = await resultAt(piece);
+    const { error } = await runtime.editWithRetry((tx) => {
+      runtime.getHomeSpaceCell(tx).withTx(tx).key("defaultPattern").set(
+        target as never,
+      );
+    });
+    if (error) {
+      throw new Error(`linkHomeRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
+   * Links the root of `space` to a fresh document in it, in place of the root
+   * it had, as any member with `WRITE` there can.
+   */
+  async repointSpaceRoot({ space }) {
+    const runtime = controller().runtime;
+    const elsewhere = runtime.getCell<FabricValue>(
+      space as MemorySpace,
+      crypto.randomUUID(),
+    );
+    const { error } = await runtime.editWithRetry((tx) => {
+      elsewhere.withTx(tx).set({ elsewhere: true });
+      runtime.getSpaceCell(space as MemorySpace).withTx(tx).key(
+        "defaultPattern",
+      ).set(elsewhere as never);
+    });
+    if (error) {
+      throw new Error(`repointSpaceRoot failed: ${error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
+   * Creates a space the way a loom daemon's sidecar creates a social Loom's:
+   * its genesis commit reserves the Loom root at the Loom's publication cause
+   * and declares `spaceKind`, `loom` when absent and no kind for `null`, and
+   * grants `recipient` `WRITE`, as the daemon's offer does. Then provisions
+   * the root, titled `title`, from `system:system/loom/main.tsx` at the host this
+   * runtime reads. Answers the space and the address of its root.
+   */
+  async createLoomSpace({ recipient, spaceKind, title }) {
+    const runtime = controller().runtime;
+    const root = {
+      source: "system:system/loom/main.tsx",
+      sourceRoots: [
+        "system:system/loom/main.test.tsx",
+        "system:system/loom/presentation-refusals.test.tsx",
+        "system:system/loom/multi-user.test.tsx",
+        "system:system/loom/url-view.test.tsx",
+      ],
+      cause: JSON.stringify({
+        purpose: "loom-publication-root",
+        publication: crypto.randomUUID(),
+      }),
+      argument: { title: title as string },
+    };
+    const space = await runtime.createSpace({
+      grants: { [recipient as DID]: "WRITE" },
+      root,
+      ...(spaceKind === null
+        ? {}
+        : { spaceKind: (spaceKind ?? "loom") as string }),
+    });
+    const { error } = await createSpaceRootIfAbsent(runtime, space, root);
+    if (error) throw new Error(`createLoomSpace failed: ${error.message}`);
+    await idle();
+    const { id } = runtime.getCell(space, root.cause).getAsNormalizedFullLink();
+    return { space, root: { space, id } };
+  },
+
+  /** Reads an explicit held address with the same stored-label gate as any Cell. */
+  async readAddress({ link }) {
+    const cell = controller().runtime.getCellFromLink(link as never);
+    await cell.sync();
+    return convertCellsToLinks(
+      cell.asSchema({ ifc: { confidentiality: [] } }).get(),
+    );
+  },
+
+  /**
+   * The rendered view's reconciliation errors since the last call, as
+   * messages, and nothing when the view mounted and reconciled cleanly or
+   * the session holds no view. Drained on each call.
+   */
+  renderErrors() {
+    return Promise.resolve(viewRenderErrors.splice(0) as FabricValue);
+  },
+
+  /**
+   * The timing measures this worker's loggers emitted since the last call,
+   * as the perf-investigation scripts read them, and nothing when emission
+   * is off. Drained on each call, so a capture is the measures of one window.
+   */
+  timingMeasures() {
+    const entries: { name: string; startTime: number; duration: number }[] = [];
+    for (const entry of performance.getEntriesByType("measure")) {
+      if (!entry.name.startsWith(TIMING_MEASURE_PREFIX)) continue;
+      entries.push({
+        name: entry.name,
+        startTime: entry.startTime,
+        duration: entry.duration,
+      });
+    }
+    clearTimingMeasures();
+    return Promise.resolve(entries as unknown as FabricValue);
+  },
+
+  async idle() {
+    await idle();
+    return {};
+  },
+
+  // How many events this runtime fired whose consequence has yet to arrive
+  // back here, or `null` where there is no speculation overlay to track them
+  // (the OFF arm). The handler table's contract is asynchronous.
+  // deno-lint-ignore require-await
+  async outstandingEventCount() {
+    return controller().runtime.speculationOverlay?.pendingIntentCount ?? null;
+  },
+
+  // Deliver the frames held since a `send` with `thenHoldInbound`, in arrival
+  // order, and deliver frames as they arrive from here on.
+  async releaseInbound() {
+    const held = heldInbound;
+    if (held === undefined) throw new Error("inbound frames are not held");
+    heldInbound = undefined;
+    for (const deliver of held) deliver();
+    await idle();
+    return {};
+  },
+
+  // Wait — with no budget of its own — until every event this runtime
+  // fired has reached a terminal consequence (consequenced, errored,
+  // dropped, or refused) that has ARRIVED back here: the overlay's
+  // outstanding-intent set is empty (speculation.md §4 step 2). The
+  // gate a test needs between two CHAINED events whose second served
+  // handler reads state the first one writes: events on DIFFERENT
+  // streams have no cross-stream serve-order guarantee (events.md §2 —
+  // per stream only), so firing the second while the first is in
+  // flight can serve it against a pre-first view; a precondition-
+  // reading handler then no-ops SILENTLY (the 2026-08-22 ON-lane
+  // group-chat flake). Once the first event's consequence has arrived
+  // back, its commit is in the space's history, so any later-fired
+  // event is served against a view that includes it. Nothing bounds
+  // the wait; instant on the OFF arm (no overlay) and when nothing is
+  // outstanding. First-order only, like the count it drains — a
+  // server-side cascade child is no session's intent.
+  async awaitEventConsequences() {
+    const overlay = controller().runtime.speculationOverlay;
+    if (overlay !== undefined) await overlay.waitForIntentQuiescence();
+    return {};
+  },
+
+  // Force an ordered-after round trip on every open space connection, so any
+  // subscription fan-out the server has already sent has been received and
+  // applied by this runtime before returning. The harness's cross-runtime
+  // delivery barrier (see MultiRuntimeHarness.settle).
+  async barrier() {
+    await controller().runtime.storageManager.pullOpenSpacesToHead();
+    return {};
+  },
+
+  async diagnostics() {
+    await idle();
+    const scheduler = controller().runtime.scheduler;
+    return {
+      graph: scheduler.getGraphSnapshot(),
+      settleStatsHistory: scheduler.getSettleStatsHistory(),
+      actionRunTrace: scheduler.getActionRunTrace(),
+      triggerTrace: scheduler.getTriggerTrace(),
+    } satisfies RuntimeDiagnosticsSnapshot;
+  },
+
+  async rejections() {
+    await idle();
+    return { rejections: recorded() };
+  },
+
+  async clearRejections() {
+    await idle();
+    recorded().length = 0;
+    return {};
+  },
+
+  async loggerCounts() {
+    await idle();
+    const counts = getLoggerCountsBreakdown();
+    // The declaration cannot say this is a `FabricValue`: `LoggerBreakdown` is
+    // an index signature intersected with `total`, and `LogCounts` beneath it
+    // is an interface. Nor can `utils` be where that is said, `data-model`
+    // depending on it. So the question is settled by checking, the same way
+    // `assertFabricLoggerFlags()` settles it for the flag breakdown the
+    // runtime connection sends.
+    if (!isValidFabricValue(counts)) {
+      throw new Error(
+        "Cannot send logger counts across this boundary, not being a " +
+          `\`FabricValue\`: ${toShortQuotedDebugString(counts)}`,
+      );
+    }
+    return counts;
+  },
+
+  patternCoverage() {
+    return Promise.resolve(
+      patternCoverageCollector()?.toData() as unknown as FabricValue,
+    );
+  },
+
+  async dispose() {
+    for (const intake of shareIntakes.splice(0)) intake.stop();
+    viewMountCancel?.();
+    viewMountCancel = undefined;
+    resultSinkCancel?.();
+    resultSinkCancel = undefined;
+    piece = undefined;
+    addressedResults.clear();
+    if (cc) {
+      await cc.dispose();
+      cc = undefined;
+    }
+    return {};
+  },
+};
+
+self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+  const { id, cmd, args } = event.data;
+  const respond = (response: WorkerResponse) =>
+    (self as unknown as Worker).postMessage(response);
+  const fail = (error: unknown) =>
+    respond({
+      id,
+      error: error instanceof Error
+        ? `${cmd}: ${error.message}\n${
+          (globalThis as { getStackString?: (error: Error) => string })
+            .getStackString?.(error) ?? error.stack ?? ""
+        }`
+        : String(error),
+    });
+
+  const handler = handlers[cmd];
+  if (!handler) {
+    respond({ id, error: `unknown command "${cmd}"` });
+    return;
+  }
+
+  // Every step from here is answered rather than thrown. A decode refuses a
+  // payload it cannot read and an encode refuses an answer outside the
+  // `FabricValue` domain, and either one thrown out of this listener would
+  // leave the caller waiting on a response that is never coming.
+  let decoded: Record<string, unknown>;
+  try {
+    decoded = fabricFromRealmValue(args) as Record<string, unknown>;
+  } catch (error) {
+    fail(error);
+    return;
+  }
+
+  handler(decoded).then(
+    (ok) => {
+      try {
+        respond({ id, ok: realmFromFabricValue(ok) });
+      } catch (error) {
+        fail(error);
+      }
+    },
+    fail,
+  );
+};
+
+(self as unknown as Worker).postMessage(
+  {
+    ready: true,
+    lifetimeLock: await holdWorkerLifetimeLock(),
+  } satisfies WorkerResponse,
+);

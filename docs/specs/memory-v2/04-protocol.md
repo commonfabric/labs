@@ -428,6 +428,10 @@ interface SessionOpenRequest {
   invocation?: SessionOpenInvocation;
   authorization?: {
     signature: SignatureBytes;
+    // The delegations `invocation.prf` names, as their issuers encoded
+    // them, in the same order (section 4.5.1, "Proof chains"). Outside the
+    // signature: each is signed by its own issuer, and `prf` binds the set.
+    proofs?: Uint8Array[];
   };
   // The client's declared holdings, sent when resuming (see the rules).
   // Outside the signed descriptor: it shapes only what this session is
@@ -483,6 +487,10 @@ interface SessionOpenInvocation {
   challenge: string;
   iat: number;
   exp: number;
+  // The CIDs of `authorization.proofs`, in chain order, on an open that
+  // presents a proof chain (section 4.5.1, "Proof chains"). Inside the
+  // signed invocation, so the chain is bound to the signature.
+  prf?: string[];
 }
 
 interface SessionOpenResult {
@@ -526,7 +534,7 @@ safe integer as diagnostic data. An absent generation stays absent in the
 normalized report, so adding or removing it from a valid signed report fails
 authentication. Client retirement is disabled, and nonzero startup cutoff
 settings are rejected. See
-[client attribution](../../../packages/memory/README.md#client-attribution)
+[client attribution](../../../runtime/memory/README.md#client-attribution)
 for host wiring and configuration constraints.
 
 Rules:
@@ -664,6 +672,7 @@ interface HelloMessage {
     presenceV1?: boolean;
     sessionClose?: boolean;
     connectionAuth?: boolean;
+    sessionOpenProofs?: boolean;
     admissionNotice?: boolean;
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
@@ -840,32 +849,55 @@ interface SessionAdmissible {
 }
 ```
 
-`session/admissible` names a space and a principal that the server refused
-that space on this connection, and that the space's access list now grants
-`READ`. The server records a refusal when it denies a `session.open` for want
-of `READ`, and when an access-list change revokes a session for the same
-reason. An access-list commit that gives a recorded principal `READ` sends the
-notice to the connection the refusal was recorded on, and removes the record,
-so each refusal is told at most once. A grant written to the space's store by
-another process sends it at the space's next refresh turn after the server
-finds the change (see the capability cache under the ACL policy below). A change that leaves the principal
-without `READ` sends nothing, and the notice reaches no other connection.
+`session/admissible` names a space and a principal that the server refused that
+space, on this connection or on a closed one whose refusal it holds (below), and
+that the space's access list now grants `READ`. The server records a refusal
+when it denies a `session.open` for want of `READ`, and when an access-list
+change revokes a session for the same reason. An access-list commit that gives a
+recorded principal `READ` sends the notice to the connection the refusal was
+recorded on, and removes the record, so each refusal is told at most once. A
+grant written to the space's store by another process sends it at the space's
+next refresh turn after the server finds the change (see the capability cache
+under the ACL policy below), or sooner, when the principal's own admitted
+`session.open` of the space finds it and so ends a held record (below). A change
+that leaves the principal without `READ` sends nothing. While the connection the
+refusal was recorded on is open, the notice reaches no other connection.
+
+A refusal outlives the connection it was recorded on. With one connection per
+space, a refused `session.open` closes the connection it was refused on while
+the principal's sessions on other spaces stay open on theirs, so when that
+connection closes the server holds the record for the principal instead. A grant
+then sends the notice to every connection serving the principal: each that holds
+a session opened as it, in any space, under a lease that has not run out, and
+each whose `connection.auth` holds it. A connection is told once however many of
+its principal's refusals the grant answers. The principal is told on whichever
+connection its client still has, and learns nothing it could not learn there by
+opening the session again.
 
 The notice is a hint and grants nothing. A client that acts on it opens the
 session again through ordinary admission, which decides on the access list as
 it then stands. It tells the principal only that its own access changed, and
 when, which opening the session again would also tell it.
 
-A record lives as long as its connection, and ends with an admitted
-`session.open` of the same space and principal, or with a `connection.release`
-of the principal. A connection holds at most 1024 records, and the oldest is
-dropped past that; its principal then learns of a grant only by opening the
-session again. A connection whose peer did not advertise `admissionNotice`
-records nothing, and neither does a routed connection
-([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor
-does a session opened `actingAs: "space-owner"`: only a co-hosted serving
-runtime opens one, and it hears of every access-list commit in process, after
-which its next read of the space opens the session again.
+A record ends with an admitted `session.open` of the same space and principal on
+its connection, or with a `connection.release` of the principal there. A held
+record ends with an admitted `session.open` of its space and principal on any
+connection, which first sends the notice to every other connection serving the
+principal, since one runtime's admission says nothing of another's, and ends
+each of those connections' own record of the space and principal, which that
+notice answers; or once no connection serves its principal, which the server
+checks when a connection closes, a session closes or is revoked, and a
+`connection.release` ends an authentication. A lease running out is not checked
+when it happens, so a held record whose principal only an expired lease serves
+stays until the next of those, and its notice reaches no connection meanwhile. A
+connection holds at most 1024 records, and so do a principal's held records; the
+oldest is dropped past that, and its principal then learns of a grant only by
+opening the session again. A connection whose peer did not advertise
+`admissionNotice` records nothing, and neither does a routed connection
+([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
+a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
+opens one, and it hears of every access-list commit in process, after which its
+next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1902,6 +1934,68 @@ transport.
 Broader ACL-based read opens and non-owner session opens are implemented by the
 server ACL policy when enabled.
 Route-level `Origin` checks remain future work on the v2 websocket route.
+
+#### Proof chains
+
+A `session.open` may present a UCAN proof chain: delegations by which a
+principal the access list grants hands its authority over the space down to
+the principal opening the session. The server verifies the chain and resolves
+the session's capability, READ, WRITE and OWNER alike, from the access list's
+grant to the chain's **root issuer**, while the session's principal stays the
+key that opened it: scope partitions, commit attribution, presence, and
+`session/admissible` are unchanged. [`profile-delegation.md`](../profile-delegation.md)
+is the design this serves, and the delegation's encoding is specified there.
+
+A server advertises `sessionOpenProofs` when its access-list policy admits
+delegations, and refuses every chain when it does not; a client holding a
+chain for the space refuses such a server before opening, rather than open
+under its key's own grant and be refused there. The chain is
+`authorization.proofs`, the delegations' bytes as their issuers encoded them,
+in order from the root. A signed open also names their CIDs in
+`invocation.prf`, in the same order; the invocation is signed, so a relay
+cannot add, drop, or reorder proofs without invalidating the open. An open
+naming a connection-authenticated `principal` carries the proofs alone, since
+proofs are per space and connection authentication is per key.
+
+The server, after authenticating the open's principal, checks that:
+
+- `proofs` is a non-empty array of bytes, and on a signed open `prf` names
+  exactly one CID per proof
+- each proof decodes as a delegation of the shape the design specifies, and
+  its CID, computed over the bytes as received, is the one `prf` names
+- each proof's signature verifies against its own `iss`
+- each proof's `sub` is the requested space
+- each proof's `cmd` covers `/memory/session.open`: it is `/`, `/memory`, or
+  `/memory/session.open`
+- each proof is within its `nbf` and `exp`, to the second: valid from the
+  `nbf` second through the `exp` second, with no clock-skew grace
+- the proofs link, each `aud` being the next proof's `iss`, and the last `aud`
+  is the open's principal
+- the open does not also carry the `actingAs` binding
+
+The structural checks run over the whole chain before any signature is
+verified, and a chain holds at most eight proofs, so a chain that fails them
+costs the server no signature verification. A chain failing any check is
+refused with a permanent `AuthorizationError` naming the step: no fresh
+handshake heals it, and an expired proof is not retriable. The capability is
+then resolved for the root issuer, and an open whose root issuer the access
+list does not grant READ is refused as any ungranted principal is. Such a
+refusal records no admission wait: as with the `actingAs` binding, the grant
+the open would need is not the connection's principal's. The chain is fresh
+per open: a resume presenting none leaves the session to its principal's own
+grant.
+
+The chain is held to after admission as it is at admission. A session opened
+with a chain carries the chain's earliest `exp`; from the second after it,
+the session is refused every request with a permanent
+`AuthorizationError`, is ended with `session/revoked` at the first such
+request, and is sent no `session/effect`, `presence/upsert`, or
+`presence/remove`. That refusal comes before the
+lease's, so a session whose chain and lease have both run out is ended rather
+than told to renew. Nothing renews the chain: a client whose delegation has a
+later expiry opens the session again with a current chain, and every open,
+a reopen on the same connection included, replaces the deadline with the
+chain it presents, or clears it when it presents none.
 
 ### 4.5.2 Future Target
 

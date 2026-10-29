@@ -8,9 +8,9 @@
  * pattern that can ship without an updatability proof.
  */
 
-import { CONNECTOR_PATTERN_SOURCES } from "../packages/connectors/pattern-sources.ts";
+import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 
-export const PATTERNS_DIR = "packages/patterns";
+export const PATTERNS_DIR = "patterns";
 
 /** The recorded contracts of every pattern, one directory per pattern key. */
 export const BASELINES_DIR = `${PATTERNS_DIR}/baselines`;
@@ -40,7 +40,7 @@ export const PATTERN_TREES: readonly PatternTree[] = [
  * Exclusions are expressed relative to the patterns root, not to the repo
  * root, so they hold whatever directory the walk is rooted at — an absolute
  * path, or a relative one from a different working directory. Anchoring them
- * to `packages/patterns/...` instead would silently stop excluding anything
+ * to `patterns/...` instead would silently stop excluding anything
  * the moment a caller passed an absolute directory.
  */
 const NON_PATTERN_FILES = new Set([
@@ -63,7 +63,7 @@ const NON_PATTERN_PREFIXES = [
   "integration/",
   "tools/",
   // The Topics board's command-line client, a Deno program beside the pattern.
-  "topics/tools/",
+  "apps/topics/tools/",
 ];
 
 /** Use repository separators for keys shared across operating systems. */
@@ -73,8 +73,8 @@ export function normalizePatternPath(path: string): string {
 
 /**
  * A pattern's identity in the baseline tree: its path relative to the patterns
- * root, e.g. `system/home.tsx`. This is also the suffix of the toolshed route
- * that serves it (`/api/patterns/system/home.tsx`), which is what the updater
+ * root, e.g. `system/home/home.tsx`. This is also the suffix of the toolshed route
+ * that serves it (`/api/patterns/system/home/home.tsx`), which is what the updater
  * resolves against — so a baseline directory is named by the same string the
  * update mechanism keys on.
  */
@@ -158,7 +158,9 @@ export function isIframeGuestSource(
 /** The file name of a pattern key that lies in an iframe pattern's tree. */
 function iframeFileName(key: string): string | undefined {
   const segments = key.split("/");
-  return segments[0].startsWith("iframe-") ? segments.at(-1) : undefined;
+  return segments.slice(0, -1).some((segment) => segment.startsWith("iframe-"))
+    ? segments.at(-1)
+    : undefined;
 }
 
 export async function collectPatternFiles(

@@ -65,14 +65,14 @@ const BINARY_EXTENSIONS: readonly string[] = [
  */
 const EXEMPT_PATHS: readonly string[] = [
   // A hashing fixture whose CRLF endings are the whole point of the fixture.
-  "packages/content-hash/test/fixture-frank.txt",
+  "base/content-hash/test/fixture-frank.txt",
   // A drawing, stored as tab-separated data.
-  "packages/memory/memory.tldr",
+  "runtime/memory/memory.tldr",
   // Makefiles from a real repository, which the file viewer's tests read.
   // Make starts a recipe line with a tab, and no escape stands in for one.
-  "packages/cli/test/fixtures/view-language/make-infra/after.mk",
-  "packages/cli/test/fixtures/view-language/make-infra/before.mk",
-  "packages/cli/test/fixtures/view-language/make-infra/incomplete.mk",
+  "runtime/cli/test/fixtures/view-language/make-infra/after.mk",
+  "runtime/cli/test/fixtures/view-language/make-infra/before.mk",
+  "runtime/cli/test/fixtures/view-language/make-infra/incomplete.mk",
 ];
 
 /**
@@ -86,7 +86,7 @@ const EXEMPT_PATHS: readonly string[] = [
  */
 const EXEMPT_PREFIXES: readonly string[] = [
   "docs/history/",
-  "packages/static/assets/types/",
+  "base/static/assets/types/",
 ];
 
 /** The one control codepoint a source file may contain. */

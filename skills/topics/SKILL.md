@@ -10,11 +10,11 @@ description: Search, read, file, and update Topics on the Common Fabric team's
 
 Topics is the team's minimal issue tracker: a board piece on Estuary holding one
 Topic piece per issue, each a title, a body, a comment thread, and links.
-`deno task -q topics`, the client in `packages/patterns/topics/tools/`, reads
-and writes it with one command per operation. This file is the map. That
-directory's `README.md` says how the client keeps its local copy and how a write
-is recovered; the pattern's canonical semantics are
-`packages/patterns/topics/README.md`.
+`deno task -q topics`, the client in `patterns/apps/topics/tools/`, reads and
+writes it with one command per operation. This file is the map. That directory's
+`README.md` says how the client keeps its local copy and how a write is
+recovered; the pattern's canonical semantics are
+`patterns/apps/topics/README.md`.
 
 ## Where, and as whom
 
@@ -34,6 +34,7 @@ material.
 | To                            | Run                                                                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------- |
 | find Topics                   | `deno task -q topics search <term>...`                                                 |
+| find Topics like a text       | `deno task -q topics similar < issue.md`                                               |
 | list recent activity          | `deno task -q topics search`                                                           |
 | search titles only            | `deno task -q topics search --in title <term>...`                                      |
 | skip settled Topics           | `deno task -q topics search --exclude '^\[RESOLVED' --exclude '^\[OBSOLETE' <term>...` |
@@ -48,11 +49,14 @@ material.
 
 A search term is a case-insensitive regular expression; a Topic matches when
 every term matches its title, body, a comment, a link, or an author's name, or
-one of those that `--in` names. `--json` on `search` and `show` prints the same
-as JSON for a program to read. Each Topic listed shows when it was last active:
-its age within the last day (`12m ago`, `5h ago`), and otherwise the day in the
-local time zone. Text holding Markdown, backticks, or quotes goes on stdin
-through a quoted here-document (`<<'EOF'`), which the shell leaves unexpanded.
+one of those that `--in` names. `similar` instead ranks Topics by the words
+their titles and bodies share with a whole text, rare words counting most: check
+it with the body of a Topic before filing that Topic. `--json` on `search`,
+`similar`, and `show` prints the same as JSON for a program to read. Each Topic
+listed shows when it was last active: its age within the last day (`12m ago`,
+`5h ago`), and otherwise the day in the local time zone. Text holding Markdown,
+backticks, or quotes goes on stdin through a quoted here-document (`<<'EOF'`),
+which the shell leaves unexpanded.
 
 `deno task -q topics watch` shows the board live on the whole terminal, for a
 person to watch; it takes over the terminal until a key quits it, so do not run

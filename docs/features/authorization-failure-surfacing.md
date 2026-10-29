@@ -40,7 +40,7 @@ is read as permanent — the safe default for an authorization decision.
 
 ## Memory client: terminate rather than loop
 
-`packages/memory/v2/client.ts` acts on the classification during reconnect:
+`runtime/memory/v2/client.ts` acts on the classification during reconnect:
 
 - A **permanent** authorization denial reopening a session terminates just that
   session with the real error, the same way a `session/revoked` does: its
@@ -94,7 +94,7 @@ session replacement. `subscribeSpaceAccessLoss` remains loss-only.
 
 ## Runner storage: record it per space, keep the barrier silent
 
-`packages/runner/src/storage/v2.ts` preserves the failure and exposes it without
+`runtime/runner/src/storage/v2.ts` preserves the failure and exposes it without
 changing what the sync barrier does:
 
 - `toPullError` keeps a real `AuthorizationError` — its name, message, and the

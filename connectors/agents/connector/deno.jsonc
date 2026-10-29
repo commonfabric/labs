@@ -1,0 +1,24 @@
+{
+  "name": "@commonfabric/agents-connector",
+  "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../../tasks/run-member-tests.ts deno-test",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-read --allow-write --allow-run --allow-ffi --allow-sys=homedir,uid"
+  },
+  "exports": {
+    ".": "./mod.ts",
+    "./command-ledger": "./src/command-ledger.ts",
+    "./commands": "./src/commands.ts",
+    "./create-driver": "./src/create-driver.ts",
+    "./drivers/acp": "./src/drivers/acp.ts",
+    "./drivers/claude-agent-sdk": "./src/drivers/claude-agent-sdk.ts",
+    "./drivers/codex-app-server": "./src/drivers/codex-app-server.ts",
+    "./fabric": "./src/fabric.ts",
+    "./fabric-graph": "./src/fabric-graph.ts",
+    "./reconcile": "./src/reconcile.ts",
+    "./types": "./src/types.ts"
+  },
+  "imports": {
+    "@agentclientprotocol/sdk": "npm:@agentclientprotocol/sdk@1.2.1",
+    "@anthropic-ai/claude-agent-sdk": "npm:@anthropic-ai/claude-agent-sdk@0.3.206"
+  }
+}

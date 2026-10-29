@@ -18,8 +18,9 @@
 
 import { walk } from "@std/fs/walk";
 import * as path from "@std/path";
+import { packageDirNamed } from "./package-layout.ts";
 import ports from "@commonfabric/ports" with { type: "json" };
-import { CF_PERMISSION_FLAGS } from "../packages/cli/lib/cf-permissions.ts";
+import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import {
   FragmentWriter,
   preloadArgument,
@@ -31,6 +32,7 @@ import {
 import {
   pinShuffleSeed,
   shuffledPaths,
+  shuffleFlag,
   shuffleSeed,
 } from "@commonfabric/test-support/shuffle";
 import {
@@ -222,7 +224,7 @@ function getCfCommand(rootDir: string): string[] {
     "deno",
     "run",
     ...CF_PERMISSION_FLAGS,
-    path.join(rootDir, "packages/cli/mod.ts"),
+    path.join(rootDir, "runtime/cli/mod.ts"),
   ];
 }
 
@@ -653,20 +655,22 @@ export async function findIntegrationTestFiles(
 }
 
 /**
- * Build the `deno test` arguments for a name-filtered integration run. The
+ * Build the `deno test` command for a name-filtered integration run. The
  * matching files are passed as explicit paths under `relDir`. Deno does not
  * filter explicitly-passed paths through a package `test` config's `exclude`,
  * so they run even where that config drops the `integration/` directory.
- * The run writes its JUnit report into `junitDir`, and carries the
- * registration preload beside it.
+ * The files run in the order `seed` shuffles them into. The run writes its
+ * JUnit report into `junitDir`, and carries the registration preload beside
+ * it.
  */
-export function buildFilteredTestArgs(
+export function filteredTestCommand(
   pkg: string,
   relDir: string,
   testFiles: string[],
   junitDir: string,
+  seed: number,
 ): string[] {
-  const args = ["test", "--no-check", "-A"];
+  const args = ["deno", "test", "--no-check", "-A", shuffleFlag(seed)];
 
   if (pkg === "patterns") {
     args.push("--v8-flags=--max-old-space-size=4096", "--trace-leaks");
@@ -693,7 +697,8 @@ export function buildFilteredTestArgs(
  * `integration/` directory, leaving no modules to run. Explicit file paths skip
  * that filtering, so the files are enumerated here instead of passing a glob.
  * Returns a failing result, without running anything, when no file matches.
- * The report goes into `junitDir`, which the caller has made.
+ * The report goes into `junitDir`, which the caller has made. The files run
+ * in the order of the run's shuffle seed.
  */
 export async function runFilteredIntegration(
   pkg: string,
@@ -718,13 +723,14 @@ export async function runFilteredIntegration(
 
   // Resolved for the same reason as in runPackageIntegration: the child's
   // working directory is the package, not the orchestrator's.
-  const args = buildFilteredTestArgs(
+  const command = filteredTestCommand(
     pkg,
     relDir,
     testFiles,
     path.resolve(junitDir),
+    shuffleSeed(),
   );
-  return await run(["deno", ...args], {
+  return await run(command, {
     cwd: packageDir,
     env,
     inheritStdio: true,
@@ -768,6 +774,17 @@ export async function runPackageIntegration(
   filter?: string,
   only?: PatternTestList,
 ): Promise<PackageOutcome> {
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`Running integration tests for: ${pkg}`);
+  console.log(`${"=".repeat(60)}`);
+  if (pkg === "pattern-tests") {
+    // A selection that names no file ran nothing, which is not a pass.
+    const tests = await runPatternTests(rootDir, junitDir, filter, only);
+    const success = tests.length > 0 &&
+      tests.every(({ record }) => record.outcome !== "fail");
+    return { success, code: success ? 0 : 1, tests };
+  }
+
   const packageDirName = pkg === "cli-fuse"
     ? "cli"
     : pkg === "patterns-reload"
@@ -775,12 +792,8 @@ export async function runPackageIntegration(
     : pkg;
   const packageDir = path.join(
     rootDir,
-    "packages",
-    packageDirName,
+    packageDirNamed(rootDir, packageDirName),
   );
-  console.log(`\n${"=".repeat(60)}`);
-  console.log(`Running integration tests for: ${pkg}`);
-  console.log(`${"=".repeat(60)}`);
 
   const env: Record<string, string> = {
     LOG_LEVEL: "warn",
@@ -829,13 +842,7 @@ export async function runPackageIntegration(
 
   let result: { success: boolean; code: number };
 
-  if (pkg === "pattern-tests") {
-    // A selection that names no file ran nothing, which is not a pass.
-    const tests = await runPatternTests(rootDir, junitDir, filter, only);
-    const success = tests.length > 0 &&
-      tests.every(({ record }) => record.outcome !== "fail");
-    return { success, code: success ? 0 : 1, tests };
-  } else if (pkg === "cli") {
+  if (pkg === "cli") {
     // CLI uses a special shell script
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
     result = await runCommand(
@@ -885,7 +892,7 @@ export async function runPackageIntegration(
   let tests: TestResult[] = [];
   try {
     const spool = recordsDir();
-    const prefix = `packages/${packageDirName}`;
+    const prefix = packageDirNamed(rootDir, packageDirName);
     const report = readJUnit(await Deno.readTextFile(junitPath), {
       kind: "integration",
       scope: pkg,
@@ -953,14 +960,14 @@ Notes:
 
 Environment:
   CF_BINARY      - Path to the cf binary (for pattern-tests target).
-                   Falls back to running packages/cli/mod.ts via deno.
+                   Falls back to running runtime/cli/mod.ts via deno.
 Server ports (with offset):
   Toolshed:  ${ports.toolshed} + offset
   Shell:     ${ports.shell} + offset
 
 Log files (after servers start):
-  packages/shell/local-dev-shell.log
-  packages/toolshed/local-dev-toolshed.log
+  runtime/shell/local-dev-shell.log
+  runtime/toolshed/local-dev-toolshed.log
 `);
 }
 
@@ -1201,8 +1208,8 @@ async function main(): Promise<void> {
       notes,
       logs: "the output above" +
         (serverStarted
-          ? ", packages/toolshed/local-dev-toolshed.log, and " +
-            "packages/shell/local-dev-shell.log"
+          ? ", runtime/toolshed/local-dev-toolshed.log, and " +
+            "runtime/shell/local-dev-shell.log"
           : ""),
       seconds: (Date.now() - startedAt) / 1000,
     };

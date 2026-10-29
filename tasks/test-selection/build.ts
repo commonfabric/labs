@@ -603,9 +603,15 @@ export function readReport(
       // record of the same identity did carry a file, that is the better
       // answer and the unmapped one must not overwrite it: the suites are
       // mid-migration onto the preload, so one identity can have records
-      // of both kinds.
+      // of both kinds. The file moves by the path lines as of the record's
+      // day, as the identity does.
       if (where.place === "main") {
-        const surface = recordSurface(test, record.file);
+        const surface = recordSurface(
+          test,
+          record.file === undefined
+            ? undefined
+            : resolver.resolvePath(record.file, day),
+        );
         const known = surfaces.get(key);
         if (known === undefined || surface.fromFile) {
           surfaces.set(key, surface);
@@ -1115,7 +1121,15 @@ export class Fold {
         })
         .map(([key, state]) => [key, { ...emptyState(), ...state }]),
     );
-    const files = { ...aggregate.files };
+    // Every record the aggregate folded is no newer than the last day it
+    // read, so a path line dated after that day moves the file a record
+    // named the way it would have moved the record's.
+    const files = Object.fromEntries(
+      Object.entries(aggregate.files).map(([key, file]) => [
+        key,
+        resolver.resolvePath(file, aggregate.day),
+      ]),
+    );
     this.#resolved = resolveHistory(this.#states, files, resolver);
     // A record from `main` produces a state and a surface together, and
     // no other record produces either, so an identity the aggregate holds

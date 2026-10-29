@@ -1,0 +1,238 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Entry": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "seat": {
+            "type": "number"
+          },
+          "stances": {
+            "items": {
+              "$ref": "#/$defs/Stance"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seat",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "EntryList": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/dev/test/writer-policy/main.tsx",
+              "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+              "path": [
+                "submit"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/Entry",
+          "ifc": {
+            "confidentiality": [
+              {
+                "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+                "policyDigest": "39BQcD5ozLUYisqgo3YG33-nnOrRv9t8tY1BZcGt9NI",
+                "policyRefKind": "module",
+                "subject": {
+                  "__ctOwningSpace": true
+                },
+                "symbol": "roomRules",
+                "type": "https://commonfabric.org/cfc/atom/Policy"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      },
+      "FrozenEntry": {
+        "$ref": "#/$defs/Entry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+              "policyDigest": "39BQcD5ozLUYisqgo3YG33-nnOrRv9t8tY1BZcGt9NI",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "roomRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/dev/test/writer-policy/main.tsx",
+              "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+              "path": [
+                "freeze"
+              ]
+            }
+          }
+        }
+      },
+      "Rating": {
+        "enum": [
+          "great",
+          "ok",
+          "no"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "entries": {
+        "$ref": "#/$defs/EntryList",
+        "default": []
+      },
+      "frozen": {
+        "$ref": "#/$defs/FrozenEntry",
+        "default": {
+          "digest": "",
+          "seat": -1
+        }
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "dev/test/writer-policy/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Entry": {
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "seat": {
+            "type": "number"
+          },
+          "stances": {
+            "items": {
+              "$ref": "#/$defs/Stance"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "seat",
+          "digest"
+        ],
+        "type": "object"
+      },
+      "Rating": {
+        "enum": [
+          "great",
+          "ok",
+          "no"
+        ]
+      },
+      "Stance": {
+        "properties": {
+          "ratings": {
+            "items": {
+              "$ref": "#/$defs/Rating"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/Entry",
+          "ifc": {
+            "confidentiality": [
+              {
+                "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+                "policyDigest": "39BQcD5ozLUYisqgo3YG33-nnOrRv9t8tY1BZcGt9NI",
+                "policyRefKind": "module",
+                "subject": {
+                  "__ctOwningSpace": true
+                },
+                "symbol": "roomRules",
+                "type": "https://commonfabric.org/cfc/atom/Policy"
+              }
+            ]
+          }
+        },
+        "type": "array"
+      },
+      "freeze": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest"
+        ],
+        "type": "object"
+      },
+      "frozen": {
+        "$ref": "#/$defs/Entry",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "2M6vPmmQmhshBQD2sgS_knMaePozJ0My6JgtX8MvrDY",
+              "policyDigest": "39BQcD5ozLUYisqgo3YG33-nnOrRv9t8tY1BZcGt9NI",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "roomRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      },
+      "submit": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "seat": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "seat"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "entries",
+      "frozen",
+      "submit",
+      "freeze",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}

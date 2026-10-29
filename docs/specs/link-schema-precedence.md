@@ -18,7 +18,7 @@ carries the rollback, authority, and lifecycle detail.
 ## The rule
 
 `combineSchemaForLink(parentSchema, linkSchema)` in
-[`packages/runner/src/traverse.ts`](../../packages/runner/src/traverse.ts)
+[`runtime/runner/src/traverse.ts`](../../runtime/runner/src/traverse.ts)
 resolves every crossing. It is precedence, not intersection:
 
 - A `false` reader schema stays `false`: the reader selected nothing, and
@@ -196,7 +196,7 @@ stored cfc metadata and label views rather than combined schemas.
 
 What replaces combination is the **crossing seam**
 (`markIfcBearingLinkCrossing` in
-[`packages/runner/src/schema-ifc.ts`](../../packages/runner/src/schema-ifc.ts)):
+[`runtime/runner/src/schema-ifc.ts`](../../runtime/runner/src/schema-ifc.ts)):
 a transaction is marked cfc-relevant at every actual link crossing whose
 stored schema carries `ifc` anywhere (`schemaHasIfc`), independently of
 which side won the combination.
@@ -281,35 +281,35 @@ is the authority on the lifecycle and the removal path.
 
 ## Test anchors
 
-`packages/runner/test/combine-schema.test.ts` pins each precedence arm,
+`runtime/runner/test/combine-schema.test.ts` pins each precedence arm,
 the strict-union contrast, the default-inheritance arms, and the rollback
-arm. `packages/runner/test/link-ifc-read-relevance.test.ts` pins the
+arm. `runtime/runner/test/link-ifc-read-relevance.test.ts` pins the
 crossing seam: entry, nested, resolution-chain, handle-hop, cold-closure,
 cold-closure narrowing, narrowed-away-ancestor, proxy, raw-read,
 `set()`-resolution, array-element, and root-asCell-mint marking, plus the
 broken-declaration rule (an unresolvable stored schema selects nothing —
 a shaped reader reads on, and what it legibly declares still marks).
-`packages/runner/test/schema-ifc.test.ts` pins the closure loader's
+`runtime/runner/test/schema-ifc.test.ts` pins the closure loader's
 broken-declaration arms.
-`packages/runner/test/stored-link-schema-precedence.test.ts` pins the
+`runtime/runner/test/stored-link-schema-precedence.test.ts` pins the
 cell-level reads — the entry rule (by path the same as within the array, a
 `false` reader, a renderer's read past a narrower stored view, an agnostic
 reader along a chain, a link into another space) and the four cases that
 keep the stored schema (a stored `false`, both `unknown` directions, the
 rollback), the asCell handle regression, and the inherited default.
-`packages/runner/test/render-read-link-schema.test.ts` pins a render read
-under the entry rule, `packages/html/test/in-process-link-schema.test.ts`
+`runtime/runner/test/render-read-link-schema.test.ts` pins a render read
+under the entry rule, `runtime/html/test/in-process-link-schema.test.ts`
 the reconciler's root mount, and
-`packages/runner/test/view-render-reads.test.ts` the walk of a view's roots.
-`packages/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
+`runtime/runner/test/view-render-reads.test.ts` the walk of a view's roots.
+`runtime/runner/test/cross-space-cid-schema.test.ts` pins the crossing's
 recomposition route by route, and
-`packages/patterns/collection-naming/board.test.tsx` pins a lift's view
+`patterns/product/collection-naming/board.test.tsx` pins a lift's view
 holding a `Record<string, unknown>` map's members as references.
-`packages/runner/test/reader-schema-precedence-config.test.ts`
+`runtime/runner/test/reader-schema-precedence-config.test.ts`
 and the ambient-flag family in
-`packages/runner/test/experimental-options.test.ts` pin the
+`runtime/runner/test/experimental-options.test.ts` pin the
 construction-set ambient lifecycle (no teardown reset);
-`packages/runner/test/runtime-presets.test.ts` pins adoption and the
+`runtime/runner/test/runtime-presets.test.ts` pins adoption and the
 legacy-absent rule. The traverse-replay goldens carry the
 serving-behavior consequences.
 

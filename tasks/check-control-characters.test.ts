@@ -111,17 +111,17 @@ describe("check-control-characters", () => {
       for (
         const path of [
           "tasks/a.ts",
-          "packages/ui/b.tsx",
+          "runtime/ui/b.tsx",
           "x.js",
           "deno.jsonc",
           "scripts/run.sh",
           ".github/workflows/ci.yml",
-          "packages/fuse/verify-structs.c",
+          "runtime/fuse/verify-structs.c",
           "docs/specs/memory-v2/tla/PendingStacks.tla",
-          "packages/shell/public/manifest.webmanifest",
+          "runtime/shell/public/manifest.webmanifest",
           "tasks/test-identity-aliases/tags.test.ts.jsonl",
-          "packages/shell/public/assets/cf.svg",
-          "Dockerfile.toolshed",
+          "runtime/shell/public/assets/cf.svg",
+          "runtime/toolshed/Dockerfile",
           "docs/README.md",
         ]
       ) {
@@ -140,11 +140,11 @@ describe("check-control-characters", () => {
     it("exempts the named data fixtures and the trees it may not reach", () => {
       for (
         const path of [
-          "packages/content-hash/test/fixture-frank.txt",
-          "packages/memory/memory.tldr",
-          "packages/cli/test/fixtures/view-language/make-infra/after.mk",
+          "base/content-hash/test/fixture-frank.txt",
+          "runtime/memory/memory.tldr",
+          "runtime/cli/test/fixtures/view-language/make-infra/after.mk",
           "docs/history/specs/pattern-id-retirement.md",
-          "packages/static/assets/types/es2023.d.ts",
+          "base/static/assets/types/es2023.d.ts",
         ]
       ) {
         expect(isGovernedPath(path)).toBe(false);
@@ -154,7 +154,7 @@ describe("check-control-characters", () => {
     it("governs a text file that shares a name with an exempt one", () => {
       // The fixture is exempt by PATH, not by name: another `fixture-frank.txt`
       // elsewhere is ordinary tracked text.
-      expect(isGovernedPath("packages/other/fixture-frank.txt")).toBe(true);
+      expect(isGovernedPath("runtime/other/fixture-frank.txt")).toBe(true);
     });
   });
 

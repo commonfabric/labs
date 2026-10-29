@@ -57,7 +57,7 @@ walking links, not by building values.
 sending while nothing reads the socket; the server answers each frame within
 a second and the client reads the answer minutes later. The serving scheduler
 has a cooperative macrotask yield for exactly this shape
-(`packages/runner/src/scheduler/cooperative-yield.ts`); the resume path has none.
+(`runtime/runner/src/scheduler/cooperative-yield.ts`); the resume path has none.
 
 ## Stages
 
@@ -70,14 +70,14 @@ stage 0 is what every later stage reports against.
       each holding a nested badge — against an in-process memory server,
       demands every row, and counts the pre-sync's node plans against the
       `(instance, node)` pairs the tree holds
-      (`packages/runner/test/resume-presync-plan-count.test.ts`). The count
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`). The count
       reaches the test through `Runner.accessForTestingOnly.presyncPlanRecorder`.
       The ratio is one: the root's waves plan each pair once, and a child
       whose family is whole does not name it again. What the field load pays
       is the next stage's hold, which this shape does not provoke because
       the root's own run computes the derived argument before the rows
       start.
-- [ ] A benchmark in `packages/runner/test/` that resumes the same shape at
+- [ ] A benchmark in `runtime/runner/test/` that resumes the same shape at
       sizes 10, 20, and 40 rows and reports wall time, `#nodePlan` calls,
       and watch roots requested, with the fixture outside the timed window
       (`docs/development/BENCHMARKS.md`, "Time only the operation the name promises").
@@ -102,19 +102,19 @@ Exit: a number per stage that a pull request can quote.
 - [x] `Runtime.getImmutableCell()` mints the value as the caller held it,
       references included. A link inside a snapshot minted from a value no
       space has stored (`mintedFromUnstoredValue`,
-      `packages/runner/src/immutable-cell.ts`) names a closure the realm
+      `runtime/runner/src/immutable-cell.ts`) names a closure the realm
       registry holds, since the registry minted the reference, and the
       traversal's loader takes a document the registry holds from there for
       such a document rather than reading the space the snapshot is
-      addressed in (`loadSchemaDocClosure`, `packages/runner/src/traverse.ts`);
+      addressed in (`loadSchemaDocClosure`, `runtime/runner/src/traverse.ts`);
       a document the registry lacks is read from the space, as for a stored
       document (`docs/specs/content-addressed-schemas.md`, "Space
       boundaries").
 - [x] Tests: the inline form is the same object on a second call for the
-      same reference (`packages/runner/test/link-utils.test.ts`); an
+      same reference (`runtime/runner/test/link-utils.test.ts`); an
       immutable cell keeps each link's schema as the reference the caller
       held, and a read through it resolves the linked value
-      (`packages/runner/test/runtime.test.ts`).
+      (`runtime/runner/test/runtime.test.ts`).
 - [x] The field check, three interleaved pairs on the thirty-message room's
       reload: `getImmutableCell` from 3.5–6.2% of the worker's busy samples
       to 1.1–2.6%, the hashing under it (`#findSnapshot`) from 2.1–3.6% to
@@ -143,7 +143,7 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       stream, whose document holds no value and whose sends are events; a
       piece's own streams are still probed with its owned cells.
 - [x] Tests, red first, in
-      `packages/runner/test/piece-named-before-start.test.ts`: a piece
+      `runtime/runner/test/piece-named-before-start.test.ts`: a piece
       whose family is local runs without holding when its caller's argument
       links to a derived cell nothing has computed, to another piece's
       stream, or to a local document whose content links to an absent one.
@@ -159,7 +159,7 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       `docs/plans/presync-from-node-plans.md` stage 5): the pre-sync's
       plans are the plans a name-sync would build. A tree whose rows
       receive a link to a document nothing has written resumes with one
-      name-sync (`packages/runner/test/resume-presync-plan-count.test.ts`).
+      name-sync (`runtime/runner/test/resume-presync-plan-count.test.ts`).
 - [x] The field check again: `start/syncCellsForRunningPattern` on the
       room from 32 to 2, `resumeCellSync` spans from 502 to 204,
       `resumeCrossSpaceRead` spans from 2,586 to 101, and the render's user
@@ -185,7 +185,7 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       a per-user cell with a default; a tree named by a synced run in a
       caller's transaction, which seeds nothing, has each row's per-user
       default seeded by the row's own start
-      (`packages/runner/test/resume-presync-plan-count.test.ts`).
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`).
 - [x] The field check, on a thirty-message room of sixty row instances
       whose rows each own one derived cell nothing demands, five reloads
       each way from copies of one store: `start/syncCellsForRunningPattern`
@@ -212,7 +212,7 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       1,983 list-child syncs, 299 cell syncs where there were 776, and the
       pre-sync's share of the worker's CPU from 17.6% to under 4% (a tree
       whose rows own a session-scoped cell resumes with one name-sync,
-      `packages/runner/test/resume-presync-plan-count.test.ts`). The
+      `runtime/runner/test/resume-presync-plan-count.test.ts`). The
       record is
       [`../history/development/performance/2026-10-16-fabrichat-room-cold-load-phases.md`](../history/development/performance/2026-10-16-fabrichat-room-cold-load-phases.md).
 - [x] An absence the store read-through confirmed holds no start, named
@@ -247,13 +247,13 @@ Exit: a plan's inputs document is hashed over its links, not its schemas.
       against 3.1, 4.3 and 2.9 s). A tree whose rows owe a per-session default,
       named by a synced run in a caller's transaction on a replica with the
       read-through, pays no name-sync for any row
-      (`packages/runner/test/resume-presync-plan-count.test.ts`). The record is
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`). The record is
       [`../history/development/performance/2026-10-23-start-gate-confirmed-absence.md`](../history/development/performance/2026-10-23-start-gate-confirmed-absence.md).
 - [ ] An instance the pre-sync did not name is still held on a derived
       cell that holds no value: one a caller's `run()` reaches, or one
       whose pre-sync round had a sync that failed. Taking the record there
       too changes what a start does when a policy manifest cannot be
-      loaded. In `packages/runner/test/cfc-policy-manifest-shared-install.test.ts`,
+      loaded. In `runtime/runner/test/cfc-policy-manifest-shared-install.test.ts`,
       "starts it again for the participant who set it up when the manifest
       cannot be loaded", the piece's per-user part is held on its derived
       cell `known`, which nothing has computed, so the part starts in a
@@ -277,7 +277,7 @@ could deliver is missing.
       needs *n*+1. Each read is a `start/resumeCrossSpaceRead` span.
 - [x] Test, red first: four lifts of which one reads through a link into a
       second space cost five reads
-      (`packages/runner/test/resume-node-plan-presync.test.ts`).
+      (`runtime/runner/test/resume-node-plan-presync.test.ts`).
 - [x] The server reports the links its walk follows out of the space in
       the frame that answers the watch (`crossings` on the session sync
       payload, `docs/specs/memory-v2/04-protocol.md`, advertised as
@@ -310,7 +310,7 @@ Exit: the cross-space pass costs in proportion to the links that cross.
       planning transaction and keeps its shape.
 - [x] Test, red first: with a zero slice, a timer due before the resume
       starts fires before the wave's last sync is issued
-      (`packages/runner/test/resume-presync-plan-count.test.ts`).
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`).
 - [ ] The frame log on the field check shows no receive silence longer than
       the longest server operation.
 
@@ -326,7 +326,7 @@ Exit: a load's watch responses are read as they arrive.
       says a round reads only the plans whose reads left a load pending.
 - [x] `docs/specs/memory-v2/04-protocol.md` says nothing about `data:`
       documents carrying schemas inline, and stays silent; the comment at
-      `packages/runner/src/link-utils.ts` that did is gone with stage 1.
+      `runtime/runner/src/link-utils.ts` that did is gone with stage 1.
 
 ### Stage 6. The first run and the render
 
@@ -338,28 +338,28 @@ where the pre-sync was no longer the whole cost.
 - [x] The scheduler's topological sort indexes the work set's readers by
       the document they read, so a writer's ordering edges cost the readers
       of what it writes rather than the whole set
-      (`packages/runner/src/scheduler/topology.ts`).
+      (`runtime/runner/src/scheduler/topology.ts`).
 - [x] The sort's cycle break chooses from a heap of candidates kept under
       the break's preference, so a break does not rank the unplaced actions
-      again (`packages/runner/src/scheduler/topology.ts`).
+      again (`runtime/runner/src/scheduler/topology.ts`).
 - [x] No computation of the room or of a message row is a declared writer
       of the room's `messages`, so none orders against another through the
       list. The room derives what a row shows of the list as a whole once,
       each row reads its own message's part, and the helpers a computation
       hands the list take it as a `Cell`, which declares no write
-      (`packages/patterns/fabrichat/room.tsx`, `message-row.tsx`,
+      (`patterns/system/fabrichat/room.tsx`, `message-row.tsx`,
       `room-records.tsx`).
 - [x] The sort breaks a cycle at one of its own members: a member of a
       strongly connected component of the unplaced actions that no unplaced
       action outside it feeds, so an action that only reads from a cycle is
       placed after what it reads (`../specs/scheduler-v2/README.md` §7.4,
-      `packages/runner/src/scheduler/topology.ts`). The thirty-row room's
+      `runtime/runner/src/scheduler/topology.ts`). The thirty-row room's
       counts are in
       [`../history/development/performance/2026-10-12-cycle-break-room-counts.md`](../history/development/performance/2026-10-12-cycle-break-room-counts.md).
 - [x] CFC commit preparation indexes a transaction's write-policy inputs by
       the document they name, once per transaction, so every check a
       written path makes reads the inputs about its document
-      (`packages/runner/src/cfc/prepare.ts`).
+      (`runtime/runner/src/cfc/prepare.ts`).
 - [x] A boundary pass holds one view of the transaction's reads, the
       stored envelope behind each and the labeled set a protected entry
       quantifies over, built once and reused across the pass's targets
@@ -379,9 +379,9 @@ where the pre-sync was no longer the whole cost.
       binds, so every such narrowing is one `schemaAtPath` keeps.
       `factoryFromPattern` takes the two schemas deep-frozen from the
       sanitizer (`sanitizeAndFreezeSchemaForLinks`,
-      `packages/runner/src/link-utils.ts`), and the builder's binding walk
+      `runtime/runner/src/link-utils.ts`), and the builder's binding walk
       freezes the schemas of each pattern graph it rebuilds
-      (`packages/runner/src/builder/to-encodable-form.ts`). Each schema
+      (`runtime/runner/src/builder/to-encodable-form.ts`). Each schema
       stays an object of its own and is not the interned instance:
       `createRef()` hashes an object it reaches twice in one cause as
       `null`, so two positions of a graph sharing one schema object derive
@@ -397,20 +397,20 @@ where the pre-sync was no longer the whole cost.
       the content is already interned. The read schema a handler plan's
       inputs are synced under is kept per handler schema, which is frozen in
       place when first read (`schemaWithEventSlotAsStream`,
-      `packages/runner/src/runner.ts`); the selector schema a link's target
+      `runtime/runner/src/runner.ts`); the selector schema a link's target
       is asked for, per deep-frozen reader schema (`selectorSchemaForLink`,
-      `packages/runner/src/storage/v2.ts`); the reference and the inline
+      `runtime/runner/src/storage/v2.ts`); the reference and the inline
       form a selector goes to the wire in, per decomposition
-      (`externalizeSyncSelector`, `packages/runner/src/storage/v2-watch.ts`);
+      (`externalizeSyncSelector`, `runtime/runner/src/storage/v2-watch.ts`);
       and a binding's schema with its slot's declared scope folded in, per
-      emitted schema (`packages/runner/src/pattern-binding.ts`). Two results
+      emitted schema (`runtime/runner/src/pattern-binding.ts`). Two results
       are keyed by content, because each document holding a link carries
       the link's schema as an object of its own: a shaped reader crossing a
       link that declares a default keys the schema it continues with by its
       own schema and that default (`combineSchemaForLink`,
-      `packages/runner/src/traverse.ts`), and `schemaHasIfc` judges a
+      `runtime/runner/src/traverse.ts`), and `schemaHasIfc` judges a
       deep-frozen schema as the interned instance of its content
-      (`packages/runner/src/schema-ifc.ts`). No two positions of a pattern
+      (`runtime/runner/src/schema-ifc.ts`). No two positions of a pattern
       graph share a schema object for it. On the thirty-row room's reload,
       86,407 of 1.25 million `internSchema()` calls had missed the identity
       cache and hashed 150 million characters of schema JSON; 35,101 miss
@@ -427,7 +427,7 @@ where the pre-sync was no longer the whole cost.
       so each decoding holds new objects; the last item of this stage is
       where that ends. Link serialization interns the stripped schema it
       builds and a reference it builds per call, 5,839 times a reload
-      (`externalizeLinkSchema`, `packages/runner/src/link-utils.ts`).
+      (`externalizeLinkSchema`, `runtime/runner/src/link-utils.ts`).
 - [x] A preparation seals a frozen snapshot of the transaction's activity
       and computes its digest only when something reads it. A commit whose
       activity epoch stands where the preparation left it accepts the
@@ -454,11 +454,11 @@ where the pre-sync was no longer the whole cost.
       weight-bounded memo, and does not sync a link that declares a stream:
       its document holds no value a read uses, and the sync had sent one
       root carrying the stream's event schema per stream to receive an
-      absence record (`packages/runner/src/storage/v2.ts`).
+      absence record (`runtime/runner/src/storage/v2.ts`).
 - [x] An inline array element's snapshot id is kept by the value's identity
       and the link it was read through, so resolving the element as a cell
       encodes it once per document version rather than once per resolve
-      (`packages/runner/src/cell.ts`).
+      (`runtime/runner/src/cell.ts`).
 - [x] Measured: the thirty-row room's first load from 71 to 30 s to the
       messages and its second load from 42 to 16 s, on the same machine
       within the hour.
@@ -513,7 +513,7 @@ where the pre-sync was no longer the whole cost.
       at 24.7 MB it stood for more slots than the server admits.
 - [x] A node's bindings, and the inputs document minted from them, are
       computed by the pre-sync and taken by the node's instantiation
-      (`NodeBindingMemo`, `packages/runner/src/node-binding-memo.ts`).
+      (`NodeBindingMemo`, `runtime/runner/src/node-binding-memo.ts`).
       Binding reads nothing through a transaction, so the held part is keyed
       by what it is computed from: the node, its pattern, the result cell's
       link, the argument link, and the kind of module the node resolved to
@@ -540,18 +540,18 @@ where the pre-sync was no longer the whole cost.
       had taken the binding, and 18 missed on the pattern object. A node
       planned after its instantiation, and a node planned under two
       pattern objects of one identity, each bind once
-      (`packages/runner/test/resume-presync-plan-count.test.ts`). The
+      (`runtime/runner/test/resume-presync-plan-count.test.ts`). The
       reload now computes 1,618 bindings and mints 1,618 documents: the
       1,614 pairs, and the four stand-in instances bound once more at their
       instantiation, which the memo never holds (the record above).
 - [x] A runtime keeps the ids of the derived internal cells it has hashed
       most recently, 65,536 of them (`DerivedInternalCellIds`,
-      `packages/runner/src/derived-internal-cell-ids.ts`). Every action
+      `runtime/runner/src/derived-internal-cell-ids.ts`). Every action
       whose scheduler summary is complete lists its pattern's derived cells,
       so a row of 49 nodes hashed each of its cells' ids once per such
       action: the reload hashed 114,694 ids for 3,167 cells.
 - [x] The scheduler holds event handlers by the address of their stream
-      (`EventHandlerRegistry`, `packages/runner/src/scheduler/events.ts`),
+      (`EventHandlerRegistry`, `runtime/runner/src/scheduler/events.ts`),
       where a registration and a dispatch each compared the link of every
       handler registered. The reload registers 1,154.
 - [x] Measured as process CPU time on a Deno reload of that room, main at
@@ -575,7 +575,7 @@ where the pre-sync was no longer the whole cost.
       the room that reaches the bound is to be measured again.
 - [ ] A plan's inputs document is decoded apart from the value it was
       minted from: once for its sync (`valueFromDataUri` under
-      `#syncDataURICell`, `packages/runner/src/storage/v2.ts`) and again for
+      `#syncDataURICell`, `runtime/runner/src/storage/v2.ts`) and again for
       its reads. The sync's decode was 4.1 to 7.5% of the profile's samples
       on the thirty-row room's reload, measured before the pre-sync held a
       node's bindings. A document decoded there is one this process minted,

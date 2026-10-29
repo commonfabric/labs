@@ -858,7 +858,7 @@ these.
   the input-driven retry counts a second `memo.misses` +
   `outbox.queued`. [serving-loop §4, §7]
 
-### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `packages/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
+### T15 (COMPLETE — authored with Phase 2, 2026-08-07; OW4's impl witnesses are `runtime/runner/test/speculation-overlay.test.ts` and the `sx2-speculation` integration surface)
 
 - Q1: the binding edit commits AUTHORED under S1's session envelope —
   state authorship under existing ACL + CAS, unchanged (README §3.6).

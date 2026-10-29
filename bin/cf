@@ -10,7 +10,7 @@
 # on PATH: that needs no binary built, and one copy serves every checkout.
 #
 # Runs from source, so it never goes stale against the checkout. `dist/cf` is
-# deliberately not used here — see "Why not dist/cf" in packages/cli/README.md.
+# deliberately not used here — see "Why not dist/cf" in runtime/cli/README.md.
 
 set -e
 
@@ -22,7 +22,7 @@ set -e
 #   2. The nearest checkout walking up from $PWD, so a symlinked install does
 #      not pin `cf` to the checkout it was installed from. Several checkouts
 #      coexisting is normal here — a vendored labs inside another repo is a
-#      supported, tested layout (see packages/cli/test/launcher.test.ts).
+#      supported, tested layout (see runtime/cli/test/launcher.test.ts).
 #   3. A default chosen when this file was installed, then the checkout this
 #      file physically lives in — for when you are not standing in one at all.
 #      An installed copy carries the default; the in-repo file and any symlink
@@ -37,7 +37,7 @@ set -e
 DEFAULT_LABS_ROOT=""
 
 is_labs_checkout() {
-  [ -f "${1}/packages/cli/launcher.ts" ]
+  [ -f "${1}/runtime/cli/launcher.ts" ]
 }
 
 # First match walking up wins. A directory is checked as a checkout before it
@@ -99,7 +99,7 @@ if [ -n "${CF_LABS_ROOT:-}" ]; then
   reason="CF_LABS_ROOT"
   if ! is_labs_checkout "${root}"; then
     echo "cf: CF_LABS_ROOT is not a labs checkout: ${root}" >&2
-    echo "    (expected ${root}/packages/cli/launcher.ts to exist)" >&2
+    echo "    (expected ${root}/runtime/cli/launcher.ts to exist)" >&2
     exit 2
   fi
 elif root=$(resolve_from_cwd); then
@@ -122,7 +122,7 @@ fi
 # entry and the reason go to stderr, matching the CLI's output conventions, so
 # stdout stays a bare path a script can consume.
 if [ "${1:-}" = "which" ]; then
-  entry="${root}/packages/cli/mod.ts"
+  entry="${root}/runtime/cli/mod.ts"
   printf '%s\n' "${root}"
   # The checkout test above only proves launcher.ts is there. The entry the
   # launcher then runs is a separate file, and reporting a path without
@@ -149,4 +149,4 @@ fi
 # which is stale whenever `cf` is called from inside a `deno task`. `--` keeps
 # launcher option parsing off the user's own arguments (`cf --config …`).
 exec deno run --allow-run --allow-env --allow-read \
-  "${root}/packages/cli/launcher.ts" --cwd "$PWD" -- "$@"
+  "${root}/runtime/cli/launcher.ts" --cwd "$PWD" -- "$@"

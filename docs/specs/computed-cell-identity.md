@@ -88,7 +88,7 @@ changes, and only for entities whose ids carry the computed scheme.
 The pattern builder assigns each internal root cell a `partialCause` —
 the cell's declared name, the instance name of a named sub-pattern instance,
 or an anonymous `{ $generated: N }` counter, with `$kind: "stream"` mixed in
-for stream cells (`packages/runner/src/builder/pattern.ts`). The counter
+for stream cells (`runtime/runner/src/builder/pattern.ts`). The counter
 numbers anonymous roots in the order the builder's walk reaches them, which
 is the pattern's inputs and then its result, `[UI]` tree included, so a
 `{ $generated: N }` cause moves when a cell is added ahead of it anywhere in
@@ -100,31 +100,34 @@ result cell and that partial cause:
 createRef({}, { parent, type: "internal", cause: descriptor.partialCause })
 ```
 
-(`packages/runner/src/derived-internal-cell-ids.ts`,
+(`runtime/runner/src/derived-internal-cell-ids.ts`,
 `DerivedInternalCellIds.idFor()`, which `getDerivedInternalCellLink` in
-`packages/runner/src/link-utils.ts` calls; a runtime keeps the ids it has
+`runtime/runner/src/link-utils.ts` calls; a runtime keeps the ids it has
 hashed, by result cell and partial cause). A partial cause that is an object is
 kept by its identity and must be deep-frozen, as the builder leaves every cause
 it assigns; `idFor()` throws for one that is not. The result is a
 `FabricHash`: hash bytes plus an algorithm tag, stringified as
 `<tag>:<base64urlHash>`, e.g.
 `fid1:abc…`
-(`packages/data-model/src/fabric-primitives/FabricHash.ts`). The hash is
-opaque: nothing about the preimage — including `type: "internal"` or the
+(`base/data-model/src/fabric-primitives/FabricHash.ts`). The
+hash is opaque: nothing about the preimage — including `type: "internal"` or the
 partial cause — is recoverable from the id. `hashOf` mints the `fid1` tag at
-a single chokepoint (`packages/data-model/src/value-hash/ValueHasher.ts`). The URI layer
-(`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
+a single chokepoint (`base/data-model/src/value-hash/ValueHasher.ts`). The URI layer
+(`runtime/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 
 The manifest of materialized internal cells is stored in result-cell metadata
-and matched by partial cause plus kind (`packages/runner/src/runner.ts`,
+and matched by partial cause plus kind (`runtime/runner/src/runner.ts`,
 `materializeDerivedInternalCells`). Setup also stamps `patternSetupBuild`, a
-record of the build it staged (`packages/runner/src/stored-setup-build.ts`): the
+record of the build it staged (`runtime/runner/src/stored-setup-build.ts`): the
 pattern identity it describes, a digest of the level's positional cells by
 number and description, the cells holding state by number and description, and a
 digest of the projection map, each result path that links a positional cell with
-the cell's number. The descriptions are the schema-free ones of
-`packages/runner/src/cause-assignment.ts`, so a schema-generator change that
+the cell's number. A named instance counts as a positional cell at the number
+of its `legacyPartialCause`, in the cells and in the projection map alike, so a
+build's record is the same whether or not it names instances. The descriptions
+are the schema-free ones of
+`runtime/runner/src/cause-assignment.ts`, so a schema-generator change that
 moves no cell changes no record. A sub-pattern child is described by its
 pattern identity and the least of the names its module gives it, so a child
 its module exports under several names is described alike whichever of them a
@@ -175,7 +178,7 @@ base revision's numbering of every in-tree pattern whose source is unchanged
 (`docs/development/automated-gates.md`). It matches the cells of one level
 across the two builds by a description that holds across compilers, and by
 their order among cells of one description
-(`packages/runner/src/cause-assignment.ts`). So where cells holding state share
+(`runtime/runner/src/cause-assignment.ts`). So where cells holding state share
 a description and their count or their numbers change, which cell went where
 cannot be told, and the gate fails on that as well.
 
@@ -217,14 +220,43 @@ names a stored record may not use as a key, such as `constructor` and
 `__proto__`; an entry repeating an earlier entry's name is ignored. Binding reads it on every setup and start: a named
 instance it records a child for runs that child, and any other named instance
 runs the child at its own spot. The record is how a deployed parent's
-positional child can become a named instance's child without moving to a new
-document. No part of the runtime writes it yet: carrying a deployed parent's
-positional children over to their names is what will.
+positional child becomes a named instance's child without moving to a new
+document.
+
+A parent set up under a pattern that did not name an instance holds that
+instance's child at the positional spot. The first setup of the parent under a
+pattern that names the instance carries that child over
+(`planInstanceCarryOver` in `runtime/runner/src/runner.ts`) and records it in
+`instanceChildren`, so carrying a child over is a one-time transition for each
+deployed parent. The child carried over is the one at the
+`legacyPartialCause` that the pattern the parent last set up gives the same
+instance name, where that pattern is loaded and names the instance. The
+pattern last set up is the one the parent's setup record describes, or, with
+no record of the current version, the one its setup marker names: a start
+repair re-stamps the record and leaves the marker alone, and the children sit
+at the numbers of the build the record describes. That build was made by the
+runtime that set the parent up, and the cause is one this runtime's build of
+the same pattern gives, so the record is held against this runtime's build
+(`compareStoredSetupBuild`): an instance whose cell the record shows holding
+state at another number, or whose description the record's cells cannot be
+matched with, carries nothing over. With no record, this runtime's build
+places the instance. A child is carried over by one instance at most. A start
+loads the pattern last set up by its identity, and syncs the children at the
+positional causes it gives the instances it names, before setup reads them.
+
+An instance that carries nothing over starts fresh, and the setup logs
+`instance-carry-over` naming it: one the pattern last set up does not name,
+which is new or was positional there; one whose parent's pattern last set up
+does not load, or that the record numbers otherwise; and one whose child at
+that cause another instance already carries. Whatever a version without the
+name set up for it is left where it is. An instance the parent ran under a
+name the pattern no longer gives is reported the same way, and its child is
+left behind.
 
 A sub-pattern instance with a positional cause moves to another child's state
 when a cell is added ahead of it, since its child is the one minted from
 whatever number it now takes. A parent's setup refuses
-(`refuseDisplacedChildren` in `packages/runner/src/runner.ts`), with an error
+(`refuseDisplacedChildren` in `runtime/runner/src/runner.ts`), with an error
 naming whichever of the two pattern identities it knows, to set up a child:
 
 - at a positional spot or a named instance's spot, over a stored child stamped
@@ -297,9 +329,9 @@ The runner already distinguishes recompute transactions from event-handler
 transactions, but only in process memory:
 
 - Reactive action runs open their transaction with a `changeGroup` and set
-  `tx.tx.sourceAction` (`packages/runner/src/scheduler/action-run.ts`).
+  `tx.tx.sourceAction` (`runtime/runner/src/scheduler/action-run.ts`).
 - Event dispatch sets `tx.dispatchedEventId` and `tx.tx.immediate`
-  (`packages/runner/src/scheduler/events.ts`).
+  (`runtime/runner/src/scheduler/events.ts`).
 
 (A retired mechanism once attached a `SchedulerActionObservation` to
 reactive runs' commits behind `EXPERIMENTAL_PERSISTENT_SCHEDULER_STATE`;
@@ -308,7 +340,7 @@ both were deleted by server-execution v2 Phase 1 stage C — see
 
 ### Commit conflict handling
 
-`ClientCommit` (`packages/memory/v2.ts`) carries `localSeq`, a read set
+`ClientCommit` (`runtime/memory/v2.ts`) carries `localSeq`, a read set
 (confirmed reads with sequence watermarks, pending reads referencing prior
 local commits by `localSeq`), operations, and optional preconditions. A
 commit whose reads are stale relative to the space head is rejected; the
@@ -353,7 +385,7 @@ same last-colon `FabricHash.fromString` parse), and no hash-layer parser
 needs to learn anything.
 
 Kind parsing is by scheme (`entityKindOfIdString`,
-`packages/data-model/src/entity-kind.ts`): the segment
+`base/data-model/src/entity-kind.ts`): the segment
 before the FIRST colon. `computed:fid1:H` parses as kind `"computed"`;
 `of:` URIs, bare tagged hashes (`fid1:H`), non-entity URIs (`data:`),
 colon-free strings, and UNKNOWN schemes (e.g. `future:fid1:H`) all parse as
@@ -382,7 +414,7 @@ Rules:
   unkinded, so it never launders a computed id into the bare world.
   `CellHandle.id()` returns the FULL schemed id and is safe as identity.
 - **One mint site.** `getDerivedInternalCellLink`
-  (`packages/runner/src/link-utils.ts`) applies `descriptor.kind` as the
+  (`runtime/runner/src/link-utils.ts`) applies `descriptor.kind` as the
   URI scheme via `toURI`; a kind change names a different entity because
   the URI string differs, even though the hash bytes do not.
 - **Absence means strict.** Unkinded ids — every existing entity — keep
@@ -411,7 +443,7 @@ at the definition site, `entity-kind.ts`.
 ### Builder-side classification
 
 The classifier (`assignComputedCellKinds`,
-`packages/runner/src/builder/pattern.ts`) runs at pattern build time, gated
+`runtime/runner/src/builder/pattern.ts`) runs at pattern build time, gated
 on the flag. Its polarity is **computed by default**: an internal cell with
 a writer is tagged `computed` unless something disqualifies it — even when
 its computation involves writes, because a replayable writer
@@ -494,7 +526,7 @@ Builtins appear at classification time as `type: "ref"` modules whose
 `implementation` is a string NAME — the runtime's module registrations are
 invisible to the builder — so replayability is decided by name against
 `REPLAYABLE_BUILTIN_REFS`
-(`packages/runner/src/builder/builtin-replayability.ts`): `map`, `filter`,
+(`runtime/runner/src/builder/builtin-replayability.ts`): `map`, `filter`,
 `flatMap`, `ifElse`, `when`, `unless`, `sqliteDatabase`. Every other name is
 non-replayable, including the documented set `fetchBinary`, `fetchText`,
 `fetchJson`, `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`,

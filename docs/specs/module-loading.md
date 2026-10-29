@@ -68,7 +68,7 @@ different entry point, and server-execution v2 keys its basis index by the
 same restart-stable identity
 ([serving-loop.md §3b](server-side-execution/serving-loop.md)).
 
-The iframe sandbox path (`packages/iframe-sandbox`) is entirely independent of
+The iframe sandbox path (`base/iframe-sandbox`) is entirely independent of
 this work and is out of scope.
 
 ## Goals
@@ -97,7 +97,7 @@ this work and is out of scope.
   invocation-isolation guarantees described in
   [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md). This governs how
   modules are *named and loaded*, not what authority they receive.
-- Do not change the `packages/iframe-sandbox` DOM-iframe path. Confirmed
+- Do not change the `base/iframe-sandbox` DOM-iframe path. Confirmed
   independent.
 - Do not change the ts-transformer pipeline's semantics. Only the emitted module
   packaging and the identity computation are in scope.
@@ -190,7 +190,7 @@ lazy `compartment.importNow` inside `execute`.
   the authored position the compiler recorded for it in that module's
   builder-source-site sidecar.
 - The scheduler's durable implementation fingerprint is stamped from that
-  provenance at action creation (`applyImplementationHash`, `packages/runner/src/runner.ts`)
+  provenance at action creation (`applyImplementationHash`, `runtime/runner/src/runner.ts`)
   and read back by [`schedulerImplementationFingerprint`][c12]. It is a content
   hash, not a source location: `.src` is served lazily from the debug-only
   [`authored-debug-source`][c16] map, through accessors
@@ -414,7 +414,7 @@ never be trusted against changed code. The reference machinery that carries
 [content-addressed-action-identity.md](content-addressed-action-identity.md).
 
 The instance binding hash computed in `schedulerJavaScriptActionName` /
-`schedulerRawActionName` (`packages/runner/src/runner.ts`, over process cell +
+`schedulerRawActionName` (`runtime/runner/src/runner.ts`, over process cell +
 read/write links) is orthogonal: it distinguishes multiple instances of the same
 implementation. Identity is the pair
 *(implementation hash, instance binding hash)*.
@@ -665,7 +665,7 @@ matched), and additionally under the root substitution the two entry names
 define: when the entries end the same way, the roots each sits under read as
 the same authored tree grounded at two places — the program the toolshed
 serves under `/api/patterns` and the same checkout supplied from a repository
-root under `/packages/patterns` — and a module matches the previous module
+root under `/patterns` — and a module matches the previous module
 named by its own name under the previous root. For every unambiguous match,
 the successor inherits the direct predecessor plus the predecessor's
 cumulative delegation list ([`deriveModuleDelegations`][c14]). Each setup
@@ -764,7 +764,7 @@ helper with a different body is therefore just an ordinary function, and the
 module fails on its call sites. The rules are byte-level and the classifier does
 not interpret a wrapper's payload; load-time enforcement of the module-safe data
 subset is the runtime freezer (`freezeVerifiedPlainData`,
-`packages/runner/src/sandbox/plain-data.ts`; see
+`runtime/runner/src/sandbox/plain-data.ts`; see
 [SES_SANDBOXING_SPEC.md](sandboxing/SES_SANDBOXING_SPEC.md) §4.2.3, §4.2.6).
 
 Write-once module exports neutralize side effects smuggled into an accepted
@@ -978,23 +978,23 @@ index's restart-stable `action` column,
 
 ## Appendix: Pipeline Reference
 
-[c1]: ../../packages/runner/src/harness/engine.ts
-[c2]: ../../packages/runner/src/harness/pretransform.ts
-[c3]: ../../packages/runner/src/harness/module-identity.ts
-[c4]: ../../packages/js-compiler/typescript/options.ts
-[c5]: ../../packages/js-compiler/typescript/resolver.ts
-[c6]: ../../packages/runner/src/sandbox/esm-module-loader.ts
-[c7]: ../../packages/runner/src/sandbox/module-record-compiler.ts
-[c8]: ../../packages/runner/src/sandbox/module-record-verifier.ts
-[c9]: ../../packages/runner/src/sandbox/compiled-bundle-verifier.ts
-[c10]: ../../packages/runner/src/sandbox/ses-runtime.ts
-[c11]: ../../packages/runner/src/builder/module.ts
-[c12]: ../../packages/runner/src/scheduler/run.ts
-[c13]: ../../packages/data-model/src/value-hash/impl.ts
-[c14]: ../../packages/runner/src/compilation-cache/cell-cache.ts
-[c15]: ../../packages/runner/src/sandbox/runtime-module-policy.ts
-[c16]: ../../packages/runner/src/harness/authored-debug-source.ts
-[c17]: ../../packages/runner/src/harness/declared-data-files.ts
+[c1]: ../../runtime/runner/src/harness/engine.ts
+[c2]: ../../runtime/runner/src/harness/pretransform.ts
+[c3]: ../../runtime/runner/src/harness/module-identity.ts
+[c4]: ../../base/js-compiler/typescript/options.ts
+[c5]: ../../base/js-compiler/typescript/resolver.ts
+[c6]: ../../runtime/runner/src/sandbox/esm-module-loader.ts
+[c7]: ../../runtime/runner/src/sandbox/module-record-compiler.ts
+[c8]: ../../runtime/runner/src/sandbox/module-record-verifier.ts
+[c9]: ../../runtime/runner/src/sandbox/compiled-bundle-verifier.ts
+[c10]: ../../runtime/runner/src/sandbox/ses-runtime.ts
+[c11]: ../../runtime/runner/src/builder/module.ts
+[c12]: ../../runtime/runner/src/scheduler/run.ts
+[c13]: ../../base/data-model/src/value-hash/impl.ts
+[c14]: ../../runtime/runner/src/compilation-cache/cell-cache.ts
+[c15]: ../../runtime/runner/src/sandbox/runtime-module-policy.ts
+[c16]: ../../runtime/runner/src/harness/authored-debug-source.ts
+[c17]: ../../runtime/runner/src/harness/declared-data-files.ts
 
 - Compile and evaluate entry points: [`Engine.compileToRecordGraph`][c1],
   [`Engine.compileResolvedToRecordGraph`][c1],

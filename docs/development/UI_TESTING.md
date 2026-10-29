@@ -92,7 +92,7 @@ composite web component; use a flattened-tree tool or the pierce fallback below.
    whose shell is still booting.
 
    Every such page is also opened at a fixed viewport, `SHELL_VIEWPORT` in
-   `packages/integration/shell-utils.ts`, wide enough for the shell's desktop
+   `runtime/integration/shell-utils.ts`, wide enough for the shell's desktop
    header layout. The header switches layouts on the viewport width, and a
    browser left to its own default picks a width that varies by platform, so
    without the pin which layout a suite drives would be a property of the
@@ -310,7 +310,7 @@ evaluates `reader` once against the same probe a predicate is handed, so the
 read and the wait agree on what is visible.
 
 Pattern integration tests can use the higher-level wrappers in
-`packages/patterns/integration/cfc-browser-helpers.ts` — `waitForText`,
+`patterns/integration/cfc-browser-helpers.ts` — `waitForText`,
 `fillCfInput`, `clickCfButton`, `clickCfButtonAndWaitForText` — which bundle
 the common waiting and interaction sequences. Every one of them that clicks
 proceeds only when the same target remains rendered before and after a settle,
@@ -333,7 +333,7 @@ Each of the following is what `awaitViewSettled` replaces. They are either racy
   is not interactivity, and every poll is a CDP `evaluate` round trip. The
   `waitFor` helper re-runs its predicate from the test process on a fixed
   interval; prefer `waitForCondition`, whose in-page waiter resolves on the DOM
-  mutation itself (see `packages/integration/utils.ts`).
+  mutation itself (see `runtime/integration/utils.ts`).
 - **`await waitFor(() => clickButtonWithText(page, "X"))`, re-clicking until it
   "takes"** — fires the stimulus speculatively. It can double-fire (creating
   duplicate state) and, against a `dismissable` overlay such as `cf-modal`,

@@ -40,7 +40,7 @@ directory, and details come from navigating to the topic.
 
 ## The demand
 
-`TopicDemand` in `packages/patterns/topics/main.tsx` is what the board requires
+`TopicDemand` in `patterns/apps/topics/main.tsx` is what the board requires
 of a stored topic. Nine members, no verbs:
 
 | member | why it is demanded |
@@ -131,9 +131,9 @@ taken.
 
 Item 1 additionally needed, before it could land, and each is in the PR:
 
-- an accepted-break entry for `topics/main.tsx` and `topics/topic.tsx` naming
-  the baselines the narrowing cannot apply over and only the paths it blames,
-  plus the break record the entry points at;
+- an accepted-break entry for `apps/topics/main.tsx` and `apps/topics/topic.tsx`
+  naming the baselines the narrowing cannot apply over and only the paths it
+  blames, plus the break record the entry points at;
 - removal of the accepted-break entries that no longer forgive a finding, since
   an exemption cannot outlive its break;
 - baselines recorded for the contract the break leaves behind, and a
@@ -214,7 +214,7 @@ usage:
 ## Testing the board through a narrowed demand
 
 Several properties of the topics a board creates are guarded in
-`packages/patterns/integration/topic-board-child-contract.test.ts`, which does
+`patterns/integration/topic-board-child-contract.test.ts`, which does
 what a caller does: file through the board, resolve the row to the topic's own
 address, then read and call the topic there. That covers `addTopic` wiring its
 child to the pivot, a body given at create not being recorded as a body update,
@@ -281,8 +281,12 @@ Two preconditions belong to the board rather than to the code:
   one cannot. The activity time a verb keeps therefore counts stamped records,
   and changing it to skip them reintroduces that silently. `commentCount` is the
   other side: it counts the records carrying no `removedAt` stamp, so a card
-  never promises more comments than the topic shows. Both are computations
-  rather than schema, so neither needs a migration.
+  never promises more comments than the topic shows. Both are stored inputs a
+  verb keeps in the write that changes them, and a topic stored before they
+  existed gets both from the `activity-scalars` state upgrade. A writer still on
+  an older topic module does not keep them, so they are reliable once every
+  writer runs this one and legacy writers are retired (`state-upgrades.md`,
+  "Rollout and rollback").
 - Every field a stamped removal adds is optional, for the reason recorded on
   `TopicComment`: a stored record type has to accept what is already stored,
   and the deployed board holds records written before these fields existed.

@@ -86,6 +86,25 @@ Plain `new Writable(...)` inherits the containing pattern or factory scope. Use
 `new Writable.perUser(...)` or `new Writable.perSession(...)` when the local
 cell must have a specific sharing boundary independent of that context.
 
+A scope also decides what each page load recomputes and writes. A page load is a
+new session, so everything derived per session — a `PerSession<>` computed, a
+sub-pattern created with `asScope("session")`, and whatever is derived from
+either, the rows a `map()` makes of it included — is derived and committed again
+by every load, and nothing collects the instances a session leaves behind.
+Derive per session only what differs by session. What every reader derives alike
+is stored once in the scope they share, and a later session starts from it.
+Readers differ by principal as well as by session: a value drawn from another
+space is read under each reader's own access, so where more than one principal
+reads a space it can differ by reader, and stored once it is overwritten back
+and forth. A declared scope also persists once its declaration is removed: a
+cell that has stored a link to a narrower instance of itself keeps writing
+behind that link, so an update that broadens a deployed cell's scope gives the
+cell a new name. The FabriChat manager is the worked case: its rooms, people and
+found rooms are derived per user in documents named for it
+(`patterns/system/fabrichat/manager.tsx`), and
+`patterns/integration/fabrichat-manager-sessions-multi-runtime.test.ts` pins
+that a later session's session-scoped writes do not grow with the rooms.
+
 `PerAny<T>` is rare. Use it only when an inner value must override an outer
 scope declaration and may validly come from any concrete scope:
 
@@ -177,7 +196,7 @@ list a computed of that scope, such as `computed((): PerSession<Item[]> => …)`
 it maps, so each session holds its own rows and no viewer's choice replaces
 another's. A `display` prop stays the tool for a part of one row that differs by
 viewer. The worked case is `threadMessages` in
-`packages/patterns/fabrichat/room.tsx`: mapping the open thread's messages in
+`patterns/system/fabrichat/room.tsx`: mapping the open thread's messages in
 place of every message took a load of a thirty-message room from sixty row
 instances to thirty, and its first run from committing two row trees to one.
 
@@ -197,8 +216,8 @@ which entry that is: `--show-transformed` shows the record's whole schema on
 that `lift`, as a cell, and no `completeSchedulerScopeSummary`. What narrows is
 the read the run makes, and the read-cost report of
 `cf test <file> --verbose --stats-threshold 0` counts it per step.
-`packages/patterns/fabrichat/room.tsx` derives `places` this way and
-`packages/patterns/fabrichat/message-row.tsx` reads its own.
+`patterns/system/fabrichat/room.tsx` derives `places` this way and
+`patterns/system/fabrichat/message-row.tsx` reads its own.
 
 How much of a value a `computed()` reads depends on what the value passes
 through, and a function imported from another module is where the transformer
@@ -277,12 +296,12 @@ Phase skills consult as needed:
 - Actions/handlers: `docs/common/concepts/action.md`,
   `docs/common/concepts/handler.md`
 - Testing: `docs/common/workflows/pattern-testing.md`
-- Existing patterns: `packages/patterns/index.md` — check the "Status tiers"
-  section before copying idioms from any pattern; only `exemplar` entries are
-  style references.
-- Components: `packages/patterns/catalog/catalog.tsx` — the authoritative,
-  type-checked component catalog. Story files in
-  `packages/patterns/catalog/stories/` show live usage for each component. Also
-  see `docs/common/components/COMPONENTS.md` for narrative docs.
+- Existing patterns: `patterns/index.md` — check the "Status tiers" section
+  before copying idioms from any pattern; only `exemplar` entries are style
+  references.
+- Components: `patterns/dev/catalog/catalog.tsx` — the authoritative,
+  type-checked component catalog. Story files in `patterns/dev/catalog/stories/`
+  show live usage for each component. Also see
+  `docs/common/components/COMPONENTS.md` for narrative docs.
 - Debugging: start with `docs/development/debugging/README.md`, then follow the
   linked gotcha or workflow doc for the exact failure.

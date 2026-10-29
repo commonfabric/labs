@@ -2,10 +2,10 @@
 
 Contextual Flow Control decides, twice, whether something may proceed. The
 write gate decides whether a transaction may commit: the rules live in
-`packages/runner/src/cfc/prepare.ts`, which produces the prepare reasons, and
-`packages/runner/src/storage/extended-storage-transaction.ts` acts on them and
+`runtime/runner/src/cfc/prepare.ts`, which produces the prepare reasons, and
+`runtime/runner/src/storage/extended-storage-transaction.ts` acts on them and
 reports. The render gate in the worker reconciler,
-`packages/html/src/worker/reconciler.ts`, decides whether a piece of content
+`runtime/html/src/worker/reconciler.ts`, decides whether a piece of content
 may reach the document. Both fail closed.
 
 A refusal shows up as a write that does not land or interface that is not
@@ -14,7 +14,7 @@ decision, so each gate says what it turned away at the moment it decides.
 
 ## The reporter
 
-`packages/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
+`runtime/runner/src/cfc/denial-report.ts` holds the reporter, and both gates
 call it where they block:
 
 ```ts

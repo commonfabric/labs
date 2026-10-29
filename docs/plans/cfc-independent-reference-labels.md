@@ -24,7 +24,7 @@ when the reference at the slot is rewritten.
 A runtime may instead add historical target restrictions to the reference
 label, but only as a declared over-approximation, and that posture "is not the
 precise reference profile" (§8.2.5). Stage 1 of this plan holds the runtime to
-the specified contract: `linkSlotLabel` in `packages/runner/src/cfc/prepare.ts`
+the specified contract: `linkSlotLabel` in `runtime/runner/src/cfc/prepare.ts`
 persists the reference's own label at the slot and nothing of the source's,
 and `linkedSourceEvidence` keeps the source-derived label, through the
 references staged into the source, for write floors alone. The later stages
@@ -231,7 +231,7 @@ The envelope a transaction writes at the document's reserved position is a
 whole-member replace, computed against the list the transaction read. The
 mergeable tail operation beside it is resolved by the server against the live
 list. The seam is `SpaceReplica.#commitReadActivities` in
-`packages/runner/src/storage/v2.ts`, which drops the envelope read from the
+`runtime/runner/src/storage/v2.ts`, which drops the envelope read from the
 commit's conflict set on two arms: every verifier read of the label, and every
 read of a document with a mergeable op. Both are right for a transaction that
 only reads the label and wrong for one that writes it: without the dependency,
@@ -316,9 +316,9 @@ and 3. What it leaves behind:
   not gate a `requiredIntegrity` write; and in `cfc/atom-classes.ts` and
   `cfc/label-field-classification.ts`, so that a stored one keeps its class
   and its `source` and `target` are still committed when a label crosses
-  spaces. `packages/api/cfc.ts` keeps the constant, under which `cf label`
+  spaces. `base/api/cfc.ts` keeps the constant, under which `cf label`
   shows a stored one, and the pattern-facing ambient type generated from it
-  (`packages/static/assets/types/cfc.ts`) lists it still; a pattern that
+  (`base/static/assets/types/cfc.ts`) lists it still; a pattern that
   names it has it stripped by the mint gate.
 - Which reference a writer's stamp at a slot describes is answered by the
   envelope and not by an atom. An envelope carries `stampPlacement:
@@ -383,11 +383,11 @@ from query results, schema materialization and array proxies.
 
 The `cfcLabelView` a handle carries into a link write is the view the handle
 was minted with: `Cell.resolveAsCell`, the query-result proxy
-(`packages/runner/src/query-result-proxy.ts`), the schema reader's
-resolutions (`packages/runner/src/schema.ts`) and the schema view's
-`createOpaqueReference` and `readChild` (`packages/runner/src/schema-view.ts`,
+(`runtime/runner/src/query-result-proxy.ts`), the schema reader's
+resolutions (`runtime/runner/src/schema.ts`) and the schema view's
+`createOpaqueReference` and `readChild` (`runtime/runner/src/schema-view.ts`,
 which rebase what the cell handed them) give it, and
-`packages/runner/src/data-updating.ts` (`cfcLabelViewForPrimitiveLink`, the
+`runtime/runner/src/data-updating.ts` (`cfcLabelViewForPrimitiveLink`, the
 carried view on `set`) reads it off the handle at the write. Before this
 stage it was the label view of the read that produced the handle, the
 target's labels at read time; it is now the acquisition restriction stated
@@ -415,11 +415,11 @@ it goes.
 
 The harness audit's AUD-25, "labels across a followed link", counts the links
 a run's cells hold by the `origin: "link"` entries in the run's cell-labels
-snapshot (`packages/cf-harness/audit/checks/structural.ts`). A reference with
+snapshot (`runtime/cf-harness/audit/checks/structural.ts`). A reference with
 no label of its own stores no such entry, so the check reads a run whose links
 are bare, as a sqlite result's row links are, as holding no link at all and
 reports itself not applicable. The snapshot reader in
-`packages/cf-harness/src/space-labels.ts` walks values and already knows every
+`runtime/cf-harness/src/space-labels.ts` walks values and already knows every
 link it found. The snapshot should record those paths and the check should
 count them, with its fixtures rebuilt on what a reader reports.
 
@@ -445,11 +445,11 @@ Before stage 1 and after each of stages 1, 2 and 5, on the same checkout:
 | The thirty-row room's first-run commit (`commit288.json` capture, or a fresh capture through `seed-room.ts`) | Per-row label-map bytes and entry count; today 36 KB of a 40 KB row and 85 entries, 63 of them copies and 16 KB of them atoms |
 | The staged-reference diamond probe at depths 8, 10 and 12 | Prepared entry count and serialized bytes; before stage 1, 24,560 entries and about 3 MB at depth 12. With stages 1 to 5 on 2026-10-13, run with the probe's commit calls brought to the current receipt API and its copied-leaf assertion removed: 11 entries and 1,016 bytes at depth 8, 13 and 1,210 at depth 10, 15 and 1,404 at depth 12, one declared entry per node, in both staging orders, prepared in under 20 ms |
 | `cfc-prepare-ladder.bench.ts`, `cfc-staged-reference.bench.ts`, `cfc-input-witness.bench.ts` | Preparation time; the `authoritativeCoverCalls` and `stagedReferenceDerivations` work counters should fall to the number of links written |
-| The `cfc*` pattern integration tests and the CFC demos under `packages/patterns` | Refusals that appear because a pointer read newly carries its writer's join; each one is either the contract working or a coordinator whose read should carry the wiring marker of §18.6.2 |
+| The `cfc*` pattern integration tests and the CFC demos under `patterns` | Refusals that appear because a pointer read newly carries its writer's join; each one is either the contract working or a coordinator whose read should carry the wiring marker of §18.6.2 |
 
 The usual gates apply: `deno task check`, `deno task check-cfc-correspondence`
 (the `§` citations the removed code carried go with it), `deno task
-check-docs`, and the coverage ratchet on `packages/runner`.
+check-docs`, and the coverage ratchet on `runtime/runner`.
 
 ## Pull request 7243
 

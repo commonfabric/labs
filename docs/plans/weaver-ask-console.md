@@ -70,12 +70,12 @@ CT-2489 item 3 requires no work here.
 Checkpoint 1 is about two to three agent-days in labs plus about one and a half
 in the Weaver. Checkpoint 2 is about three to five, landed as two pull requests:
 persistence and read behavior first, then the move into `handles/`, which
-touches about 64 importers plus `packages/cli`. Checkpoint 3 is several days.
+touches about 64 importers plus `runtime/cli`. Checkpoint 3 is several days.
 Checkpoint 4 is multi-day as written.
 
 ## Code organization
 
-Paths below are relative to `packages/cf-harness/src/`, unless qualified.
+Paths below are relative to `runtime/cf-harness/src/`, unless qualified.
 Proposed extraction names are implementation choices; their responsibilities and
 single ownership are the constraints.
 
@@ -199,7 +199,7 @@ query or mutations. `loom.set-style` is the only mutation currently admitted
 automatically and runs as `agent:cf-harness`; other mutations run as `user`
 after approval.
 
-**Contract.** `packages/cf-harness/src/contracts/client-command.ts` and
+**Contract.** `runtime/cf-harness/src/contracts/client-command.ts` and
 `shared/WeaverClientCommand.swift` define the invocation, catalog, settlement
 (`executed`, `declined`, `failed_to_deliver` with `landed: no | unknown`,
 `interrupted` as `canceled`, `timeout`, `restart`, or `delivery_failed` for a
@@ -213,7 +213,7 @@ the field, so a Weaver that requires a feature beyond `client_actions` reads the
 console's `protocol` from `GET /api/status` before its first task there, and
 treats a console that publishes none, or an accepted task that echoes none, as
 one that cannot serve it. The JSON files under
-`packages/cf-harness/test/fixtures/client-command-wire/` pin the wire for both
+`runtime/cf-harness/test/fixtures/client-command-wire/` pin the wire for both
 languages; the Weaver holds a byte-identical copy.
 
 **Gate:** a deterministic Swift-to-console fixture executes a Loom query and
@@ -436,7 +436,7 @@ integration.
 **Question resolved:** can improvements be measured against the complete product
 flow without changing its communication architecture each time?
 
-`packages/cf-harness/scripts/run-measurement-batch.ts` is a single-turn HTTP
+`runtime/cf-harness/scripts/run-measurement-batch.ts` is a single-turn HTTP
 client that starts a fresh session per task and has no host seam. The host seams
 are the browser-host channel and the client-action callbacks this plan builds
 on. Extend it and its existing cell-spec/preflight machinery with multi-turn
