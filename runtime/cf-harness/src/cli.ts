@@ -800,8 +800,9 @@ Environment:
                                 bridge, which runsc reports as sandbox: on macOS the
                                 VM's network; on Linux under the default, or for a run
                                 that forwards host ports, pasta's, with egress and the
-                                host as host.docker.internal; on Linux with no pasta
-                                configured, loopback alone)
+                                host as host.docker.internal; for a named runsc on
+                                Linux that forwards no host ports, loopback alone. The
+                                Linux default with no pasta on PATH refuses to run)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url

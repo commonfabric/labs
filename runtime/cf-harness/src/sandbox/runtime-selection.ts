@@ -65,8 +65,9 @@ export interface SandboxRuntimeSelection {
   sandboxRunscRootless?: true;
 
   /**
-   * The `pasta` that gives a container of the Linux default its `sandbox`
-   * network. Absent otherwise.
+   * The `pasta` that gives a container its `sandbox` network on Linux, for
+   * the Linux default and for a run that forwards host ports, its `runsc`
+   * named or not. Absent otherwise.
    */
   sandboxRunscNetworkHelper?: string;
 

@@ -336,10 +336,12 @@ networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
 hosts such as `localhost`, `127.0.0.1`, `[::1]`, and the `host.docker.internal`
 host alias, but obvious external `curl` targets are denied before sandbox
 execution. The refusal states that rule and names no host to try instead, since
-what answers on those names is the platform's: on Linux `host.docker.internal`
-reaches any port of the host, through `pasta`, or only the ports a run lists in
-`CFC_VM_FORWARD_PORTS`, and on macOS only the ports the launch forwards into the
-VM. This is an integration unblock, not a complete network confinement model.
+what answers on those names is the platform's. On Linux, under `pasta`'s
+network, `host.docker.internal` reaches any port of the host's loopback for the
+default, or only the ports a run lists in `CFC_VM_FORWARD_PORTS`; a named
+`runsc` that lists none has no `pasta`, and its loopback is its own. On macOS it
+reaches only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
