@@ -102,17 +102,21 @@ export interface LaneReports {
 }
 
 /**
- * Every LCOV report under a directory, and the record each lane that opened
+ * Every LCOV report under a directory, keyed by absolute source path with a
+ * relative path resolved against `root`, and the record each lane that opened
  * the compile byte cache left of whether it found the cache restored.
  */
-export async function collectReports(at: string): Promise<LaneReports> {
+export async function collectReports(
+  at: string,
+  root: string,
+): Promise<LaneReports> {
   const coverage = new Map<string, LcovFileCoverage>();
   const cacheStates = new Set<string>();
   try {
     for await (const entry of walk(at, { includeDirs: false })) {
       if (path.extname(entry.path) === ".lcov") {
         addLcovReport(coverage, await Deno.readTextFile(entry.path), {
-          mapPath: path.normalize,
+          mapPath: (sourcePath) => path.resolve(root, sourcePath),
         });
       } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
         cacheStates.add((await Deno.readTextFile(entry.path)).trim());
@@ -257,7 +261,7 @@ export async function report(
   options: ReportOptions,
   env: Environment,
 ): Promise<string> {
-  const reports = await collectReports(reportsDirectory(options));
+  const reports = await collectReports(reportsDirectory(options), options.root);
   const figures = [
     ...await repositoryFigures(options, reports),
     ...await measuredSetFigures(options),

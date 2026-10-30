@@ -43,7 +43,7 @@
  *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --described
  */
 
-import { exists } from "@std/fs";
+import { exists, walk } from "@std/fs";
 import * as path from "@std/path";
 import {
   ALIAS_DIRECTORY,
@@ -155,7 +155,10 @@ import { ALL_PACKAGES, integrationRerun } from "./integration.ts";
 import { getPackageName, readWorkspaceMembers } from "./workspace-tests.ts";
 import { outcomesOf, verdictOf } from "./test-selection/report.ts";
 import { duration } from "./test-selection/duration.ts";
-import { writeLcovReport } from "./write-coverage-lcov.ts";
+import {
+  relativeLcovSourcePaths,
+  writeLcovReport,
+} from "./write-coverage-lcov.ts";
 import {
   batchMeasurementName,
   excusedMeasurementName,
@@ -1191,6 +1194,34 @@ export async function convertCoverage(
     }
   }
   return { ok, reports: reports.sort() };
+}
+
+/**
+ * Rewrites every report the authored-pattern instrumentation wrote to name
+ * each file of the checkout by its path relative to the checkout, as the
+ * conversion's own reports do. A job that reads the reports from a checkout
+ * in another directory then finds the same files.
+ */
+export async function relativizePatternCoverage(
+  options: LaneOptions,
+): Promise<void> {
+  const at = path.join(coverageRoot(options), PATTERN_COVERAGE_DIR);
+  try {
+    for await (
+      const entry of walk(at, { exts: [".lcov"], includeDirs: false })
+    ) {
+      await Deno.writeTextFile(
+        entry.path,
+        relativeLcovSourcePaths(
+          await Deno.readTextFile(entry.path),
+          options.root,
+        ),
+      );
+    }
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return;
+    throw error;
+  }
 }
 
 /** The subdirectories of a directory, or none where it does not exist. */
@@ -3229,6 +3260,9 @@ export async function runLane(
       notes.push(describeFailure(error));
       console.log(`ci-lane: ${describeFailure(error)}`);
     }
+    // On every path, a lane that stops or throws included, since the job
+    // uploads what the lane leaves however it ends.
+    await relativizePatternCoverage(options);
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
     if (!ok) {
