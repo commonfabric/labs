@@ -2772,8 +2772,18 @@ export class CellImpl<T extends FabricValue>
             // with the recorded mergeable append below — keeps it out
             // of the commit's conflict read set, and with it out of
             // the sealed reads that feed wave basis rows (§3b).
+            // `writeDestinationRead` keeps it out of the run's CFC flow
+            // join as well, as `Cell.pushAll()`'s snapshot is: the entries
+            // already there stay where they are and only this run's entry
+            // is appended, so a label an earlier entry's `consequenced` mark
+            // carries is no input of this run (CFC §18.6.2, write-destination
+            // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: { ...ignoreReadForScheduling, ...mergeableOpRead },
+              meta: {
+                ...ignoreReadForScheduling,
+                ...mergeableOpRead,
+                ...writeDestinationRead,
+              },
             });
             const emittedEntry = {
               eventId: emittedId,
