@@ -859,12 +859,18 @@ export class Client {
       if (attempts === 1) {
         await client.#hello();
       } else {
-        // The loop ends connected, failed, or closed, and nothing but an
-        // abort of `signal` closes a client `connect()` has not returned.
         await client.#reconnect({ attempts, address: options.address });
         if (client.#fatalError !== null) throw client.#fatalError;
       }
       if (options.signal?.aborted) throw abortError();
+      // The reconnect loop ends connected, failed, or closed. A client is
+      // closed only by an abort of `signal` until `connect()` returns it, and
+      // the check above reports that, so this one guards that invariant.
+      if (!client.#connected) {
+        // deno-coverage-ignore-start -- only an abort closes it mid-connect
+        throw new Error("memory client closed before its first handshake");
+      }
+      // deno-coverage-ignore-stop
       return client;
     } catch (error) {
       await client.close().catch(() => {});
