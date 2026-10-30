@@ -22,7 +22,10 @@
  *   Omission retains every profile mount; `[]` grants none. Mount selection
  *   participates in idempotency and is inherited by follow-ups. An ungranted
  *   name or writable access to a readonly grant is `400 beyond_profile`.
- * - `GET /jobs?limit=n` — the newest jobs, newest first.
+ * - `GET /jobs?limit=n&caller=c&profile=p` — the newest jobs, newest first;
+ *   `caller` and `profile`, each optional, keep one caller's or one
+ *   profile's jobs, so a caller sharing the runner with busier ones still
+ *   sees its own newest `n`. A listing carries each job whole.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
  *   instructions?, imageAttachments?, inputs?, foreignSpaces?}` on the
@@ -753,7 +756,23 @@ async (request: Request): Promise<Response> => {
           "`limit` must be a whole number from 1 to 100.",
         );
       }
-      return json(200, { jobs: store.list(limit) });
+      const of: { caller?: string; profile?: string } = {};
+      for (const field of ["caller", "profile"] as const) {
+        const named = url.searchParams.getAll(field);
+        if (named.length === 0) continue;
+        if (
+          named.length > 1 || named[0].length === 0 ||
+          named[0].length > MAX_NAME_LENGTH
+        ) {
+          return refuse(
+            400,
+            "invalid_request",
+            `\`${field}\`, when named, must be named once, as a nonempty name of at most ${MAX_NAME_LENGTH} characters.`,
+          );
+        }
+        of[field] = named[0];
+      }
+      return json(200, { jobs: store.list(limit, of) });
     }
     if (request.method === "POST") {
       let body: unknown;
