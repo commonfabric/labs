@@ -1421,6 +1421,35 @@ describe("SchemaGenerator", () => {
       });
     });
 
+    it("keeps the evidence on a cell that names a record on numeric keys, as the labeled constituent holds all of its data", async () => {
+      // The keys a signature applies to stay true of a cell around it, so the
+      // labeled record holds every key the cell's value does. The type path
+      // keeps the reference that the node path reads through.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type Numbered = Record<number, string>;
+        type M1 = Cfc<Numbered, { integrity: readonly ["v"] }>;
+        type M2 = Cell<Numbered>;
+      `);
+      const numbered = {
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "string" },
+      } as const;
+
+      expect(byType()).toEqual({
+        $ref: "#/$defs/Numbered",
+        asCell: ["cell"],
+        ifc: { integrity: ["v"] },
+        $defs: { Numbered: numbered },
+      });
+      expect(byNode()).toEqual({
+        ...numbered,
+        asCell: ["cell"],
+        ifc: { integrity: ["v"] },
+      });
+    });
+
     it("keeps the scope of what a cell holds where it names an intersection that fell back", async () => {
       // A reference with the cell written beside it holds the fallback, and
       // does not stand for the constituents the fallback hides. The type path

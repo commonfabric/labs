@@ -92,6 +92,7 @@ import {
   unionFoldedFrom,
   withIndexKeys,
   withIndexKeysNoted,
+  withIndexKeysOf,
   withOriginOf,
   withOriginsNumbered,
 } from "./schema-origins.ts";
@@ -925,8 +926,9 @@ function wholeValueKeywordsOf(
  * reference to no definition reads as itself. A cell written beside a
  * reference holds what the definition denotes, so it reads as that cell, with
  * no record of the definition's source (`schemaOrigins`), as a cell written
- * around it in place does. A schema that is no reference is returned as it
- * came.
+ * around it in place does, though the keys its index signature applies to
+ * (`GenerationContext.indexKeys`) stay true of it. A schema that is no
+ * reference is returned as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -953,7 +955,9 @@ function withBesideKeywords(
     ? withIfcLabels(read, ifc as Record<string, unknown>)
     : read;
   return withBesideKeywords(
-    "asCell" in beside ? labeled : withOriginOf(labeled, resolved, context),
+    "asCell" in beside
+      ? withIndexKeysOf(labeled, resolved, context)
+      : withOriginOf(labeled, resolved, context),
     context,
     followed,
   );
