@@ -105,7 +105,11 @@ import {
   type TitlesCell,
   viewKeyOf,
 } from "./room-records.tsx";
-import { bodyText, FabriChatMessageRow } from "./message-row.tsx";
+import {
+  bodyText,
+  FabriChatMessageRow,
+  type RowFacts,
+} from "./message-row.tsx";
 import {
   type AboutRecord,
   type AddMemberDelivery,
@@ -719,22 +723,17 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const bindings = { room, ownSpace, kind, requests, latest, offer };
     const add = commitAddMember(bindings);
     // Whether the reader can add someone is each session's own, as the room's
-    // `canSend` is. Its binding's name is its cause.
-    const canAddForSession = computed((): PerSession<boolean> =>
-      ownSpace && kind !== "direct" && spaceAccess(room) === "OWNER"
+    // `canSend` is. Its binding's name is its cause. It defaults to `false`,
+    // which a reader reads until this session has derived it.
+    const canAddForSession = computed(
+      (): PerSession<boolean | Default<false>> =>
+        ownSpace && kind !== "direct" && spaceAccess(room) === "OWNER",
     );
     // Who may add differs by viewer, and what came of an add by session, so
     // both are hidden by a prop rather than built as a different tree (see
     // `FabriChatMessageRow`).
-    //
-    // TODO(danfuzz): Test `canAddForSession` itself, once the transformer
-    // keeps a captured value whose only use is as a guard, typed other than
-    // `boolean` or `number`, in a computation's inputs. As the leading operand
-    // of `&&` here it is left out, and reads as `undefined`.
     const addDisplayForSession = computed((): PerSession<ChatDisplay> =>
-      canAddForSession === true && myProfile?.get() !== undefined
-        ? "flex"
-        : "none"
+      canAddForSession && myProfile?.get() !== undefined ? "flex" : "none"
     );
     const outcomes = computed((): Record<string, AddMemberOutcome> =>
       withDeliveries(requests?.get() ?? {}, spaceOf(room), manager?.requests)
@@ -1559,8 +1558,10 @@ export const FabriChatRoomCore = pattern<
   // sessions would let one whose profile hasn't resolved tell another, whose
   // profile has, that it can't send. Each binding's name is its cause, the
   // identity of the document that stores it, so renaming one moves its data.
-  const canSendForSession = computed((): PerSession<boolean> =>
-    canActIn(messages, myProfile)
+  // It defaults to `false`, which a reader reads until this session has
+  // derived it.
+  const canSendForSession = computed(
+    (): PerSession<boolean | Default<false>> => canActIn(messages, myProfile),
   );
   const addMember = AddMember({
     room: messages,
@@ -1580,8 +1581,8 @@ export const FabriChatRoomCore = pattern<
   const cannotSendForSession = computed(
     (): PerSession<boolean | Default<true>> => !canSendForSession,
   );
-  // It defaults to `false`. The rows' map takes it as an argument, and a room
-  // whose rows were stored before it was bound has no value for it there.
+  // It defaults to `false`, which a reader reads until this session has
+  // derived it.
   const isOwnerForSession = computed(
     (): PerSession<boolean | Default<false>> => isOwnerOf(messages),
   );
@@ -1600,19 +1601,14 @@ export const FabriChatRoomCore = pattern<
   // Display rights use the selected profile's owner. Handlers check
   // the authenticated actor, whose identity is available only in a handler.
   const messageRightsForSession = computed(
-    (): PerSession<ChatMessageRights[]> => {
+    (): PerSession<ChatMessageRights[] | Default<[]>> => {
       const profile = viewerProfileOf(myProfile);
       const reader = profile === undefined
         ? undefined
         : profileOwnerOf(profile);
       return facts.entries.map((entry) => ({
         message: entry.cell,
-        // TODO(danfuzz): Test `canSendForSession` itself, once the
-        // transformer keeps a captured value whose only use is as a guard,
-        // typed other than `boolean` or `number`, in a computation's inputs.
-        // As the leading operand of `&&` here it is left out, and reads as
-        // `undefined`.
-        ...(canSendForSession === true && reader !== undefined
+        ...(canSendForSession && reader !== undefined
           ? rightsOf(
             principalOf(entry.cell, "authored-by") === reader,
             entry.live,
@@ -1623,6 +1619,32 @@ export const FabriChatRoomCore = pattern<
           )
           : NO_MESSAGE_RIGHTS),
       }));
+    },
+  );
+  // What every row offers its reader, by the message's key: which of the
+  // controls that act on the message show, derived once for the whole list
+  // for the session, so a row reads its own entry rather than deriving its
+  // rights for itself.
+  const rowFactsForSession = computed(
+    (): PerSession<
+      Record<string, RowFacts> | Default<Record<string, never>>
+    > => {
+      const editing = composer.get()?.editing;
+      const editingKey = editing === undefined ? undefined : viewKeyOf(editing);
+      const byKey: Record<string, RowFacts> = {};
+      for (const rights of messageRightsForSession) {
+        const key = viewKeyOf(rights.message);
+        if (key === undefined) continue;
+        byKey[key] = {
+          edit: rights.canEdit ? "inline-flex" : "none",
+          delete: rights.canDelete ? "inline-flex" : "none",
+          obliterate: rights.canObliterate ? "inline-flex" : "none",
+          // An open editor closes once the message no longer takes an edit
+          // from the reader, as when an OWNER deletes it.
+          editor: rights.canEdit && key === editingKey ? "block" : "none",
+        };
+      }
+      return byKey;
     },
   );
   // The title a member last set outranks the one the room was created with.
@@ -1963,7 +1985,7 @@ export const FabriChatRoomCore = pattern<
               composer={composer}
               places={places}
               cannotWrite={cannotSendForSession}
-              isOwner={isOwnerForSession}
+              rowFacts={rowFactsForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}
@@ -2074,7 +2096,7 @@ export const FabriChatRoomCore = pattern<
               composer={composer}
               places={places}
               cannotWrite={cannotSendForSession}
-              isOwner={isOwnerForSession}
+              rowFacts={rowFactsForSession}
               ownersMayObliterate={ownersMayObliterate}
               messages={messages}
               canJoin={canJoin}
@@ -2168,7 +2190,10 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     // The room itself, the link another member's manager lists it by.
     [SELF]: self,
   }) => {
-    const profileWish = wish<ChatProfile>({ query: "#profile" });
+    // Each session finds its own profile: a session whose wish finds none, or
+    // fails, writes that into its own instance, never over the one a session
+    // that found the profile reads.
+    const profileWish = wish<PerSession<ChatProfile>>({ query: "#profile" });
     const containerWish = wish<Cell<ChatContainer>>({ query: "#default" });
     // The viewer's adds' outcomes, which follow them, and only them, across
     // sessions.
@@ -2181,11 +2206,6 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const managerWish = wish<
       RoomManager & { openDirect: Stream<StartDirectEvent> }
     >({ query: "#chatManager" });
-    // Hidden by a prop rather than a branch, and `hidden` until the prop has a
-    // value, as `FabriChatMessageRow` says.
-    const setupDisplay = computed((): ChatDisplay =>
-      profileWish.result === undefined ? "block" : "none"
-    );
     const room = FabriChatRoomCore(
       {
         myProfile: profileWish.result,
@@ -2201,6 +2221,14 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         self,
         manager: managerWish.result,
       },
+    );
+    // Hidden by a prop rather than a branch, and `hidden` until the prop has a
+    // value, as `FabriChatMessageRow` says. Read through the room's viewer,
+    // the session's own, which holds the profile once the wish finds it. The
+    // profile is a cell there, whose handle is never absent, so its value is
+    // what is tested.
+    const setupDisplay = computed((): PerSession<ChatDisplay> =>
+      room.viewer.profile?.get() === undefined ? "block" : "none"
     );
 
     return {

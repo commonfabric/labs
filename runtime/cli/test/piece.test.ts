@@ -75,7 +75,7 @@ import {
 import { safeStringify } from "../lib/render.ts";
 import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const API_URL = "https://cf.dev";
 const SPACE = "common-knowledge";

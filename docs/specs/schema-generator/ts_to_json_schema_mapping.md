@@ -221,7 +221,8 @@ keeps it on this path alone, as the checker hands the type path `any`
 itself, which holds nothing of the constituents beside it; a constituent
 whose value, with its labels and whole-value keywords set aside, is `{}` or
 `{ not: true }` is read as `any` or `never`; otherwise a union constituent
-distributes and every combination of arms is settled on its own; `unknown`
+distributes and every combination of arms is settled on its own, a cell
+holding a union being no union, as `Cell<A | B>` is one cell; `unknown`
 is the identity; an empty object part drops out and takes `null` and
 `undefined` with it, as `T & {}` does; primitives are narrowed or found
 disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
@@ -253,7 +254,15 @@ holds is set aside while the values are settled and stated of what they
 settle to, as the type path reads it from the checker's type: its scope and
 its default belong to the whole value, so two scopes refuse the
 intersection, as a scope wrapper nested in another with no cell between
-them, and defaults that differ leave none; its labels are placed as the type
+them, and defaults that differ leave none. Neither of a cell's scopes is
+set aside: its own is the cap on its handle, and the one written beside its
+handles is that of what it holds, so `Cell<PerUser<string>> & string[]` is
+`Cell<PerUser<string>>`
+(`{ type: "string", scope: "user", asCell: ["cell"] }`), while a scope
+another constituent states of the whole value caps the handle of the cell
+the intersection is, `PerUser<{ x: string }> & Cell<PerSession<{ x: string }>>`
+giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
+its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
 none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
@@ -284,7 +293,10 @@ fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over
 them, and the labels the survivor states are that union's (an arm accepting
-nothing is no arm, and is neither counted nor kept).
+nothing is no arm, and is neither counted nor kept). A cell written around
+such a schema, in place or beside a reference to it, holds it and keeps none
+of this: `Cell<PerUser<F>>` with `F` a union that folded or an intersection
+that fell back is one cell, whose scope stays beside its handle.
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.
@@ -1186,8 +1198,19 @@ Default paths of §7:
   `labelsBesideAnyValue()`): every restriction a constituent states anywhere
   in its value, a member's or an array's items' included, goes on the whole
   fallback, and its evidence goes nowhere. `{ x: Confidential<string, C> } &
-  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope a
-  member states is not lifted. A fallback that meets a definition still
+  string[]` gives the fallback `ifc: { confidentiality: C }`. A scope on
+  the whole value is kept, as `PerUser<{ x: string }> & string[]` gives the
+  fallback `scope: "user"`. A scope a member declares, anywhere in a
+  constituent's value, on any handle of a cell the member is, and through
+  its references, is refused ("An
+  intersection whose constituents cannot be merged falls back to a schema
+  that accepts any object and describes nothing inside them, so it cannot
+  keep the scope `user` declared on `x` …"): the write path reads a value's
+  scope from its own schema, and the fallback has none for its members, so
+  the member's data would be stored in the whole value's scope, one copy
+  shared across the space where the whole value has none. Where that member
+  is in a definition still being generated, the refusal comes once
+  generation is done. A fallback that meets a definition still
   being generated, as one inside a recursive interface does, is checked once
   generation is done, at each position emitting it, and refused where one
   holds fewer restrictions than that definition states ("An intersection
@@ -1238,7 +1261,24 @@ Default paths of §7:
   declarations beside the one that declares `any`, the property accepts any
   value and keeps what would otherwise fail open. It keeps the scope a
   declaration states, read from its type's brand or, where its type is `any`,
-  from its schema, a cell's cap counting as its scope. It keeps every
+  from its schema, a cell's cap counting as its scope. A scope a member of a
+  declaration declares cannot be kept by a value that describes nothing
+  inside the declaration, and is refused ("A value intersected with `any`
+  accepts any value and describes nothing inside what it is intersected
+  with, so it cannot keep the scope `user` declared on `x` …"), as an
+  unsupported intersection's fallback refuses one;
+  `{ a: { x: PerUser<string> } } & { a: any }` is refused where
+  `{ a: PerUser<{ x: string }> } & { a: any }` gives `a`
+  `{ scope: "user" }`. Of a declaration that is a cell, the value keeps only
+  the scope that cell's own slot is read in: its outermost handle's cap, or,
+  where no handle declares one, the scope beside the handles. A scope inside
+  the cell, on an inner handle or on what a capped cell holds, is refused
+  the same way ("… so it cannot keep the scope `user` declared inside a cell
+  there …"); `{ a: Cell<PerUser<Cell<string>>> } & { a: any }` and
+  `{ a: PerUser<Cell<PerSession<string>>> } & { a: any }` are refused where
+  `{ a: PerUser<Cell<Cell<string>>> } & { a: any }` and
+  `{ a: Cell<Cell<PerUser<string>>> } & { a: any }` give `a`
+  `{ scope: "user" }`. It keeps every
   restriction a declaration states anywhere in its value, through its
   references, on the whole value, which may hold that declaration's data
   anywhere: every `ifc` key but the evidence keys `integrity` and
@@ -2084,7 +2124,7 @@ producing alias in this package as of this writing.
   points (§4 table; §9).
 - Hashtags remain in attached descriptions. Discovery extracts them at runtime
   with `tagsFromSchema` in `runtime/runtime-client/src/schema-tags.ts`,
-  using `extractHashtags` from `@commonfabric/utils/hashtags`. Tags are
+  using `extractHashtags` from `@commonfabric/runner/hashtags`. Tags are
   lowercased and deduplicated in first-seen order across nested schemas.
   Fixtures: descriptions-hashtag-tags, descriptions-index-signature-tags,
   descriptions-root-with-tags.
@@ -2275,6 +2315,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
 | Scope wrapper beside `null` or `undefined` in a written union whose members do not read as wrappers or `null` or `undefined` | ``A scope wrapper beside `null` or `undefined` is read from the union written around it`` | `common-fabric-formatter.ts` |
+| A scope a member declares inside an intersection whose constituents cannot be merged, or one declared on a member or inside a cell beside `any` | `An intersection whose constituents cannot be merged falls back to a schema that accepts any object and describes nothing inside them` / ``A value intersected with `any` accepts any value and describes nothing inside what it is intersected with`` | `scope-placement.ts` |
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |

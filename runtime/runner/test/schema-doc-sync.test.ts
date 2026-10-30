@@ -34,8 +34,8 @@ import {
 } from "../src/schema-doc-config.ts";
 import { resolveSchema } from "../src/schema.ts";
 import { LINK_V1_TAG, type URI } from "../src/sigil-types.ts";
-import { defer } from "@commonfabric/utils/defer";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { defer } from "@commonfabric/async/defer";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 describe("schema-doc-sync", () => {
   // Two managers on one shared loopback server model two real sessions: what

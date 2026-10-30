@@ -126,7 +126,8 @@ const FabriChatPlacement = pattern<
 >(({ room }) => {
   // Wished for as a cell, which the tallies compare reactors against; the
   // placement never tests it for absence, which a cell's handle would defeat.
-  const profileWish = wish<ProfileCell>({ query: "#profile" });
+  // Each session finds its own profile, as the room's does.
+  const profileWish = wish<PerSession<ProfileCell>>({ query: "#profile" });
   const viewer = profileWish.result;
   const about = computed(() => room.get()?.about);
   // The viewer's access to the room's space decides: `"none"` is not a

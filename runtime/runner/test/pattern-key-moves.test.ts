@@ -182,16 +182,23 @@ describe("pattern-key-moves", () => {
 
     it("maps each bare-key line of the test-identity aliases to its target", async () => {
       // A bare-key line renames a key that a gate's item names without the
-      // `patterns/` prefix.
+      // `patterns/` prefix. Every other line names a repository path, which
+      // starts with one of the repository's top-level directories.
       const lines = (await Deno.readTextFile(
         `${repository}tasks/test-identity-aliases/moved-paths.jsonl`,
       )).split("\n").filter((line) => line.length > 0).map((line) =>
         JSON.parse(line)
       ).filter(({ from }) =>
         typeof from.p === "string" &&
-        !["packages/", "patterns/", "tools/"].some((prefix) =>
-          from.p.startsWith(prefix)
-        )
+        ![
+          "base/",
+          "connectors/",
+          "dashboard/",
+          "packages/",
+          "patterns/",
+          "runtime/",
+          "tools/",
+        ].some((prefix) => from.p.startsWith(prefix))
       );
       expect(lines.length).toBeGreaterThan(0);
       for (const { from, to } of lines) {

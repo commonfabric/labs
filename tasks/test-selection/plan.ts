@@ -15,7 +15,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   DISCRETIONARY_SECONDS,
   FILL_DENSITY_SHARE,

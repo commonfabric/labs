@@ -37,7 +37,7 @@
 
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import type { GenesisRoot, SourcedGenesisRoot } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Cell } from "./cell.ts";
 import {

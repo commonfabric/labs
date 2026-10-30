@@ -8,7 +8,7 @@
  */
 
 import { isDID } from "@commonfabric/identity/did";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   AttachPortNotification,
   CellRef,

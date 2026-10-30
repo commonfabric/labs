@@ -21,7 +21,7 @@ import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 export const HealthResponseSchema = z.object({
   status: z.literal("OK"),

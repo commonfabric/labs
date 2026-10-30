@@ -1,4 +1,4 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   BaseCodecEngine,

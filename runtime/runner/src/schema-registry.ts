@@ -26,7 +26,7 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { walkSchemaDocumentClosure } from "@commonfabric/data-model-schema/schema-closure";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 /** Thrown when a document's content does not hash to its claimed id. */
 export class SchemaDocumentHashMismatchError extends Error {

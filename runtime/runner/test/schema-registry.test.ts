@@ -18,7 +18,7 @@ import {
   registerSchemaDocument,
   SchemaDocumentHashMismatchError,
 } from "../src/schema-registry.ts";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   type DecomposedSchema,
   decomposeSchema,

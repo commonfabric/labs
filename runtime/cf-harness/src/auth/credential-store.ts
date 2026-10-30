@@ -1,5 +1,5 @@
 import { dirname, join, resolve } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type {
   HarnessCredential,
   HarnessCredentialHealth,

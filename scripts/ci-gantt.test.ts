@@ -1,6 +1,6 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 const SCRIPT = new URL("./ci-gantt.ts", import.meta.url).href;
 const START = Date.parse("2026-07-20T10:00:00Z");

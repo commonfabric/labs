@@ -1,8 +1,8 @@
 import type { FabricValue } from "@commonfabric/api";
 import type { CfcModulePolicyRefAtom } from "@commonfabric/api/cfc";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type { Immutable } from "@commonfabric/utils/types";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import type { Immutable } from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import type { Metadata } from "../storage/interface.ts";

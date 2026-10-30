@@ -12,12 +12,12 @@
  * main thread and the HTML renderer's text integrity boundary in the worker.
  * The module
  * depends on nothing but types from `@commonfabric/api` and the label view,
- * `@commonfabric/utils`, and `@commonfabric/identity/did`, so that either can
- * import it without the rest of the CFC machinery.
+ * `@commonfabric/js-values`, and `@commonfabric/identity/did`, so that either
+ * can import it without the rest of the CFC machinery.
  */
 import type { DID, PrincipalClaimKind } from "@commonfabric/api";
 import { isWellFormedDID } from "@commonfabric/identity/did";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { CfcLabelView } from "./label-view-core.ts";
 
 export type { PrincipalClaimKind };

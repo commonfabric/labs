@@ -45,13 +45,17 @@ the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
 `#default` is itself. `roster` is computed from those who joined alone.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
-computed from the messages when it's read, and isn't stored. `canSend`,
-`canAdd`, `viewer`, and `messageRights` are computed for each session, in a
-`PerSession` instance of each: `canSend` from the reader's access and profile,
-`canAdd` from their access, `viewer` from their profile and access, and
-`messageRights` from those and the messages, for every message at once. So
-are the values the room's rendering derives from them, such as whether its
-composers are disabled.
+computed from the messages when it's read, and isn't stored. The reader's
+profile is what the room's `#profile` wish finds, in a `PerSession` instance,
+so each session holds its own. `canSend`, `canAdd`, `viewer`, and
+`messageRights` are computed for each session, in a `PerSession` instance of
+each: `canSend` from the reader's access and profile, `canAdd` from their
+access, `viewer` from their profile and access, and `messageRights` from those
+and the messages, for every message at once. So are the values the room's
+rendering derives from them: whether its composers are disabled, and, in one
+record for all the message rows, keyed by message, which of each row's edit,
+delete, and obliterate controls show and whether its editor does. A row reads
+its own entry.
 
 `participantEntries` is computed from `participants`, reading whose own profile
 each is with `profileOwnerOf()`, and
@@ -208,8 +212,8 @@ its authorship and moderation facts. Handlers identify the author by the
 authenticated actor. Displayed `messageRights` and controls use the owner of
 the viewer's selected profile, as `profileOwnerOf()` determines from its
 attestation and name-chain ownership. Authenticated actor identity is available
-only inside handlers, so a selected profile can offer a
-control the handler refuses. Obliteration needs no resolved profile.
+only inside handlers, so a selected profile can offer a control the handler
+refuses. Obliteration needs no resolved profile.
 `commitObliterate` rewrites the message to its tombstone, which drops its author
 and its link to its reactions. So the message's write policy admits it alongside
 the send handlers, `commitEdit`, and `commitDelete`.

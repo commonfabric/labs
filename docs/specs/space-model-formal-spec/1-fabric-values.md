@@ -2770,7 +2770,7 @@ import {
   type LiveEnvironment,
 } from '@commonfabric/data-model/codec-common';
 import { BaseFabricInstance } from '@commonfabric/data-model/codec-common';
-import { isPlainObject } from '@commonfabric/utils/types';
+import { isPlainObject } from '@commonfabric/js-values/types';
 
 type TemperatureUnit = "C" | "F" | "K";
 

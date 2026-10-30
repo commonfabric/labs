@@ -73,6 +73,7 @@ export default pattern<FabriChatManagerInput, TestOutput>(
     const memberProfile = new Writable<MemberProfile>();
     const manager = FabriChatManagerCore({
       myProfile: profile,
+      sessionProfile: profile,
       sharedSpaceCatalog,
       direct,
       requests,
@@ -83,6 +84,7 @@ export default pattern<FabriChatManagerInput, TestOutput>(
       [UI]: manager[UI],
       [VIEWS]: manager[VIEWS],
       rooms: manager.rooms,
+      roomMembership: manager.roomMembership,
       sharedSpaceCatalog: manager.sharedSpaceCatalog,
       direct: manager.direct,
       requests: manager.requests,

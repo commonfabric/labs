@@ -14,7 +14,7 @@ import {
   decodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";

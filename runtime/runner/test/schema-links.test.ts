@@ -4,14 +4,14 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import type { Cell } from "../src/cell.ts";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { toCell } from "../src/back-to-cell.ts";
 import { type JSONSchema } from "../src/builder/types.ts";

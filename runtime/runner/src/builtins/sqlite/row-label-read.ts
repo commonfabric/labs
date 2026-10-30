@@ -17,7 +17,7 @@ import {
   validateRowLabelSpec,
 } from "@commonfabric/memory/sqlite/row-label";
 import { tableDeclaresRowLabel } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { CfcConfClause } from "../../cfc/clause.ts";
 import { clauseAlternatives, isOrClause } from "../../cfc/clause.ts";

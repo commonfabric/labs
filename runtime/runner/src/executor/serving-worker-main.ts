@@ -15,8 +15,8 @@ import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease"
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+} from "@commonfabric/logger";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";

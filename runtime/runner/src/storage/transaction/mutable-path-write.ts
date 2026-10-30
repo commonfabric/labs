@@ -23,7 +23,7 @@ import {
   tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import type {
   IInvalidArrayLengthError,
   IMemoryAddress,

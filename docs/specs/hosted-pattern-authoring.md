@@ -460,11 +460,10 @@ the retention and identifier obligations above.
 
 ## Relationship to nearby systems
 
-Pattern Factory is useful prior art and can remain an experimental client of
-the harness. Its phase ordering, separate repair passes, and finalization pass
-are not part of this product contract. The required boundary is simpler: an
-autonomous session produces a candidate, deterministic gates verify it, and a
-trusted service publishes it.
+Multi-phase orchestration, with its phase ordering, separate repair passes, and
+finalization pass, is not part of this product contract. The required boundary
+is simpler: an autonomous session produces a candidate, deterministic gates
+verify it, and a trusted service publishes it.
 
 Server-primary pattern execution is complementary. It determines where
 deployed patterns run. Hosted pattern authoring determines where a coding

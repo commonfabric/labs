@@ -1,7 +1,7 @@
 /** Deno version of SHA256. */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isDeno } from "@commonfabric/utils/env";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { isDeno } from "@commonfabric/platform/env";
 import type { IncrementalHasher } from "@/interface.ts";
 import {
   BaseSmallChunkUpdatingHasher,

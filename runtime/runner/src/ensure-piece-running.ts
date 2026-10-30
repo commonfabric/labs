@@ -1,5 +1,5 @@
 import { isKeyableObjectOrArray } from "@commonfabric/data-model";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { Cell } from "./cell.ts";
 import {
   areNormalizedLinksSame,

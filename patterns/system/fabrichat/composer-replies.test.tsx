@@ -79,7 +79,7 @@ export default pattern(() => {
     composer: Writable.of<ComposerState>({}),
     places: {},
     cannotWrite: false,
-    isOwner: true,
+    rowFacts: {},
     ownersMayObliterate: true,
     messages,
   };

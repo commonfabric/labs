@@ -1,8 +1,8 @@
 import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { defer } from "@commonfabric/utils/defer";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { defer } from "@commonfabric/async/defer";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   connect,
   loopback,

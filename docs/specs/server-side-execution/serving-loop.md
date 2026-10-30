@@ -1317,9 +1317,13 @@ first does so for free. The classes:
   taken the head of holds a value the derivation that wrote it never saw,
   so committing that write would be the blind derived write this section
   forbids — even where the head sits at or below the wave's basis.
-  Recovery is the same as for any other drop, and needs no addition: a
-  derivation that read the doc carries it in its basis rows, so the
-  arrival of the commit it missed re-runs it.
+  Recovery is the same as for any other drop: a derivation that read the
+  doc carries it in its basis rows, so the arrival of the commit it
+  missed re-runs it. A derivation that only writes the doc depends on it
+  the same way when its replica held no instance of the doc: such a
+  write records a read at the document's root, not recursive, so the
+  instance's arrival re-runs the derivation while its own later writes
+  beneath the root do not.
 
   An INTRUSION is what makes that second basis a conflict. A serving
   tenure's own derived commits advance a document under runs still in

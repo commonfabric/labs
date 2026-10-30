@@ -17,7 +17,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 
 // One real macrotask turn. A zero-delay `setTimeout` fires on a real macrotask
@@ -57,7 +57,7 @@ describe("fake-clock caller classification survives SES lockdown", () => {
 
   it("a src/-scheduled positive-delay setTimeout still auto-advances after lockdown", async () => {
     ensureSESLockdown();
-    // `sleep` arms the timer from `base/utils/src`, a `src/` frame, so the
+    // `sleep` arms the timer from `base/async/src`, a `src/` frame, so the
     // harness auto-advances it — the runtime's own throttle and backoff timers
     // are armed the same way and must keep elapsing on their own. The pump
     // fires it once the loop is idle, so the wait is on the sleep itself:

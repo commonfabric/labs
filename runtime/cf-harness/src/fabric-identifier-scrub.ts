@@ -3,7 +3,7 @@
  * a fixed placeholder. Schemed links and harness handle tokens remain intact.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export const scrubBareFabricIdentifiers = (text: string): string =>
   text

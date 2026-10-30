@@ -7,7 +7,7 @@
  * in the pattern's result.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { exportCell, isCell } from "../cell.ts";
 import {

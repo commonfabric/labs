@@ -248,8 +248,8 @@ describe("interactive chat session context", () => {
 
     const context = seen[0].map((message) => message.content).join("\n");
     expect(context).toContain("No input cells are attached for this run");
-    expect(context).toContain("make zero registry reads and ask the user");
-    expect(context).toContain("at most one registry read");
+    expect(context).toContain("resolve_piece resolves a piece slug");
+    expect(context).not.toContain("make zero registry reads");
     expect(seen[0].at(-1)?.content).toBe("add a total to this bills pane");
   });
 
@@ -261,12 +261,8 @@ describe("interactive chat session context", () => {
 
     const context = seen[0].map((message) => message.content).join("\n");
     expect(context).toContain("No input cells are attached for this run");
-    expect(context).toContain("make zero registry reads and ask the user");
-    expect(context).toContain("at most one registry read");
-    expect(context).toContain(
-      "released evidence identifies exactly one matching piece",
-    );
-    expect(context).toContain("Do not delegate discovery of an unnamed target");
+    expect(context).toContain("resolve_piece resolves a piece slug");
+    expect(context).not.toContain("make zero registry reads");
     expect(seen[0].at(-1)?.content).toBe("add a total to this bills pane");
   });
 

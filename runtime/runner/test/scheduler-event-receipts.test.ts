@@ -1,6 +1,6 @@
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   cellTx,
   markRuntimeInjectedEventKeys,

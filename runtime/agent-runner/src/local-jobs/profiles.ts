@@ -44,7 +44,7 @@ import {
 } from "@commonfabric/cf-harness/input-cells";
 import { isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** One profile, as the host file states it. */
 export interface LocalJobProfile extends HarnessModelLimits {

@@ -44,7 +44,10 @@ import { ensureDir } from "@std/fs";
 import { isAbsolute, join } from "@std/path";
 
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
 import {

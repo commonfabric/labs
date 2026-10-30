@@ -199,8 +199,8 @@ export default pattern(() => {
         ),
       },
       { action: action(() => clickButton(alice[UI], "Close")) },
-      // A row offers its edit control to its sender alone, and its removal to
-      // the room's OWNER, which this lane's user is.
+      // Both profiles act for this lane's one principal, so both rows offer
+      // Edit. That principal is also the room's OWNER and may remove either.
       {
         assertion: assert(() =>
           rowsIn(alice[UI], THREAD, ALL) ===

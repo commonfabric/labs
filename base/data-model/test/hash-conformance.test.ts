@@ -9,7 +9,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { sha256 } from "@commonfabric/content-hash";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 
 import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";

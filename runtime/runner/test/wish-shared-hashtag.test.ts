@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { getTimingStatsBreakdown } from "@commonfabric/utils/logger";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type JSONSchema, NAME } from "../src/builder/types.ts";

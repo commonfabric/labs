@@ -60,7 +60,7 @@ import type {
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import type { Immutable } from "@commonfabric/utils/types";
+import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
 import { Cell } from "../cell.ts";
@@ -496,6 +496,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * where the manager's sessions cannot present a chain.
    */
   addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
+
+  /**
+   * The chain a session this manager opens on `space` presents now, root
+   * first, as copies of the delegations' bytes, or `undefined` where it
+   * holds none it could present: the delegation granting this manager's
+   * identity last, every link within its validity window. A caller
+   * delegating the space onward puts its own delegation after this chain.
+   */
+  delegationChainFor?(space: MemorySpace): readonly Uint8Array[] | undefined;
 
   /**
    * The kind `space` declares in its genesis commit, or `undefined` when it

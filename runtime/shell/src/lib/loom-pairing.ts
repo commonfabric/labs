@@ -16,7 +16,7 @@
  */
 
 import { urlToAppView } from "@commonfabric/navigation";
-import { isLoopbackHostname } from "@commonfabric/utils/loopback";
+import { isLoopbackHostname } from "@commonfabric/platform/loopback";
 
 /** The Loom a code is redeemed against when the link or the form names none. */
 export const DEFAULT_LOOM_URL = "http://localhost:9900";

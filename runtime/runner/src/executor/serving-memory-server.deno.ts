@@ -43,7 +43,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { ExperimentalOptions } from "../runtime.ts";
 import { newLoopbackServer } from "../storage/v2-emulate.ts";
 import { ExecutorHost, type ExecutorHostOptions } from "./host.ts";

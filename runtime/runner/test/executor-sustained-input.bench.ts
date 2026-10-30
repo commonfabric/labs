@@ -16,7 +16,7 @@
  * loop's exhaustion counters.
  */
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { benchDiagnostic } from "./bench-diagnostics.ts";

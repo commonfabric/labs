@@ -3,8 +3,8 @@ import {
   BOOT_FAILURE_MESSAGE,
   BrowserProcess,
 } from "@commonfabric/integration/browser-process";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { sleep } from "@commonfabric/utils/sleep";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { sleep } from "@commonfabric/async/sleep";
 
 import { DRIVER_BINDING, SETTLE_GLOBAL } from "./commands-protocol.ts";
 import { DEFAULT_TEST_TIMEOUT_MS, extractAstralConfig } from "./config.ts";

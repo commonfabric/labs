@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { Logger, type LogMessage } from "@commonfabric/utils/logger";
+import { Logger, type LogMessage } from "@commonfabric/logger";
 
 import {
   resumeContainerWait,

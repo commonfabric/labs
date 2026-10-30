@@ -494,10 +494,9 @@ describe("input-cells", () => {
   });
 
   describe("inputCellsContextMessage()", () => {
-    it("states that there are no attachments without discarding the conversation target", () => {
+    it("states that there are no attachments", () => {
       const message = inputCellsContextMessage([]);
       expect(message).toContain("No input cells are attached for this run");
-      expect(message).toContain("conversation can still be the target");
       expect(message).toContain(
         "registry or connector references are not attachments",
       );

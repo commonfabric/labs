@@ -1,8 +1,8 @@
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";

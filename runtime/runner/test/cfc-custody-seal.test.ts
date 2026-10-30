@@ -4,7 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import {

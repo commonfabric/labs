@@ -1,4 +1,5 @@
 /** Opens a space's own conversation and supplies the viewer's live profile. */
+
 import {
   type Cell,
   computed,
@@ -23,7 +24,7 @@ const initializeRoom = handler<unknown, {
 }>((_, { space, available, candidate }) => {
   if (!available) return;
   const root = space.get();
-  if (!root?.setChatRoom || root.chatRoom) return;
+  if (!root?.setChatRoom || root.chatRoom?.get() !== undefined) return;
   const access = spaceAccess(candidate);
   if (access !== "WRITE" && access !== "OWNER") return;
   root.setChatRoom.send({ room: candidate });
@@ -34,7 +35,8 @@ const selectRoom = lift(({
   space,
   candidate,
 }: { space: Cell<SpaceChat | undefined>; candidate: Cell<SpaceChatRoom> }) => {
-  return space.get()?.chatRoom ?? candidate;
+  const registered = space.get()?.chatRoom;
+  return registered?.get() === undefined ? candidate : registered;
 });
 
 /** A space conversation shares its enclosing space's membership. */
@@ -46,7 +48,7 @@ export default pattern(() => {
   const registry = wish<{ setChatRoom?: unknown }>({ query: "#default" });
   const candidate = FabriChatRoom({});
   const room = selectRoom({ space: space.result!, candidate });
-  const ready = computed(() => space.result?.chatRoom !== undefined);
+  const ready = computed(() => space.result?.chatRoom?.get() !== undefined);
   const canCreate = computed(() => {
     const access = spaceAccess(room);
     return registry.result?.setChatRoom !== undefined &&

@@ -72,9 +72,11 @@ declarations. The manager discovers a container's conversation through its root
 `chatRoom` link and deduplicates by room identity. Private membership records
 keep joins and forgotten conversations independently of their containers. The
 manager retains its direct-room lookup after forgetting, so opening that
-conversation again restores the same room. Creation commits the room, its
-grants, catalog registration, and terminal outcome together. Repeated requests
-preserve their original outcome.
+conversation again restores the same room. Creation records each completed step
+under the request's identity. Offers, notices, participant registration, and
+catalog registration follow room creation through separate events, so the
+manager's private labels do not flow into the room. Repeated requests resume
+their recorded progress and preserve their terminal outcome.
 
 A client must verify direct-room container admission before creating a
 placement, as the specification requires. The placement reports the viewer's

@@ -1,0 +1,334 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CrewColor": {
+        "enum": [
+          "amber",
+          "blue",
+          "mint",
+          "violet"
+        ]
+      },
+      "CrewTool": {
+        "enum": [
+          "water",
+          "firebreak",
+          "evacuate"
+        ]
+      },
+      "IframeInputData": {
+        "properties": {
+          "briefing": {
+            "type": "string"
+          },
+          "columns": {
+            "type": "number"
+          },
+          "initialFireCount": {
+            "type": "number"
+          },
+          "maximumTurns": {
+            "type": "number"
+          },
+          "rows": {
+            "type": "number"
+          },
+          "seed": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "briefing",
+          "seed",
+          "columns",
+          "rows",
+          "initialFireCount",
+          "maximumTurns"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "crew": {
+            "properties": {
+              "color": {
+                "$ref": "#/$defs/CrewColor"
+              },
+              "name": {
+                "type": "string"
+              },
+              "preferredTool": {
+                "$ref": "#/$defs/CrewTool"
+              }
+            },
+            "required": [
+              "name",
+              "color",
+              "preferredTool"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "crew"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a Firebreak Commons piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "briefing": "Coordinate water drops, firebreaks, and evacuations before advancing the shared wildfire.",
+          "columns": 9,
+          "initialFireCount": 3,
+          "maximumTurns": 12,
+          "rows": 7,
+          "seed": 1597463007,
+          "title": "Firebreak Commons"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "crew": {
+            "color": "amber",
+            "name": "Commons crew",
+            "preferredTool": "water"
+          }
+        },
+        "description": "This user's crew: its name, color and preferred tool."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-firebreak-commons/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AdvanceTurnAction": {
+        "properties": {
+          "actorId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "advance-turn"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "actorId",
+          "turn"
+        ],
+        "type": "object"
+      },
+      "CrewColor": {
+        "enum": [
+          "amber",
+          "blue",
+          "mint",
+          "violet"
+        ]
+      },
+      "CrewTool": {
+        "enum": [
+          "water",
+          "firebreak",
+          "evacuate"
+        ]
+      },
+      "EvacuateAction": {
+        "properties": {
+          "actorId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "tileId": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "evacuate"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "tileId",
+          "id",
+          "actorId",
+          "turn"
+        ],
+        "type": "object"
+      },
+      "FirebreakAction": {
+        "properties": {
+          "actorId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "tileId": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "firebreak"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "tileId",
+          "id",
+          "actorId",
+          "turn"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "crew": {
+            "properties": {
+              "color": {
+                "$ref": "#/$defs/CrewColor"
+              },
+              "name": {
+                "type": "string"
+              },
+              "preferredTool": {
+                "$ref": "#/$defs/CrewTool"
+              }
+            },
+            "required": [
+              "name",
+              "color",
+              "preferredTool"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "crew"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/SimulationAction"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "type": "object"
+      },
+      "SimulationAction": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WaterAction"
+          },
+          {
+            "$ref": "#/$defs/FirebreakAction"
+          },
+          {
+            "$ref": "#/$defs/EvacuateAction"
+          },
+          {
+            "$ref": "#/$defs/AdvanceTurnAction"
+          }
+        ]
+      },
+      "WaterAction": {
+        "properties": {
+          "actorId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "tileId": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "number"
+          },
+          "type": {
+            "enum": [
+              "water"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "tileId",
+          "id",
+          "actorId",
+          "turn"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A Firebreak Commons piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each user."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -1,7 +1,7 @@
 import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   createDefaultOperationCodecRegistry,

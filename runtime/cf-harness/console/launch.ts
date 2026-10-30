@@ -42,7 +42,7 @@
  */
 import { parseArgs } from "@std/cli/parse-args";
 import { fromFileUrl, join } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   argvHolds,
@@ -56,10 +56,12 @@ import { HarnessControlError } from "../src/control-errors.ts";
 import { DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE } from "../src/config.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";
 import {
+  FORWARD_PORTS_ENV,
   nativeStoreCfcPolicy,
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
   RUNSC_CFC_POLICY_ENV,
+  SANDBOX_NETWORK_MODE_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
@@ -681,37 +683,64 @@ const runscResolvedValues = (
   const fromStore = store === undefined
     ? "harness default"
     : `the native store at \`${store}\``;
-  return [{
-    name: "sandbox",
-    value: "runsc",
-    source: sandboxSource(choice),
-  }, {
-    name: "runsc",
-    value: selection.sandboxRunscBinary ?? "`runsc`, looked for on `PATH`",
-    source: sandbox.binaryNamed ? inherited(RUNSC_BINARY_ENV) : fromStore,
-  }, {
-    name: "rootfs",
-    value: selection.sandboxRootfs ?? "(the driver's default)",
-    source: sandbox.rootfsNamed ? inherited(SANDBOX_ROOTFS_ENV) : fromStore,
-  }, {
-    name: "cfc policy",
-    // The console takes no loop enforcement mode, so its turns run at the
-    // harness default.
-    value: selection.sandboxCfcPolicy ??
-      (runscWithoutPolicyRefusesTurns(DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE)
-        ? `(none: every turn is refused at \`${DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE}\`)`
-        : "(none: `runsc` runs without `--cfc`)"),
-    // The policy under `HOME` is the harness's default on either runtime; the
-    // store's own is one only a defaulted native runtime takes.
-    source: sandbox.policyNamed
-      ? inherited(RUNSC_CFC_POLICY_ENV)
-      : native !== undefined &&
-          selection.sandboxCfcPolicy ===
-            nativeStoreCfcPolicy(native.platform, native.nativeStore)
-      ? fromStore
-      : "harness default",
-  }];
+  return [
+    {
+      name: "sandbox",
+      value: "runsc",
+      source: sandboxSource(choice),
+    },
+    {
+      name: "runsc",
+      value: selection.sandboxRunscBinary ?? "`runsc`, looked for on `PATH`",
+      source: sandbox.binaryNamed ? inherited(RUNSC_BINARY_ENV) : fromStore,
+    },
+    {
+      name: "rootfs",
+      value: selection.sandboxRootfs ?? "(the driver's default)",
+      source: sandbox.rootfsNamed ? inherited(SANDBOX_ROOTFS_ENV) : fromStore,
+    },
+    {
+      name: "cfc policy",
+      // The console takes no loop enforcement mode, so its turns run at the
+      // harness default.
+      value: selection.sandboxCfcPolicy ??
+        (runscWithoutPolicyRefusesTurns(DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE)
+          ? `(none: every turn is refused at \`${DEFAULT_HARNESS_CFC_ENFORCEMENT_MODE}\`)`
+          : "(none: `runsc` runs without `--cfc`)"),
+      // The policy under `HOME` is the harness's default on either runtime; the
+      // store's own is one only a defaulted native runtime takes.
+      source: sandbox.policyNamed
+        ? inherited(RUNSC_CFC_POLICY_ENV)
+        : native !== undefined &&
+            selection.sandboxCfcPolicy ===
+              nativeStoreCfcPolicy(native.platform, native.nativeStore)
+        ? fromStore
+        : "harness default",
+    },
+    ...hostPortsRow(selection.sandboxRunscForwardedHostPorts),
+  ];
 };
+
+/**
+ * Helper for `runscResolvedValues()`, which returns the `host ports` row for
+ * the ports a run under pasta forwards: no row for a run that reaches every
+ * port of the host's loopback, and for an empty list the network that asked
+ * for it.
+ */
+const hostPortsRow = (ports: readonly number[] | undefined) =>
+  ports === undefined ? [] : [
+    ports.length > 0
+      ? {
+        name: "host ports",
+        value: `${ports.join(", ")}, and no other port of the host's loopback`,
+        source: inherited(FORWARD_PORTS_ENV),
+      }
+      : {
+        name: "host ports",
+        value: "none of the host's loopback",
+        source: inherited(SANDBOX_NETWORK_MODE_ENV),
+      },
+  ];
 
 /** The lines the launcher prints before the server binds. */
 export const consoleLaunchReport = (

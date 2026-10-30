@@ -31,7 +31,7 @@
  */
 
 import ts from "typescript";
-import { isTrustedBuilder } from "@commonfabric/utils/sandbox-contract";
+import { isTrustedBuilder } from "@commonfabric/pattern-contract/sandbox-contract";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { detectCallKind, isCallbackReference } from "../ast/call-kind.ts";
 import { visitEachChildWithJsx } from "../ast/utils.ts";

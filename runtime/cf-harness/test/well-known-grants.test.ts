@@ -338,7 +338,7 @@ describe("well-known-grants", () => {
       expect(message).toContain("piece registry");
       expect(message).toContain("a refused name read leaves the name unknown");
       expect(message).toContain(
-        "not a fallback for identifying an unspecified target",
+        "A pattern can return entry references without reading values",
       );
       expect(message).not.toContain(REGISTRY_ID);
     });

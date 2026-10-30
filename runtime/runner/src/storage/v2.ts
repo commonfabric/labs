@@ -82,14 +82,14 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { BoundedKeyMap, LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   applyPatchToDocument,
@@ -208,6 +208,7 @@ import {
   type ViewInterestLease,
 } from "./interface.ts";
 import { endLocalReadValidationStretch } from "./local-read-policy.ts";
+import type { MemorySocketFactory } from "./memory-socket.ts";
 import {
   getBlindStructuralTarget,
   isDurableReadTx,
@@ -1150,6 +1151,13 @@ export interface Options {
    */
   spaceHostMap?: Record<string, string>;
 
+  /**
+   * Opens each memory connection. Absent, `createMemorySocket()` picks the
+   * backend for the platform the manager runs on. Tests inject their own to
+   * observe which addresses the manager dials.
+   */
+  createSocket?: MemorySocketFactory;
+
   id?: string;
   settings?: IRemoteStorageProviderSettings;
 
@@ -1920,6 +1928,11 @@ export class StorageManager implements IStorageManager {
     const space = (await decodeDelegation(chain[0])).payload.sub;
     if (space === null) return;
     await this.#providers.get(space as MemorySpace)?.restoreSession();
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(space: MemorySpace): readonly Uint8Array[] | undefined {
+    return this.#sessionFactory.delegationChainFor?.(space, this.as.did());
   }
 
   protected constructor(
@@ -4274,7 +4287,7 @@ export class StorageManager implements IStorageManager {
           dynamicHosts,
         ),
         options.as,
-        undefined,
+        options.createSocket,
         options.clientBuild,
       ),
     );

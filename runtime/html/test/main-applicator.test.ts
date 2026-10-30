@@ -13,7 +13,7 @@ import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
 import { $conn, type CellRef } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { DomEventMessage } from "../src/main/events.ts";

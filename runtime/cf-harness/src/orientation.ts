@@ -14,16 +14,11 @@ const GOAL_GUIDANCE =
   "Orient to the user's goal: distinguish what is given, what is findable within the granted scope, and what the available capabilities cannot do. Work toward the closest achievable outcome and state any limitation before asking for details that cannot remove it.";
 
 const GIVEN_GUIDANCE =
-  "Given: check relevant attached or focused pieces, conversation targets, grants, and retained research. Reuse established descriptions; inspect unresolved relevant handles with describe_handle before asking the user to connect or attach that source. A grant's name is a lead, not its contents: a calendar-named grant may describe mail, and a document source may already be available. Descriptions establish shape and capabilities, not the requested values.";
+  "Given: check relevant attached or focused pieces, conversation targets, grants, and retained research. Reuse established descriptions; describe_handle reports the shape and capabilities of a handle. A grant's name is a lead, not its contents: a calendar-named grant may describe mail, and a document source may already be available. Descriptions establish shape and capabilities, not the requested values.";
 
 const findableGuidance = (patternIndex: boolean): string =>
   [
     "Findable: not given does not mean absent.",
-    ...(patternIndex
-      ? [
-        "Search the pattern index for an applicable space-search pattern and use it over held references when the tools and release rules permit.",
-      ]
-      : []),
     ...(patternIndex
       ? ["The parent can run an indexed pattern with run_pattern."]
       : []),

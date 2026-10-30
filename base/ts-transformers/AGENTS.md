@@ -61,9 +61,9 @@ the spec). `docs/common/` is author-facing teaching material, lowest authority.
   raw visitor silently misses JSX subtrees.
 - The module-scope stages' emitted shapes (`__cf_data` wrapping, hardening
   helpers, the single trailing `__cfReg`) are pattern-matched by the runner's
-  sandbox verifier (`@commonfabric/utils/sandbox-contract`). Changing what they
-  emit is a cross-package contract change — module loading breaks until the
-  verifier agrees.
+  sandbox verifier (`@commonfabric/pattern-contract/sandbox-contract`). Changing
+  what they emit is a cross-package contract change — module loading breaks
+  until the verifier agrees.
 - Emitted synthetic identifiers use the `__cf` prefix (`__cfLift_1`,
   `__cf_pattern_input`); `__`-prefixed params are skipped by shrink validation.
   (`__ct*`-prefixed names you'll see in `base/api` type brands are a separate,

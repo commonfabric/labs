@@ -26,7 +26,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { sendEvent } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";

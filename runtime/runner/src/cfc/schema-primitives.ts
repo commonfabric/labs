@@ -10,8 +10,8 @@
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
-import { decodeJsonPointer } from "@commonfabric/utils/json-pointer";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { decodeJsonPointer } from "@commonfabric/json/json-pointer";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * The object form of `schema`: `true` and an absent schema admit everything,

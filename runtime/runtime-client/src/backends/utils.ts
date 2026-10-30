@@ -24,8 +24,8 @@ import {
   linkRefFrom,
   refuseFabricInstance,
 } from "@commonfabric/runner/shared";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import type { LoggerFlagsBreakdown } from "@commonfabric/utils/logger";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import type { LoggerFlagsBreakdown } from "@commonfabric/logger";
 
 import { isCellRef } from "@/protocol/mod.ts";
 import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";

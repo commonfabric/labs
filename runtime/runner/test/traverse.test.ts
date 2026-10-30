@@ -16,7 +16,7 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";

@@ -4,8 +4,8 @@ import { type DIDKey, isDIDKey } from "@commonfabric/identity/did";
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { isLoopbackHostname } from "@commonfabric/utils/loopback";
+} from "@commonfabric/bytes/base64url";
+import { isLoopbackHostname } from "@commonfabric/platform/loopback";
 import type { Capability } from "./acl.ts";
 
 /**

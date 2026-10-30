@@ -56,7 +56,7 @@ import {
 } from "@commonfabric/cf-harness/task-classification";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { decodeHarnessInlineImage } from "@commonfabric/cf-harness/image-attachments";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { LocalJobBrowserHost } from "./browser-host.ts";
 import {

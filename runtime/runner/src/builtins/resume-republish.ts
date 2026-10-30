@@ -1,5 +1,5 @@
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import type { Logger } from "@commonfabric/utils/logger";
+import type { Logger } from "@commonfabric/logger";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";

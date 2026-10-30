@@ -35,7 +35,7 @@ import {
 } from "../src/ops/piece-origin.ts";
 import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 // The routes those refs resolve to. A system pattern is still SERVED at, and
 // its modules still NAMED by, the route path; the `system:` ref is what a

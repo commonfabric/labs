@@ -2,10 +2,10 @@ import type { FabricKeyPair as ApiFabricKeyPair } from "@/api.ts";
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isPlainObject } from "@commonfabric/utils/types";
+} from "@commonfabric/bytes/base64url";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";

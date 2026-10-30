@@ -35,13 +35,13 @@ import {
   TYPE,
   UI,
   VIEWS,
-} from "@commonfabric/utils/framework-result-keys";
+} from "@commonfabric/pattern-contract/framework-result-keys";
 import type { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { valueEqual } from "@commonfabric/data-model";
 import type * as RowLabelHelpers from "@commonfabric/memory/sqlite/row-label";
 import type { cfLink, table } from "@commonfabric/memory/sqlite/schema";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import type { EntityKind } from "../entity-kind.ts";
@@ -56,10 +56,10 @@ import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
 
 // Define runtime constants here - actual runtime values
 
-// The reserved result keys are spelled in `@commonfabric/utils`, where the
-// transformer that polices what a pattern may declare about them reads the
-// same list. They are re-exported here because this is the builder surface a
-// pattern sees them through.
+// The reserved result keys are spelled in `@commonfabric/pattern-contract`,
+// where the transformer that polices what a pattern may declare about them
+// reads the same list. They are re-exported here because this is the builder
+// surface a pattern sees them through.
 export {
   CHIP_UI,
   FRAMEWORK_RESULT_KEYS,
@@ -284,7 +284,8 @@ export type DerivedInternalCellDescriptor = {
 
   /**
    * For a named sub-pattern instance, the positional `{ $generated: N }` cause
-   * its root would take without its name. See
+   * its root would take without its name. A child a parent set up under that
+   * cause is found again under the instance's own cause. See
    * `docs/specs/computed-cell-identity.md`.
    */
   legacyPartialCause?: JSONValue;
@@ -581,10 +582,10 @@ export interface BuilderFunctionsAndConstants extends
 
   // The rest of this interface is what the sandbox binds beyond what
   // `@commonfabric/api` declares. Pattern source cannot name any of it: the
-  // assert-diagnostics transformer reaches the two operand recorders through
-  // the injected `__cfHelpers` object, which carries `nameInstance` too, JSX
-  // lowering emits calls to `h`, and the two schemas are read by the runner
-  // rather than by pattern code.
+  // assert-diagnostics transformer reaches the two operand recorders, and the
+  // reactive-variable stage reaches `nameInstance`, through the injected
+  // `__cfHelpers` object, JSX lowering emits calls to `h`, and the two schemas
+  // are read by the runner rather than by pattern code.
   assertCapture: AssertCaptureFunction;
   assertRenderParts: AssertRenderPartsFunction;
   nameInstance: <T>(value: T, name: string) => T;

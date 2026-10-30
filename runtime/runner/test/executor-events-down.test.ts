@@ -32,7 +32,7 @@ import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { resultSchemaMetaSpelling } from "../src/result-schema-meta.ts";
 import {
   decodeMemoryBoundary,

@@ -4,7 +4,7 @@
  * artifact.
  */
 
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/js-values/types";
 import { currentBenchKey } from "./bench-report.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 

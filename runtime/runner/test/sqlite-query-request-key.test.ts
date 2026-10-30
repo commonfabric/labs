@@ -6,7 +6,7 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";

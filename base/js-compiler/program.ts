@@ -7,8 +7,8 @@ import {
   SEPARATOR,
 } from "@std/path";
 
-import { decodeDataFile } from "@commonfabric/utils/encoding";
-import { isDeno } from "@commonfabric/utils/env";
+import { decodeDataFile } from "@commonfabric/text/utf8";
+import { isDeno } from "@commonfabric/platform/env";
 
 import { ProgramResolver, Source } from "./interface.ts";
 

@@ -3,7 +3,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { resetCfcDenialAnnouncements } from "@commonfabric/runner/cfc";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

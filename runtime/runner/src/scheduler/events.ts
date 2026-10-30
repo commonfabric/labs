@@ -1,7 +1,7 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
 import { toURI } from "../uri-utils.ts";

@@ -500,6 +500,15 @@ export interface RunCfHarnessCliDependencies
   sandboxRuntimeNamedBy?: string;
 
   /**
+   * The platform this process runs on, for an embedder that sets
+   * `sandboxRuntimeNamedBy` and so states no `platform`; the one this process
+   * runs on when absent. It decides no default: on Linux, the host ports a
+   * run forwards are forwarded by pasta, and a named `runsc` under `bridge`
+   * runs under pasta.
+   */
+  processPlatform?: SandboxPlatform;
+
+  /**
    * Whether whoever starts this run can give it the sandbox selection flags,
    * which they can when absent. An embedder that writes the argument list
    * itself says `false`, and a refusal then names each setting's variable
@@ -705,7 +714,9 @@ Options:
   --sandbox-runtime <kind>      runsc: run runsc directly; the same on Linux and on
                                 macOS through the darwin runsc. Tool calls may name a
                                 sandbox session, except under pasta's network (the
-                                Linux default's). With no runtime
+                                Linux default's, any Linux run's that forwards host
+                                ports, and a named runsc's under bridge on Linux).
+                                With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
@@ -789,9 +800,13 @@ Environment:
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host, in Docker's words (default:
                                 bridge, which runsc reports as sandbox: on macOS the
-                                VM's network; on Linux under the default pasta's, with
-                                egress and the host as host.docker.internal; on Linux
-                                with no pasta configured, loopback alone)
+                                VM's network; on Linux pasta's, with egress, and the host
+                                as host.docker.internal: every port of its loopback for
+                                the default, the forwarded ports alone for a run that
+                                forwards some or a named runsc that names bridge. A
+                                named runsc on Linux whose network is unnamed and that
+                                forwards no host ports gets runsc's own, loopback alone.
+                                A run that needs pasta refuses to start without it)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
@@ -814,6 +829,10 @@ Environment:
                                 its store)
   CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
+  CFC_VM_FORWARD_PORTS          Host ports the sandbox reaches, comma-separated: the darwin
+                                runsc forwards them into its VM; on Linux pasta forwards
+                                them and no other port of the host's loopback, for a
+                                named runsc too, and no sandbox session is offered
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
 `;
@@ -1494,6 +1513,7 @@ type CliSandboxSelectionDependencies = Pick<
   | "sandboxHomeDir"
   | "platform"
   | "arch"
+  | "processPlatform"
   | "uid"
   | "readSysctl"
   | "which"
@@ -1513,7 +1533,12 @@ const cliSandboxRuntimeSelection = (
 ): Promise<SandboxRuntimeSelection> =>
   resolveSandboxRuntimeSelection(env, explicit, {
     ...(deps.sandboxRuntimeNamedBy !== undefined
-      ? { namedBy: deps.sandboxRuntimeNamedBy }
+      ? {
+        namedBy: deps.sandboxRuntimeNamedBy,
+        ...(deps.processPlatform !== undefined
+          ? { processPlatform: deps.processPlatform }
+          : {}),
+      }
       : { platform: deps.platform ?? Deno.build.os }),
     ...sandboxProcessOf(deps),
     flags: deps.sandboxSelectionFlags ?? true,
@@ -2035,18 +2060,7 @@ export const parseCfHarnessCliArgs = async (
   // One derivation shared with the interactive entrypoints; flags win over
   // the environment, and a default policy is looked up through
   // `deps.pathExists`.
-  const {
-    sandboxRuntimeKind,
-    sandboxRootfs,
-    sandboxCfcPolicy,
-    sandboxRunscBinary,
-    sandboxRunscNetworkMode,
-    sandboxRunscRootless,
-    sandboxRunscNetworkHelper,
-    sandboxRunscUnshare,
-    sandboxRunscSetpriv,
-    sandboxRuntimeChoice,
-  } = await cliSandboxRuntimeSelection(
+  const selection = await cliSandboxRuntimeSelection(
     env,
     {
       ...(typeof args["sandbox-runtime"] === "string"
@@ -2305,20 +2319,8 @@ export const parseCfHarnessCliArgs = async (
     printTranscript: Boolean(args["print-transcript"]),
     ...(apiKey !== undefined ? { apiKey } : {}),
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
-    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
-    ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
-    ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
-    ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),
-    ...(sandboxRunscNetworkMode !== undefined
-      ? { sandboxRunscNetworkMode }
-      : {}),
-    ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
-    ...(sandboxRunscNetworkHelper !== undefined
-      ? { sandboxRunscNetworkHelper }
-      : {}),
-    ...(sandboxRunscUnshare !== undefined ? { sandboxRunscUnshare } : {}),
-    ...(sandboxRunscSetpriv !== undefined ? { sandboxRunscSetpriv } : {}),
-    sandboxRuntimeChoice,
+    // The selection leaves out what it does not set.
+    ...selection,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),

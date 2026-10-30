@@ -336,6 +336,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const notices = Writable.of<ChatManagerNotice[]>([]);
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,

@@ -6,7 +6,10 @@ import {
   type SessionSync,
   type SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type {
   IStorageProvider,
   StorageNotification,

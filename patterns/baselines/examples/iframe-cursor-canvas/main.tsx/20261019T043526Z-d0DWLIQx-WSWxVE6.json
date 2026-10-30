@@ -1,0 +1,209 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeInputData": {
+        "properties": {
+          "title": {
+            "description": "Heading shown above the board.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "displayName": {
+            "description": "Display name, or the empty string until the user picks one.",
+            "type": "string"
+          },
+          "hue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cursor and shape hue in degrees, or `null` until the user picks a name."
+          }
+        },
+        "required": [
+          "displayName",
+          "hue"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a Cursor Canvas piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "title": "Cursor Canvas"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "displayName": "",
+          "hue": null
+        },
+        "description": "Each person's name and color on the board, kept for each user."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-cursor-canvas/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CanvasShape": {
+        "properties": {
+          "box": {
+            "$ref": "#/$defs/ShapeBox",
+            "description": "The shape's bounding box."
+          },
+          "hue": {
+            "description": "Fill hue, in degrees.",
+            "type": "number"
+          },
+          "id": {
+            "description": "Stable id, minted by the guest that added the shape.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Outline drawn inside the shape's bounding box.",
+            "enum": [
+              "rectangle",
+              "ellipse"
+            ]
+          },
+          "removed": {
+            "description": "Whether the shape was removed. A removed shape stays in the list.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "box",
+          "hue",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "displayName": {
+            "description": "Display name, or the empty string until the user picks one.",
+            "type": "string"
+          },
+          "hue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cursor and shape hue in degrees, or `null` until the user picks a name."
+          }
+        },
+        "required": [
+          "displayName",
+          "hue"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "shapes": {
+            "description": "Every shape added to the board, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/CanvasShape"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "shapes"
+        ],
+        "type": "object"
+      },
+      "Point": {
+        "properties": {
+          "x": {
+            "description": "Distance from the board's left edge.",
+            "type": "number"
+          },
+          "y": {
+            "description": "Distance from the board's top edge.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "type": "object"
+      },
+      "ShapeBox": {
+        "properties": {
+          "height": {
+            "description": "Height of the box, in board pixels.",
+            "type": "number"
+          },
+          "position": {
+            "$ref": "#/$defs/Point",
+            "description": "Top-left corner of the box."
+          },
+          "width": {
+            "description": "Width of the box, in board pixels.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "position",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A Cursor Canvas piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each user."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

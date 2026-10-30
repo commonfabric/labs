@@ -8,7 +8,7 @@ import type {
   Stream,
   WriteonlyCell,
 } from "@commonfabric/api";
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
 
 interface Item {
   id: string;

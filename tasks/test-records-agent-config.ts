@@ -16,7 +16,7 @@
 import { dirname, join } from "@std/path";
 import { replaceFile } from "./test-records-atomic-write.ts";
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** A harness whose configuration can carry the variable. */
 export interface AgentHarness {

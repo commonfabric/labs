@@ -34,7 +34,7 @@
 
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { RemoteEchoBreaker } from "../src/scheduler/echo-breaker.ts";
 import { gunzip } from "./traverse-replay/gzip.ts";

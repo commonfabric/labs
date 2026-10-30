@@ -8,8 +8,7 @@ The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
 
 `cf-harness` is an experimental but product-integrated Common Fabric agent
-runtime. Loom is its first product adapter and Pattern Factory is its first
-multi-phase orchestration adapter.
+runtime. Loom is its first product adapter.
 
 ## Architecture
 
@@ -194,8 +193,15 @@ whoever else runs, a named `runsc` included, has pasta make a user namespace),
 runs runsc there through `setpriv --pdeathsig KILL` (util-linux, refused where
 no `setpriv` is on `PATH`) with `--network=host` and a bundle with no network
 namespace of its own, and binds a hosts file over `/etc/hosts` that names the
-gateway, which pasta maps to the host's loopback, `host.docker.internal`. The
-container has egress and the host, and sees none of the host's interfaces. Pasta
+gateway, which pasta maps to the host's loopback, `host.docker.internal`, and a
+resolver configuration over `/etc/resolv.conf` that names the gateway, where
+pasta answers DNS with the host's resolver. The container has egress, by address
+and by name, and the host, and sees none of the host's interfaces. Pasta shares
+its stderr with that command and writes to it before the command starts (root's
+two warnings about user mappings, and the one below), so under pasta the
+driver's shell is named for the call (`cf-harness-call:<call id>`), writes that
+name to stderr before it starts runsc, and the call's stderr is what follows it;
+where the line is missing, pasta stopped first, and all it wrote is kept. Pasta
 starts what it runs in a PID namespace of its own, so a session's container
 started under it would record pids that `exec` and the control commands, run
 outside it, cannot find: under pasta's network the runtime describes no
@@ -207,9 +213,39 @@ goes (a call's timeout, a close of the runtime, which stops each call in flight
 through its pasta), the first process of its PID namespace dies, and every
 process of the namespace, the container's included, with it. Each such container
 keeps its state in a runsc root of its own call's, which goes when the call
-ends. A mount at or over `/etc/hosts` is refused under pasta's network. `none`
-gives the container loopback alone, and `host` the host's own network, with no
-network namespace of its own either.
+ends. A mount at or over `/etc/hosts` or `/etc/resolv.conf` is refused under
+pasta's network. `none` gives the container loopback alone, and `host` the
+host's own network, with no network namespace of its own either.
+
+On Linux a run that lists host ports in `CFC_VM_FORWARD_PORTS` reaches those
+ports of the host's loopback and no other port of it, whether its `runsc` is
+named or the default. The list is read as the macOS `runsc` reads it:
+comma-separated, with empty entries skipped, so an empty or unset variable lists
+none. An entry that is not a port number from 1 to 65535 refuses the run, naming
+the entry. The run's network is pasta's, as above, where the network mode is
+unnamed or `bridge`; a named `runsc` takes pasta's network for such a run, with
+the same lookups and the same refusals, which then offer to forward no ports. A
+run that lists ports under `none` or `host`, which forward nothing, is refused.
+A named `runsc` under `bridge` takes the same network where the run lists no
+port, with `-T none`: egress, and no port of the host's loopback. runsc's own
+`sandbox` network is loopback alone there, and a rootless `runsc` refuses it, so
+`bridge` would otherwise give no egress. Its refusals name `bridge` as what
+needs pasta, and offer `none`. Pasta runs with `--no-map-gw`, so the gateway
+does not lead to the host's loopback; with `-T <ports>` in place of `-T none`,
+so pasta listens on each port at the container's loopback and forwards it to the
+host's, and a command in the container cannot listen on a forwarded port itself;
+and with `--dns-forward 10.0.2.2`, so the gateway answers DNS as it does for the
+default. It is given no `--dns`, because with one pasta (passt 2024-02, Ubuntu
+24.04's) forwards queries to the address `--dns` names rather than to the host's
+resolver, and none would be answered. Without it, on a host whose nameservers
+are all on its loopback, pasta warns before the call's command starts that it
+finds no nameserver to hand the container, and names resolve all the same. The
+hosts file names the container's own loopback `host.docker.internal`. Egress is
+kept, so a service the host binds to an address of another interface is reached
+at that address, as from any other machine. Such a run offers no sandbox
+session, as any run under pasta's network does. On macOS the variable is the
+macOS `runsc`'s, which forwards the listed ports into its VM, and the selection
+does not read it.
 
 The macOS default is refused for two more things, and the Linux default for the
 last, each checked before the pieces above:
@@ -336,12 +372,13 @@ The settings below are read for a named `runsc` and for the macOS and Linux
 defaults. A setting that is named means the same under all three; what an
 unnamed one falls to differs:
 
-| Setting        | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                                                                                                              | Unnamed, for the macOS default                                                                                       | Unnamed, for the Linux default                                                                                         |
-| -------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Rootfs         | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, `images/kitchensink` in the Linux store under the home, where there is a home; with none the run is refused. | `images/kitchensink` in the store.                                                                                   | `images/kitchensink` in the store.                                                                                     |
-| CFC policy     | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                 |
-| `runsc` binary | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, with `--rootless` for a process that is not root, where the host allows it a user namespace. |
-| Network mode   | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which pasta gives: egress and `host.docker.internal`.                                                       |
+| Setting              | Batch CLI flag         | Environment                      | Unnamed, for a named `runsc`                                                                                                                                                                                              | Unnamed, for the macOS default                                                                                       | Unnamed, for the Linux default                                                                                         |
+| -------------------- | ---------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Rootfs               | `--sandbox-rootfs`     | `CF_HARNESS_SANDBOX_ROOTFS`      | On macOS, the kitchen-sink image in the store `CFC_VM_HOME` names, else in the one under the home. On Linux, `images/kitchensink` in the Linux store under the home, where there is a home; with none the run is refused. | `images/kitchensink` in the store.                                                                                   | `images/kitchensink` in the store.                                                                                     |
+| CFC policy           | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                 |
+| `runsc` binary       | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, with `--rootless` for a process that is not root, where the host allows it a user namespace. |
+| Network mode         | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which pasta gives: egress and `host.docker.internal`.                                                       |
+| Forwarded host ports | none                   | `CFC_VM_FORWARD_PORTS`           | None. On Linux, listed ones give it pasta's network, which reaches those ports of the host's loopback alone, and `bridge` gives it that network with none.                                                                | None; the macOS `runsc` reads the variable itself.                                                                   | None, so the gateway reaches every port of the host's loopback; listed ones are the only ports of it reached.          |
 
 The macOS default requires a policy because a run enforces CFC unless told
 otherwise, and an enforcing run with none is refused as it starts. The selection
@@ -405,11 +442,14 @@ operator summary, as `runsc (default on macOS: the native store at <store>)`,
 `sandbox` is the driver's default network. On macOS it is the VM's network. On
 Linux under the platform default it is `pasta`'s network namespace, taken as
 runsc's host network, with egress and the host at `host.docker.internal`.
-Missing `pasta` refuses that default. A named Linux `runsc` using `sandbox`,
-with no `pasta` configured, uses runsc's own network stack, loopback alone.
-`none` and `host` bypass pasta and use their respective network modes.
-`CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name and the vocabulary of the Docker
-driver it was first read by, which maps onto the driver's as follows:
+Missing `pasta` refuses that default. A named Linux `runsc` under `bridge` gets
+pasta's network forwarding the listed ports, none included. A named Linux
+`runsc` whose network is unnamed and that lists no port, with no `pasta`
+configured, uses runsc's own network stack, loopback alone; the platform default
+does not, and refuses without `pasta`. `none` and `host` bypass pasta and use
+their respective network modes. `CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name
+and the vocabulary of the Docker driver it was first read by, which maps onto
+the driver's as follows:
 
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | Network   |
 | -------------------------------- | --------- |
@@ -655,11 +695,11 @@ The current package provides:
   command endpoint, whose own rules decide what runs. The listing is read once
   per run and held for it, an explicit `list_commands` reading it again, and
   shows each command as a one-line typed signature; `run_command` takes one call
-  or a batch of up to sixteen, run four at a time, refuses a name the held
-  listing does not show with the nearest listed names, and returns a host
-  `bad-args` refusal with the command's signature. `run_command` carries write
-  authority. Each answer is measured against the run's observation ceiling like
-  a retrieval row, a batch's answers within one output bound. See
+  or a batch of up to sixteen, run four at a time, sends names to the host for
+  admission, and returns a host `bad-args` refusal with a known command's
+  signature. Its effect comes from host metadata; missing effects are writes.
+  Each answer is measured against the run's observation ceiling like a retrieval
+  row, a batch's answers within one output bound. See
   [Host commands](LOOM_COMMANDS.md);
 - durable local jobs with a 1 MiB enqueue body bound, SQLite FULL
   acknowledgment, and inline image bytes snapshotted into their job workspace. A
@@ -758,12 +798,11 @@ The current package provides:
   persisted-policy alias and is normalized without rewriting old transcript or
   run-state evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
-  discovery within the granted scope, and unavailable actions before asking or
-  giving up. Private research identifies applicable space-search patterns for
-  the parent to execute under existing targeting and release rules. The agent
-  offers the closest achievable outcome, checks a send path before asking for a
-  recipient, and never asks for a nonexistent release permission. Targeted
-  research answers keep their focused question guidance;
+  discovery within the granted scope, and unavailable actions. Private research
+  can identify space-search patterns for the parent to execute under tool and
+  release rules. The agent offers the closest achievable outcome, checks a send
+  path before asking for a recipient, and never asks for a nonexistent release
+  permission. Targeted research answers keep their focused question guidance;
 - caller and profile return-schema definitions checked before child creation,
   with bounded argument errors for malformed contracts and unresolved
   references; valid child results remain schema-validated and sanitized, with
@@ -858,17 +897,12 @@ The current package provides:
   strings as `revealed`, their sites as `sites`, and the other tokens as
   `hidden`, and its run state carries no return referents. Children report
   blockers to the parent. Missing-input discovery distinguishes released
-  evidence, absence within an enumerated granted scope, and unknown reads; it
-  stops for input rather than repeating author delegation. Shared
-  target-selection guidance asks for an unnamed, unattached piece without a
-  registry read and preserves established conversation targets. The parent
-  resolves a user-supplied slug with `resolve_piece` before author delegation,
-  using the input-cell path's exact-address resolver and space restriction. Only
-  an opaque handle returns; source remains child-only. An unheld slug or a
-  readable target that is not a usable piece returns recoverable `not-found`. A
-  failed read returns `unavailable` and does not establish absence. A display
-  name without a slug permits at most one registry lookup; only a unique
-  released match allows work to proceed;
+  evidence, absence within an enumerated granted scope, and unknown reads. The
+  parent can resolve a slug with `resolve_piece`, using the input-cell path's
+  exact-address resolver and space restriction. Only an opaque handle returns;
+  source remains child-only. An unheld slug or a readable target that is not a
+  usable piece returns recoverable `not-found`. A failed read returns
+  `unavailable` and does not establish absence;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
   run for cell addresses, recorded in `run-state.json`, carried across resume,
   and committed with an interactive session's checkpoint so each turn's run
@@ -1247,14 +1281,6 @@ the parent with whatever crosses.
 Loom currently forces autonomous `cf-harness` runs to `observe` mode while
 trusted `runsc-cfc` observation metadata is not wired through every local tool
 path. This is a product-integration deviation, not the package default.
-
-### Pattern Factory
-
-Pattern Factory runs each supported phase as a separate batch invocation. The
-launcher owns phase ordering, validation, bounded critic/manual-test repair
-passes, and finalization; `cf-harness` owns the phase-local model/tool loop and
-evidence. All default Pattern Factory phase profiles currently use CFC `observe`
-mode.
 
 ## Known limitations
 

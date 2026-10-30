@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type {
   AsCellEntry,
@@ -92,6 +92,7 @@ import {
   unionFoldedFrom,
   withIndexKeys,
   withIndexKeysNoted,
+  withIndexKeysOf,
   withOriginOf,
   withOriginsNumbered,
 } from "./schema-origins.ts";
@@ -101,7 +102,10 @@ import {
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
-import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import {
+  assertAnyValuesKeptNoMemberScope,
+  assertScopeDeclarationsAreReachable,
+} from "./scope-placement.ts";
 import {
   acceptsAnyValue,
   acceptsNoValue,
@@ -860,9 +864,9 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
 
 /**
  * What a schema states about its whole value besides which values it is: the
- * scope the value is stored in, and the default it takes. A value of an
- * intersection is a value of every constituent at once, so it takes what any
- * of them states.
+ * scope the value is stored in (`wholeValueScopeOf()`), and the default it
+ * takes. A value of an intersection is a value of every constituent at once,
+ * so it takes what any of them states.
  */
 type WholeValueKeywords = {
   readonly scope?: SchemaScope;
@@ -888,7 +892,10 @@ function wholeValueKeywordsOf(
     .filter(isObjectOrArray);
   const scopes = [
     ...new Set(
-      resolved.flatMap(({ scope }) => scope ? [scope as SchemaScope] : []),
+      resolved.flatMap((schema) => {
+        const scope = wholeValueScopeOf(schema, context);
+        return scope ? [scope] : [];
+      }),
     ),
   ];
   if (scopes.length > 1) throw nestedScopeError();
@@ -916,8 +923,12 @@ function wholeValueKeywordsOf(
  * is generated, the label beside a reference is that declaration's alone,
  * and the definition's are those of the value it wraps (`declaredIfcLabels()`).
  * A definition that is itself a reference is read the same way, and a
- * reference to no definition reads as itself. A schema that is no reference
- * is returned as it came.
+ * reference to no definition reads as itself. A cell written beside a
+ * reference holds what the definition denotes, so it reads as that cell, with
+ * no record of the definition's source (`schemaOrigins`), as a cell written
+ * around it in place does, though the keys its index signature applies to
+ * (`GenerationContext.indexKeys`) stay true of it. A schema that is no
+ * reference is returned as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -940,14 +951,13 @@ function withBesideKeywords(
     return withBesideKeywords(resolved, context, followed);
   }
   const read = { ...resolved, ...beside };
+  const labeled = isObjectOrArray(ifc)
+    ? withIfcLabels(read, ifc as Record<string, unknown>)
+    : read;
   return withBesideKeywords(
-    withOriginOf(
-      isObjectOrArray(ifc)
-        ? withIfcLabels(read, ifc as Record<string, unknown>)
-        : read,
-      resolved,
-      context,
-    ),
+    "asCell" in beside
+      ? withIndexKeysOf(labeled, resolved, context)
+      : withOriginOf(labeled, resolved, context),
     context,
     followed,
   );
@@ -971,14 +981,17 @@ type LabeledArm = {
  * reads a schema and flattened through nested unions, a union whose arms
  * folded to one schema included (`schemaOrigins`), with the labels of the
  * unions it is an arm of (`LabeledArm`). A schema that is no union is its
- * own single arm.
+ * own single arm, and so is a cell, whose union is what it holds
+ * (`Cell<A | B>`) and not the value it is.
  */
 function labeledArms(
   schema: MutableJSONSchema,
   context: GenerationContext,
 ): LabeledArm[] {
   const stated = withBesideKeywords(schema, context);
-  if (!isObjectOrArray(stated)) return [{ schema: stated, labels: [] }];
+  if (!isObjectOrArray(stated) || isCellValue(stated, context)) {
+    return [{ schema: stated, labels: [] }];
+  }
   const origin = context.schemaOrigins?.get(stated);
   if (origin?.kind === "union") {
     return armsOfUnion(stated, origin.parts(), context);
@@ -1126,6 +1139,22 @@ function establishedUnnamedKeysOf(
 }
 
 /**
+ * The scope `schema` states of its whole value (`WholeValueKeywords`): its
+ * `scope`, except a cell's. The scope a cell's schema writes beside its
+ * handles is that of what the cell holds, and is part of the cell
+ * (`Cell<PerUser<T>>`); the cell's own is the cap on its handle
+ * (`PerUser<Cell<T>>`), which its value keeps.
+ */
+function wholeValueScopeOf(
+  schema: MutableJSONSchemaObj,
+  context: GenerationContext,
+): SchemaScope | undefined {
+  return isCellValue(schema, context)
+    ? undefined
+    : schema.scope as SchemaScope | undefined;
+}
+
+/**
  * `schema` as the value it denotes, without what it states about its whole
  * value (`WholeValueKeywords`), read as `withBesideKeywords()` reads it. A
  * schema stating neither, beside a reference or in it, is returned as it
@@ -1136,13 +1165,20 @@ function valueOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const stated = withBesideKeywords(schema, context);
+  const scope = isObjectOrArray(stated)
+    ? wholeValueScopeOf(stated, context)
+    : undefined;
   if (
-    !isObjectOrArray(stated) || (!("scope" in stated) && !("default" in stated))
+    !isObjectOrArray(stated) || (scope === undefined && !("default" in stated))
   ) {
     return stated === resolveLocalRef(schema, context) ? schema : stated;
   }
-  const { scope: _, default: __, ...value } = stated;
-  return withOriginOf(value, stated, context);
+  const { scope: own, default: _, ...value } = stated;
+  return withOriginOf(
+    scope === undefined && own !== undefined ? { ...value, scope: own } : value,
+    stated,
+    context,
+  );
 }
 
 /**
@@ -1308,15 +1344,17 @@ function isUnknownValue(part: MutableJSONSchema): boolean {
 }
 
 /**
- * Whether `part` declares a cell: an `asCell` entry on a schema that is not
- * `void`'s, which lowers to the opaque marker too (`schemaOrigins`).
+ * Whether `part` declares a cell: an `asCell` entry on a schema that is
+ * neither `void`'s, which lowers to the opaque marker too, nor a union's that
+ * folded to one, as `void | OpaqueCell<any>` does (`schemaOrigins`).
  */
 function isCellValue(
   part: MutableJSONSchemaObj,
   context: GenerationContext,
 ): boolean {
+  const origin = context.schemaOrigins?.get(part)?.kind;
   return Array.isArray(part.asCell) && part.asCell.length > 0 &&
-    context.schemaOrigins?.get(part)?.kind !== "void";
+    origin !== "void" && origin !== "union";
 }
 
 /**
@@ -1380,9 +1418,9 @@ function intersectionOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const expand = (schema: MutableJSONSchema): MutableJSONSchema[] => {
-    const resolved = resolveLocalRef(schema, context);
-    const origin = isObjectOrArray(resolved)
-      ? context.schemaOrigins?.get(resolved)
+    const stated = withBesideKeywords(schema, context);
+    const origin = isObjectOrArray(stated)
+      ? context.schemaOrigins?.get(stated)
       : undefined;
     return origin?.kind === "intersection"
       ? origin.parts().flatMap(expand)
@@ -1417,10 +1455,15 @@ function intersectionOf(
     );
     if (scopes.size > 1) throw nestedScopeError();
     const agreed = wholeValueKeywordsOf(distinct, context).default;
-    return anyValueSchema(values, {
-      scope: [...scopes][0],
-      ...(agreed !== undefined ? { default: agreed.value } : {}),
-    }, context);
+    return anyValueSchema(
+      values,
+      {
+        scope: [...scopes][0],
+        ...(agreed !== undefined ? { default: agreed.value } : {}),
+      },
+      context,
+      distinct,
+    );
   }
   const keywords = wholeValueKeywordsOf(distinct, context);
   const combinations = arms.reduce<LabeledArm[][]>(
@@ -2154,6 +2197,7 @@ export class SchemaGenerator {
       result,
       context.anyValuesBySchema,
     );
+    assertAnyValuesKeptNoMemberScope(context.anyValuesBesideUnwritten);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

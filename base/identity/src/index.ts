@@ -12,6 +12,11 @@ export {
   verifyDelegation,
 } from "./delegation.ts";
 export {
+  decodeDelegationChains,
+  DELEGATION_CHAIN_FORMAT,
+  encodeDelegationChains,
+} from "./delegation-chain-text.ts";
+export {
   Identity,
   type IdentityCreateConfig,
   VerifierIdentity,

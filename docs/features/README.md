@@ -81,7 +81,8 @@ a line for each new document to the index below.
 ## Identity and people
 
 - [`shared-space-catalog.md`](shared-space-catalog.md) — portable collection
-  membership, transactional registration, and archive/restore confirmation
+  membership, transactional registration, archive/restore confirmation, and
+  entries whose space is deleted
 - [`did-identifiers.md`](did-identifiers.md) — what makes a string a DID, the
   one module that decides it, and the guard for an argument that takes a space
   name rather than a DID
@@ -106,8 +107,8 @@ a line for each new document to the index below.
   about the access its principal holds in a space: where the level comes from,
   who the principal is, when the answer is `"none"` and when it is not known,
   and how it stays current; what `spaceMembers(target)` lists, the principals
-  the space's access list names; and what `spaceOf(target)` returns, the DID
-  of that space
+  the space's access list names; what `spaceOf(target)` returns, the DID of
+  that space; and what `spaceDeleted(target)` says of a deleted space
 - [`private-inbox.md`](private-inbox.md) — the one inbox per identity where
   others deliver offers: where it lives, who creates it, what access its space
   grants, the offer envelope it shares with loom's share inbox, what `receive`

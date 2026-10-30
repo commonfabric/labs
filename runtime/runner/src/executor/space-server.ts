@@ -103,8 +103,8 @@ import {
   selectForeignBasisRows,
   selectStaleBasisInstances,
 } from "@commonfabric/memory/v2/scheduler-basis";
-import { getLogger } from "@commonfabric/utils/logger";
-import { minOf } from "@commonfabric/utils/math";
+import { getLogger } from "@commonfabric/logger";
+import { minOf } from "@commonfabric/collections/math";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,

@@ -1,4 +1,4 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type {
   AsCellEntry,
   CellKind,

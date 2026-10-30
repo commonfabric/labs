@@ -11,7 +11,7 @@ import {
 } from "@commonfabric/data-model";
 import type { SigilLink } from "@commonfabric/runner/shared";
 import { isCellHandle } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   type EventProvenance,
   getEventProvenance,

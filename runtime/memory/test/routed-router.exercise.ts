@@ -6,7 +6,7 @@ import {
 } from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { fromFileUrl, toFileUrl } from "@std/path";

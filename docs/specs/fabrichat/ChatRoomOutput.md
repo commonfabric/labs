@@ -249,9 +249,9 @@ space.
   client reads an absent `canSend` as `false`.
 - **`viewer`** says who is reading the room. Its `profile` is the reader's
   profile, absent until it resolves, as a link to the profile itself: the link
-  `sendMessage` records as a message's `authorProfile`, so a client tells the
-  reader's own messages from the rest by comparing the two links, and finds
-  the reader among `participants` the same way. Its `principal` is the
+  `sendMessage` records as a message's `authorProfile`. A client compares
+  profile links to find the reader among `participants`; a message can retain
+  a different profile the reader sent under. Its `principal` is the
   principal whose own profile that is (`profileOwnerOf()`), absent where it is
   no one's or its label can't be read, as for `participantEntries`. Its
   `role` is the reader's access to the room's space, as the space's access
@@ -261,9 +261,12 @@ space.
 - **`messageRights`** says what the reader may do to each of the room's
   messages: one entry per message, oldest first, holding the `message`, as the
   link to its own cell that every field of the room naming it holds, and
-  `canEdit`, `canDelete`, and `canObliterate`, decided by the rules the streams
-  below admit an event by, so a client offers exactly the acts the room would
-  take. Every entry is all `false` while `canSend` doesn't hold.
+  `canEdit`, `canDelete`, and `canObliterate`. Authorship for this display is
+  the match between `viewer.principal` and the message's `authored-by`
+  attestation. The streams check the authenticated event actor instead, so
+  selecting another person's profile can offer a control the handler refuses.
+  Every entry is all `false` while `canSend` doesn't hold or the selected
+  profile has no verified owner.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's
@@ -312,11 +315,15 @@ and the difference matters to a client:
   else passes none of these: they read their own.
 - **`PerSession`**: one instance per session. That is `canSend`, `canAdd`,
   `viewer`, and `messageRights`, which each session derives from the reader's
-  own access and profile. A session's profile can resolve later than another
-  session's of the same person, so each session reads its own answer: one
-  whose profile hasn't resolved yet can't tell another, whose profile has, that
-  it can't send. Each is a small document per session per room. A placement
-  carries `canSend` as well, per session in the same way.
+  own access and profile, and the room's `#profile` wish, which finds that
+  profile. A session's wish can find no profile, or fail, where another
+  session's of the same person finds one, as one whose home hasn't loaded yet
+  or that acts as another profile can, so each session reads its own answer:
+  one that found no profile can't tell another, which did, that it can't send.
+  Each is a small document per session per room, and a message row reads which
+  of its controls show from one record the room keeps for all its rows per
+  session. A placement's `#profile` wish and its `canSend` are per session in
+  the same way.
 
 Some values are derived when they're read, and stored nowhere, so reading them
 needs no instance of anything: `participants`, `roster`, and everything in
@@ -342,9 +349,16 @@ the sender's own runtime, that runtime's user. Below, **the sender** is that
 principal, and **the sender's profile** is the profile
 `wish({ query: "#profile" })` resolves to for it (see [per-demanding-identity
 wish resolution](../server-side-execution/builtins.md)): the sender's default
-profile, or their most recently used one. The sender can't choose which, and
-when it resolves to none, as when they have several profiles and no default, the
-event is refused.
+profile, or their most recently used one. When it resolves to none, as when
+they have several profiles and no default, streams that require a resolved
+profile refuse the event.
+
+Delegation grants access without changing the authenticated principal (see
+[proof chains](../memory-v2/04-protocol.md#proof-chains)). Distinct DIDs remain
+distinct authors even when they belong to one person or use the same profile.
+Delegation alone does not transfer the right to edit or delete a message or
+remove a reaction. OWNER moderation is a separate permission governed by the
+room's `ownersMayObliterate` policy.
 
 These rules hold for every stream:
 
@@ -362,11 +376,13 @@ These rules hold for every stream:
   gesture on that surface (see
   [`clients.md`](clients.md#writing-the-reviewed-gesture-requirement)), and the
   record it writes is labeled `authored-by` the principal who sent it.
-- `sendMessage`, `editMessage`, and `sendReaction` record the sender's profile,
-  and `deleteMessage` and `deleteReaction` read it to tell the sender's own
-  message or reaction. Each refuses an event that arrives before it resolves.
-  `obliterateMessage` reads it only to tell whether a message is the sender's
-  own.
+- `sendMessage` and `sendReaction` record the sender's profile. They,
+  `editMessage`, `deleteMessage`, and `deleteReaction` require it to resolve.
+  Edits, deletions, reaction removals, and an author's obliteration compare
+  the authenticated event actor with the record's `authored-by` attestation;
+  selecting a profile grants no authorship rights. `obliterateMessage` needs
+  no resolved profile and also admits OWNER moderation where the policy
+  allows it.
 - Writing in a room is joining it. When `sendMessage` appends a message,
   `sendReaction` adds a reaction, or `setTitle` sets the title, in a room in a
   space of its own, the room
@@ -556,11 +572,11 @@ room, it is also how either person removes their own words completely.
 Adds the sender's reaction to a message.
 
 - **Admitted:** as a trusted gesture on `ChatReactSurface`.
-- **Effect:** if the sender has no reaction with `emoji` on `message`, adds a
-  [`ChatReaction`](ChatReaction.md) to that message's `reactions`, recorded at
-  the handler clock as its `sentAt`. If they already have one, nothing
-  changes, and it keeps its `sentAt`. No one else's reaction changes, and
-  neither does the message itself.
+- **Effect:** if the sender's selected profile has no reaction with `emoji`
+  on `message`, adds a [`ChatReaction`](ChatReaction.md) to that message's
+  `reactions`, recorded at the handler clock as its `sentAt`. If that profile
+  already has one, nothing changes, and it keeps its `sentAt`. No one else's
+  reaction changes, and neither does the message itself.
 - **Refused:** a `message` outside the room's space, or deleted, or an `emoji`
   that isn't a single emoji.
 
@@ -576,6 +592,9 @@ one that isn't.
   `reactions` as it read them; it never describes the reaction by its emoji.
 
 Removes the sender's reaction from a message.
+
+The sender must match the reaction's `authored-by` attestation, regardless of
+which profile they now select.
 
 - **Admitted:** as a trusted gesture on `ChatReactSurface`.
 - **Effect:** removes `reaction` from `message`'s reactions. One that is no

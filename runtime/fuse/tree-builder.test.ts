@@ -1,7 +1,7 @@
 // tree-builder.test.ts — Unit tests for JSON-to-tree conversion and symlink parsing
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { isPatternToolValue } from "@commonfabric/piece/verb-listing";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { FsTree } from "./tree.ts";
 import { buildCallableScript, classifyCallableEntry } from "./callables.ts";
 import {

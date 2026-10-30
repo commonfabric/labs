@@ -1,31 +1,38 @@
 # React iframe-first pattern guide
 
 Use this guide to build a Common Fabric pattern whose application is a React
-tree inside one sandboxed `cf-iframe`. The wrapper remains mechanical: it
-exposes named Cell and SQLite resources, bundles the React guest and all of its
-dependencies into one HTML string, and returns durable state and output through
-the normal pattern result.
+tree inside one sandboxed `cf-iframe`. The pattern is one `main.tsx` you write
+by hand: it declares the Cells and any SQLite databases the application uses,
+renders a `cf-iframe` that hands them to the guest by name, and returns durable
+state and output through the normal pattern result. `deno bundle` compiles the
+React guest and all of its dependencies into one module.
 
 This guide is self-contained. Do not also load the plain-DOM iframe guide unless
 you are migrating an existing guest and need to compare the two source styles.
 
 ## Source layout
 
-Keep these authored files beside the generated wrapper:
+Keep these files together:
 
 ```text
 patterns/examples/iframe-react-quick-notes/
-├── contract.ts  # input, durable state, output, scopes, optional databases
-├── guest.tsx    # React application and Fabric bridge client
-├── guest.html   # optional document shell
+├── contract.ts  # types and defaults shared by main.tsx and the guest
+├── guest.tsx    # the React application and Fabric bridge client
+├── guest.html   # the guest's document, holding the React root
+├── guest.js     # `deno bundle` output of guest.tsx; never edited by hand
 ├── editor/
 │   └── guest.ts  # optional browser-only helper; see below
-└── main.tsx     # generated wrapper; do not hand-edit
+└── main.tsx     # the pattern: cells, databases, and the cf-iframe
 ```
 
-The generated `main.tsx` contains React, React DOM, the guest bridge, and the
-application. It does not need a module server at runtime. Keep `contract.ts` and
-`guest.tsx` so an agent can regenerate the wrapper.
+In this repository, the directory's name starts with `iframe-`. That prefix
+keeps the guest out of the pattern type check, which would compile it under the
+pattern runtime's JSX, and keeps the bundle out of `deno fmt`, `deno lint` and
+`deno task check`, which read the guest's source instead.
+
+`main.tsx` reads `guest.html` and `guest.js` with `dataFile()`, so both travel
+with the pattern's code: deploying the pattern needs no module server and no
+separate build artifact.
 
 React is owned by the guest bundle. The iframe sandbox adapter accepts the
 exact React instance the guest imports; `@commonfabric/iframe-sandbox` does not
@@ -35,13 +42,14 @@ Pattern discovery treats an ordinary non-test `.ts` or `.tsx` file under an
 `iframe-*` pattern as another pattern entry. Keep browser-only code in the root
 `guest.tsx`, or give an extracted browser helper the basename `guest.ts` or
 `guest.tsx`, as in `editor/guest.ts` above. Import that helper from the root
-guest so the wrapper includes it in the bundle; the basename prevents pattern
+guest so `deno bundle` includes it in `guest.js`; the basename prevents pattern
 discovery from separately asking the pattern compiler to evaluate its React or
 browser-only dependencies.
 
 ## Describe input, state, and output
 
-Create `contract.ts` as a declarative module with no side effects:
+Create `contract.ts` as a declarative module with no side effects. It holds only
+types and defaults, which `main.tsx` and the guest both import:
 
 ```typescript
 interface Note {
@@ -76,45 +84,125 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   noteCount: 0,
   selectedId: null,
 };
-
-export const IFRAME_PATTERN = {
-  name: "ReactQuickNotes",
-  displayName: "React quick notes",
-  stateScope: "user",
-  outputScope: "session",
-  frameHeight: "100vh",
-  databases: {},
-} as const;
 ```
 
-The wrapper exposes three resources with these roles:
+Declare each default with its interface as the annotation, as above, rather
+than `as const`: `main.tsx` types every resource as
+`Default<IframeStateData, typeof DEFAULT_STATE>`, so a default that does not
+satisfy its interface is a type error at the contract, and an `as const`
+default makes array members `readonly`, which a mutable `Note[]` rejects.
+
+`main.tsx` hands the guest three resources, and the guest receives each by the
+name `main.tsx` gives it:
 
 - `input` is read-only data supplied by the caller.
 - `state` is durable application state the guest may change.
-- `output` is the public result the guest may change and the wrapper returns.
+- `output` is the public result the guest may change and the pattern returns.
 
 The scopes are independent:
 
-| Scope | Meaning |
-| --- | --- |
-| `space` | Shared by every user and session in the piece |
-| `user` | Separate for each user and shared by that user's sessions |
-| `session` | Separate for each browser session |
+| Scope | Meaning | Declared in `main.tsx` as |
+| --- | --- | --- |
+| `space` | Shared by every user and session in the piece | `new Writable(...)` in the pattern body |
+| `user` | Separate for each user and shared by that user's sessions | an optional `PerUser<...>` input |
+| `session` | Separate for each browser session | an optional `PerSession<...>` input |
 
 Keep React-only UI state such as hover, an open menu, an unfinished text field,
 or animation state in React. Put data in a Fabric Cell only when it should be
 durable or visible outside this component tree.
 
+## Write the pattern
+
+`main.tsx` for the quick notes, with state kept for each user and output kept
+for each browser session:
+
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerSession,
+  type PerUser,
+  UI,
+  type VNode,
+  type Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface ReactQuickNotesInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  state?: PerUser<Writable<Default<IframeStateData, typeof DEFAULT_STATE>>>;
+  output?: PerSession<
+    Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>
+  >;
+}
+
+export interface ReactQuickNotesOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<ReactQuickNotesInput, ReactQuickNotesOutput>(
+  ({ input, state, output }) => ({
+    [NAME]: "React quick notes",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{ input, state, output }}
+          resourceKinds={{ input: "readonly" }}
+        />
+      </div>
+    ),
+    state,
+    output,
+  }),
+);
+```
+
+`src` is the guest's document and `script` is its bundle. `$context` binds a
+record of cells: each field is a resource the guest asks for by name, and each
+reaches the guest live, resolved to this user's or this session's cell before
+the guest loads. `resourceKinds` grants `input` reads only; a field it gives no
+kind is a cell the guest may write. Callers omit the optional inputs, and each
+`Default` supplies the readable fallback. `state` and `output` are returned, so
+the piece's result carries the guest's data to callers.
+
+A `space`-scoped state or output is created in the pattern body instead, as
+[Choose a scope for state and output](./iframe-pattern-guide.md#choose-a-scope-for-state-and-output)
+in the iframe pattern guide shows. The same guide's
+[Optional SQLite](./iframe-pattern-guide.md#optional-sqlite),
+[Optional presence](./iframe-pattern-guide.md#optional-presence), and
+[Optional streams](./iframe-pattern-guide.md#optional-streams) carry the
+templates that add a database, a presence room, or a verb to the record;
+[the SQLite section below](#add-sqlite-without-querying-before-hydration) adapts
+the first to the quick notes.
+
 ## Import React and create the adapter
 
-Pin the React and type packages in the guest source. The file-level JSX pragmas
-make the guest compile independently of the Common Fabric JSX configuration
-used by generated `main.tsx`:
+Pin the React and type packages in the guest source, and start `guest.tsx` with
+the three JSX pragmas that [Bundle the guest](#bundle-the-guest) explains:
 
 ```tsx
 // Shown at module scope.
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 // @deno-types="npm:@types/react@19.2.18"
 import React from "npm:react@19.2.8";
 // @deno-types="npm:@types/react-dom@19.2.5/client.d.ts"
@@ -145,9 +233,37 @@ Pass the same imported `React` object to `createFabricReact` that creates the
 tree. Do not import a second React copy for the bridge adapter. Use
 `createRoot`; do not use the removed legacy `render` entry point.
 
-The default generated document contains `<div id="root"></div>`. Supply a
-custom `guest.html` only when the guest needs document-level metadata, fonts,
-or sibling elements outside the React root.
+`guest.html` is the guest's complete document. It holds the element the React
+root renders into, `<div id="root"></div>`, together with any document-level
+metadata, styles, or sibling elements outside the React root:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>React quick notes</title>
+    <style>
+    html, body, #root {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+```
+
+The document holds no `<script>` for the guest. The sandbox runs `guest.js` as
+the document's last module script once the document is parsed, so `#root` exists
+when the guest starts. A Content Security Policy the document declares in a
+`<meta>` must admit inline scripts (`script-src 'unsafe-inline'`), since that is
+how the bundle arrives; a policy that does not leaves the guest blank.
 
 ## Read and write Cells with hooks
 
@@ -184,6 +300,7 @@ ready before that action becomes available:
 // Shown at module scope.
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 // @deno-types="npm:@types/react@19.2.18"
 import React from "npm:react@19.2.8";
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
@@ -372,18 +489,19 @@ snap between local and durable positions. Keep component types, React keys, and
 the library root stable for the same reason. The full loading view belongs only
 to initial hydration; an ordinary mutation must not remount the application.
 
-A presence room is declared in the contract and read through
+A presence room is declared in `main.tsx` and read through
 `fabric.presence(name)`; its events arrive outside React, so hold what a
 component renders from them in state or an external store.
 [Optional presence](./iframe-pattern-guide.md#optional-presence) in the
 iframe pattern guide is the contract.
 
-A verb is declared in the contract's `streams`, and the guest sends it an event
-through `fabric.stream(name).send(event)` from the event handler where the user
-acted, which is how a guest calls `agent()` and the other LLM built-ins in a
-user-triggered way. When the pattern exposes an action as a verb, prefer
-sending that verb an event over making the same change through Cell writes. Keep the draft that produced the event, and show any error
-the send rejects with, until the send settles.
+A verb is declared in `main.tsx` and passed to the guest as a stream, and the
+guest sends it an event through `fabric.stream(name).send(event)` from the event
+handler where the user acted, which is how a guest calls `agent()` and the other
+LLM built-ins in a user-triggered way. When the pattern exposes an action as a
+verb, prefer sending that verb an event over making the same change through
+Cell writes. Keep the draft that produced the event, and show any error the send
+rejects with, until the send settles.
 [Optional streams](./iframe-pattern-guide.md#optional-streams) in the iframe
 pattern guide is the contract.
 
@@ -435,6 +553,7 @@ ancestor:
 // Shown at module scope.
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 // @deno-types="npm:@types/react@19.2.18"
 import React from "npm:react@19.2.8";
 
@@ -458,16 +577,16 @@ replace the text under the user's cursor.
 
 ### Include the library's structural CSS
 
-The generated wrapper bundles JavaScript imports, but a React library can also
-depend on stylesheet rules that give its viewport, measurement wrappers,
-overlays, portals, and controls their geometry. Theme colors alone are not
-enough; the guest receives the `--cf-theme-*` variables and
-the `cf-*` classes described in
+`deno bundle` inlines JavaScript imports, but a React library can also depend on
+stylesheet rules that give its viewport, measurement wrappers, overlays,
+portals, and controls their geometry. Theme colors alone are not enough; the
+guest receives the `--cf-theme-*` variables and the `cf-*` classes described in
 [Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme),
-so components spell no color or font of their own. The required structural rules still belong in `guest.html` so the document stays
-self-contained under the iframe CSP. Give `html`, `body`, `#root`, and every
-intermediate layout container an explicit height, and give custom measured
-items a stable width or size when the library expects one.
+so components spell no color or font of their own. The required structural
+rules still belong in `guest.html` so the document stays self-contained under
+the iframe CSP. Give `html`, `body`, `#root`, and every intermediate layout
+container an explicit height, and give custom measured items a stable width or
+size when the library expects one.
 
 Exercise built-in layout actions such as fit-to-view and inspect the rendered
 bounds. A component that mounts without an exception can still be unusable when
@@ -493,6 +612,7 @@ host-minted handle in the effect:
 ```tsx
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 // @deno-types="npm:@types/react@19.2.18"
 import React from "npm:react@19.2.8";
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
@@ -537,35 +657,95 @@ go through the resolved handle.
 
 For inline objects in an append-only array, use an application-level stable ID.
 Pull the array when the queued action begins, locate the current index by ID,
-derive the path handle, pull it, and recheck its ID before the narrow write. This
-is safe only while existing entries never reorder or disappear. If entries can
-move or be deleted, store them as independently addressable entities or use a
-record keyed by stable ID instead of retaining an array path.
+derive the path handle, pull it, and recheck its ID before the narrow write.
+This is safe only while existing entries never reorder or disappear. If entries
+can move or be deleted, store them as independently addressable entities or use
+a record keyed by stable ID instead of retaining an array path.
 
 ## Add SQLite without querying before hydration
 
-Declare databases in `IFRAME_PATTERN`:
+Create the database in the pattern body with `sqliteDatabase()`, put it in the
+`$context` record under the name the guest asks for, and give that name the kind
+`sqlite`. The variable's annotation sets its scope: `PerUser<SqliteDb>` keeps
+one database for each user, `PerSession<SqliteDb>` one for each browser
+session, and no annotation one for the whole piece. `main.tsx` for the quick
+notes with a database of notes kept for each user:
 
-```typescript
-export const IFRAME_PATTERN = {
-  name: "ReactQuickNotes",
-  displayName: "React quick notes",
-  stateScope: "user",
-  outputScope: "session",
-  databases: {
-    appDatabase: {
-      scope: "user",
+```tsx
+// Shown at module scope.
+import {
+  cfSqlite,
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerSession,
+  type PerUser,
+  sqliteDatabase,
+  type SqliteDb,
+  UI,
+  type VNode,
+  type Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface ReactQuickNotesInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  state?: PerUser<Writable<Default<IframeStateData, typeof DEFAULT_STATE>>>;
+  output?: PerSession<
+    Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>
+  >;
+}
+
+export interface ReactQuickNotesOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<ReactQuickNotesInput, ReactQuickNotesOutput>(
+  ({ input, state, output }) => {
+    const { table } = cfSqlite;
+    const appDatabase: PerUser<SqliteDb> = sqliteDatabase({
       tables: {
-        notes: {
+        notes: table({
           id: "integer primary key",
           text: "text not null",
-        },
+        }),
       },
-    },
+    });
+
+    return {
+      [NAME]: "React quick notes",
+      [UI]: (
+        <div style={{ width: "100%", height: "100vh" }}>
+          <cf-iframe
+            src={GUEST_HTML}
+            script={GUEST_SCRIPT}
+            $context={{ input, state, output, appDatabase }}
+            resourceKinds={{ input: "readonly", appDatabase: "sqlite" }}
+          />
+        </div>
+      ),
+      state,
+      output,
+    };
   },
-} as const;
+);
 ```
 
+The guest opens the database by the name the record gives it, `appDatabase`.
 Mount the query component only after every Cell used to construct or authorize
 the query is ready. This preserves the Rules of Hooks while preventing an early
 query from using fallback configuration:
@@ -573,6 +753,7 @@ query from using fallback configuration:
 ```tsx
 /** @jsxRuntime classic */
 /** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
 // @deno-types="npm:@types/react@19.2.18"
 import React from "npm:react@19.2.8";
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
@@ -621,9 +802,10 @@ invalidations, so committed `exec()` calls refresh active queries. Do not put a
 query hook behind a conditional inside one component; put it in a child that is
 mounted after the readiness boundary.
 
-SQLite scopes have the same meanings as Cell scopes. Database, table, and
-column names are data. For the exact name `__proto__` in `contract.ts`, use a
-computed property (`["__proto__"]`) so JavaScript creates an own property.
+SQLite scopes have the same meanings as Cell scopes. Table and column names are
+data rather than TypeScript bindings. When a table or column needs the exact
+name `__proto__`, write it as a computed property (`["__proto__"]`) in
+`main.tsx`, so JavaScript creates an own property.
 
 ## Preserve user drafts and report failures
 
@@ -643,27 +825,40 @@ one authoritative resource and store only its stable key in the other. Separate
 Cell writes are not atomic. Mint a new ID for a genuinely edited retry; reuse an
 idempotency ID only for the same payload.
 
-## Generate the wrapper
+## Bundle the guest
 
-Run the helper from the repository root with `--react`. That flag compiles TSX
-through the `React` instance imported by `guest.tsx`; without it, repository JSX
-settings target the Common Fabric host runtime instead.
+`guest.tsx` starts with three pragmas that select React's classic JSX runtime,
+its factory, and its fragment:
 
-```bash
-deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/examples/iframe-react-quick-notes/contract.ts \
-  --guest patterns/examples/iframe-react-quick-notes/guest.tsx \
-  --out patterns/examples/iframe-react-quick-notes/main.tsx \
-  --react
+```tsx
+// Shown at module scope.
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// @deno-types="npm:@types/react@19.2.18"
+import React from "npm:react@19.2.8";
 ```
 
-The helper refuses to overwrite a file. Add `--force` only when regenerating
-that named output. For a custom document, add `--html .../guest.html`; the HTML
-must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
+The JSX settings `deno bundle` reads from the repository's configuration are
+the pattern runtime's, which `main.tsx` compiles under. Without the pragmas,
+`deno bundle` compiles the guest's JSX against that runtime and draws the
+runtime into the bundle instead of React.
+
+From the pattern's directory, write the guest's bundle:
+
+```bash
+deno bundle --platform browser --minify guest.tsx -o guest.js
+```
+
+Run it again after every change to the guest or to anything it imports, and
+keep `guest.js` with the change: `main.tsx` reads the file as it is, so a stale
+bundle runs the guest as it was. `deno bundle` inlines React, React DOM,
+`@commonfabric/iframe-sandbox/guest`, `@commonfabric/iframe-sandbox/react`,
+and every other import of the guest into the one module the sandbox runs.
 
 ## Verify in the browser
 
-Format and compile both realms:
+From the repository root, format and compile both realms:
 
 ```bash
 deno fmt patterns/examples/iframe-react-quick-notes
@@ -734,7 +929,8 @@ deno task cf acl set <browser DID> WRITE
 
 Exercise every meaningful action and inspect the browser console. A successful
 bundle does not prove React mounted, a hook completed its pull, or a bridge
-write reached the worker.
+write reached the worker, and a `guest.js` written before the guest's last
+change runs the guest as it was.
 
 Verify at least these behaviors:
 
@@ -764,7 +960,7 @@ event boundary. Run `*.browser.test.ts` through the package's browser task and
 exclude it from plain Deno discovery; a DOM guard that turns the same file into
 a no-op unit test is false coverage. Prefer this focused component boundary
 when the regression does not require the running shell. Reserve a full pattern
-integration test for behavior that genuinely crosses the wrapper, runtime,
+integration test for behavior that genuinely crosses the `cf-iframe`, runtime,
 scope, or reload boundary. Do not add an application-specific `postMessage`
 command or snapshot backdoor only to automate the guest.
 

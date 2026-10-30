@@ -8,7 +8,7 @@ import {
   type MemorySpace,
   type Runtime,
 } from "@commonfabric/runner";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   type CellSelection,
   CellSelectionError,

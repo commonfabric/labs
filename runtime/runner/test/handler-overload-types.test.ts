@@ -28,7 +28,7 @@ import type {
   HandlerState,
   Stream,
 } from "@commonfabric/api";
-import type { Equal, MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { Equal, MustBeTrue, Same } from "@commonfabric/js-values/types";
 import { handler } from "../src/builder/module.ts";
 
 interface AddTopic {

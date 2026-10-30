@@ -7,7 +7,7 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { sourceDocKey } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";

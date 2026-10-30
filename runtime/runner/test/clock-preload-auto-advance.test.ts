@@ -13,12 +13,12 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 
 describe("clock-preload auto-advance", () => {
   it("runs a chain of zero-delay turns to its end before jumping to a production timer", async () => {
     const started = Date.now();
-    // Armed from `src/` (the utils sleep), so the pump owns it.
+    // Armed from `src/` (`@commonfabric/async`'s sleep), so the pump owns it.
     const timer = sleep(30_000).then(() => "timer" as const);
     // A chain of turns, each armed only once the one before it has run —
     // the shape of a frame delivered a turn at a time.

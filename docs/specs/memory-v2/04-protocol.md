@@ -27,6 +27,9 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
+- deleting a space (section 4.5.1, INV-15) is specified and not yet
+  implemented: the server refuses the tombstone it writes under INV-12's
+  validity clause, as it refuses any ACL document that is not an access list
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -781,7 +784,8 @@ The server sends:
 
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
-- `session/revoked` when a session loses ownership to a newer connection
+- `session/revoked` when a session loses ownership to a newer connection, when
+  an access-list change deauthorizes it, or when its space is deleted
 - `session/admissible` when an access-list change admits a principal this
   connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
@@ -814,6 +818,10 @@ interface ResponseMessage<Result> {
     permanentEvidence?: true;
     // Engine revision whose ACL state produced an authorization denial.
     aclRevision?: number;
+    // On an AuthorizationError, present and `true` when the space is deleted
+    // (section 4.5.1): every principal is refused it for good. An older client
+    // ignores the marker and reads the denial as permanent, which it is.
+    deleted?: true;
   };
 }
 
@@ -828,7 +836,10 @@ interface SessionRevoked {
   type: "session/revoked";
   space: SpaceId;
   sessionId: SessionId;
-  reason: "taken-over";
+  // `taken-over`: a newer connection resumed the session. `unauthorized`: an
+  // access-list change left its principal without access. `deleted`: its
+  // space was deleted (section 4.5.1), so no principal will be admitted again.
+  reason: "taken-over" | "unauthorized" | "deleted";
 }
 
 interface SessionAdmissible {
@@ -1783,26 +1794,66 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
+| a deleted space's tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
-initialize or repair ACL state. The exact space DID holds OWNER only while the
-space has no ACL document and no history, which is what genesis needs and all
-it needs; after that it holds what the ACL grants it, like any other principal.
-A space DID therefore cannot repair a malformed or retracted ACL, and cannot
-claim a populated space that has none. A valid ACL mutation is a whole-document,
-space-scoped replacement on the default branch and must retain at least one
-concrete (non-`"*"`) OWNER. Patch, deletion, mixed ACL/data commits, and
-last-owner removal are rejected. These shape and genesis rules are hard
-storage invariants in both `observe` and `enforce`; `observe` relaxes only
-READ and WRITE shortfalls on an already valid ACL, and refuses a principal
-lacking OWNER, so no principal can write a space's ACL while a deployment
-stages its access control. The one ACL mutation a principal without OWNER may
-make, in both modes, is removing its own entry: a replacement whose document is
-the stored one less that principal's entry, and nothing else, from a list with
-no `"*"` entry.
+initialize or repair ACL state, except a deleted space's. The exact space DID
+holds OWNER only while the space has no ACL document and no history, which is
+what genesis needs and all it needs; after that it holds what the ACL grants it,
+like any other principal. A space DID therefore cannot repair a malformed or
+retracted ACL, and cannot claim a populated space that has none. A valid ACL
+mutation is a whole-document, space-scoped replacement on the default branch and
+must retain at least one concrete (non-`"*"`) OWNER, unless it deletes the
+space, as below. A patch, a document `delete`, a mixed ACL/data commit, and
+last-owner removal are rejected. These shape and genesis rules are hard storage
+invariants in both `observe` and `enforce`; `observe` relaxes only READ and
+WRITE shortfalls on an already valid ACL, and refuses a principal lacking OWNER,
+so no principal can write a space's ACL while a deployment stages its access
+control. The one ACL mutation a principal without OWNER may make, in both modes,
+is removing its own entry: a replacement whose document is the stored one less
+that principal's entry, and nothing else, from a list with no `"*"` entry.
+
+A space's sole member deletes it, which ends it for everyone and for good.
+Deleting a space writes its ACL document and never removes it: the deletion
+commit is an ACL-only commit, shaped as any other, whose document is a
+tombstone rather than an access list:
+
+```json
+{ "deleted": { "by": "did:key:z6Mk..." } }
+```
+
+`by` names the committing principal, and the tombstone holds nothing else. The
+server admits it only when the stored ACL is valid and its one entry is at
+OWNER, naming either the committing principal or the principal the session's
+capability resolves to through a verified proof chain, the chain's root issuer
+("Proof chains" below). For an ordinary space that entry is the deleting
+principal's own, so another member has to be removed, visibly and through the
+ordinary check, before the space can be deleted. That asks no authority an OWNER
+does not already hold. A self-owned space, whose list names the space's own DID
+and whose owner acts through a delegation from it, is deleted through the chain,
+as every other OWNER act on it is. A server whose access-list policy admits no
+delegations, and so advertises no `sessionOpenProofs`, refuses every chain, and
+there only an entry naming the committing principal admits a deletion. A
+delegation is not an entry in the list, so another holder of one loses access
+with no commit of its own first, as it does when an owner replaces the list; and
+since `by` still names the committing principal, the tombstone is the one place
+such a space records the identity that acted for it. A self-owned profile's
+space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
+list replacement through the chain before it is deleted. No one deletes a Home
+space, through a chain or without one: a space whose list grants its own DID
+OWNER and that declares no kind, which is how the server already tells a home
+when it resolves the `actingAs` binding. From the deletion commit on, the server
+refuses every command any principal sends the space, a service DID's included,
+with a permanent `AuthorizationError` carrying `deleted: true`, revokes the
+sessions open on it, as it revokes those any ACL commit deauthorizes but with
+the `session/revoked` reason `deleted`, and admits no further commit to it, so
+no principal can undo the deletion. A tombstone is not an access list, so a
+server rolled back to a release that does not know tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
-shape) and **INV-13** (ACL genesis precedence and authority) in
+shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
+space as **INV-15** (space deletion), in
 [`09-invariants.md`](09-invariants.md#inv-12--acl-mutation-commit-shape) —
 go there for the exact admission predicate, what each rejection message means,
 and what is and is not known about why the whole-document rule exists. A client
@@ -2128,7 +2179,21 @@ An implementation MAY still expose convenience methods named `subscribe()` at
 the client API level, but they are library constructs built on `watchSet()` and
 the session cache rather than distinct server-routed effect streams.
 
-### 4.8.4 Session Lifecycle
+### 4.8.4 Refusals
+
+The client library rejects a refused request with an `Error` whose `name` is
+the response's `error.name` and whose `message` is its `error.message`, and
+copies onto it each marker the envelope carries: `retriable`,
+`permanentEvidence`, `aclRevision`, `deleted`, `clientUpdateRequired`,
+`precondition`, `retryAfterSeq`, and `conflicts`. A consumer matches on `name`
+and the markers, never on `message`. A `session/revoked` terminates the session
+with an `Error` named `SessionRevokedError` for `taken-over`, and
+`AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
+also sets `deleted: true` on it, so a session open when its space is deleted
+reports the deletion as a refused reopen would. Copying `deleted` is not
+implemented yet.
+
+### 4.8.5 Session Lifecycle
 
 On disconnect:
 

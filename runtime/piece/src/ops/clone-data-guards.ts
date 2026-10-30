@@ -15,7 +15,7 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { commitPreconditionValueHash } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export function cloneCellKey(cell: Cell<unknown>): string {
   const link = cell.getAsNormalizedFullLink();

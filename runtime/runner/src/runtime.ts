@@ -34,11 +34,11 @@ import { StaticCache } from "@commonfabric/static";
 import {
   type AsyncLocalStore,
   FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isDeno } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+} from "@commonfabric/async/async-local-store";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isDeno } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
@@ -258,8 +258,8 @@ const isFullNormalizedLinkShape = (
 };
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
+// otherwise. The `await import` stays here (not in `@commonfabric/async`): a
+// top-level await in a widely-imported package stalls Deno module evaluation.
 const WriteDebugContextStorage = (isDeno()
   // deno-lint-ignore cf-imports/no-inline-module-import
   ? (await import("node:async_hooks")).AsyncLocalStorage
@@ -458,15 +458,18 @@ export interface ExperimentalOptions {
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots
    * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
-   * Defaults to off, which compiles every instance positionally. Turning it on
-   * moves every deployed `const`-bound child from its positional identity to a
-   * named one. The first setup that names an instance carries its deployed
-   * child over where the pattern the parent last set up loads and names it
-   * too, and the parent's setup record, where it has one, numbers its cell as
-   * this runtime's build of that pattern does; otherwise the instance starts
-   * fresh. It needs every runtime that opens the
-   * same space to run the same naming mode first, so no environment variable
-   * reaches it (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   * A deployed parent's positional child is carried over to its name on the
+   * first setup that names it. Where the parent's setup record numbers the
+   * pattern it last set up otherwise than this runtime's build of it, an
+   * instance at a number the record cannot vouch for takes a child only as
+   * the one positional child of its pattern identity, and none takes the
+   * child at its own positional spot. Defaults to off, which compiles every
+   * instance positionally, so nothing names an instance and nothing is
+   * carried over.
+   * Turning it on is one-way for the data it writes, and needs every runtime
+   * that opens the same space to run the same naming mode first
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`), so no
+   * environment variable reaches it.
    */
   instanceNames?: boolean | undefined;
 }
@@ -2001,9 +2004,9 @@ export class Runtime {
     this.experimental.lazyMaterialization ??= true;
     this.experimental.agentBuiltin ??= true;
     this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a deployed parent's positional
-    // children are carried over to their names, and a runtime whose naming
-    // mode differs from a space's data is kept away from that space.
+    // TODO(danfuzz): Turn this on only once a runtime whose naming mode
+    // differs from a space's data is kept away from that space;
+    // `instance-naming-modes.test.ts` pins what one does to it until then.
     this.experimental.instanceNames ??= false;
     this.experimental.localSessionDocuments ??= false;
 
@@ -4758,26 +4761,44 @@ export class Runtime {
     await profiles.sync();
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
-    let held = 0;
-    for (const link of links) {
-      if (!isCell(link)) continue;
+    const spaces = links.flatMap((link) => {
+      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
-      if (space === home.space) continue;
-      const record = this.getCell(
-        home.space,
-        delegationsCause(space),
-        delegationRecordSchema,
-      );
-      await record.sync();
+      return space === home.space ? [] : [space];
+    });
+    // The records are read together, so that their reads reach the server
+    // holding Home as one request rather than as a round trip per profile.
+    const recorded = await Promise.all(
+      spaces.map((space) => this.recordedDelegations(space)),
+    );
+    let held = 0;
+    for (const delegations of recorded) {
       // Each recorded delegation is one the space issued to this key, so
       // each is a chain of its own.
-      for (const delegation of record.get()?.delegations ?? []) {
-        if (!(delegation instanceof FabricBytes)) continue;
-        await this.storageManager.addDelegationChain([delegation.slice()]);
+      for (const delegation of delegations) {
+        await this.storageManager.addDelegationChain([delegation]);
         held += 1;
       }
     }
     return held;
+  }
+
+  /**
+   * The delegations the Home space records over `space`, as their bytes,
+   * oldest first: the one the space issued to this key when it was created
+   * to own itself, and any added beside it since. Empty for a space Home
+   * records none for. Each is a copy, the caller's to keep or change.
+   */
+  async recordedDelegations(space: MemorySpace): Promise<Uint8Array[]> {
+    const record = this.getCell(
+      this.getHomeSpaceCell().space,
+      delegationsCause(space),
+      delegationRecordSchema,
+    );
+    await record.sync();
+    return (record.get()?.delegations ?? []).flatMap((delegation) =>
+      delegation instanceof FabricBytes ? [delegation.slice()] : []
+    );
   }
 
   /**

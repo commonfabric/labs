@@ -379,7 +379,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [
       "base/static/assets/types/",
       "base/static/scripts/",
-      "base/utils/",
+      "base/pattern-contract/",
     ],
   },
 ];

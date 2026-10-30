@@ -8,7 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type CellHandle,
   CellReadRefusedError,

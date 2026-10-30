@@ -23,8 +23,8 @@ Write tests for:
 - regressions that are easy to reintroduce
 - edge cases with real branching logic
 
-For Pattern Factory Build, prefer tests that cover the product contract rather
-than only the happy path:
+When a pattern implements a spec or a product brief, prefer tests that cover
+that contract rather than only the happy path:
 
 - first-run/default and sparse states
 - primary add, remove, edit, toggle, or submit flows

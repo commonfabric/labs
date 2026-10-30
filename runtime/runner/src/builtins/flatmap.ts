@@ -1,6 +1,6 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Pattern } from "../builder/types.ts";
 import type { AddCancel } from "../cancel.ts";

@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   cfcResultFromRunscSidecar,

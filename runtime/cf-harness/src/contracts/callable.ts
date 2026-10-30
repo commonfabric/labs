@@ -17,7 +17,7 @@
 import type { JSONObject } from "@commonfabric/api";
 
 /** What a callable does to the person's world, where its source says. */
-export type HarnessCallableEffect = "read" | "change";
+export type HarnessCallableEffect = "read" | "change" | "external";
 
 /** One callable thing, as a model reads it. */
 export interface HarnessCallableDescriptor {

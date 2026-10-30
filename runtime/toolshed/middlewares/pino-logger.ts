@@ -4,7 +4,7 @@ import pretty from "pino-pretty";
 
 import env from "@/env.ts";
 import { backgroundLogFile, backgroundLogStream } from "@/background.ts";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 const SENSITIVE_HEADERS = new Set([
   "cf-request-auth",

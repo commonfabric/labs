@@ -417,7 +417,7 @@ describe("the repository's gate suites", () => {
     );
     expect(shared).toContain("runner");
     expect(shared).toContain("shell");
-    expect(shared).not.toContain("utils");
+    expect(shared).not.toContain("js-values");
     // A path no group checks makes nothing mandatory, rather than making
     // every group mandatory or throwing.
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
