@@ -70,7 +70,11 @@ export interface ServingMemoryServer extends AsyncDisposable {
    */
   readonly host: ServingLoopHandle;
 
-  /** The identity the serving runtimes open their sessions as. */
+  /**
+   * The identity the serving runtimes sign their sessions' opens as. Under
+   * `aclMode` `observe` or `enforce`, the sessions read a space whose access
+   * list names a concrete owner as that owner, not as this identity.
+   */
   readonly serviceIdentity: Identity;
 
   /**
