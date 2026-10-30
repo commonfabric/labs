@@ -159,7 +159,6 @@ import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitElisions } from "./commit-elision.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
-import { isCfcEnvelopePath } from "./differential.ts";
 import {
   type EventAppendOutcome,
   type EventAppendPacing,
@@ -9959,7 +9958,10 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcEnvelopePath(write.path)) {
+        if (
+          write.space !== this.#space ||
+          !Differential.isCfcEnvelopePath(write.path)
+        ) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -9997,7 +9999,10 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcEnvelopePath(read.path)) {
+      if (
+        isInternalVerifierRead(read.meta) &&
+        Differential.isCfcEnvelopePath(read.path)
+      ) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -10013,7 +10018,7 @@ export class SpaceReplica
           // A mergeable write reads the CFC envelope as part of the write;
           // the read leaves the conflict set unless the transaction also
           // writes the envelope (handled above).
-          isCfcEnvelopePath(read.path) ||
+          Differential.isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
