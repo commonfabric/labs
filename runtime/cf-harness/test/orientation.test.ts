@@ -57,7 +57,13 @@ describe("orientation", () => {
 
   it("leaves target discovery to the caller across assembled parent prompts", () => {
     for (const patternIndex of [false, true]) {
-      for (const tags of [undefined, new Set(["find"]), new Set(["author"])]) {
+      for (
+        const tags of [
+          undefined,
+          new Set(["find" as const]),
+          new Set(["author" as const]),
+        ]
+      ) {
         const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex, tags });
         expect(prompt).not.toContain("make zero registry reads");
         expect(prompt).not.toContain("at most one registry read");
