@@ -3,12 +3,15 @@
 ## Status
 
 Design sketch. Nothing here is implemented. It is written against the serving
-loop's lease ([`server-side-execution/serving-loop.md`](server-side-execution/serving-loop.md)
+loop's lease
+([`server-side-execution/serving-loop.md`](server-side-execution/serving-loop.md)
 §2), the admission table and the `actingAs` binding
 ([`server-side-execution/protocol.md`](server-side-execution/protocol.md) §2
 and §2b), and the proof chains of
 [`profile-delegation.md`](profile-delegation.md) as
-[`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5.1 admits them.
+[`memory-v2/04-protocol.md`](memory-v2/04-protocol.md) §4.5.1 admits them. It
+changes the shape of a space's access-list document, which "Rolling out the new
+form" covers.
 
 ## The problem
 
@@ -26,17 +29,16 @@ space cannot show that its owner agreed.
 ## The design in one paragraph
 
 A space's owner issues a delegation over the space to the execution identity of
-the ASP that is to serve it, and writes it into the space's delegations
-document. An executor opening a space may read the entries of that document
-addressed to it without holding READ in the space, so it learns from the space
-itself whether it may serve it. An executor serves a space only while such a
-delegation stands: the memory server grants the space's lease, and admits the
-executor's served reads and derived commits there, only to a holder whose
-service identity a delegation in the document names. A space with no delegation
-to an ASP is not served by it, and runs in its members' runtimes as it does with
-server execution off. Removing the delegation ends the service. A person
-delegates only to the ASP they choose to run their spaces, and only for the
-spaces they choose.
+the ASP that is to serve it, and records it in the space's access-list document,
+beside the access list itself. The service identity already reads that document
+in every space, so an executor learns from the space whether it may serve it.
+An executor serves a space only while such a delegation stands: the memory
+server grants the space's lease, and admits the executor's served reads and
+derived commits there, only to a holder whose service identity a delegation in
+the document names. A space with no delegation to an ASP is not served by it,
+and runs in its members' runtimes as it does with server execution off.
+Removing the delegation ends the service. A person delegates only to the ASP
+they choose to run their spaces, and only for the spaces they choose.
 
 ## What it guarantees, and what it does not
 
@@ -83,7 +85,7 @@ toolshed refuses to start without.
 | `sub` | the space |
 | `cmd` | a read-class command path (see "Reads stay read-only") |
 | `pol` | empty |
-| `exp` | `null` by default: consent stands while the delegations document holds it |
+| `exp` | `null` by default: consent stands while the access-list document holds it |
 
 Who issues it follows from who owns the space:
 
@@ -100,29 +102,70 @@ processes come to sign with keys of their own, the executor identity delegates
 onward to each, attenuated and with an expiry, and the chain gains a link that
 the ASP holds and the space does not.
 
-## The delegations document
+## The access-list document
 
-A space holds its consent delegations in a document beside its access list and
-its revocation document, `of:<space>/delegations`: a list of chains, each a list
-of delegation envelopes exactly as their issuers encoded them, root first.
+A space's access-list document is `of:<space>`, the id `aclDocId` in
+`runtime/memory/acl.ts` builds. Its value today is the access list itself, a
+map from a principal to its capability:
 
-- **Writing it needs OWNER**, under the same whole-document rule as the access
-  list (INV-12 in [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md)).
-  The genesis commit holds nothing but the access list (04-protocol.md), so the
-  creator writes the delegations document in its first commit after genesis.
-- **Reading it is an exception to READ, and a narrow one.** A principal the
-  access list grants nothing may read the chains in the document whose final
-  audience is that principal, and no others. An executor opening a space it
-  does not yet serve learns from the space whether its owner consented, and goes
-  on to open the space under the chain it read. The server holds back every
-  other entry, so a reader without READ does not learn who owns the space or
-  which other ASPs serve it. A reader with READ reads the document as it reads
-  any other.
+```json
+{ "did:key:z6MkOwner": "OWNER", "*": "READ" }
+```
 
-The document is what makes consent something the space says rather than
-something the executor carries. The owner writes a delegation once, in the space
-it is over; no runtime has to hand it to an executor; and an auditor with READ
-sees which ASPs serve the space.
+Under this design the access list moves down a level, beside the space's
+consent delegations:
+
+```json
+{
+  "acl": { "did:key:z6MkOwner": "OWNER", "*": "READ" },
+  "delegations": [["<envelope>", "..."]]
+}
+```
+
+`delegations` is a list of chains, each a list of delegation envelopes exactly
+as their issuers encoded them, root first. A space with no consent delegations
+holds an empty list or no `delegations` key.
+
+The delegations live in the value rather than in a sibling metadata field of
+the document, beside `cfc` or `result`. Metadata fields are delivered and
+followed by rules of their own
+([`memory-v2/01-data-model.md`](memory-v2/01-data-model.md),
+[`memory-v2/05-queries.md`](memory-v2/05-queries.md) §5.3.2), and consent is
+access-list data: it takes the access list's validation and write rules, and
+leaves the metadata rules as they are.
+
+**The two forms are told apart by their keys.** Every key of a legacy list is
+`"*"` or a DID (`isACLUser` in `runtime/memory/acl.ts`), and neither `acl` nor
+`delegations` is either. A value with an `acl` key is the new form; a value
+whose keys are all principals is the legacy form, read as the `acl` of a space
+with no consent delegations. A value holding a principal key beside `acl` or
+`delegations` is malformed, and fails closed as a malformed list does today. A
+reader of the new form reads `acl` exactly as it reads a legacy list and
+ignores keys it does not know, so a field added later reaches readers that
+predate it without making them fail closed. The server's validator for genesis
+and access-list commits knows every field and refuses any other.
+
+**Writing it is unchanged.** A change is an access-list commit: a single
+whole-document `set`, by an OWNER, in a commit of its own (INV-12 in
+[`memory-v2/09-invariants.md`](memory-v2/09-invariants.md)). The validator
+additionally verifies every chain in `delegations`: each is over this space,
+its links meet, and its signatures hold. A writer that changes membership
+replaces `acl` and keeps `delegations` as it stands, as the writers already
+keep the document's sibling fields (`writeAcl` in
+`runtime/runner/src/acl-manager.ts`, and the served access-list change in
+`runtime/memory/v2/server.ts`). A genesis commit may carry `delegations`, so a
+space can be born with its consent, as a profile is (see "Profiles").
+
+**Reading it needs nothing new.** The service identity may read a space's
+access list and nothing else in its own name; every other served read runs as
+the space's owner (the OW31 ruling, in
+[`server-side-execution/verification-coverage.md`](server-side-execution/verification-coverage.md)).
+The consent delegations are part of that document, so the ruling covers them:
+the memory server reads them when it decides the lease, and an executor reads
+them, as it reads the access list, to learn whether it may serve the space. A
+principal with READ reads the document as it reads any other, so it reads the
+chains too. They disclose the space's owners, whom `acl` already names, and
+which executors serve the space.
 
 If the document is written only by an OWNER and consulted by the server, an
 entry already shows that an owner consented. The signature adds what a document
@@ -130,6 +173,31 @@ write does not: the bytes alone are verifiable away from the store, by another
 operator's memory server, an auditor, or the ASP itself, and they say which
 owner consented and when, where the document's history says only who last
 replaced it.
+
+## Rolling out the new form
+
+A reader that predates the new form finds keys that are not principals, takes
+the list for malformed, and fails closed, so the space admits no one. The new
+form therefore reaches readers before any writer produces it:
+
+1. Every reader accepts both forms. The memory server goes first: its
+   access-list classification (`readAclState`), genesis validation
+   (`isSpaceKeyAclGenesis`), owner resolution (`resolveSpaceOwnerOf`), invites
+   (`invites.ts`) and compaction (`compact.ts`). Then the runner's access-list
+   writer (`acl-manager.ts`), its contextual flow control readers
+   (`cfc/space-membership.ts`, `cfc/custody-seal.ts`), `space-access.ts` and
+   the executor's wave; the toolshed's `space-authority.ts`, `meeting-rooms.ts`
+   and pattern-lifecycle handlers; the piece operations `space-vetting.ts`,
+   `private-inbox.ts` and `profile-space-root.ts`; `cf acl`; and the state
+   inspector's compaction. The private inbox's vetting compares a list for
+   exact equality (`sameAcl`), so it compares the `acl` of either form.
+2. Writers produce the new form, and a writer converts a legacy list on its
+   next write. No reader needs the conversion; it only lets the legacy branch be
+   retired eventually.
+3. Where the document carries a persisted label map (its `cfc` field) keyed by
+   value paths, a label under a principal's key moves with the list, from
+   `value.<principal>` to `value.acl.<principal>`, in the commit that converts
+   it.
 
 ## Where it is enforced
 
@@ -141,16 +209,17 @@ Checking consent at the session alone would leave those paths open.
 
 So the memory server grants a space's lease, by the conditional write
 serving-loop.md §2 describes, only to a holder whose service identity is the
-final audience of a chain in the space's delegations document that verifies
-now: its signatures and links hold, its root issuer holds OWNER in the access
-list, and no link is listed in the space's revocation document. The server reads
-the document itself, as it reads the access list, so a chain an executor kept
-from an earlier read counts for nothing once the owner has removed it. The
+final audience of a chain in the space's `delegations` that verifies now: its
+signatures and links hold, its root issuer holds OWNER in the space's `acl`,
+and no link is listed in the space's revocation document. The server reads the
+document itself, as it reads the access list, so a chain an executor kept from
+an earlier read counts for nothing once the owner has removed it. The
 derived-commit admission check, which already compares the commit's holder with
-the live lease, then needs nothing further. A commit to the delegations
-document, to the access list, or to the revocation document that leaves the
-holder without a standing chain sweeps the lease as an access-list commit sweeps
-the sessions it deauthorizes.
+the live lease, then needs nothing further. Withdrawing consent is an
+access-list commit, which already sweeps the sessions it deauthorizes
+(`#revokeDeauthorizedSessions`); the same commit ends a lease whose holder it
+leaves without a standing chain, and so does a commit to the revocation
+document.
 
 The executor's sessions present the chain they read from the document in place
 of `actingAs: "space-owner"`. Capability then resolves for the chain's root
@@ -160,7 +229,8 @@ operator's list of delegating principals.
 
 ## Reads stay read-only
 
-The `actingAs` binding grants READ-class decisions only: write and owner checks
+The `actingAs` binding grants READ-class decisions only: `session.open`,
+queries, and watches resolve as the space's owner, while write and owner checks
 resolve against the envelope principal, and served writes go by the lease and
 the carriage. A proof chain grants more. The capability a chain resolves "feeds
 every check the session's capability feeds, the access-list mutation check
@@ -168,30 +238,45 @@ included" ([`profile-delegation.md`](profile-delegation.md), "Capability"), so
 an owner-rooted chain on an executor's session would make that session an OWNER
 for writes and for replacing the access list.
 
-Consent delegations therefore carry a read-class command path, and the server
-evaluates it: the command restriction of profile delegation's fifth phase
-("Policy and command restriction"). Until that phase lands, the server applies
-a chain on a session opened by an executor identity to READ-class decisions
-only, the rule the binding follows today.
+What limits a delegation to some operations is its command path, `cmd`, not its
+policy: UCAN matches a command by prefix, and a policy (`pol`) is evaluated
+over an invocation's arguments, which can say which documents but cannot tell a
+query from a transaction. A command path can say read-only only once the
+operations that name documents are invocations of their own, with `cmd` and
+`args`, which is the protocol's target (`memory-v2/04-protocol.md` §4.5.2;
+profile delegation's fifth phase, "Policy and command restriction"). Today the
+open is the one invocation.
+
+When those commands are named, the read-class ones, `session.open`, the query
+and the watch, belong under one prefix that no write command shares, so that a
+single consent delegation covers exactly what the binding covers today. A
+delegation has one `cmd`, and `/memory/graph.query` does not cover
+`/memory/session.open`. The alternative is a server rule that admits an open for
+any chain covering some read command.
+
+Until command restriction lands, the server applies a chain on a session opened
+by an executor identity to READ-class decisions only, the rule the binding
+follows today.
 
 ## Profiles
 
 A profile's access list grants only the profile itself, and its key is
 destroyed at creation, so the person holds the profile's authority through a
 delegation. A consent chain built on that delegation, profile to person to
-executor, would name the person as an issuer in the profile's delegations
-document, and every reader with READ in the profile, which is every principal,
-would read the link between the profile and the person.
+executor, would name the person as an issuer in the profile's access-list
+document, and every reader of that document would read the link between the
+profile and the person.
 [`profile-delegation.md`](profile-delegation.md), "Attribution and
 unlinkability", keeps that link out of the space's documents; a consent chain
 through the person would put it back.
 
-So the profile's key issues the consent delegation itself, at creation, beside
-the delegation it issues to the person and before it is destroyed: profile to
-executor, with no person in the chain. That needs the ASP to be known when the
-profile is created, which it is when the profile is created through that ASP's
-shell. A profile created without one, or one that moves to another ASP, has no
-key left to issue a new one; that is an open question below.
+So the profile's key issues the consent delegation itself, beside the
+delegation it issues to the person and before it is destroyed, and the genesis
+commit carries it in `delegations`: profile to executor, with no person in the
+chain, in place from the space's first commit. That needs the ASP to be known
+when the profile is created, which it is when the profile is created through
+that ASP's shell. A profile created without one, or one that moves to another
+ASP, has no key left to issue a new one; that is an open question below.
 
 The binding resolves no one in a profile space today, since a self-owned space
 declaring a kind is not taken for a home, so a served read of a profile stands
@@ -205,19 +290,19 @@ delegation from the profile serves it under the profile's own grant instead.
   with the flag off.
 - **A cross-space read follows the consent of the space read.** A served
   derivation in space S that reads space T is refused that read when T's
-  delegations document holds no chain to the ASP serving S. Today it reads T as
-  T's owner. Whether such a derivation fails visibly or runs in a client instead
-  is an open question below.
-- **Ownership changes end consent.** The binding resolves a space's owner again
-  on every access-list change. A chain resolves its root issuer's current grant
-  instead: when the owner who issued the delegation is demoted or removed, the
-  space stops being served until a remaining owner writes another. A social
-  space whose members are all owners, as a FabriChat room's are, is the case
-  this reaches most.
+  access-list document holds no chain to the ASP serving S. Today it reads T as
+  T's owner. Whether such a derivation fails visibly or runs in a client
+  instead is an open question below.
+- **An ownership change carries its consent with it.** A chain resolves its
+  root issuer's current grant, so when the owner who issued a delegation is
+  demoted or removed, that chain stops standing. The commit that changes the
+  owners can replace `delegations` in the same `set`, so a space whose owners
+  change need not stop being served. A social space whose members are all
+  owners, as a FabriChat room's are, is the case this reaches most.
 - **Withdrawing consent is an edit to the space.** An owner takes a space away
-  from an ASP by removing its chain from the delegations document, and the lease
-  ends with the commit. The revocation document keeps its role for chains
-  presented without being in the document, such as the delegations
+  from an ASP by removing its chain from `delegations`, and the lease ends with
+  the commit. The revocation document keeps its role for chains presented
+  without being in the document, such as the delegations
   [`profile-delegation.md`](profile-delegation.md) describes.
 
 ## What stays as it is
@@ -247,16 +332,12 @@ delegation from the profile serves it under the profile's own grant instead.
   one, every profile created before this design among them, can be served only
   through a chain through the person, which publishes the link this design
   keeps out of it, or not at all.
-- **How the read reaches the server.** A principal without READ cannot open a
-  session, so it cannot query the delegations document as it queries other
-  documents. The server can consult the document itself when an executor
-  identity opens the space, and admit the open under the chain it finds there,
-  so the executor presents nothing; or it can answer a read of the entries
-  addressed to the opener before admission, which lets an executor learn which
-  spaces it may serve without opening them.
 - **The default for a new space.** Creating a space through an ASP's shell could
   write a consent delegation to that ASP as part of the creation, or ask, or
   write none until the owner opts in.
 - **Home.** A served `wish` reads the demanding person's Home through the
   binding today. Without consent for Home, a served run cannot read it, so Home
   is the first delegation a person who wants server execution writes.
+- **The revocation document.** `of:<space>/revocations` is a document of its
+  own today. With consent in the access-list document, it could move there too,
+  as another field beside `acl` and `delegations`.
