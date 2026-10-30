@@ -3,7 +3,20 @@ import type { Cell } from "../cell.ts";
 import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
+import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import {
+  cfcConfidentialityForObservationNode,
+  type CfcObservedConfidentiality,
+} from "../cfc/observation.ts";
+import type {
+  IExtendedStorageTransaction,
+  Metadata,
+} from "../storage/interface.ts";
+import {
+  linkResolutionProbe,
+  machineryRead,
+} from "../storage/reactivity-log.ts";
 import { listElementKeys } from "./list-element-keys.ts";
 import { listElementLink, listSlotPlace } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
@@ -56,6 +69,12 @@ export type ListCoordinatorPlan = {
   container: Cell<any[]>;
   /** Element identity keys by position (empty when `list` is not an array). */
   elementKeys: Map<number, string>;
+  /**
+   * The confidentiality the list's membership carries, for a `map` to
+   * declare on its container's membership; empty for the other ops, whose
+   * membership reads stay ordinary. See `listCoordinatorPlan`.
+   */
+  membershipConfidentiality: CfcObservedConfidentiality;
 };
 
 /**
@@ -73,6 +92,20 @@ export type ListCoordinatorPlan = {
  * member content onto the result container's structure label. The slot
  * resolutions are link-resolution probes, which flow derivation treats
  * as resolution machinery rather than observations.
+ *
+ * For `map`, the list-doc read is machinery as well, and what the
+ * membership carries is returned for the coordinator to declare on its
+ * container's membership instead. The per-transaction join stamps
+ * everything the reconcile writes, the setup of each new child included,
+ * and a child's existence is a fact about its own slot alone: a list whose
+ * membership carries every element's label (a query result, CFC spec
+ * §8.17.6) would otherwise hand each child the join of all of them. The
+ * coordinator still consumes the membership — which children exist, and
+ * how many, is what it computes from it — so the label it carries moves to
+ * the container's membership by declaration, read off the list's stored
+ * labels the way an enumerating read of it would consume them. The label
+ * metadata read is a verifier read, which reactivity sees, so a membership
+ * label that grows re-runs the reconcile.
  *
  * The result container is keyed on the node's reserved output spot — a
  * stable, position-derived, program-independent identity (CT-1623) —
@@ -108,7 +141,18 @@ export function listCoordinatorPlan(
     runtime,
     tx,
     inputsCell,
+    "list",
+    op === "map" ? { ...linkResolutionProbe, ...machineryRead } : undefined,
   );
+  const listBase = listCell.getAsNormalizedFullLink();
+  const membershipConfidentiality: CfcObservedConfidentiality = op === "map"
+    ? cfcConfidentialityForObservationNode({
+      labelView: cfcLabelViewFromMetadata(
+        readStoredCfcMetadata(tx, listBase),
+        listBase.path,
+      ),
+    })
+    : [];
   const list: Cell<any>[] | undefined = rawList === undefined
     ? undefined
     : !Array.isArray(rawList)
@@ -158,6 +202,7 @@ export function listCoordinatorPlan(
     scope,
     container,
     elementKeys,
+    membershipConfidentiality,
   };
 }
 
@@ -173,19 +218,29 @@ export function listCoordinatorPlan(
  * ends on, until a round ends where the last one did, before deriving a
  * plan. A slot whose links run in a cycle names no value and resolves to its
  * own place in the list. `slots` is empty when the list is not an array.
+ *
+ * `rawListReadMeta`, when given, marks the list-doc read: a caller that
+ * declares what the membership carries itself passes the machinery markers,
+ * so the read does not join it into the transaction (see
+ * `listCoordinatorPlan`). Left out, the read is an ordinary observation of
+ * the membership.
  */
 export function listSlotResolutions(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
+  rawListReadMeta?: Metadata,
 ): {
   listCell: Cell<any>;
   rawList: unknown;
   slots: NormalizedFullLink[];
 } {
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
-  const rawList = listCell.withTx(tx).getRaw() as unknown;
+  const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
+  const rawList = rawListReadMeta === undefined
+    ? readRawList()
+    : tx.runWithAmbientReadMeta(rawListReadMeta, readRawList);
   const listBase = listCell.getAsNormalizedFullLink();
   // An element whose links run in a cycle, back to a place they passed or
   // into their own subpath, names no value, so its slot is its place in the

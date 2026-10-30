@@ -121,7 +121,16 @@ there observed without dereferencing, was an SC-4/SC-8 residual until
 template-population Stage A: a standalone slot observation now consumes the
 assignment `J` through the `*`-path `followRef` template — on declared
 list-coordinator containers since Stage A, and on ALL pure-link containers
-since the machinery-read marker landed (#4674; see the SC-8 note below).)
+since the machinery-read marker landed (#4674; see the SC-8 note below).
+Implementation note 2026-10-30: the per-transaction J also stamps the setup of
+every child a reconcile starts, and a child's existence is a fact about its own
+slot alone, so a list whose membership carries every element's label — a query
+result, §8.17.6 — handed each child the join of all of them. `map` now reads the
+list's membership as machinery and declares what it carries on its container's
+membership (`observes: "enumerate"`, grow-only), read off the list's stored
+labels as an enumerating read would consume them: the container's membership and
+length keep every element's label, and a child carries its own slot's label and
+the selection's. `filter` and `flatMap` still read the membership into J.)
 
 **SC-8 [normative] Read-API → observation-class mapping — §4.6.3.** The
 primitive read profile defines `shape`/`value`/`enumerate`/`count`/ `followRef`,

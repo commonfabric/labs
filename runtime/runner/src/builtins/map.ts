@@ -2,9 +2,14 @@ import { internSchema } from "@commonfabric/data-model-schema";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
 
-import { type Pattern } from "../builder/types.ts";
+import { type JSONSchema, type Pattern } from "../builder/types.ts";
 import { type AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
+import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import {
+  type CfcObservedConfidentiality,
+  joinCfcObservedConfidentiality,
+} from "../cfc/observation.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { setResultCell } from "../result-utils.ts";
@@ -62,6 +67,53 @@ const RESULT_PRESENCE_SCHEMA = internSchema({
   items: { asCell: ["cell"], type: "unknown" },
 });
 
+/**
+ * The membership confidentiality `container` already declares at its root:
+ * the declaration is grow-only, so every write of the container carries it
+ * forward, whatever the list's membership carries now.
+ */
+function declaredMembership(
+  tx: IExtendedStorageTransaction,
+  container: Cell<any[]>,
+): CfcObservedConfidentiality {
+  const link = container.getAsNormalizedFullLink();
+  const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
+  return joinCfcObservedConfidentiality(
+    entries
+      .filter((entry) =>
+        entry.origin === "declared" && entry.observes === "enumerate" &&
+        entry.path.length === link.path.length &&
+        link.path.every((segment, i) => segment === entry.path[i])
+      )
+      .map((entry) => entry.label.confidentiality),
+  );
+}
+
+/**
+ * The schema a write of the container goes through: the presence schema,
+ * declaring on the container's membership what the list's membership
+ * carries, joined with what the container declares already. Which children
+ * the container holds, and how many, is what the coordinator computes from
+ * the list's membership, and its read of that membership is machinery (see
+ * `listCoordinatorPlan`), so the label reaches the container here and
+ * nowhere else. A list whose membership carries nothing leaves the schema
+ * as it is.
+ */
+function membershipWriteSchema(
+  tx: IExtendedStorageTransaction,
+  container: Cell<any[]>,
+  membership: CfcObservedConfidentiality,
+): JSONSchema {
+  const confidentiality = joinCfcObservedConfidentiality([
+    declaredMembership(tx, container),
+    membership,
+  ]);
+  return confidentiality.length === 0 ? RESULT_PRESENCE_SCHEMA : {
+    ...RESULT_PRESENCE_SCHEMA,
+    ifc: { confidentiality, observes: "enumerate" },
+  };
+}
+
 const logger = getLogger("runner.map", { enabled: true, level: "warn" });
 
 /**
@@ -77,15 +129,17 @@ const logger = getLogger("runner.map", { enabled: true, level: "warn" });
  *
  * The goal is to keep the output array current without recomputing too much.
  *
- * Elements are tracked by the normalized link address of their cell (via
- * `getAsNormalizedFullLink()`). The `asSchema` traverse with
- * `asCell: ["cell"]` already resolves cell links to target entities, so:
+ * Elements are tracked by identity, not position: each slot's link is
+ * resolved without reading the element (`listSlotResolutions`), and the
+ * link it ends on, with how many times that link has already appeared in
+ * the list, is the element's key (`listElementKeys`). So:
  *
- * - Cell links: `list[i]` resolves to a cell pointing at the target entity.
- *   Its normalized link is stable across position changes, enabling reuse.
- * - Inline values: `list[i]` resolves to a cell pointing at the array position.
- *   Its normalized link includes the positional index, so identity = position.
- *   Shifted inline values get new runs (acceptable trade-off).
+ * - A slot holding a link keys by the entity the link resolves to. The key
+ *   survives a move to another position, and the child is reused there.
+ * - A slot holding an inline value keys by its place in the list, since the
+ *   value has no entity of its own. A value that shifts position gets a
+ *   new run (acceptable trade-off).
+ * - A slot whose links run in a cycle keys by its place as well.
  *
  * @param list - A doc containing an array of values to map over.
  * @param op - A pattern to apply to each value.
@@ -236,9 +290,8 @@ function createMapInstance(
               settleTx.runWithAmbientReadMeta(
                 { ...linkResolutionProbe, ...machineryRead },
                 () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx).set(
-                    [],
-                  ),
+                  result!.asSchema(membershipWriteSchema(settleTx, result!, []))
+                    .withTx(settleTx).set([]),
               );
             }
           }).then(({ error }) => {
@@ -318,6 +371,11 @@ function createMapInstance(
     // every element's taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
+    // The same view for writes, declaring on the container's membership what
+    // the list's membership carries (`membershipWriteSchema`).
+    const resultForWrite = result.asSchema(
+      membershipWriteSchema(tx, result, plan.membershipConfidentiality),
+    ).withTx(tx);
 
     const droppedArgumentFields = unusedListOpArgumentFields(argumentUsage);
     const createRunInput = (element: Cell<any>, index: number) => ({
@@ -394,7 +452,7 @@ function createMapInstance(
     // Correspondingly, the result should be []. TODO: Maybe it's important to
     // distinguish empty inputs from undefined inputs?
     if (list === undefined) {
-      probeScoped(() => resultWithLog.set([]));
+      probeScoped(() => resultForWrite.set([]));
       releaseRemovedElements(runtime, elementRuns, new Set());
       return;
     }
@@ -489,7 +547,7 @@ function createMapInstance(
         newArrayValue[i] = exposedResultCell(runtime, tx, resultCell);
       }
     }
-    probeScoped(() => resultWithLog.set(newArrayValue));
+    probeScoped(() => resultForWrite.set(newArrayValue));
   };
 
   // Child-starting coordinator: its reconcile must run on resume to

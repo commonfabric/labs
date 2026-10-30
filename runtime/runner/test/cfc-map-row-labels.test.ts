@@ -229,7 +229,7 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     const read = runtime.edit();
     try {
       const link = cell.getAsNormalizedFullLink();
-      const entries = readStoredCfcMetadata(read, { ...link, path: [] })
+      const entries = readStoredCfcMetadata(read, link)
         ?.labelMap.entries ?? [];
       return entries.flatMap((entry) =>
         (entry.label as { confidentiality?: unknown[] }).confidentiality ?? []
