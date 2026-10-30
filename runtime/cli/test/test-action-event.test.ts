@@ -77,6 +77,8 @@ async function fixture() {
 describe("test-action-event", () => {
   it("readies wrapper fields without demanding linked descendants", async () => {
     await using docs = await fixture();
+    // Exercise the CLI's wrapper construction, beyond the runtime primitive's
+    // projection tests, so a recursive pull here would demand the descendant.
     const result = await pullActionEvent(docs.event, {
       surface: "TestSurface",
       action: "Record",

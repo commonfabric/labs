@@ -67,6 +67,8 @@ async function fixture() {
 describe("pullProjected()", () => {
   it("readies copied fields without demanding their recursive descendants", async () => {
     await using docs = await fixture();
+    // Projected callbacks belong to hosts, not to the cells pattern code holds.
+    expect("pullProjected" in docs.event).toBe(false);
     const result = await pullProjected(docs.event.asSchema(true), (value) => ({
       ...(value as { record: { scalar: number; descendant: number } }),
     }));
