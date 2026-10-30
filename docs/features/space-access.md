@@ -17,7 +17,9 @@ default (`MEMORY_ACL_MODE`), checks every read and write against the space's
 access list whatever a pattern decided, so a pattern that offers a control on
 the strength of this answer has not granted anything. In `observe` mode the
 server only logs an ordinary shortfall, and in `off` mode, the memory server's
-own default when it is constructed without a mode, it checks nothing.
+own default when it is constructed without a mode, it checks nothing. A
+[deleted space](#a-deleted-space), once deletion is implemented, is the
+exception: it is refused in every mode.
 
 ## Where the level comes from
 
@@ -219,16 +221,15 @@ appears once access is granted, without a reload.
 
 A deleted space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
-has a tombstone where its access list was. A memory server that checks access,
-in `observe` or `enforce` mode, refuses it to every principal for good, with a
-refusal marked `deleted`; in `off` mode it checks no session's access, and
-serves a deleted space to a session like any other
-([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)), so
-there a client's `spaceDeleted(target)` never returns `true`. To the access
-calls that is a refusal like any other permanent one: `spaceAccess(target)`
-returns `"none"`, `spaceMembers(target)` returns `undefined`, and
-`retrySpaceAccess(space)` is refused again. A tombstone is not a list, so
-`spaceReaderRole()` finds no role in it for anyone.
+has a tombstone where its access list was. The memory server refuses it to
+every principal for good, with a refusal marked `deleted`, in every mode,
+`off` included
+([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)). To the
+access calls that is a refusal like any other permanent one:
+`spaceAccess(target)` returns `"none"`, `spaceMembers(target)` returns
+`undefined`, and `retrySpaceAccess(space)` is refused again, in `off` mode as in
+the others. A tombstone is not a list, so `spaceReaderRole()` finds no role in
+it for anyone.
 
 `spaceDeleted(target)` is what tells a deleted space apart from one the
 principal has merely lost. Its `target` is a cell, as `spaceAccess(target)`

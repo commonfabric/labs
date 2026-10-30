@@ -177,14 +177,15 @@ leaves it in place.
   DID, so its access list grants its own DID OWNER, and it declares no kind,
   which is how the Memory server tells it from a self-owned space of a declared
   kind such as a profile's.
-- From that commit on, wherever the Memory server checks access, the space
-  refuses every principal, a deployment's service identities included, and takes
-  no further commit on any write path, the serving plane's included, so deletion
-  is not undone. The refusal says that the space is deleted, which a reader can
-  tell apart from a refusal of access to a space that goes on, and it comes
-  before every check of access, shape and genesis.
+- From that commit on, the Memory server refuses the space to every principal,
+  a deployment's service identities included, in every access-control mode, and
+  the space takes no further commit on any write path, the serving plane's
+  included, so deletion is not undone. The refusal says that the space is
+  deleted, which a reader can tell apart from a refusal of access to a space
+  that goes on, and it comes before every check of access, shape and genesis.
 - Every invitation operation on a deleted space is refused with a code of its
-  own, `space-deleted`, once its proof has verified
+  own, `space-deleted`, once the request has passed rate limiting, proof
+  verification and body validation
   ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
   so an invitation to a deleted space reads differently from one that has
   expired or been revoked.
@@ -215,21 +216,27 @@ list.
 
 ### Reaping a deleted space
 
-Reaping reclaims a deleted space's storage. It is an operator's call to the
-Memory server that hosts the space's store, made through that server's process,
-so that it coordinates with the store the server holds open, and it is an
-operation of its own rather than a compaction.
+Reaping reclaims a deleted space's storage. It is an operation of its own rather
+than a compaction, which refuses a store whose access-control document is not an
+access list. The Memory server that hosts the space's store performs it, in its
+own process, so that it coordinates with the store the server holds open. It is
+not a Memory protocol command, since the protocol refuses a deleted space to
+every principal, service identities included. The server offers it as a
+host-local operator operation, reachable only from the host it runs on, and its
+authority is that access to the host rather than any principal's grant.
+`cf space reap <space>`, run on that host, makes the call.
 
 - A reap takes only a space whose access-control document holds a tombstone,
   and refuses any other.
-- It keeps the tombstone at the `seq` its deletion commit gave it, and a server
-  sequence no lower than that `seq`. So the space goes on refusing every
-  principal as deleted, its refusal names the same `aclRevision` as before, and
-  its DID never again has no history.
+- It keeps the tombstone's document row at the `seq` its deletion commit gave
+  it, and a server sequence no lower than that `seq`, and nothing else. So the
+  space goes on refusing every principal as deleted, its refusal names the same
+  `aclRevision` as before, and its DID never again has no history.
 - It removes everything else the store holds for the space: every other
   document and its history, the earlier revisions of the access-control
-  document, the genesis receipt, the private tables such as an invitation's
-  admission records and receipts, and the cell databases beside the store.
+  document, the commit log, the deletion commit's own record included, the
+  genesis receipt, the private tables such as an invitation's admission records
+  and receipts, and the cell databases beside the store.
 
 Reaping is not implemented yet.
 
@@ -239,11 +246,12 @@ Reaping is not implemented yet.
 names any principal besides the one the command connects as, it refuses, and
 names those principals, so that each one's removal is an ordinary
 `cf acl remove` of its own. Since deletion cannot be undone, it also refuses to
-run without an explicit confirmation flag. It deletes only a space whose list
+run without `--confirm <space-DID>`, whose DID has to be the space's own, so
+that a mistyped `--space` deletes nothing. It deletes only a space whose list
 names the connecting principal; deleting a self-owned space through a
 delegation chain is not part of this command.
 
-The command is not implemented yet. Once it is, the CLI's own documentation
+Neither command is implemented yet. Once each is, the CLI's own documentation
 describes it beside `cf space create`.
 
 ## Routing across provider processes

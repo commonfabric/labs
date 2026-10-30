@@ -498,14 +498,14 @@ a tombstone is not an access list. None of these clauses is reached for a space
 that is already deleted: INV-15 refuses every commit to one first.
 
 It holds in **both** `observe` and `enforce`, and is skipped only when
-`MEMORY_ACL_MODE` is `off`, except for a commit that writes a tombstone, which
-it holds in `off` as well (INV-15). The code states its own reason for keeping
-it outside the mode dial: it is a *storage* invariant, not an access decision —
-"an invalid ACL or an ordinary first write would make later enforcement
-ambiguous or impossible" (`#validateAclCommit`'s doc comment). The shape check
-also runs *before* the OWNER capability check on the same commit, so a
-malformed ACL write reports `ProtocolError` even from a principal that has no
-OWNER capability at all.
+`MEMORY_ACL_MODE` is `off`, except for a commit that writes a tombstone or one
+to a deleted space, which INV-15 holds to its rules in `off` as well. The code
+states its own reason for keeping it outside the mode dial: it is a *storage*
+invariant, not an access decision — "an invalid ACL or an ordinary first write
+would make later enforcement ambiguous or impossible" (`#validateAclCommit`'s
+doc comment). The shape check also runs *before* the OWNER capability check on
+the same commit, so a malformed ACL write reports `ProtocolError` even from a
+principal that has no OWNER capability at all.
 
 The capability check that follows requires OWNER for an ACL mutation, with one
 exception: a member may remove its own entry. A session principal without OWNER
@@ -722,7 +722,7 @@ one by `runtime/memory/test/v2-client-holdings.test.ts`.
 > proof chain. `by` names the committing principal in both cases. Once one is
 > admitted the space is deleted: every command any principal sends it, a service
 > DID's included, is refused, and no commit to it is admitted again on any write
-> path, an ACL commit included.
+> path, an ACL commit included. It holds in every ACL mode, `off` included.
 
 Deleting a space ends it for everyone. It writes the space's ACL document and
 never removes it: a document `delete` of the ACL stays refused under INV-12. The
@@ -790,46 +790,42 @@ and none of them reports a shape, capability or genesis failure.
 
 No write path admits a commit to a deleted space, including those that never
 pass through the server's admission of a session's transact. A serving wave's
-`derived` commit and a delegated append commit to their space engine-direct.
-The engine's own admission of those two kinds of commit refuses one to a space
-whose ACL document holds a tombstone, so the check sits where the write is
-committed and not in an earlier authority probe that a deletion could land
+`derived` commit commits to its space engine-direct, and so does every commit
+that carries delegated carriage: a delegated append, and a served run's
+access-list change. The engine's own admission of those commits refuses one to
+a space whose ACL document holds a tombstone, so the check sits where the write
+is committed and not in an earlier authority probe that a deletion could land
 after. It refuses with a `ProtocolError` naming the deletion, the deterministic
 refusal a wave's commit step and the outbox already handle
 ([`serving-loop.md`](../server-side-execution/serving-loop.md#a-deleted-space)).
-An authored commit from a session and the invitation service's system commit are
-checked at the server's admission instead. The operator `writeDocument` path and
-a served run's `grantSpaceAccess()` or `revokeSpaceAccess()` are refused like
-any other commit to a deleted space. The invitation service refuses every
-operation on a deleted space with its own code, `space-deleted`, once the
-operation's proof has verified
+A session's authored commit and the invitation service's system commit are
+checked at the server's admission instead. The operator `writeDocument` path is
+refused like any other commit to a deleted space. The invitation service refuses
+every operation on a deleted space with its own code, `space-deleted`, once the
+request has passed rate limiting, its proof has verified, and its body has
+validated
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 
 What follows the deletion commit revokes every session open on the space with
 the `session/revoked` reason `deleted`, and sends no `session/admissible`. It
-does so in `observe` as well as in `enforce`, unlike what follows an
-access-list change that leaves the space in place, which revokes only in
-`enforce`. A deleted space refuses every principal in both modes, so a session
-left open in `observe` would be one whose every command is refused. The session
-that committed the deletion receives its transact response first and its
-revocation after, as a member's session does when it removes its own entry.
+does so in every mode, unlike what follows an access-list change that leaves
+the space in place, which revokes only in `enforce`: a deleted space refuses
+every principal in every mode, so a session left open would be one whose every
+command is refused. The session that committed the deletion receives its
+transact response first and its revocation after, as a member's session does
+when it removes its own entry.
 
-Like INV-12 it holds in `observe` and `enforce`, and three parts of it hold in
-`off` as well:
-
-- A commit that writes a tombstone is held to INV-12's shape clauses and to
-  these clauses in every mode. Deletion cannot be undone, and `off` would
-  otherwise let any writer delete a space for good the moment the mode changes.
-- The engine's refusal of a `derived` commit or a delegated append to a deleted
-  space consults no mode.
-- The serving plane's foreign grant (`foreignWriteAuthorityFor()` and
-  `foreignReadAuthorityFor()`) consults no mode, and grants nothing on a list
-  that is not valid. Its refusal of a deleted space carries `deleted: true`, so
-  a serving runtime's `spaceDeleted(target)` for a foreign space reads the
-  deletion as a client's does.
-
-Beyond those, in `off` the server checks no access, so it does not refuse a
-session's commands to a deleted space.
+Unlike INV-12, it holds in every mode, `off` included. Deletion cannot be
+undone, and a mode in which a deleted space took commits would let one replace
+its tombstone and so undo it, while a mode that admitted a tombstone unchecked
+would let any writer delete a space for good. So in `off` too the server tests
+a tombstone against INV-12's shape clauses and these clauses, and refuses every
+command to a deleted space, before the checks that `off` skips. The engine's
+refusal of engine-direct commits and the serving plane's foreign grant
+(`foreignWriteAuthorityFor()` and `foreignReadAuthorityFor()`) consult no mode
+in any case. The foreign grant's refusal of a deleted space carries
+`deleted: true`, so a serving runtime's `spaceDeleted(target)` for a foreign
+space reads the deletion as a client's does.
 
 Deleting a space reclaims no storage by itself. An operator reclaims it by
 reaping the space, which leaves the tombstone in place at a nonzero server

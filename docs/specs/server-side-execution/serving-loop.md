@@ -470,20 +470,27 @@ renewal via the commit stream, more than one lease shape.
 ### A deleted space
 
 A deleted space
-([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) is not served.
-The memory server refuses every commit to one, a derived commit and a
-delegated append included, with a `ProtocolError` naming the deletion, and that
-refusal is deterministic: no successor tenure could have it admitted.
+([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) is not served,
+in any ACL mode. The memory server refuses every commit to one, a derived
+commit and every commit carrying delegated carriage included, with a
+`ProtocolError` naming the deletion, and that refusal is deterministic: no
+successor tenure could have it admitted.
 
+- Activation reads the space's access list before it acquires a lease. When
+  it finds a tombstone there, it starts no tenure, and §1's re-evaluation
+  starts none for that space again, whatever demand it sees.
 - When the SpaceServer serving a space learns that the space is deleted, from
   such a refusal or from the revocation of its session with the reason
   `deleted`, it ends the tenure for good. It stops committing at once, as on a
   lease loss, disposes of the runtime, releases the lease, and does not
-  re-acquire it. §1's re-evaluation starts no tenure for a deleted space,
-  whatever demand it sees.
+  re-acquire it.
 - An outbox row whose target space is deleted is refused at delivery like any
   other deterministic admission refusal (§5), and is deleted with the
   source-side notice written first.
+- An outbox row that a deleted space's own waves wrote, and that was not
+  delivered before the deletion, is never delivered. The tenure that would
+  re-send it at activation (§6 step 5) never starts, and a reap removes it with
+  the rest of the store.
 
 Deletion is not implemented yet.
 

@@ -1793,7 +1793,8 @@ Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
 
 When ACL policy is active, the authenticated principal is evaluated against
-the space ACL document (wire entity id `of:<space DID>`) for every command:
+the space ACL document (wire entity id `of:<space DID>`) for every command. The
+deleted space's row holds whether the policy is active or not:
 
 | Stored ACL state | Effective access |
 | --- | --- |
@@ -1820,11 +1821,13 @@ control. The one ACL mutation a principal without OWNER may make, in both modes,
 is removing its own entry: a replacement whose document is the stored one less
 that principal's entry, and nothing else, from a list with no `"*"` entry.
 
-A refusal on account of a space's ACL carries `permanentEvidence` and
-`aclRevision`, the `seq` at which the space's ACL document is stored: the
-revision of the document whose state decided the refusal, not the server's
-current sequence. It names the same revision for as long as the document stands,
-and a new one once the document changes.
+A refusal that a space's ACL state decided, and that carries
+`permanentEvidence`, carries `aclRevision` too: the `seq` at which the space's
+ACL document is stored, the revision of the document whose state decided the
+refusal, not the server's current sequence. It names the same revision for as
+long as the document stands, and a new one once the document changes. A refusal
+for a space whose store holds no ACL document carries `aclRevision` 0, since no
+revision of the document exists.
 
 A space's sole member deletes it, which ends it for everyone and for good.
 Deleting a space writes its ACL document and never removes it: the deletion
@@ -1866,13 +1869,15 @@ The server checks for deletion once it has routed the command and found the
 session it names, and before every other check, so a command to a deleted space
 reports the deletion and never a shape, capability or genesis failure. The
 server revokes the sessions open on the space with the `session/revoked` reason
-`deleted`, in `observe` as in `enforce`, the deleting session's own after its
-transact response. It admits no further commit to the space on any write path,
-engine-direct writes from the serving plane included, so no principal can undo
-the deletion. A commit that writes a tombstone is held to the admission rules
-above in every ACL mode, `off` included. A tombstone is not an access list, so a
-server rolled back to a release that does not know tombstones finds the ACL
-malformed, and refuses the space to every principal but a service DID.
+`deleted`, the deleting session's own after its transact response. It admits
+no further commit to the space on any write path, engine-direct writes from the
+serving plane included, so no principal can undo the deletion. All of this
+holds in every ACL mode, `off` included, as do the admission rules above for a
+commit that writes a tombstone: a deleted space is refused whatever the policy,
+since a mode that admitted commits to one could undo it. A tombstone is not an
+access list, so a server rolled back to a release that does not know tombstones
+finds the ACL malformed, and refuses the space to every principal but a service
+DID.
 
 The server sends the `deleted` marker and the `deleted` reason to every client,
 whatever the client advertises. A client that predates the marker reads the
