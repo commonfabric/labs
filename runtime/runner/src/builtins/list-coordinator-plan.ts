@@ -210,6 +210,49 @@ export function listContainerWriteSchema(
 }
 
 /**
+ * A list input's entity and its raw slots: the list-doc read that journals
+ * membership and order, which ARE the list's content.
+ *
+ * That read observes the membership, and the transaction's join charges it
+ * to everything the transaction writes. With `declare` set, the read is
+ * declared onward instead (`declaredOnwardRead`): the confidentiality the
+ * join resolves for it, slot probes included, comes back as `membership`,
+ * for the caller to declare on the container it writes from it
+ * (`listContainerWriteSchema`), and a child the caller sets up in the same
+ * transaction carries its own slot's label and the selection's, not every
+ * element's. A list whose membership carries every element's label, a query
+ * result (CFC spec §8.17.6), is the case that tells the two apart. The join
+ * reads the list's labels through verifier reads reactivity sees, so a label
+ * that grows runs the caller again.
+ */
+export function listMembershipRead(
+  tx: IExtendedStorageTransaction,
+  inputsCell: Cell<any>,
+  listKey = "list",
+  declare?: "declared",
+): {
+  listCell: Cell<any>;
+  rawList: unknown;
+  membership: readonly CfcConfClause[] | undefined;
+} {
+  const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
+  const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
+  // A declared-onward read (proposed CFC spec §18.6.2, commonfabric/specs#85):
+  // the declaration lands on the caller's result container, through
+  // `listContainerWriteSchema`, before the transaction's writes are
+  // measured. Every other write the caller derives from this read is a
+  // child's setup, which the caller's resolution of that child's slot
+  // (`listSlotResolutions`) decides: that read stays in the join.
+  const rawList = declare === undefined
+    ? readRawList()
+    : tx.runWithAmbientReadMeta(declaredOnwardRead, readRawList);
+  const membership = declare === undefined
+    ? undefined
+    : deriveFlowJoin(tx, { declaredOnwardOnly: true }).declaredOnward;
+  return { listCell, rawList, membership };
+}
+
+/**
  * A list input's entity and the value resolution of each of its slots — the
  * cells a coordinator's element keys are built from. One derivation, shared
  * by the plan and by the resume pre-sync: a slot's value chain is followed
@@ -221,18 +264,7 @@ export function listContainerWriteSchema(
  * ends on, until a round ends where the last one did, before deriving a
  * plan. A slot whose links run in a cycle names no value and resolves to its
  * own place in the list. `slots` is empty when the list is not an array.
- *
- * The list-doc read observes the membership, and the transaction's join
- * charges it to everything the transaction writes. With `declare` set, the
- * read is declared onward instead (`declaredOnwardRead`): the
- * confidentiality the join resolves for it, slot probes included, comes
- * back as `membership`, for the caller to declare on the container it
- * writes from it (`listContainerWriteSchema`), and a child the caller sets
- * up in the same transaction carries its own slot's label and the
- * selection's, not every element's. A list whose membership carries every
- * element's label, a query result (CFC spec §8.17.6), is the case that
- * tells the two apart. The join reads the list's labels through verifier
- * reads reactivity sees, so a label that grows runs the caller again.
+ * The list itself is read by `listMembershipRead`, `declare` included.
  */
 export function listSlotResolutions(
   runtime: Runtime,
@@ -246,19 +278,12 @@ export function listSlotResolutions(
   slots: NormalizedFullLink[];
   membership: readonly CfcConfClause[] | undefined;
 } {
-  const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
-  const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
-  // A declared-onward read (CFC spec §18.6.2): the declaration lands on the
-  // caller's result container, through `listContainerWriteSchema`, before
-  // the transaction's writes are measured. Every other write the caller
-  // derives from this read is a child's setup, which the slot resolution
-  // below decides: that read stays in the join.
-  const rawList = declare === undefined
-    ? readRawList()
-    : tx.runWithAmbientReadMeta(declaredOnwardRead, readRawList);
-  const membership = declare === undefined
-    ? undefined
-    : deriveFlowJoin(tx, { declaredOnwardOnly: true }).declaredOnward;
+  const { listCell, rawList, membership } = listMembershipRead(
+    tx,
+    inputsCell,
+    listKey,
+    declare,
+  );
   const listBase = listCell.getAsNormalizedFullLink();
   // An element whose links run in a cycle, back to a place they passed or
   // into their own subpath, names no value, so its slot is its place in the

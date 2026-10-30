@@ -161,7 +161,11 @@ const declaredOnwardReadMarker = Symbol("declaredOnwardRead");
  * its input's membership to decide which children exist and sets those
  * children up in the same transaction; the membership's label belongs on
  * the container's membership, which the coordinator declares, and not on a
- * child, whose existence is a fact about its own slot. The read's integrity
+ * child, whose existence is a fact about its own slot. Only what the read
+ * consumed at its own path goes onward — the membership; what it consumed at
+ * the slots, each item's shape, the reference scalar there and the pointer a
+ * probe finds, is per-item and stays the transaction's own, since a child is
+ * set up from exactly that and must carry it. The read's integrity
  * still joins the transaction's meet: evidence withheld can only weaken a
  * claim, and a declaration carries no integrity. Scheduling, conflict
  * detection and the read ceiling are unaffected. What the reader declares

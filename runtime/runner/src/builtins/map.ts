@@ -24,7 +24,7 @@ import {
   listContainerWriteSchema,
   listCoordinatorPlan,
   listElementResultCell,
-  listSlotResolutions,
+  listMembershipRead,
 } from "./list-coordinator-plan.ts";
 import {
   type ElementRun,
@@ -58,10 +58,13 @@ export const MAP_INPUT_SCHEMA = internSchema({
 // element contents. A content-schema get() here would journal real value
 // reads of every element result — under flow labels (S16) that smears every
 // element's taint into the coordinator's per-tx join and from there onto
-// sibling scaffolding (the read-own-output feedback).
+// sibling scaffolding (the read-own-output feedback). The slots claim no
+// type: the container's stored schema claims the element's, and a write
+// through this view that declares the membership (`listContainerWriteSchema`)
+// is merged with the stored schema, which refuses a differing type.
 const RESULT_PRESENCE_SCHEMA = internSchema({
   type: "array",
-  items: { asCell: ["cell"], type: "unknown" },
+  items: { asCell: ["cell"] },
 });
 
 const logger = getLogger("runner.map", { enabled: true, level: "warn" });
@@ -235,9 +238,9 @@ function createMapInstance(
               scopeKeyIdentity: identity,
             });
             // The list is read as the reconcile reads it, its membership
-            // declared onward onto the container.
-            const { rawList: raw, membership } = listSlotResolutions(
-              runtime,
+            // declared onward onto the container. Only the raw list is
+            // needed here, so the slots are not resolved.
+            const { rawList: raw, membership } = listMembershipRead(
               settleTx,
               inputsCell,
               "list",

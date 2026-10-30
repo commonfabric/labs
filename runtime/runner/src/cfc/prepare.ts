@@ -4197,10 +4197,13 @@ const forEachFlowObservation = (
       // them, which is what leaves `flowLabelWorkExists` — and with it
       // whether the flow stage runs at all — exactly as it was.
       writeDestination: boolean;
-      // True when the read carries `declaredOnwardRead`: its confidentiality
-      // is declared by the reader on what it writes, so `deriveFlowJoin`
-      // leaves it out of the join's confidentiality and keeps its integrity
-      // in the meet. Every other consumer of this walk keeps the read.
+      // True for a CONTENT observation of a read carrying
+      // `declaredOnwardRead`: what it consumed at its own path is declared
+      // by the reader on what it writes, so `deriveFlowJoin` leaves that out
+      // of the join's confidentiality (what it consumed at the slots is
+      // per-item and joins) and keeps its integrity in the meet. The pointer
+      // observations such a read's scope makes are never declared onward.
+      // Every other consumer of this walk keeps the read.
       declaredOnward: boolean;
       // True for the probe of a slot this transaction went on to follow: a
       // `followRef` observation made by a dereference rather than standing
@@ -4378,7 +4381,14 @@ const forEachFlowObservation = (
           },
           machinery: isMachineryRead(read.meta),
           writeDestination: isWriteDestinationRead(read.meta),
-          declaredOnward: isDeclaredOnwardRead(read.meta),
+          // A declared-onward read declares its CONTENT observations onward:
+          // the membership at the node and what sits inline at its slots.
+          // The pointer observations its scope makes — which reference sits
+          // at each slot, the identity a child is set up from — stay the
+          // attempt's own, so a child's setup and the container's slot
+          // templates carry them (spec §8.5.4.3).
+          declaredOnward: shape !== "followRef" &&
+            isDeclaredOnwardRead(read.meta),
           followedSlot: followsSlot,
         },
       )
@@ -4912,6 +4922,7 @@ const deriveFlowJoinImpl = (
         observation.shape,
         String(observation.nonRecursive === true),
         String(observation.coveredByTrace || observation.machinery),
+        String(observation.declaredOnward),
         encodePointer(logicalPath),
       ]);
       let label = document.labels.get(labelKey);
@@ -4948,6 +4959,27 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        if (observation.declaredOnward && entries !== undefined) {
+          // The split a read declared onward is routed by, below: what it
+          // consumed at its own path, and what it consumed at the slots.
+          const depth = logicalPath.length;
+          const labelWhere = (keep: (entryDepth: number) => boolean) =>
+            labelForConsumedEntries(
+              entries.filter((entry) =>
+                keep(canonicalizeLogicalPath(entry.path).length)
+              ),
+              logicalPath,
+              observation.nonRecursive,
+            );
+          document.labels.set(
+            `${labelKey}#node`,
+            labelWhere((entryDepth) => entryDepth === depth),
+          );
+          document.labels.set(
+            `${labelKey}#below`,
+            labelWhere((entryDepth) => entryDepth > depth),
+          );
+        }
         // A shallow content read's locations are resolved over what a value
         // read of them would consume; see `observationInputWitnesses`. So are
         // those of a probe of a slot that holds no reference: what it finds
@@ -5053,14 +5085,25 @@ const deriveFlowJoinImpl = (
       ) {
         labeledSpaces.add(space);
       }
-      // A read declared onward charges its confidentiality where its reader
-      // declares it (`declaredOnwardRead`), which is answered as
-      // `declaredOnward` and kept out of the join; its integrity meets
-      // below like any content read's.
-      if (label?.confidentiality?.length && observation.declaredOnward) {
-        for (const atom of label.confidentiality) declaredAtoms.push(atom);
-      } else if (label?.confidentiality?.length) {
-        for (const atom of label.confidentiality) atoms.push(atom);
+      // A read declared onward charges what it consumed AT its own path —
+      // the membership — where its reader declares it
+      // (`declaredOnwardRead`), which is answered as `declaredOnward` and
+      // kept out of the join. What it consumed at the slots is per-item:
+      // each item's shape, the reference scalar materialized there (the
+      // reference-valued-children rule, spec §4.6.3), which a child is set
+      // up from, so it joins like any content read's. The read's integrity
+      // meets below like any content read's.
+      if (observation.declaredOnward) {
+        const node = document.labels.get(`${labelKey}#node`);
+        for (const atom of node?.confidentiality ?? []) {
+          declaredAtoms.push(atom);
+        }
+      }
+      const joined = observation.declaredOnward
+        ? document.labels.get(`${labelKey}#below`)?.confidentiality
+        : label?.confidentiality;
+      if (joined?.length) {
+        for (const atom of joined) atoms.push(atom);
         let reads = confidentialReads.get(key);
         if (reads === undefined) {
           reads = [];

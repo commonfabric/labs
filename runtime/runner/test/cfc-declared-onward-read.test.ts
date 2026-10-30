@@ -4,13 +4,16 @@
  * The flow join charges everything a transaction writes with every read the
  * transaction made. A reader that declares a read's confidentiality on the
  * one document it writes from it marks the read `declaredOnwardRead`: the
- * join then leaves that read's confidentiality out and keeps its integrity
- * in the meet, and answers what those reads consumed as `declaredOnward`,
- * resolved by its own rules, slot probes included. The cases below hold the
- * declaration to the join over a list document carrying one entry of each
- * kind a read can consume: a `map` over it declares on its container's
- * membership exactly the confidentiality an ordinary read of the list
- * joins.
+ * join then leaves what the read consumed at its own path — the membership —
+ * out, keeps its integrity in the meet, and answers that confidentiality as
+ * `declaredOnward`, resolved by its own rules. What the read consumed at
+ * the slots — each item's shape, the reference scalar there, the pointer a
+ * probe finds — is per-item and stays in the join: a child is set up from
+ * exactly that and carries it. The cases below hold the partition to the
+ * join over a list document carrying one entry of each kind a read can
+ * consume: a `map` over it declares on its
+ * container's membership what a read consumes at the list itself, and
+ * carries what it consumed at the slots onto its container's slots.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -48,8 +51,9 @@ const CERTIFIED = { type: "https://commonfabric.org/cfc/atom/PolicyCertified" };
 
 /**
  * One entry of each kind a read of the list can consume: content labels at
- * the root and below it, the membership's own, a child's shape, and the
- * pointer label the probe of each slot consumes.
+ * the root and below it, the membership's own, a child's shape, the pointer
+ * label the probe of each slot consumes, and the runtime-minted template
+ * that materializing a slot's reference scalar consumes.
  */
 const LIST_ENTRIES: LabelMapEntry[] = [
   {
@@ -79,6 +83,12 @@ const LIST_ENTRIES: LabelMapEntry[] = [
     label: { confidentiality: ["child-shape"] },
     origin: "structure",
     observes: "shape",
+  },
+  {
+    path: ["*"],
+    label: { confidentiality: ["slot-template"] },
+    origin: "structure",
+    observes: "value",
   },
 ];
 
@@ -150,27 +160,38 @@ describe("a read declared onward", () => {
     left.length === right.length &&
     left.every((atom) => right.some((other) => deepEqual(atom, other)));
 
-  it("leaves the read's confidentiality out of the join and keeps its integrity", async () => {
+  /** What a read of the list consumes at the list itself: its membership. */
+  const NODE_ATOMS = ["root-value", "root-derived", "root-membership"];
+
+  /** What it consumes at the slots: each item's shape, scalar and pointer. */
+  const ITEM_ATOMS = [
+    "slot-value",
+    "child-shape",
+    "slot-pointer",
+    "slot-template",
+  ];
+
+  it("keeps what the read consumed at the slots in the join, and its integrity", async () => {
     const list = await seededList("declared-onward-join", LIST_ENTRIES);
 
     const ordinary = joinOfRead(list);
     const declared = joinOfRead(list, declaredOnwardRead);
 
-    expect(ordinary.confidentiality.length).toBeGreaterThan(0);
-    expect(declared.confidentiality).toEqual([]);
+    expect(
+      sameAtoms(ordinary.confidentiality, [...NODE_ATOMS, ...ITEM_ATOMS]),
+    ).toBe(true);
+    expect(sameAtoms(declared.confidentiality, ITEM_ATOMS)).toBe(true);
     expect(declared.integrity).toEqual(ordinary.integrity);
     expect(declared.integrity).toContainEqual(CERTIFIED);
   });
 
-  it("answers what the reads declared onward consumed, as an ordinary read joins it", async () => {
+  it("answers what the reads declared onward consumed at the list itself", async () => {
     const list = await seededList("declared-onward-answer", LIST_ENTRIES);
 
     const ordinary = joinOfRead(list);
     const declared = joinOfRead(list, declaredOnwardRead);
 
-    expect(sameAtoms(declared.declaredOnward, ordinary.confidentiality)).toBe(
-      true,
-    );
+    expect(sameAtoms(declared.declaredOnward, NODE_ATOMS)).toBe(true);
     expect(ordinary.declaredOnward).toEqual([]);
   });
 
@@ -223,13 +244,42 @@ describe("a read declared onward", () => {
     }
   };
 
-  it("map declares on its container's membership what an ordinary read of the list joins", async () => {
+  /**
+   * The confidentiality the runtime stamped on `container`'s slots: the
+   * `*` pointer template, minted from the coordinator's own join.
+   */
+  // deno-lint-ignore no-explicit-any -- any container
+  const stampedSlotPointer = (container: Cell<any>): unknown[] => {
+    const tx: IExtendedStorageTransaction = runtime.edit();
+    try {
+      const link = container.getAsNormalizedFullLink();
+      const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
+      return entries
+        .filter((entry) =>
+          entry.origin === "structure" && entry.observes === "followRef" &&
+          entry.path.length === link.path.length + 1 &&
+          entry.path[entry.path.length - 1] === "*"
+        )
+        .flatMap((entry) => entry.label.confidentiality ?? []);
+    } finally {
+      tx.abort("label read");
+    }
+  };
+
+  it("map declares on its container's membership what a read consumes at the list itself", async () => {
     const list = await seededList("map-declares", LIST_ENTRIES);
     const container = await mapOver("map-declares-page", list);
 
     const declared = declaredMembership(container);
-    expect(sameAtoms(declared, joinOfRead(list).confidentiality)).toBe(true);
-    expect(declared).toContainEqual("root-membership");
+    expect(sameAtoms(declared, NODE_ATOMS)).toBe(true);
+  });
+
+  it("map carries what it consumed at the slots onto its container's slots", async () => {
+    const list = await seededList("map-carries-slots", LIST_ENTRIES);
+    const container = await mapOver("map-carries-slots-page", list);
+
+    const stamped = stampedSlotPointer(container);
+    expect(sameAtoms(stamped, ITEM_ATOMS)).toBe(true);
   });
 
   it("map declares nothing over a list whose membership carries nothing", async () => {
@@ -237,5 +287,6 @@ describe("a read declared onward", () => {
     const container = await mapOver("map-declares-nothing-page", list);
 
     expect(declaredMembership(container)).toEqual([]);
+    expect(stampedSlotPointer(container)).toEqual([]);
   });
 });

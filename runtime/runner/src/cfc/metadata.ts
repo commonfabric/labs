@@ -503,11 +503,15 @@ export const readStoredCfcSchemaHash = (
 ): string | undefined => readStoredEnvelope(tx, target, policy)?.schemaHash;
 
 /**
- * The label `metadata` declares for observations of class `observes`: at
- * `path` itself, or at each of its children, as `at` says. Only `declared`
- * entries count, so a writer that reads back what it declared last time, to
- * carry it forward, never folds the derived stamps on the same document into
- * its declaration. The two axes are joined across the matching entries.
+ * The label `metadata` declares for exactly the observation class
+ * `observes`: at `path` itself, or at each of its children, as `at` says.
+ * Only `declared` entries count, so a writer that reads back what it declared
+ * last time, to carry it forward, never folds the derived stamps on the same
+ * document into its declaration. A legacy covering entry, one with no class,
+ * is not answered either: the caller re-declares one class, and carrying a
+ * covering entry forward as that class would narrow what it covers; left
+ * alone, the declared-monotonicity gate refuses the narrowing. The two axes
+ * are joined across the matching entries.
  */
 export const cfcDeclaredLabelAt = (
   metadata: Pick<CfcMetadata, "labelMap"> | undefined,
