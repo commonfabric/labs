@@ -4566,7 +4566,9 @@ export class CfHarnessPromptLoop {
    * before dispatch), `describe_handle`, whose input names a token rather
    * than a referent, and `research`, whose private loop must retain the same
    * opaque tokens it describes and binds. `loom_compose` also proves
-   * membership before resolving a Pattern Instance. `finish_task` preserves
+   * membership before resolving a Pattern Instance. `run_command` resolves
+   * component references according to the command's grammar before swapping
+   * other tokens for Fabric links. `finish_task` preserves
    * its user-facing message as text, and `submit_result` its value: a token
    * in a structured result is what the result writer resolves.
    * `weaver_action` is exempt because its input leaves the harness for the
@@ -4585,7 +4587,8 @@ export class CfHarnessPromptLoop {
       toolId === "delegate_task" || toolId === "describe_handle" ||
       toolId === "research" || toolId === "finish_task" ||
       toolId === "weaver_action" ||
-      toolId === "loom_compose" || toolId === "submit_result"
+      toolId === "loom_compose" || toolId === "run_command" ||
+      toolId === "submit_result"
     ) {
       return input;
     }

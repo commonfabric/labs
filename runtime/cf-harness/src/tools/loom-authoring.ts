@@ -19,7 +19,7 @@ import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
 /** A requested addition, with one ordinary reference or one held pattern token. */
 export interface LoomComposeComponent {
-  /** A typed non-Fabric object reference, validated by the Loom host. */
+  /** A producer's composition-ready reference or held whole-piece token. */
   ref?: string;
 
   /** A held whole Pattern Instance address, resolved by the host. */
@@ -140,7 +140,7 @@ const projectManifest = (value: unknown) => {
  * Helper for composition, which accepts only held whole Pattern Instances in
  * the session's own space. Restricted skill handles never grant composition.
  */
-const patternReference = async (
+export const patternReference = async (
   context: HarnessToolContext,
   token: string,
 ): Promise<string> => {
@@ -298,12 +298,16 @@ const invoke = async (
       if ((item.ref !== undefined) === (item.pattern_token !== undefined)) {
         return fail("Give each component exactly one ref or pattern_token.");
       }
-      if (item.pattern_token !== undefined) {
-        if (typeof item.pattern_token !== "string") {
+      const token = item.pattern_token ??
+        (typeof item.ref === "string" && item.ref.startsWith("cfh:")
+          ? item.ref
+          : undefined);
+      if (token !== undefined) {
+        if (typeof token !== "string") {
           return fail("A pattern_token must be a held token.");
         }
         try {
-          const ref = await patternReference(context, item.pattern_token);
+          const ref = await patternReference(context, token);
           const { pattern_token: _token, ...rest } = item;
           normalized.push({ ...rest, ref });
         } catch {
@@ -314,7 +318,7 @@ const invoke = async (
       } else {
         if (
           typeof item.ref !== "string" ||
-          !/^(page|artifact|url|person|thread|moment|loom|wish|intention|chat|run):/
+          !/^(page|page-id|section|artifact|url|person|thread|moment|loom|wish|intention|chat|run):/
             .test(item.ref)
         ) {
           return fail(
@@ -436,7 +440,7 @@ export const loomComposeTool: HarnessToolDefinition<
               ref: {
                 type: "string",
                 description:
-                  "An existing page:, artifact:, url:, person:, thread:, moment:, loom:, wish:, intention:, chat:, or run: reference. The host validates its grammar and binding. Mutually exclusive with pattern_token.",
+                  "The ref returned by page.write, run_pattern or assign_slug, including a held whole-piece cfh:a: token; or a typed page:, page-id:, section:, artifact:, url:, person:, thread:, moment:, loom:, wish:, intention:, chat: or run: reference. The host validates grammar and binding. Mutually exclusive with pattern_token. Source-reader refs are not component refs: read with source.read, retain with page.write, then compose its ref.",
               },
               pattern_token: {
                 type: "string",

@@ -12,6 +12,8 @@ import {
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
 import { directPromptSlotBindingFor } from "../support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
+import { startCommandHost } from "../support/command-host.ts";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
@@ -127,6 +129,25 @@ describe("loom-authoring", () => {
         }),
         runtime,
       );
+      const received: Record<string, unknown>[] = [];
+      await using host = startCommandHost({
+        list: () =>
+          Response.json({
+            commands: [
+              {
+                id: "loom.compose",
+                scope: "global",
+                inputs: { type: "object" },
+              },
+              { id: "loom.add", scope: "loom", inputs: { type: "object" } },
+            ],
+          }),
+        run: (body) => {
+          if (!isObjectNotArray(body)) throw new Error("Expected command body");
+          received.push(body);
+          return Response.json({ ok: true });
+        },
+      });
       try {
         const created = await pieces.create(
           "import { pattern } from 'commonfabric'; export default pattern(() => ({ count: 1 }));",
@@ -162,6 +183,10 @@ describe("loom-authoring", () => {
             allowed: true,
           },
           {
+            ref: createLLMFriendlyLink(link),
+            allowed: true,
+          },
+          {
             ref: createLLMFriendlyLink(link, pieces.getSpace()),
             capability: "skill-context" as const,
             allowed: false,
@@ -192,6 +217,7 @@ describe("loom-authoring", () => {
           const calls: ProcessRunRequest[] = [];
           const controller = new AbortController();
           const engine = new CfHarnessEngine({
+            model: "gpt-5.4",
             sandboxRuntime: sandbox,
             ...(!candidate.noFabric
               ? {
@@ -205,6 +231,7 @@ describe("loom-authoring", () => {
               cliPath: "/trusted/loom",
               transport: { kind: "broker", queuePath: "/trusted/queue" },
             },
+            loomCommands: { url: host.url, actor: "agent:test", runId: "test" },
             processRunner: {
               run(request) {
                 calls.push(request);
@@ -231,18 +258,99 @@ describe("loom-authoring", () => {
               : { capability: candidate.capability },
           );
           await engine.recordHandleTable(minted.table);
-          const { output } = await engine.invokeBuiltinTool("loom_compose", {
-            request_id: "collection-one",
-            components: [{ pattern_token: minted.token }],
-          }, { signal: controller.signal });
-          expect(output.status).toBe(candidate.allowed ? "ok" : "error");
-          expect(calls).toHaveLength(candidate.allowed ? 1 : 0);
+          for (const field of ["pattern_token", "ref"]) {
+            calls.length = 0;
+            const { output } = await engine.invokeBuiltinTool("loom_compose", {
+              request_id: "collection-one",
+              components: [{ [field]: minted.token }],
+            }, { signal: controller.signal });
+            expect(output.status).toBe(candidate.allowed ? "ok" : "error");
+            expect(calls).toHaveLength(candidate.allowed ? 1 : 0);
+            expect(JSON.stringify(output)).not.toContain("did:key:");
+          }
           if (candidate.allowed) {
             expect(JSON.parse(calls[0].stdinText!).components[0].ref).toMatch(
               /^pattern:did:key:.+\/fid1:/,
             );
           }
-          expect(JSON.stringify(output)).not.toContain("did:key:");
+          for (const command of ["loom.compose", "loom.add"]) {
+            received.length = 0;
+            const { output } = await engine.invokeBuiltinTool("run_command", {
+              command,
+              args: command === "loom.compose"
+                ? {
+                  request_id: "collection-one",
+                  components: [{ ref: minted.token }],
+                }
+                : { ref: minted.token },
+            }, { signal: controller.signal });
+            expect(output.status).toBe(
+              candidate.allowed ? "executed" : "failed_to_deliver",
+            );
+            expect(received).toHaveLength(candidate.allowed ? 1 : 0);
+            if (candidate.allowed) {
+              expect(JSON.stringify(received[0])).toContain(
+                `pattern:${pieces.getSpace()}/${created.id}`,
+              );
+              expect(JSON.stringify(received[0])).not.toContain("/of:");
+            }
+          }
+          if (candidate.allowed) {
+            received.length = 0;
+            const payloads = [{
+              choices: [{
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [{
+                    id: "compose-held",
+                    type: "function",
+                    function: {
+                      name: "run_command",
+                      arguments: JSON.stringify({
+                        calls: [{
+                          command: "loom.compose",
+                          args: {
+                            request_id: "receipt-loop",
+                            components: [{ ref: minted.token }],
+                          },
+                        }],
+                      }),
+                    },
+                  }],
+                },
+              }],
+            }, {
+              choices: [{
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: "Done",
+                },
+              }],
+            }];
+            let index = 0;
+            const loop = new CfHarnessPromptLoop({
+              engine,
+              apiKey: "synthetic-test-key",
+              model: "gpt-5.4",
+              allowedToolIds: ["run_command"],
+              fetchFn: () =>
+                Promise.resolve(Response.json(
+                  responsesBodyFromChatFixture(payloads[index++]),
+                )),
+            });
+            await loop.runPrompt({
+              prompt: "Compose the piece I hold",
+              promptSlotBinding: directPromptSlotBindingFor("held-receipt"),
+            });
+            expect(received).toHaveLength(1);
+            expect(JSON.stringify(received[0])).toContain(
+              `pattern:${pieces.getSpace()}/${created.id}`,
+            );
+            expect(JSON.stringify(received[0])).not.toContain("/of:");
+          }
         }
       } finally {
         await runtime.dispose();
@@ -475,6 +583,8 @@ describe("loom-authoring", () => {
       for (
         const ref of [
           "wish:W-123",
+          "page-id:pg_11111111111111111111111111111111",
+          "section:pg_11111111111111111111111111111111:es-22222222222222222222222222222222",
           "intention:step-11111111111111111111111111111111",
           "chat:conv-example",
           "person:email:synthetic@example.com",

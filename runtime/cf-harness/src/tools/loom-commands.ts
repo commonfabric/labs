@@ -15,7 +15,7 @@
  */
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
-import type { JSONObject } from "@commonfabric/api";
+import type { JSONObject, JSONValue } from "@commonfabric/api";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -54,6 +54,38 @@ import {
   measureLoomRows,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
+import { patternReference } from "./loom-authoring.ts";
+import { swapTokensForRefs } from "../handle-table.ts";
+
+/** Commands whose reference fields name durable Loom components. */
+const COMPONENT_COMMANDS = new Set([
+  "loom.compose",
+  "loom.create-child",
+  "loom.add",
+  "loom.replace",
+  "loom.revise",
+]);
+
+/** Resolves held component identities before generic Fabric-link substitution. */
+const componentReferences = async (
+  context: HarnessToolContext,
+  value: JSONValue,
+): Promise<JSONValue> => {
+  if (Array.isArray(value)) {
+    return await Promise.all(
+      value.map((item) => componentReferences(context, item)),
+    );
+  }
+  if (!isObjectNotArray(value)) return value;
+  const result: { [key: string]: JSONValue } = {};
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = (key === "ref" || key === "if_ref") &&
+        typeof item === "string" && item.startsWith("cfh:")
+      ? await patternReference(context, item)
+      : await componentReferences(context, item);
+  }
+  return result;
+};
 
 /** The notice every listing carries beside its entries. */
 export const LOOM_COMMANDS_EFFECT_NOTICE =
@@ -583,7 +615,38 @@ const sendCall = async (
   // `runLoomCommand` reads every failure of the request itself as an answer
   // that may have been lost; what it throws is an invalid configuration,
   // found before anything is sent, which is not this call's to absorb.
-  const answered = await runLoomCommand(config, invocation, context.signal);
+  let args: JSONValue = invocation.args;
+  if (
+    COMPONENT_COMMANDS.has(invocation.command) &&
+    JSON.stringify(args).includes("cfh:")
+  ) {
+    try {
+      args = await componentReferences(context, args);
+    } catch {
+      return notSent(
+        outputId,
+        "invalid_input",
+        "Use the ref returned by run_pattern or assign_slug for a held, unrestricted whole Pattern Instance in this run's own space. Read source material with source.read, then retain it with page.write and use that receipt's ref.",
+      );
+    }
+  }
+  const resolved = context.handleTable === undefined
+    ? args
+    : swapTokensForRefs(context.handleTable, args);
+  if (!isObjectNotArray(resolved) || !isHarnessCommandJsonValue(resolved)) {
+    return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
+  }
+  if (context.signal?.aborted) {
+    return notSent(
+      outputId,
+      "cancelled",
+      "The turn was cancelled before the command.",
+    );
+  }
+  const answered = await runLoomCommand(config, {
+    ...invocation,
+    args: resolved,
+  }, context.signal);
   if (answered.status === "error") {
     return {
       outputId,

@@ -38,6 +38,14 @@ boolean, an enum or const string) as themselves, and everything else as a
 reference token addressing that position. So a total comes back as `42` and a
 free-text description comes back as something to point at.
 
+`run_pattern` and `assign_slug` also return `ref`, a whole-piece handle that can
+be passed directly as a component's `ref` to `loom_compose` or through
+`run_command` to `loom.compose`, `loom.add`, `loom.replace`, `loom.revise`, and
+`loom.create-child`. The trusted bridge resolves it to the session's space and
+piece identity after checking that the run holds an unrestricted whole piece.
+Source-reader references need a retained Page first: read the source, write the
+relevant material with `page.write`, then compose the Page receipt's `ref`.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
