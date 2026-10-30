@@ -350,12 +350,16 @@ function frameSize(frame: unknown): number {
 }
 
 /**
- * How many memory sockets to one host may be opening at once. RFC 6455 §4.1
- * allows a client one connection per host in the `CONNECTING` state, and a
- * browser that does not queue the rest itself is handed every space's dial at
- * once when connections are per space.
+ * How many memory sockets to one host may be opening at once. With a
+ * connection per space, a runtime would otherwise hand the platform every
+ * space's dial together, and a web view handed that many can leave some
+ * `CONNECTING` for good. Six is how many connections a browser opens to one
+ * host for its own page loads, so the burst stays within what the platform
+ * handles routinely. A handshake that never answers holds its place until its
+ * transport closes, so a host's later dials wait only once six such handshakes
+ * are in flight.
  */
-export const MEMORY_DIALS_PER_HOST = 1;
+export const MEMORY_DIALS_PER_HOST = 6;
 
 /**
  * The dials of a set of transports, queued per host so that no more than

@@ -41,12 +41,13 @@ A](routed-mode-a.md) step 4):
   the genesis ACL, and the durable session as the user — runs over that one
   connection, as three sessions of two principals.
 
-Either way, the factory has no more than one of its sockets to a host opening
-at a time: a dial, the first or a reconnect, waits until the dial before it to
-that host has opened, closed or failed (`MEMORY_DIALS_PER_HOST`). RFC 6455 §4.1
-allows a client one connection per host in the `CONNECTING` state, and with a
-connection per space the factory would otherwise hand the platform's WebSocket
-a dial for every space at once.
+Either way, the factory has no more than six of its sockets to a host opening
+at a time (`MEMORY_DIALS_PER_HOST`): a dial, the first or a reconnect, waits
+until one of those has opened, closed or failed. With a connection per space
+the factory would otherwise hand the platform's WebSocket a dial for every
+space at once. A handshake that never answers keeps its place until its
+transport closes, since nothing times one out, so six such handshakes in
+flight hold up every later dial to their host.
 
 Per space, a connection of its own costs a TCP and TLS handshake, a `hello`
 exchange, a compression channel, and a toolshed socket, and a client with

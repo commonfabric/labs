@@ -8,10 +8,10 @@ import {
   WebSocketTransport,
 } from "../../src/storage/v2-remote-session.ts";
 import {
-  type ScriptedDial,
-  type ScriptedSockets,
-  scriptedSockets,
-} from "./scripted-memory-socket.ts";
+  type DrivableSockets,
+  drivableSockets,
+  type DrivableWebSocket,
+} from "./drivable-web-socket.ts";
 
 describe("WebSocketTransport", () => {
   it("receives a large native frame with a null limit and rejects it after the limit is omitted", async () => {
@@ -195,7 +195,7 @@ describe("WebSocketTransport", () => {
 
     /** A transport per space at `origin`, all dialing through `limiter`. */
     const transportsFor = (
-      sockets: ScriptedSockets,
+      sockets: DrivableSockets,
       limiter: MemoryDialLimiter,
       origin: string,
       spaces: string[],
@@ -219,17 +219,17 @@ describe("WebSocketTransport", () => {
       );
 
     /** The space each dial so far names. */
-    const dialedSpaces = (sockets: ScriptedSockets): (string | null)[] =>
-      sockets.dials.map((dial) => dial.address.searchParams.get("space"));
+    const dialedSpaces = (sockets: DrivableSockets): (string | null)[] =>
+      sockets.dials.map((dial) => new URL(dial.url).searchParams.get("space"));
 
-    const events: [string, (dial: ScriptedDial) => void][] = [
-      ["opens", (dial) => dial.open()],
+    const events: [string, (dial: DrivableWebSocket) => void][] = [
+      ["opens", (dial) => dial.openConnection()],
       ["closes", (dial) => dial.close()],
-      ["fails", (dial) => dial.fail()],
+      ["fails", (dial) => dial.fail(new Error("handshake refused"))],
     ];
     for (const [event, fire] of events) {
       it(`starts a host's next dial once a dial in flight ${event}`, async () => {
-        const sockets = scriptedSockets();
+        const sockets = drivableSockets();
         const transports = transportsFor(
           sockets,
           new MemoryDialLimiter(2),
@@ -250,7 +250,7 @@ describe("WebSocketTransport", () => {
     }
 
     it("dials another host while one host's dials wait", async () => {
-      const sockets = scriptedSockets();
+      const sockets = drivableSockets();
       const limiter = new MemoryDialLimiter(1);
       const transports = [
         ...transportsFor(sockets, limiter, "ws://memory.test", ["one", "two"]),
@@ -266,7 +266,7 @@ describe("WebSocketTransport", () => {
     });
 
     it("refuses a send whose dial is waiting when its transport closes, and never dials it", async () => {
-      const sockets = scriptedSockets();
+      const sockets = drivableSockets();
       const transports = transportsFor(
         sockets,
         new MemoryDialLimiter(1),
