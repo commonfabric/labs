@@ -2586,6 +2586,18 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /** Resolves a call's effect from its inputs and host metadata. */
+  async builtinToolEffectClass(
+    toolId: BuiltinToolId,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    const tool = getBuiltinTool(toolId);
+    if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
+    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+      tool.descriptor.effectClass;
+  }
+
   /**
    * Runs one builtin tool and records its output on the run. A tool call is
    * one step of a run, not the run: the run's status is the driver's to

@@ -5111,8 +5111,11 @@ export class CfHarnessPromptLoop {
       ? deniedToolInputSummary ??
         await summarizeToolInput(toolId, input)
       : await summarizeToolInput(toolId, input);
-    callEffectClass = tool.effectClassOf?.(input) ??
-      tool.descriptor.effectClass;
+    callEffectClass = await this.engine.builtinToolEffectClass(
+      toolId,
+      input,
+      signal,
+    );
     const decision = evaluateToolPolicy(
       this.engine.getRunState().cfcEnforcementMode,
       tool.descriptor,

@@ -629,29 +629,16 @@ describe("loom-commands tools", () => {
       expect(calls.map((call) => call.path)).toEqual(["/commands"]);
     });
 
-    it("returns `unknown_command` with the nearest listed names for a command the listing leaves out, sending nothing", async () => {
-      for (
-        const [command, suggestion] of [
-          ["share.invite", undefined],
-          ["loom.compse", "loom.compose"],
-          ["dossier", "people-discovery.dossier"],
-        ] as const
-      ) {
-        const { context, calls } = contextWith();
-        const output = await runCommandTool.invoke(context, {
-          command,
-          args: {},
-        });
-        expect(output).toMatchObject({ status: "unknown_command", command });
-        if (output.status !== "unknown_command") throw new Error("unreachable");
-        expect(output.suggestions.length).toBeLessThanOrEqual(3);
-        expect(output.suggestions).not.toContain("share.invite");
-        if (suggestion !== undefined) {
-          expect(output.suggestions[0]).toBe(suggestion);
-        }
-        expect(output.hint).toContain("list_commands");
-        expect(calls.map((call) => call.path)).toEqual(["/commands"]);
-      }
+    it("sends an unlisted command to the host for admission", async () => {
+      const { context, calls } = contextWith({
+        answer: () => Response.json({ ok: false, code: "refused" }),
+      });
+      const output = await runCommandTool.invoke(context, {
+        command: "share.invite",
+        args: {},
+      });
+      expect(executed(output).outcome.code).toBe("not_granted");
+      expect(calls.map((call) => call.path)).toEqual(["/commands", "/command"]);
     });
 
     it("adds the signature to an answer the host refused as `bad-args`, and to no other", async () => {
@@ -695,7 +682,7 @@ describe("loom-commands tools", () => {
     });
 
     describe("batches", () => {
-      it("returns one result per call in order, running the listed calls and sending nothing for an unknown one", async () => {
+      it("returns one result per call in order, sending unlisted names to the host", async () => {
         const { context, calls } = contextWith({
           answer: ({ id }) => Response.json({ ok: true, id }),
         });
@@ -714,13 +701,11 @@ describe("loom-commands tools", () => {
         );
         expect(output.results.map((result) => result.status)).toEqual([
           "executed",
-          "unknown_command",
+          "executed",
           "executed",
         ]);
         expect(executed(output.results[0]).outcome.id).toBe("loom.compose");
-        expect(output.results[1]).toMatchObject({
-          suggestions: expect.arrayContaining(["loom.compose"]),
-        });
+        expect(executed(output.results[1]).outcome.id).toBe("loom.compse");
         expect(executed(output.results[2]).outcome.id).toBe("loom.inspect");
         const sequence = output.results.map((result) =>
           Number(result.outputId.split(":").at(-1))
@@ -731,6 +716,7 @@ describe("loom-commands tools", () => {
           .toEqual([
             ["/commands", undefined],
             ["/command", "loom.compose"],
+            ["/command", "loom.compse"],
             ["/command", "loom.inspect"],
           ]);
       });
@@ -1380,9 +1366,7 @@ describe("loom-commands tools", () => {
       });
     };
 
-    it("runs a command at `enforce-explicit` only for a direct command, refusing one a `context` task asks for", async () => {
-      // A request a pattern submitted binds its task as `context`; a person's
-      // own request binds as a direct command.
+    it("admits declared reads from context tasks and gates other effects", async () => {
       const context: PromptSlotBinding = {
         type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
         source: { type: "test.prompt-slot", subject: "pattern-request" },
@@ -1393,31 +1377,40 @@ describe("loom-commands tools", () => {
         eventId: "event-pattern-request",
       };
       for (
-        const [binding, decision, hostCalls] of [
-          [context, "denied", []],
-          [directPromptSlotBindingFor("loom-commands"), "allowed", [
-            "/commands",
-            "/command",
-          ]],
-        ] as const
+        const effect of ["read", "write", "external", "unknown", undefined]
       ) {
-        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-          cfcEnforcementMode: "enforce-explicit",
-          manifest: () =>
-            JSON.stringify({
-              commands: [{ id: "loom.compose", effect: "read" }],
-            }),
-        });
-        const result = await composeOnce(engine, binding);
-        const record = (result.runState.policyDecisions ?? []).find((entry) =>
-          entry.toolId === "run_command"
-        );
-        expect(record?.decision).toBe(decision);
-        expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
+        for (
+          const binding of [
+            context,
+            directPromptSlotBindingFor("loom-commands"),
+          ]
+        ) {
+          const allowed = binding.role !== "context" || effect === "read";
+          const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+            cfcEnforcementMode: "enforce-explicit",
+            manifest: () =>
+              JSON.stringify({ commands: [{ id: "loom.compose", effect }] }),
+          });
+          const result = await composeOnce(engine, binding);
+          const record = (result.runState.policyDecisions ?? []).find((entry) =>
+            entry.toolId === "run_command"
+          );
+          expect(record?.decision).toBe(allowed ? "allowed" : "denied");
+          expect(record?.effectClass).toBe(
+            effect === "read"
+              ? "read"
+              : effect === "external"
+              ? "side-effect"
+              : "write",
+          );
+          expect(calls.map((call) => call.path)).toEqual(
+            allowed ? ["/commands", "/command"] : ["/commands"],
+          );
+        }
       }
     });
 
-    it("judges a batch as one write: refused whole for a `context` task, and sent whole for a direct command", async () => {
+    it("admits read batches from context tasks and gates mixed batches", async () => {
       const context: PromptSlotBinding = {
         type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
         source: { type: "test.prompt-slot", subject: "pattern-request" },
@@ -1433,26 +1426,34 @@ describe("loom-commands tools", () => {
           { command: "loom.inspect", args: {} },
         ],
       };
-      for (
-        const [binding, decisions, hostCalls] of [
-          [context, ["denied"], []],
-          [directPromptSlotBindingFor("loom-commands"), ["allowed"], [
-            "/commands",
-            "/command",
-            "/command",
-          ]],
-        ] as const
-      ) {
-        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-          cfcEnforcementMode: "enforce-explicit",
-        });
-        const result = await composeOnce(engine, binding, input);
-        expect(
-          (result.runState.policyDecisions ?? [])
-            .filter((entry) => entry.toolId === "run_command")
-            .map((entry) => entry.decision),
-        ).toEqual([...decisions]);
-        expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
+      for (const effect of ["read", "write", "external", undefined]) {
+        for (
+          const binding of [
+            context,
+            directPromptSlotBindingFor("loom-commands"),
+          ]
+        ) {
+          const allowed = binding.role !== "context" || effect === "read";
+          const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+            cfcEnforcementMode: "enforce-explicit",
+            manifest: () =>
+              JSON.stringify({
+                commands: [
+                  { id: "loom.compose", effect },
+                  { id: "loom.inspect", effect: "read" },
+                ],
+              }),
+          });
+          const result = await composeOnce(engine, binding, input);
+          expect(
+            (result.runState.policyDecisions ?? [])
+              .filter((entry) => entry.toolId === "run_command")
+              .map((entry) => entry.decision),
+          ).toEqual([allowed ? "allowed" : "denied"]);
+          expect(calls.map((call) => call.path)).toEqual(
+            allowed ? ["/commands", "/command", "/command"] : ["/commands"],
+          );
+        }
       }
     });
 
