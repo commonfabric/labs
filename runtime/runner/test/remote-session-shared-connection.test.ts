@@ -10,7 +10,6 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
 import {
   createNativeMemorySocket,
-  type MemorySocketConnection,
   type MemorySocketFactory,
 } from "../src/storage/memory-socket.ts";
 import {
@@ -23,32 +22,6 @@ const SPACES = [
   "did:key:z6Mk-shared-connection-two",
   "did:key:z6Mk-shared-connection-three",
 ] as MemorySpace[];
-
-/** A socket that closes before it opens, as a handshake refused in flight does. */
-const closesBeforeOpening = (): MemorySocketConnection => {
-  const events = new EventTarget();
-  let readyState: number = WebSocket.CONNECTING;
-  queueMicrotask(() => {
-    readyState = WebSocket.CLOSED;
-    events.dispatchEvent(new Event("close"));
-  });
-  return {
-    socket: {
-      get readyState() {
-        return readyState;
-      },
-      addEventListener(type, listener, options) {
-        events.addEventListener(
-          type,
-          () => listener({ type, data: undefined }),
-          options,
-        );
-      },
-      close() {},
-    },
-    send: () => {},
-  };
-};
 
 /** A factory onto a server, and the address of every socket it has dialed. */
 type Harness = {
@@ -153,27 +126,38 @@ describe("RemoteSessionFactory connection sharing", () => {
   }
 
   for (const shared of [false, true]) {
-    it(`mounts a space whose first socket closes before opening, on the socket dialed after it, with shared connections=${shared}`, async () => {
+    it(`mounts a space whose first handshake is refused, on the socket dialed after it, with shared connections=${shared}`, async () => {
       const server = startServer({ connectionAuth: true });
+      // A host that answers every websocket handshake with a refusal, so the
+      // socket dialed there closes before it opens.
+      const refuser = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+        () => new Response(null, { status: 403 }),
+      );
       const dialed: URL[] = [];
       const factory = new RemoteSessionFactory(
         createStorageAddressResolver(server.url),
         user,
         (address) => {
           dialed.push(address);
-          return dialed.length === 1
-            ? closesBeforeOpening()
-            : createNativeMemorySocket(address);
+          if (dialed.length > 1) return createNativeMemorySocket(address);
+          const refused = new URL(address);
+          refused.port = String(refuser.addr.port);
+          return createNativeMemorySocket(refused);
         },
       );
       factory.setSharedConnections(shared);
       factories.push(factory);
-      const opened = await factory.create(SPACES[0]);
       try {
-        expect(dialed).toHaveLength(2);
-        expect(principalsIn(server, SPACES[0])).toEqual([user.did()]);
+        const opened = await factory.create(SPACES[0]);
+        try {
+          expect(dialed).toHaveLength(2);
+          expect(principalsIn(server, SPACES[0])).toEqual([user.did()]);
+        } finally {
+          await opened.client.close();
+        }
       } finally {
-        await opened.client.close();
+        await refuser.shutdown();
       }
     });
   }
