@@ -1114,6 +1114,9 @@ export class Client {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
       }
+      if (result.error.deleted === true) {
+        (error as Error & { deleted?: true }).deleted = true;
+      }
       serverVerdicts.add(error);
       throw error;
     }
@@ -3908,9 +3911,14 @@ export class SpaceSession {
       return;
     }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = reason === "unauthorized"
-      ? "AuthorizationError"
-      : "SessionRevokedError";
+    error.name = reason === "taken-over"
+      ? "SessionRevokedError"
+      : "AuthorizationError";
+    // A session open when its space is deleted reports the deletion as a
+    // refused reopen would.
+    if (reason === "deleted") {
+      (error as Error & { deleted?: true }).deleted = true;
+    }
     this.#terminateSession(error);
   }
 
@@ -5422,7 +5430,8 @@ const isSessionRevoked = (
   return type === "session/revoked" &&
     typeof space === "string" &&
     typeof sessionId === "string" &&
-    (reason === "taken-over" || reason === "unauthorized");
+    (reason === "taken-over" || reason === "unauthorized" ||
+      reason === "deleted");
 };
 
 const isSessionAdmissible = (

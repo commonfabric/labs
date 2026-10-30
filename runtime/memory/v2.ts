@@ -2443,7 +2443,13 @@ export type SessionRevokedMessage = {
   type: "session/revoked";
   space: string;
   sessionId: SessionId;
-  reason: "taken-over" | "unauthorized";
+  /**
+   * `taken-over`: a newer connection resumed the session. `unauthorized`: an
+   * access-list change left its principal without access. `deleted`: its space
+   * was deleted, so no principal will be admitted to it again (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`).
+   */
+  reason: "taken-over" | "unauthorized" | "deleted";
 };
 
 /**
@@ -2492,6 +2498,13 @@ export type V2Error = {
 
   /** Engine revision whose ACL state produced an authorization denial. */
   aclRevision?: number;
+
+  /**
+   * Present on an `AuthorizationError` for a deleted space, which every
+   * principal is refused for good (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`).
+   */
+  deleted?: true;
 };
 
 export type V2Result<Value> = { ok: Value } | { error: V2Error };

@@ -2190,8 +2190,7 @@ and the markers, never on `message`. A `session/revoked` terminates the session
 with an `Error` named `SessionRevokedError` for `taken-over`, and
 `AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
 also sets `deleted: true` on it, so a session open when its space is deleted
-reports the deletion as a refused reopen would. Copying `deleted` is not
-implemented yet.
+reports the deletion as a refused reopen would.
 
 ### 4.8.5 Session Lifecycle
 
