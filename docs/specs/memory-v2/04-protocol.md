@@ -387,16 +387,20 @@ it to the genesis rules, nor reads one, since that server reports none.
 
 `instanceNameMark` (specified, not yet built) advertises that the server
 records the instance-naming mark of a space and enforces INV-16: a marked
-space admits only sessions that declare `instanceNames: true`, and the first
-commit from such a session marks the space. It is build-inherent, defaults to
-`false` when absent, and only the server advertises it. A client whose runtime
-names instances REQUIRES it: an older server would admit its commits and mark
-nothing, leaving runtimes with naming off free to bind the parents it wrote to
-other documents, so the client refuses to open a session against a server that
-does not advertise it, before signing a `session.open`. A client whose runtime
-names none declares nothing and is unaffected on any server. A client of a
-build that knows the capability treats the `session/revoked` reason
-`instance-names` as the refusal `clientUpdateRequired` marks.
+space admits only sessions, and commits, that declare `instanceNames: true`;
+the first commit from such a session marks the space; and the server admits a
+declaring session to an unmarked space only while its own posture names
+instances. It is build-inherent, defaults to `false` when absent, and only the
+server advertises it. A client whose runtime names instances REQUIRES it: an
+older server would admit its commits and mark nothing, leaving positional
+runtimes free to bind the parents it wrote to other documents. Such a client
+fails the connection permanently against a server that does not advertise it,
+before signing any `session.open`, as it does against a server that does not
+advertise `stableExpressionResultIds`, with guidance to update the server. A
+client whose runtime names none declares nothing and is unaffected on any
+server. A client of a build that knows the capability treats the
+`session/revoked` reason `instance-names` as the refusal
+`clientUpdateRequired` marks, and keeps it the same way.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -527,9 +531,6 @@ interface SessionOpenResult {
   // The kind the space's genesis commit declares; absent when it declares
   // none, or the space has no history yet.
   spaceKind?: string;
-  // Present when a naming commit has marked the space (specified, not yet
-  // built; INV-16).
-  instanceNamesMarked?: true;
   sessionOpen: {
     challenge: {
       value: string;
@@ -589,14 +590,16 @@ Rules:
   genesis declares, in `spaceKind`, whether the session declared one or not
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional (specified, not yet built). A server
-  that advertises `instanceNameMark` refuses an open or resume of a marked
-  space by a positional session with a `SessionRevokedError` carrying
-  `clientUpdateRequired: true`, after authorization and before session
-  restoration, so a principal the space would refuse learns nothing of its
-  mark; marks the space at the first commit it admits from a naming
-  session; and in the same engine turn revokes the space's positional sessions
-  with the reason `instance-names`. Every open of a marked space is told so, in
-  `instanceNamesMarked`. INV-16 states the rule
+  that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
+  carrying `clientUpdateRequired: true`, an open or resume of a marked space by
+  a positional session, and an open of an unmarked space by a naming session
+  while its own posture names no instances. It checks both after
+  authorization and before session restoration, so a principal the space
+  would refuse learns nothing of its mark. It marks the space in the same
+  store transaction as the first commit it admits from a naming session,
+  refuses every later commit to the space from a positional session, and
+  revokes the space's positional sessions with the reason `instance-names`.
+  INV-16 states the rule
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts

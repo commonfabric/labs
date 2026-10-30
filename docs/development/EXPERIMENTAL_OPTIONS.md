@@ -1062,8 +1062,9 @@ holds the measurements and the conditions for revisiting.
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
   set up shows fresh children in place of the named ones. The mechanism is
   specified and not built: a one-way mark on each space, recorded at the first
-  commit from a naming runtime, after which the memory server admits no other
-  runtime to the space (INV-16 in
+  commit from a naming runtime and only where the deployment's posture names
+  instances, after which the memory server admits no other runtime to the
+  space (INV-16 in
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   it, the env mapping, the tests that assume the flag's default, and the flip.
