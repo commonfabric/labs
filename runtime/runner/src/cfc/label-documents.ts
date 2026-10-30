@@ -10,7 +10,6 @@
 import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { canonicalizeCfcLabel } from "./canonical.ts";
-import { isLabelMetadataTemplateEntry } from "./label-metadata-population.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 import { onSchemaRegistryClear } from "../schema-registry.ts";
 import type {
@@ -200,75 +199,6 @@ export const registerCfcLabelDocument = (
  */
 export const lookupCfcLabelDocument = (hash: string): IFCLabel | undefined =>
   labelsByHash.get(hash);
-
-/**
- * The position in the document an entry describes: a payload entry's own
- * path, and for a label-metadata template the payload path under its
- * `["cfc", "labels", "value"]` prefix, so the template sorts beside the entry
- * it was minted from.
- */
-const describedPath = (entry: LabelMapEntry): readonly string[] =>
-  isLabelMetadataTemplateEntry(entry) && entry.path[0] === "cfc" &&
-    entry.path[1] === "labels" && entry.path[2] === "value"
-    ? entry.path.slice(3)
-    : entry.path;
-
-const compareStrings = (left: string, right: string): number =>
-  left < right ? -1 : left > right ? 1 : 0;
-
-const ARRAY_INDEX = /^(0|[1-9][0-9]*)$/;
-
-/** Path segments in document order: array indices by number, keys by code
- * unit, and an index before a key. */
-const compareSegments = (left: string, right: string): number => {
-  const leftIndex = ARRAY_INDEX.test(left);
-  const rightIndex = ARRAY_INDEX.test(right);
-  if (leftIndex && rightIndex) {
-    return left.length !== right.length
-      ? left.length - right.length
-      : compareStrings(left, right);
-  }
-  if (leftIndex !== rightIndex) return leftIndex ? -1 : 1;
-  return compareStrings(left, right);
-};
-
-const compareInDocumentOrder = (
-  left: readonly string[],
-  right: readonly string[],
-): number => {
-  for (let i = 0; i < left.length && i < right.length; i++) {
-    const order = compareSegments(left[i]!, right[i]!);
-    if (order !== 0) return order;
-  }
-  return left.length - right.length;
-};
-
-/**
- * `entries` in the order the stored label map keeps them: by the document
- * position each describes, in the document's own order, then by its own path,
- * origin and observation class.
- *
- * Why this order: a commit tells readers what changed by comparing the stored
- * document position by position (`storage/differential.ts`), so an entry that
- * moves to another index is reported as changed at both. In document order, a
- * write that appends to a list appends its entries and moves none, and the
- * label map's change stays the size of the value's change. Ordered by pointer
- * string instead, `/12` sorts between `/1` and `/2`, and one appended element
- * re-reported most of a list's label map.
- *
- * The order is the stored spelling's alone: readers index entries by path and
- * origin, and the canonical form every comparison and digest uses sorts on its
- * own (`canonicalizeCfcMetadata`).
- */
-export const inStoredLabelMapOrder = <T extends LabelMapEntry>(
-  entries: readonly T[],
-): T[] =>
-  [...entries].sort((left, right) =>
-    compareInDocumentOrder(describedPath(left), describedPath(right)) ||
-    compareInDocumentOrder(left.path, right.path) ||
-    compareStrings(left.origin ?? "", right.origin ?? "") ||
-    compareStrings(left.observes ?? "", right.observes ?? "")
-  );
 
 /**
  * The version-2 stored form of resolved entries: each label's canonical

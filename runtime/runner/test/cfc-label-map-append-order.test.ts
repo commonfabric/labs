@@ -2,9 +2,6 @@ import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { equal } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
-import { inStoredLabelMapOrder } from "../src/cfc/label-documents.ts";
-import { LABEL_METADATA_TEMPLATE_ORIGIN } from "../src/cfc/label-metadata-population.ts";
-import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 
@@ -100,51 +97,5 @@ describe("CFC: the stored label map keeps an element's entries in place", () => 
       }
     }
     expect(elementEntriesMoved).toEqual([]);
-  });
-
-  it("keeps a label-metadata template beside the entry it describes", () => {
-    // Templates are minted per labeled payload path and stored in the same
-    // list, so they too must not move when an element is appended.
-    const payload = (i: number): LabelMapEntry => ({
-      path: [String(i), "text"],
-      label: { confidentiality: [`el-${i}`] },
-      origin: "derived",
-    });
-    const template = (i: number): LabelMapEntry => ({
-      path: [
-        "cfc",
-        "labels",
-        "value",
-        String(i),
-        "text",
-        "confidentiality",
-        "clauses",
-        "*",
-        "alternatives",
-        "*",
-      ],
-      label: { confidentiality: [`el-${i}`] },
-      origin: LABEL_METADATA_TEMPLATE_ORIGIN,
-      observes: "labelMetadata",
-    });
-    const list = (count: number): LabelMapEntry[] => {
-      // Given payload first and templates after, as the envelope holds them.
-      const entries: LabelMapEntry[] = [];
-      for (let i = 0; i < count; i++) entries.push(payload(i));
-      for (let i = 0; i < count; i++) entries.push(template(i));
-      return entries;
-    };
-
-    const before = inStoredLabelMapOrder(list(12));
-    const after = inStoredLabelMapOrder(list(13));
-
-    expect(before.slice(0, 4).map((entry) => entry.path.join("/"))).toEqual([
-      "0/text",
-      "cfc/labels/value/0/text/confidentiality/clauses/*/alternatives/*",
-      "1/text",
-      "cfc/labels/value/1/text/confidentiality/clauses/*/alternatives/*",
-    ]);
-    expect(after.slice(0, before.length)).toEqual(before);
-    expect(after.slice(before.length)).toEqual([payload(12), template(12)]);
   });
 });
