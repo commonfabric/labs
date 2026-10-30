@@ -401,10 +401,13 @@ export interface HarnessToolRun {
   subagentProfiles?: readonly HarnessSubagentProfile[];
 }
 
-/** What about a run a tool reads to class one of its calls. */
+/**
+ * What about a run a tool reads to class one of its calls, and the turn's
+ * signal, so classing a call waits on nothing once the turn is cancelled.
+ */
 export type HarnessToolEffectRun = Pick<
   HarnessToolContext,
-  "loomCommandCatalog"
+  "loomCommandCatalog" | "signal"
 >;
 
 /** How policy judges one call of a tool: its effect class, and why. */

@@ -1243,6 +1243,16 @@ const REASONS: ReadonlyMap<string, Reason> = new Map(Object.entries(
       `${task} ${WHY}`,
     structured_result_return: () =>
       "Handing back the run's result is always allowed.",
+    command_effect_read: () =>
+      "Every host command this step named only reads, as the host declares.",
+    command_effect_change: () =>
+      "A host command this step named is declared to change data.",
+    command_effect_undeclared: () =>
+      "A host command this step named declares no effect, so it may change data.",
+    command_unknown: () =>
+      "A host command this step named is not among the ones listed for this run.",
+    command_catalog_unread: () =>
+      "The host's list of commands could not be read, so this step may change data.",
     subagent_profile_allowed: () =>
       "This run may start this kind of helper agent.",
     subagent_profile_not_allowed: () =>

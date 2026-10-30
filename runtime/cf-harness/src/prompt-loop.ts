@@ -5158,6 +5158,7 @@ export class CfHarnessPromptLoop {
     const callEffect: HarnessToolCallEffect =
       await tool.effectClassOf?.(input, {
         loomCommandCatalog: this.engine.loomCommandCatalog,
+        ...(signal !== undefined ? { signal } : {}),
       }) ?? { effectClass: tool.descriptor.effectClass };
     callEffectClass = callEffect.effectClass;
     const decision = evaluateToolPolicy(

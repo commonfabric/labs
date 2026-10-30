@@ -388,15 +388,15 @@ placeholders resolve only at the SQLite query boundary.
    client actions and `read` otherwise, so an answer, question or give-up keeps
    the read path while actions need a direct-command binding; `run_command` is
    `read` when the host's catalog declares every command the call names a read
-   and `write` otherwise, so a task bound as `context` can read through the
-   host's commands and nothing else. The decision is recorded before the tool
-   runs, so it is not a commit point, and it consults no sink and no label.
-   `run_pattern` is the exception and shows the shape the rest want: a named
-   sink, an explicit ceiling, and the runner's commit boundary deciding. Owner:
-   `cf-harness` and the CFC runtime. Retirement: each side-effecting tool's
-   effect is declared as a named sink whose ceiling the runner's boundary commit
-   evaluates, so that a refusal comes back as structured evidence rather than as
-   an allow recorded in advance.
+   and `write` otherwise, so under `enforce-explicit` a task bound as `context`
+   can read through the host's commands and nothing else. The decision is
+   recorded before the tool runs, so it is not a commit point, and it consults
+   no sink and no label. `run_pattern` is the exception and shows the shape the
+   rest want: a named sink, an explicit ceiling, and the runner's commit
+   boundary deciding. Owner: `cf-harness` and the CFC runtime. Retirement: each
+   side-effecting tool's effect is declared as a named sink whose ceiling the
+   runner's boundary commit evaluates, so that a refusal comes back as
+   structured evidence rather than as an allow recorded in advance.
 7. **Direct-command bindings not bound to a subject or a submitted value.** Both
    minting surfaces produce a binding from constants: the console's is a
    module-level value reused for every turn of every session, and the CLI's

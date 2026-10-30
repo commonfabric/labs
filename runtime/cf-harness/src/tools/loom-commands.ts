@@ -717,7 +717,9 @@ const commandNamesOf = (input: Record<string, unknown>): string[] => {
  * leaves out, a command whose effect is undeclared, and a catalog that
  * cannot be read are each a write, since nothing then says the call changes
  * nothing. The catalog read is the one the tool itself shares, so classing a
- * call asks the host nothing the call would not.
+ * call asks the host nothing the call would not, and a cancelled turn stops
+ * waiting for it without ending it: the call is then a write, which the tool
+ * refuses as cancelled before anything is sent.
  */
 const runCommandEffectOf = async (
   input: Record<string, unknown>,
@@ -735,7 +737,13 @@ const runCommandEffectOf = async (
   if (run.loomCommandCatalog === undefined || names.length === 0) {
     return { effectClass: "write" };
   }
-  const listed = await run.loomCommandCatalog.current();
+  const listed = await unlessCancelled(
+    run.loomCommandCatalog.current(),
+    run.signal,
+  );
+  if (listed === "cancelled") {
+    return { effectClass: "write", detail: "the turn was cancelled" };
+  }
   if (listed.status === "error") {
     return write(
       "command_catalog_unread",

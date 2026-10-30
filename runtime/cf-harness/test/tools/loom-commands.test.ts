@@ -1381,6 +1381,23 @@ describe("loom-commands tools", () => {
       });
     });
 
+    it("classes a call a write once the turn is cancelled, waiting for no catalog read", async () => {
+      const input = { command: "people-discovery.dossier", args: {} };
+      const { context, calls } = contextWith({ aborted: true });
+      expect(await runCommandTool.effectClassOf!(input, context)).toEqual({
+        effectClass: "write",
+        detail: "the turn was cancelled",
+      });
+      expect(calls).toEqual([]);
+      const during = contextWith({ cancelDuringListing: true });
+      expect(await runCommandTool.effectClassOf!(input, during.context))
+        .toMatchObject({ effectClass: "write" });
+      // The shared read goes on without the cancelled caller, and settles.
+      expect(await during.context.loomCommandCatalog!.current()).toMatchObject(
+        { status: "ok" },
+      );
+    });
+
     it("shares the run's one catalog read with the call it classes", async () => {
       const { context, calls } = contextWith();
       const input = { command: "people-discovery.dossier", args: {} };

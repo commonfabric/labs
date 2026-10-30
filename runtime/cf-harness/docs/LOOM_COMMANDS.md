@@ -220,9 +220,10 @@ slot.
 The policy decision records the call's class and, beside the decision's own
 reason code, how the class was found: `command_effect_read`,
 `command_effect_change`, `command_effect_undeclared`, `command_unknown`, or
-`command_catalog_unread`. A refusal's detail names the command that decided it.
-Classing a call reads the catalog the tool itself reads, held once for the run,
-so the policy check asks the host nothing the call would not.
+`command_catalog_unread`. A refusal's detail names the command that decided it,
+or says the catalog could not be read. Classing a call reads the catalog the
+tool itself reads, held once for the run, so the policy check asks the host
+nothing the call would not, and a cancelled turn stops waiting for it.
 
 ## The answer is Loom data
 
