@@ -176,31 +176,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
     scale: 1,
   },
 };
-
-export const IFRAME_PATTERN = {
-  name: "SignalPropagationAtlas",
-  displayName: "Signal Propagation Atlas",
-  stateScope: "space",
-  outputScope: "session",
-  frameHeight: "100vh",
-  databases: {
-    personalAtlas: {
-      scope: "user",
-      tables: {
-        atlas_bookmarks: {
-          id: "text primary key",
-          observation_id: "text not null",
-          note: "text not null",
-          created_at: "integer not null",
-        },
-        atlas_hypotheses: {
-          id: "text primary key",
-          title: "text not null",
-          narrative: "text not null",
-          status: "text not null",
-          created_at: "integer not null",
-        },
-      },
-    },
-  },
-} as const;

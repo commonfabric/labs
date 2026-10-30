@@ -189,8 +189,8 @@ const GLOBS = [
   "patterns/*.ts",
   // Iframe guests and the contracts they are written against compile as
   // ordinary browser modules, and `isPatternSource()` excludes them for
-  // exactly that reason, so this task is what checks them. Their generated
-  // pattern wrappers remain under the classic JSX environment owned by
+  // exactly that reason, so this task is what checks them. The patterns that
+  // host them remain under the classic JSX environment owned by
   // `deno task cfcheck`. The depth is open because a guest sits wherever the
   // pattern that hosts it puts it; the `iframe-` prefix is not, because that
   // is the condition under which the exclusion applies. A file of the same

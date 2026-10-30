@@ -498,6 +498,135 @@ describe("cf-iframe cell bridge", () => {
     ]);
   });
 
+  it("resolves each field of a record a view binds inline to the cell it links to", async () => {
+    // A view binding `$context={{ glaze, order }}` hands over the record's
+    // own slot, read through a schema that stops at the record, so the read
+    // names no field. The worker's list of fields names the cells, and a
+    // stream, which is not one, is named by the kind the view gives it.
+    const targets: Record<string, CellRef> = {
+      glaze: {
+        id: "of:glaze" as CellRef["id"],
+        space: ref.space,
+        scope: "user",
+        path: [],
+        schema: { type: "string" },
+      },
+      order: {
+        id: "of:order" as CellRef["id"],
+        space: ref.space,
+        scope: "space",
+        path: [],
+        schema: { $ref: "cid:fid1:order-stream-schema" },
+      },
+    };
+    const slot: CellRef = {
+      ...ref,
+      path: ["props", "$context"],
+      schema: { type: "object", properties: {} },
+    };
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          if (
+            request.type === RequestType.CellGet ||
+            request.type === RequestType.CellPull
+          ) {
+            return Promise.resolve({ value: {} });
+          }
+          if (request.type === RequestType.CellFields) {
+            return Promise.resolve({ fields: { glaze: targets.glaze } });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            const name = request.cell.path.at(-1);
+            // A name the record does not hold stays where it was asked,
+            // with the schema the worker reads it under.
+            return Promise.resolve({
+              cell: request.cell.path.length === slot.path.length
+                ? request.cell
+                : targets[name as string] ?? { ...request.cell, schema: {} },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, slot);
+
+    const bridge = await resolveCellContextBridge(context, {
+      order: "stream",
+      frosting: "cell",
+    });
+
+    // `frosting` names nothing the record holds, so it grants nothing.
+    expect(Object.keys(bridge.resources).sort()).toEqual(["glaze", "order"]);
+    expect(bridge.resources.glaze.kind).toBe("cell");
+    expect(bridge.resources.glaze.cell!.identity).toMatchObject({
+      id: "of:glaze",
+      scope: "user",
+      path: [],
+    });
+    expect(bridge.resources.order.kind).toBe("stream");
+  });
+
+  it("grants nothing for a kind whose name a context bound as a link does not hold", async () => {
+    // The bound context links to the record that holds the fields, so a name
+    // the record lacks resolves to the record's own path for it.
+    const record: CellRef = {
+      ...ref,
+      id: "of:record" as CellRef["id"],
+      schema: { type: "object", properties: {} },
+    };
+    const glaze: CellRef = {
+      ...ref,
+      id: "of:glaze" as CellRef["id"],
+      schema: { type: "string" },
+    };
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          if (
+            request.type === RequestType.CellGet ||
+            request.type === RequestType.CellPull
+          ) {
+            return Promise.resolve({ value: {} });
+          }
+          if (request.type === RequestType.CellFields) {
+            return Promise.resolve({ fields: { glaze } });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            const [name] = request.cell.path;
+            return Promise.resolve({
+              cell: name === undefined
+                ? record
+                : name === "glaze"
+                ? glaze
+                : { ...record, path: [name], schema: {} },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+
+    const bridge = await resolveCellContextBridge(context, {
+      frosting: "cell",
+    });
+
+    expect(Object.keys(bridge.resources)).toEqual(["glaze"]);
+  });
+
   it("holds lazy scoped SQLite demand through backend readiness", async () => {
     const subscriptions: CellRef[] = [];
     const idle = Promise.withResolvers<void>();

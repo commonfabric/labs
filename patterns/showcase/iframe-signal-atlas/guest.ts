@@ -1,4 +1,4 @@
-// The iframe generator bundles this pinned module into the self-contained guest.
+// `deno bundle` inlines this pinned module into the guest's bundle.
 // deno-lint-ignore no-external-import
 import {
   contours,

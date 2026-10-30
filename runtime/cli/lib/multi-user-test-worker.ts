@@ -83,7 +83,7 @@ import {
   runtimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
 import { servedConsequences, settleServed } from "./served-settle.ts";
-import { buildActionEvent } from "./trusted-action-event.ts";
+import { pullActionEvent } from "./test-action-event.ts";
 
 export interface WorkerRequest {
   id: number;
@@ -277,13 +277,6 @@ const stepPeekSchema = {
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
-    // The payload is what the step sends, so it is read as authored: an
-    // object arrives as an object, reaching the handler as a reference into
-    // this step rather than a snapshot of it. `type: "unknown"` marks a value
-    // the traversal must not descend into, which is right for the fields this
-    // schema only tests for presence and wrong here, where it drops an object
-    // payload to `undefined`.
-    event: true,
     trustedUi: {
       type: "object",
       properties: {
@@ -638,10 +631,13 @@ const handlers: Record<
       throw new Error(`Test step ${index} action is not a stream`);
     }
     const meta = stepCell.asSchema(stepPeekSchema).get() as {
-      event?: unknown;
       trustedUi?: unknown;
     };
-    stream.send(buildActionEvent(meta?.event, meta?.trustedUi));
+    const event = await pullActionEvent(
+      stepCell.key("event" as never),
+      meta?.trustedUi,
+    );
+    stream.send(event);
     await settle();
     return {};
   },

@@ -67,6 +67,20 @@ describe("CFIframe", () => {
     expect(templateValues(element)[1]).toBe("<p>stateful guest</p>");
   });
 
+  it("forwards its script to the sandbox apart from its source", () => {
+    const element = new CFIframe();
+    element.src = '<div id="root"></div>';
+    expect(element.script).toBe("");
+    element.script = "document.body.dataset.glaze = 'maple';";
+
+    // The fifth binding is the sandbox's `script`, after its bridge, source,
+    // outer frame and presentation.
+    expect(templateValues(element)[1]).toBe('<div id="root"></div>');
+    expect(templateValues(element)[4]).toBe(
+      "document.body.dataset.glaze = 'maple';",
+    );
+  });
+
   it("reports a non-Error context failure and clears it on replacement", async () => {
     const runtime = {
       [$conn]: () => ({ request: () => Promise.reject("context refused") }),

@@ -126,9 +126,11 @@ What works today:
   see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions: a long-lived container that later calls execute in,
   offered to the model only where the run's CFC enforcement mode allows them,
-  and not under the Linux default's `pasta` network
+  and not under `pasta`'s network: the Linux default's, and that of any Linux
+  run that forwards host ports
 - a sandbox network that defaults to `sandbox`, the driver's own: on Linux
-  `pasta` gives it egress and the host at `host.docker.internal`.
+  `pasta` gives it egress and the host at `host.docker.internal`, every port of
+  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists.
   `CF_HARNESS_DOCKER_NETWORK_MODE` names one: `bridge` is that default, and
   `none` and `host` are the others; the name is kept from the Docker driver, as
   is its vocabulary
@@ -334,10 +336,12 @@ networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
 hosts such as `localhost`, `127.0.0.1`, `[::1]`, and the `host.docker.internal`
 host alias, but obvious external `curl` targets are denied before sandbox
 execution. The refusal states that rule and names no host to try instead, since
-what answers on those names is the platform's: on Linux `host.docker.internal`
-reaches any port of the host, through `pasta`, and on macOS only the ports the
-launch forwards into the VM. This is an integration unblock, not a complete
-network confinement model.
+what answers on those names is the platform's. On Linux, under `pasta`'s
+network, `host.docker.internal` reaches any port of the host's loopback for the
+default, or only the ports a run lists in `CFC_VM_FORWARD_PORTS`; a named
+`runsc` that lists none has no `pasta`, and its loopback is its own. On macOS it
+reaches only the ports the launch forwards into the VM. This is an integration
+unblock, not a complete network confinement model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -1195,14 +1199,22 @@ Pasta also clears the parent-death signal of what it runs, so the driver runs it
 through `setpriv --pdeathsig KILL` (util-linux): a call that times out, or is in
 flight when the runtime closes, stops its pasta, and its container dies with
 pasta's namespace. No port is forwarded into the container, or from the
-container's loopback to the host's. A user id, or a kernel parameter, that
-cannot be read refuses the default rather than being guessed at. Where no
-`pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the default is
-refused, saying to install passt (`sudo apt install passt`) or util-linux, or to
-name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container
-loopback alone, and `host` the host's own network, interfaces and all. Those two
-need none of `pasta`, `setpriv` or `unshare`; a process that is not root still
-needs user namespaces for the store's rootless `runsc`, as above.
+container's loopback to the host's, unless the run lists host ports in
+`CFC_VM_FORWARD_PORTS`: then the container reaches those ports of the host's
+loopback and no other port of it. Pasta runs with `--no-map-gw`, so the gateway
+does not lead to the host, and listens on each listed port at the container's
+loopback, which the hosts file then names `host.docker.internal`, forwarding it
+to the host's. A named `runsc` gets pasta's network for such a run too, and the
+run is refused under the `none` or `host` network, which forward nothing. Egress
+is kept, so a service the host binds to an address of another interface is
+reached at that address, as from any other machine. A user id, or a kernel
+parameter, that cannot be read refuses the default rather than being guessed at.
+Where no `pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the
+default is refused, saying to install passt (`sudo apt install passt`) or
+util-linux, or to name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives
+the container loopback alone, and `host` the host's own network, interfaces and
+all. Those two need none of `pasta`, `setpriv` or `unshare`; a process that is
+not root still needs user namespaces for the store's rootless `runsc`, as above.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1294,7 +1306,8 @@ rest of this section says of that driver, and these differences of platform:
   `host.docker.internal` reaches only the host ports the launch forwards into
   the VM.
 - **On Linux** there is no VM; the default network is pasta's, above, and the
-  host is reached at `host.docker.internal` on every port its loopback serves.
+  host is reached at `host.docker.internal` on every port its loopback serves,
+  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone.
 
 The driver keeps its `runsc` state under the run's own scratch directory and
 registers nothing anywhere. The `runsc` it invokes is gVisor's own on Linux, and

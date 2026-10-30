@@ -1,9 +1,10 @@
 /// <cts-enable />
 // Browser-integration fixture for cf-iframe's real CellHandle bridge. The
-// surrounding pattern exposes scoped cells as sibling readouts while the
-// sandboxed guest performs every mutation through the bridge. The guest also
-// joins the presence room of the space-scoped cell on command, and reports
-// the room to the page that embeds the piece.
+// pattern binds its scoped cells and databases as one `$context` record,
+// exposes the cells as sibling readouts, and leaves every mutation to the
+// sandboxed guest, through the bridge. The guest also joins the presence room
+// of the space-scoped cell on command, and reports the room to the page that
+// embeds the piece.
 import {
   action,
   cfSqlite,
@@ -33,28 +34,9 @@ export interface BridgeFixtureInput {
   reloadRevision?: PerSession<RevisionCell>;
 }
 
-interface IframeContextInput {
-  shared: TextCell;
-  user: TextCell;
-  session: TextCell;
-  databaseRows: TextCell;
-  userDatabaseRows: TextCell;
-  sessionDatabaseRows: TextCell;
-  database: SqliteDb;
-  userDatabase: SqliteDb;
-  sessionDatabase: SqliteDb;
-  room: TextCell;
-}
-
-export interface IframeContextOutput extends IframeContextInput {}
-
 export interface BridgeFixtureOutput {
   [UI]: VNode;
 }
-
-const IframeContext = pattern<IframeContextInput, IframeContextOutput>(
-  (state) => state,
-);
 
 // This deliberately uses the bridge wire protocol directly. The guest helper
 // and React hooks have their own focused tests; this fixture pins the browser
@@ -348,20 +330,6 @@ export default pattern<BridgeFixtureInput, BridgeFixtureOutput>((state) => {
   const sessionDatabase: PerSession<SqliteDb> = sqliteDatabase(
     { tables },
   );
-  const context = IframeContext({
-    shared: state.shared,
-    user: state.user,
-    session: state.session,
-    databaseRows: state.databaseRows,
-    userDatabaseRows: state.userDatabaseRows,
-    sessionDatabaseRows: state.sessionDatabaseRows,
-    database,
-    userDatabase,
-    sessionDatabase,
-    // A presence room is the one derived from its cell's resolved field, and
-    // a space-scoped field is the same for every session of every identity.
-    room: state.shared,
-  });
   const source = computed(() =>
     GUEST_HTML + '<span hidden data-reload="' + state.reloadRevision.get() +
     '"></span>'
@@ -373,13 +341,13 @@ export default pattern<BridgeFixtureInput, BridgeFixtureOutput>((state) => {
   return {
     [UI]: (
       <div style={{ padding: "16px", display: "grid", gap: "8px" }}>
-        <div id="bridge-shared">{context.shared}</div>
-        <div id="bridge-user">{context.user}</div>
-        <div id="bridge-session">{context.session}</div>
-        <div id="bridge-database-rows">{context.databaseRows}</div>
-        <div id="bridge-user-database-rows">{context.userDatabaseRows}</div>
+        <div id="bridge-shared">{state.shared}</div>
+        <div id="bridge-user">{state.user}</div>
+        <div id="bridge-session">{state.session}</div>
+        <div id="bridge-database-rows">{state.databaseRows}</div>
+        <div id="bridge-user-database-rows">{state.userDatabaseRows}</div>
         <div id="bridge-session-database-rows">
-          {context.sessionDatabaseRows}
+          {state.sessionDatabaseRows}
         </div>
         <cf-button id="bridge-reload" onClick={reloadGuest}>
           Reload guest
@@ -387,7 +355,21 @@ export default pattern<BridgeFixtureInput, BridgeFixtureOutput>((state) => {
         <div style={{ height: "120px" }}>
           <cf-iframe
             src={source}
-            $context={context}
+            $context={{
+              shared: state.shared,
+              user: state.user,
+              session: state.session,
+              databaseRows: state.databaseRows,
+              userDatabaseRows: state.userDatabaseRows,
+              sessionDatabaseRows: state.sessionDatabaseRows,
+              database,
+              userDatabase,
+              sessionDatabase,
+              // A presence room is the one derived from its cell's resolved
+              // field, and a space-scoped field is the same for every
+              // session of every identity.
+              room: state.shared,
+            }}
             resourceKinds={{
               database: "sqlite",
               userDatabase: "sqlite",

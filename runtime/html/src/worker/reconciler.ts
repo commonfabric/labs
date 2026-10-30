@@ -197,8 +197,9 @@ export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
     ["cf-render", new Set(["cell"])],
     ["cf-picker", new Set(["items"])],
     // The sandbox admits same-origin images, and a same-origin relay
-    // (`/api/link-preview/<url>`) fetches any URL it is given.
-    ["cf-iframe", new Set(["context"])],
+    // (`/api/link-preview/<url>`) fetches any URL it is given. `script` runs
+    // in the guest document as `src` does, with the same reach.
+    ["cf-iframe", new Set(["context", "script"])],
     // Tiles come from a fixed host, but the viewport the data chooses tells
     // that host where to look.
     ["cf-map", new Set(["value", "center", "zoom", "bounds"])],

@@ -7,7 +7,6 @@ import {
   describeCompileErrors,
   describeFailures,
   dumperConfig,
-  workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
   assignmentDigest,

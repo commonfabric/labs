@@ -86,6 +86,19 @@ export interface RequiredPatternOverride {
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
+    // The verb list's items left its argument for the pattern's own `state`,
+    // where its `addItem` verb writes them and its guest is granted them to
+    // read, so the argument no longer takes `items`, and, declaring no field
+    // at all, refuses the extra fields the recorded one accepted; the result
+    // reads the items under `state.items` rather than `items`.
+    pattern: "examples/iframe-verb-list/main.tsx",
+    baselines: ["20261017T164922Z-9DynKREWtc-Nv2Rs"],
+    paths: ["argument", "argument.items", "result.items"],
+    reason:
+      "the items moved from the argument into the pattern's own state, which a verb can bind once the pattern holds its guest's frame itself",
+    record: "docs/history/iframe-verb-list-state-items-break.md",
+  },
+  {
     // The profile gained its owner-protected share inbox pointer (`inbox`,
     // optional, undefaulted). The picker consumes a stored profile, and the
     // proof compares the new property's `ifc` label against a baseline that
