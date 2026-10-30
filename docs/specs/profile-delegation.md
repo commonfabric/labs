@@ -737,6 +737,9 @@ of this design.
   creator's own session, so the server ensure has nothing to do for a profile.
   Whether the service should later learn the core identity from the proofs it
   has seen, to act for the user in a profile space, is the part left open.
+  [`server-execution-consent.md`](server-execution-consent.md) designs the
+  other direction: a space's owner, a profile's key among them, delegates to
+  the executor that is to serve it.
 - **Is giving up the profile as a signer the right trade?** This design destroys
   the key, so a profile never signs a verified-identity assertion, a roster
   membership, or anything else. The alternative is a key derived from the core

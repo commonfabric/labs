@@ -62,6 +62,10 @@ decision is reversed or superseded).
 - [Runner child-run ownership](runner-child-run-ownership.md)
 - [Scheduler v2](scheduler-v2/README.md)
 - [Server-primary execution](server-side-execution/README.md)
+- [Server execution by consent](server-execution-consent.md) (design sketch):
+  a space's owner delegates to the execution identity of the ASP that is to
+  serve it, in a delegations document the executor reads, and an executor
+  serves only the spaces that delegated to it
 - [Verifiable execution](verifiable-execution/README.md)
 - [Webhook ingress](webhook-ingress/README.md)
 - [Test-run records](test-records.md)
