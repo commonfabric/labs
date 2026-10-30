@@ -65,7 +65,10 @@ the last report, a `highlights` value is taken for its ids and kinds only: a
 range the view already holds keeps the position the view mapped it to, and one
 the view does not hold is added where the host put it. The host has caught up
 once its positions agree with the last report for every id both name, and from
-then on its values are set as given.
+then on its values are set as given. The report the host has yet to match
+follows the view through every later edit, a collaborator's included, so an edit
+that brings the view back onto the host's value leaves no earlier positions for
+a delayed echo to pass as the host catching up.
 
 The update listener reports in the other direction. After any transaction that
 set the selection or changed the document, it emits `cf-selection-change` when
@@ -104,6 +107,12 @@ user edits ────► transaction.changes ──► mapped ranges
 
 ## Bounds
 
+- **The host decides what is marked.** A range a deletion covers leaves the
+  field and the next report, so a value from a host that has yet to see that
+  report, still naming the range, agrees with the report on every id both name
+  and is set as given: the range reappears where the host has it until the
+  host's next value omits it. The editor decides only where a range the host
+  names sits.
 - **Mapping is per open editor.** A range is mapped by the editor that holds it.
   An edit made with no editor open, such as a handler's `applyChanges()`,
   reaches the host as a changed document and nothing else; the host has to find

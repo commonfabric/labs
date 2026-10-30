@@ -237,6 +237,33 @@ Deno.test("a host handing back an older report after a later one leaves the edit
   }
 });
 
+Deno.test("an edit undone before the host answers leaves a delayed echo of it without effect", async () => {
+  const { element, done } = await mount("hello world");
+  try {
+    element.highlights = [{ id: "one", from: 6, to: 11 }];
+    await element.updateComplete;
+    const reported = nextEvent<
+      { highlights: { id: string; from: number; to: number }[] }
+    >(
+      element,
+      "cf-highlights-mapped",
+    );
+    const view = element.editorView!;
+    view.dispatch({ changes: { from: 0, insert: "a" } });
+    const echo = (await reported).highlights;
+    assertEquals(echo, [{ id: "one", from: 7, to: 12 }]);
+    // The view is back on the host's value before the host has answered,
+    // which is no new report.
+    view.dispatch({ changes: { from: 0, to: 1 } });
+    // The echo of the undone edit arrives: the view stays where it is.
+    element.highlights = echo;
+    await element.updateComplete;
+    assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
+  } finally {
+    done();
+  }
+});
+
 Deno.test("a host handing back the ranges the editor reported leaves the editor's set as it is", async () => {
   const { element, done } = await mount("hello world");
   try {

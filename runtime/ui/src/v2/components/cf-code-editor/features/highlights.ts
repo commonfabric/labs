@@ -72,7 +72,8 @@ function mapRange(
     : { ...range, from, to };
 }
 
-function mapRanges(
+/** `ranges` after `changes`, without those the edits leave empty. */
+export function mapHighlights(
   ranges: readonly HighlightRange[],
   changes: ChangeDesc,
 ): readonly HighlightRange[] {
@@ -127,7 +128,7 @@ function decorationsOf(ranges: readonly HighlightRange[]): DecorationSet {
 export const highlightField = StateField.define<HighlightState>({
   create: () => ({ ranges: [], decorations: Decoration.none }),
   update: (value, transaction) => {
-    let ranges = mapRanges(value.ranges, transaction.changes);
+    let ranges = mapHighlights(value.ranges, transaction.changes);
     for (const effect of transaction.effects) {
       if (effect.is(setHighlightsEffect)) {
         ranges = clampRanges(effect.value, transaction.newDoc.length);

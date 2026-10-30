@@ -117,6 +117,7 @@ import {
   type HighlightRange,
   highlightsOf,
   highlightTheme,
+  mapHighlights,
   sameHighlights,
   setHighlightsEffect,
 } from "./features/highlights.ts";
@@ -2140,7 +2141,10 @@ export class CFCodeEditor extends BaseElement {
    * value is taken for its ids and kinds, with the positions of ranges the
    * view already holds kept as the view mapped them. The host has caught up
    * once its positions agree with the last report for every id both name,
-   * and from then on its values are set as given.
+   * and from then on its values are set as given. The host decides what is
+   * marked: a range a deletion dropped from the view is not in the report,
+   * so a value still naming it is set as given and the range reappears until
+   * the host's next value omits it.
    */
   private _pushHighlights(): void {
     const view = this._editorView;
@@ -2202,8 +2206,19 @@ export class CFCodeEditor extends BaseElement {
     const remote = update.transactions.some((transaction) =>
       transaction.annotation(Transaction.remote)
     );
-    if (remote) return;
+    const report = this._unmatchedHighlightReport;
+    if (remote) {
+      if (report !== undefined) {
+        this._unmatchedHighlightReport = mapHighlights(report, update.changes);
+      }
+      return;
+    }
     const mapped = highlightsOf(update.state);
+    // A report the host has yet to catch up to follows the view through
+    // every later edit, including one that brings the view back onto the
+    // host's value: a delayed echo of the earlier positions must not pass
+    // for the host catching up.
+    if (report !== undefined) this._unmatchedHighlightReport = mapped;
     if (sameHighlights(mapped, this.highlights ?? [])) return;
     this._unmatchedHighlightReport = mapped;
     this.emit("cf-highlights-mapped", {
