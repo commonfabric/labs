@@ -1068,6 +1068,28 @@ collection whose size the code fixes from one that grows with data. A spread
 that has to stay, such as one in a test that shows the overflow, sits under a
 `deno-lint-ignore` comment that says why.
 
+### Turning a file URL into a path
+
+Turn a file URL into a path with `fromFileUrl` from `@std/path`, as in
+`fromFileUrl(new URL("../..", import.meta.url))`. The `pathname` of a URL is
+percent-encoded: in a checkout under `/Users/me/my work/`, the `pathname` of a
+module's URL begins `/Users/me/my%20work/`, which names no directory, so a read
+of that path fails with `NotFound`. The same happens to every non-ASCII
+character, such as an emoji in a directory name. Where an API takes a URL, such
+as `Deno.readTextFile` or the `cwd` of `Deno.Command`, pass the URL itself. Turn
+a path into a URL with `toFileUrl` rather than by writing `file://` in front of
+it, which leaves a `#` or `?` in the path to be read as the start of a fragment
+or a query.
+
+The `cf-path/no-file-url-pathname` lint rule (`tasks/lint-file-url-pathname.ts`,
+registered in the root `deno.jsonc`) reports a read of `pathname`, by a member
+access or by destructuring in a variable declaration, directly off a URL that `new URL()` or `URL.parse()`
+builds in the same expression from `import.meta.url`, from
+`import.meta.resolve()`, or from a `file:` literal, and directly off the result
+of `toFileUrl`. It does not follow a URL through a variable or a parameter. The
+test lanes in continuous integration run from a checkout whose path holds a
+space and an emoji, which catches what the rule misses.
+
 ## Build & Test
 
 ### Running Tests

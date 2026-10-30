@@ -83,7 +83,7 @@ export async function collectCoverageDebtMetricsFromLcov(
 ): Promise<CoverageDebtMetric[]> {
   return await collectCoverageDebtMetricsFromCoverage({
     rootDir: options.rootDir,
-    coverage: parseLcov(options.lcov),
+    coverage: parseLcov(options.lcov, options.rootDir),
   });
 }
 
@@ -181,7 +181,7 @@ export async function collectMeasuredSetDebt(
     options.member,
     options.members,
   );
-  const lcovCoverage = parseLcov(options.lcov);
+  const lcovCoverage = parseLcov(options.lcov, options.rootDir);
   let uncoveredLines = 0;
   let files = 0;
   for (const source of sourceFiles) {
@@ -283,7 +283,7 @@ export function isCoverageIgnoredFile(content: string): boolean {
 export async function collectUncoveredLinesForFiles(
   options: CoverageDebtMetricsFromLcovOptions & { files: Iterable<string> },
 ): Promise<Map<string, number[]>> {
-  const lcovCoverage = parseLcov(options.lcov);
+  const lcovCoverage = parseLcov(options.lcov, options.rootDir);
   const result = new Map<string, number[]>();
 
   for (const requested of options.files) {
@@ -522,7 +522,9 @@ export function trackedSourceLineNumbers(content: string): number[] {
 }
 
 /**
- * Read one `deno coverage --lcov` report, keyed by normalized source path.
+ * Read one `deno coverage --lcov` report, keyed by absolute source path. A
+ * relative path, as a lane's report gives a file of the repository, is
+ * resolved against `rootDir`.
  *
  * Per-instance suffixes (`?testRun=<uuid>` cache-busting imports) are
  * normalized away at LCOV GENERATION (write-coverage-lcov.ts,
@@ -530,8 +532,13 @@ export function trackedSourceLineNumbers(content: string): number[] {
  * share one path per physical file; duplicate `SF:` sections accumulate into
  * the same entry.
  */
-export function parseLcov(lcov: string): Map<string, LcovFileCoverage> {
-  return parseLcovReports([lcov], { mapPath: path.normalize });
+export function parseLcov(
+  lcov: string,
+  rootDir: string,
+): Map<string, LcovFileCoverage> {
+  return parseLcovReports([lcov], {
+    mapPath: (sourcePath) => path.resolve(rootDir, sourcePath),
+  });
 }
 
 export function countUncoveredProfileLines(coverage: LcovFileCoverage): number {

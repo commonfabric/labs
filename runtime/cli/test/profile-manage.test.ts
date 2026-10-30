@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { fromFileUrl } from "@std/path";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
@@ -117,9 +118,13 @@ describe("profile management", () => {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {
-        main: new URL("../../../patterns/system/home/home.tsx", import.meta.url)
-          .pathname,
-        root: new URL("../../..", import.meta.url).pathname.replace(/\/$/, ""),
+        main: fromFileUrl(
+          new URL("../../../patterns/system/home/home.tsx", import.meta.url),
+        ),
+        root: fromFileUrl(new URL("../../..", import.meta.url)).replace(
+          /\/$/,
+          "",
+        ),
       },
     );
     const tx = runtime.edit();
@@ -238,11 +243,13 @@ describe("profile management", () => {
       const program = await resolveLocalProgram(
         (resolver) => theirs.harness.resolve(resolver),
         {
-          main: new URL(
-            "../../../patterns/system/profile-home/profile-home.tsx",
-            import.meta.url,
-          ).pathname,
-          root: new URL("../../..", import.meta.url).pathname.replace(
+          main: fromFileUrl(
+            new URL(
+              "../../../patterns/system/profile-home/profile-home.tsx",
+              import.meta.url,
+            ),
+          ),
+          root: fromFileUrl(new URL("../../..", import.meta.url)).replace(
             /\/$/,
             "",
           ),

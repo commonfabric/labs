@@ -473,6 +473,7 @@ interface Step {
   env?: Record<string, string>;
   with?: Record<string, string | boolean | number>;
   "timeout-minutes"?: unknown;
+  "working-directory"?: string;
 }
 
 interface Job {
@@ -657,6 +658,49 @@ Deno.test("a lane runs the lane runner and holds the token alone", async () => {
     const checkout = namedStep(job, "📥 Checkout repository");
     assertEquals(checkout.with?.["fetch-depth"], 0);
     assertEquals(checkout.with?.["persist-credentials"], false);
+  }
+});
+
+Deno.test("a lane runs the repository's code from a path with a space and an emoji", async () => {
+  // A test that turns a file URL into a path without decoding it passes in a
+  // checkout whose path is plain ASCII, so the lane runs from one whose path
+  // is not.
+  const job = (await parsedWorkflow("deno.yml")).jobs.tests;
+  const steps = job.steps ?? [];
+  const mount = namedStep(
+    job,
+    "📥 Mount the checkout at a path with a space and an emoji",
+  );
+  assert(
+    steps.indexOf(namedStep(job, "📥 Checkout repository")) <
+      steps.indexOf(mount),
+  );
+  for (const name of ["🗺️ Plan the lane", "🧪 Run the lane"]) {
+    const step = namedStep(job, name);
+    assertEquals(step["working-directory"], "${{ env.CHECKOUT }}", name);
+    assert(steps.indexOf(mount) < steps.indexOf(step), name);
+  }
+
+  const home = await Deno.makeTempDir({ prefix: "ci-workflow-home-" });
+  try {
+    const run = await runStep(mount.run ?? "", {
+      HOME: home,
+      GITHUB_WORKSPACE: "/work/labs/labs",
+      GITHUB_ENV: `${home}/env`,
+    }, { sudo: `printf '%s\\n' "$@" > '${home}/sudo'` });
+    assertStepCode(run, 0, "the mount step failed");
+    const checkout = `${home}/checkout 🦆`;
+    assert((await Deno.stat(checkout)).isDirectory);
+    assertEquals(
+      await Deno.readTextFile(`${home}/sudo`),
+      `mount\n--bind\n/work/labs/labs\n${checkout}\n`,
+    );
+    assertEquals(
+      await Deno.readTextFile(`${home}/env`),
+      `CHECKOUT=${checkout}\n`,
+    );
+  } finally {
+    await Deno.remove(home, { recursive: true });
   }
 });
 
