@@ -10,6 +10,7 @@ import {
   handler,
   NAME,
   pattern,
+  type PerSession,
   type Stream,
   UI,
   type VNode,
@@ -38,11 +39,11 @@ export interface MainOutput {
   [NAME]: string;
   [UI]: VNode;
 
-  /** Whether the reader can send in the room. */
-  canSend: boolean;
+  /** Whether the reader can send in the room: each session's own. */
+  canSend: PerSession<boolean>;
 
-  /** Who the room says is reading it. */
-  viewer: ChatRoomViewer;
+  /** Who the room says is reading it: each session's own. */
+  viewer: PerSession<ChatRoomViewer>;
 
   /** The profile held for the person's home to list. */
   profile: Cell<ChatProfile> | undefined;
