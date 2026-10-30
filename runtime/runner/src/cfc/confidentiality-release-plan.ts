@@ -149,13 +149,15 @@ const pathNames = (
 
 /**
  * Helper for {@link planConfidentialityRelease}, which returns `schema` with
- * the clauses `released` selects taken out of the `ifc` at `path`, reached
- * through `properties`, and for a `*` segment through `items` or the
- * `additionalProperties` of a schema naming no property, the positions
- * `cfcSchemaEntries()` reports at `*`. An `ifc` left declaring nothing goes,
- * and an `observes` class with no label beside it goes with it. Returns
- * `undefined` where `path` leads through anything else, such as a reference
- * or a branch.
+ * the clauses `released` selects taken out of the `ifc` at each position
+ * `path` names, reached through the positions `cfcSchemaEntries()` reports: a
+ * named property, a tuple position of `prefixItems`, and, for a `*` segment,
+ * every one of those besides `items` and the `additionalProperties` of a
+ * schema naming no property. An `ifc` left declaring nothing goes, and an
+ * `observes` class with no label beside it goes with it. Returns `undefined`
+ * where a concrete segment leads through anything else, such as a reference or
+ * a branch; a `*` segment leaves such a child as it is, for the caller's check
+ * of the result to find.
  */
 const lowerSchemaAt = (
   schema: JSONSchema,
@@ -165,29 +167,52 @@ const lowerSchemaAt = (
   if (!isObjectNotArray(schema) || schema.$ref !== undefined) return undefined;
   if (path.length > 0) {
     const [head, ...rest] = path;
-    const properties = schema.properties;
+    const lowerChild = (child: JSONSchema) =>
+      lowerSchemaAt(child, rest, released);
+    const properties = isObjectNotArray(schema.properties)
+      ? schema.properties
+      : undefined;
+    const prefixItems = Array.isArray(schema.prefixItems)
+      ? schema.prefixItems
+      : undefined;
     if (head === "*") {
-      const keyword = schema.items !== undefined
-        ? "items"
-        : "additionalProperties";
-      const element = schema[keyword];
-      if (
-        element === undefined ||
-        keyword === "additionalProperties" && isObjectNotArray(properties) &&
-          Object.keys(properties).length > 0
-      ) {
-        return undefined;
-      }
-      const child = lowerSchemaAt(element, rest, released);
-      return child === undefined ? undefined : { ...schema, [keyword]: child };
+      const lowerOrKeep = (child: JSONSchema) => lowerChild(child) ?? child;
+      const recordOnly = properties === undefined ||
+        Object.keys(properties).length === 0;
+      return {
+        ...schema,
+        ...(properties === undefined ? {} : {
+          properties: Object.fromEntries(
+            Object.entries(properties).map((
+              [key, child],
+            ) => [key, lowerOrKeep(child)]),
+          ),
+        }),
+        ...(prefixItems === undefined
+          ? {}
+          : { prefixItems: prefixItems.map(lowerOrKeep) }),
+        ...(schema.items === undefined
+          ? {}
+          : { items: lowerOrKeep(schema.items) }),
+        ...(!recordOnly || schema.additionalProperties === undefined ? {} : {
+          additionalProperties: lowerOrKeep(schema.additionalProperties),
+        }),
+      };
     }
-    if (!isObjectNotArray(properties) || !Object.hasOwn(properties, head)) {
-      return undefined;
+    if (properties !== undefined && Object.hasOwn(properties, head)) {
+      const child = lowerChild(properties[head]);
+      return child === undefined
+        ? undefined
+        : { ...schema, properties: { ...properties, [head]: child } };
     }
-    const child = lowerSchemaAt(properties[head], rest, released);
+    const index = prefixItems === undefined
+      ? -1
+      : prefixItems.findIndex((_, at) => String(at) === head);
+    if (prefixItems === undefined || index < 0) return undefined;
+    const child = lowerChild(prefixItems[index]);
     return child === undefined
       ? undefined
-      : { ...schema, properties: { ...properties, [head]: child } };
+      : { ...schema, prefixItems: prefixItems.with(index, child) };
   }
   const { ifc, ...withoutIfc } = schema;
   if (ifc?.confidentiality === undefined) return schema;
@@ -220,8 +245,9 @@ const lowerSchemaAt = (
  *
  * @throws If `keep` names a clause the path does not store; if `actor` may not
  *   release a clause the plan would remove ({@link clauseReleasableBy}); or if
- *   the stored schema declares a released clause other than through
- *   `properties`, where the position may describe other paths too.
+ *   the stored schema declares a released clause at a position the path names
+ *   through a reference or an `allOf`, `anyOf` or `oneOf` branch, where the
+ *   declaration may describe other paths too.
  */
 export const planConfidentialityRelease = (input: {
   readonly actor: string;
@@ -312,9 +338,9 @@ export const planConfidentialityRelease = (input: {
   ) {
     return { released, paths, entries, schema: input.schema };
   }
-  // The walk reaches the declaration through `properties`, `items` and
-  // `additionalProperties` alone, and what it changed is then held to what it
-  // was meant to change: every declaration the schema makes, with the
+  // The walk reaches declarations through `properties`, `prefixItems`,
+  // `items` and `additionalProperties` alone, and what it changed is then
+  // held to what it was meant to change: every declaration the schema makes, with the
   // released clauses gone from the positions the path names and nothing else
   // different.
   const schema = lowerSchemaAt(input.schema, path, isReleased);
@@ -340,9 +366,8 @@ export const planConfidentialityRelease = (input: {
   ) {
     throw new Error(
       `Cannot lower confidentiality at ${location}: the stored schema ` +
-        "declares it through `$ref`, `allOf`, `anyOf` or `oneOf`, or at " +
-        "more than one position the path names, which a release does not " +
-        "rewrite.",
+        "declares it through `$ref`, `allOf`, `anyOf` or `oneOf`, which a " +
+        "release does not rewrite.",
     );
   }
   return { released, paths, entries, schema };

@@ -279,9 +279,9 @@ decision is `planConfidentialityRelease()` in
   any segment, so a path holding one reaches every stored position it matches
   at its depth: the wildcard entry there, and each concrete position's
   entries. A path naming a concrete segment leaves a wildcard entry covering
-  it as it is. The stored schema's declaration at a `*` is reached through
-  `items`, or through the `additionalProperties` of a schema naming no
-  property.
+  it as it is. The stored schema's declarations at a `*` are those of every
+  named property, tuple position and `items` there, and of the
+  `additionalProperties` of a schema naming no property.
 - **Who may.** The runtime refuses the release unless the transaction runs
   under the `cfc-confidentiality-release` builtin identity, its acting
   principal is authenticated, and the document is in the space whose DID is

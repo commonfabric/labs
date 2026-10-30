@@ -301,6 +301,80 @@ describe("confidentiality release", () => {
       });
     });
 
+    it("removes the declarations at every named property and tuple position a `*` segment matches", () => {
+      const secret = {
+        type: "string",
+        ifc: { confidentiality: [owner] },
+      } as const satisfies JSONSchema;
+      const schema = {
+        type: "object",
+        properties: {
+          record: {
+            type: "object",
+            properties: { a: secret, b: { type: "string" } },
+          },
+          tuple: { type: "array", prefixItems: [secret], items: secret },
+        },
+      } as const satisfies JSONSchema;
+      const lower = (path: string[]) =>
+        planConfidentialityRelease({
+          actor,
+          path,
+          entries: [],
+          schema,
+          keep: [],
+        });
+
+      expect(lower(["record", "*"]).schema).toEqual({
+        ...schema,
+        properties: {
+          ...schema.properties,
+          record: {
+            type: "object",
+            properties: { a: { type: "string" }, b: { type: "string" } },
+          },
+        },
+      });
+      expect(lower(["tuple", "*"]).paths).toEqual([
+        ["tuple", "*"],
+        ["tuple", "0"],
+      ]);
+      expect(lower(["tuple", "*"]).schema).toEqual({
+        ...schema,
+        properties: {
+          ...schema.properties,
+          tuple: {
+            type: "array",
+            prefixItems: [{ type: "string" }],
+            items: { type: "string" },
+          },
+        },
+      });
+    });
+
+    it("throws for a declaration a `*` segment reaches through a reference", () => {
+      const schema = {
+        type: "object",
+        $defs: {
+          Secret: { type: "string", ifc: { confidentiality: [owner] } },
+        },
+        properties: {
+          a: { $ref: "#/$defs/Secret" },
+          b: { type: "string", ifc: { confidentiality: [owner] } },
+        },
+      } as const satisfies JSONSchema;
+
+      expect(() =>
+        planConfidentialityRelease({
+          actor,
+          path: ["*"],
+          entries: [],
+          schema,
+          keep: [],
+        })
+      ).toThrow("which a release does not rewrite");
+    });
+
     it("throws for a declaration reached through a reference", () => {
       const schema = {
         type: "object",
