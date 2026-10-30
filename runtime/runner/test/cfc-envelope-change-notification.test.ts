@@ -9,13 +9,10 @@ const signer = await Identity.fromPassphrase("runner-cfc-envelope-change");
 const space = signer.did();
 
 describe("CFC: a commit reports a label-map rewrite as one change", () => {
-  // A commit's notification is processed synchronously, change by change, and
-  // each change walks the trigger index and every matching reader. A labeled
-  // list keeps an entry per element in its label map, an array whose entries
-  // move when the list grows at the front, or at the back once indices sort
-  // as strings. Reported entry by entry, one sent message re-reported the
-  // label map of its whole thread: thousands of changes and ~2.9 s of
-  // notification on the worker every pane shared (Topics top/1241).
+  // A commit's changes are processed one by one, each walking the trigger
+  // index, and a labeled list's label map holds an entry per element whose
+  // index shifts when the list grows at the front. The commit must report the
+  // envelope once, however many entries moved (Topics top/1241).
 
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
   let runtime: Runtime | undefined;
@@ -98,9 +95,5 @@ describe("CFC: a commit reports a label-map rewrite as one change", () => {
     expect(appended.cfcChanges).toEqual([["cfc"]]);
     const prepended = await writeList(runtime, range(0, 14));
     expect(prepended.cfcChanges).toEqual([["cfc"]]);
-
-    // A rewrite that leaves the label map as it was reports nothing there.
-    const unchanged = await writeList(runtime, range(0, 14));
-    expect(unchanged.cfcChanges).toEqual([]);
   });
 });

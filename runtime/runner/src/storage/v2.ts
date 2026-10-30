@@ -159,6 +159,7 @@ import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitElisions } from "./commit-elision.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
+import { isCfcEnvelopePath } from "./differential.ts";
 import {
   type EventAppendOutcome,
   type EventAppendPacing,
@@ -256,12 +257,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-// A cell's CFC write-policy label lives at ["cfc"]. A mergeable write reads it as
-// part of the write; that read is dropped from its conflict set unless the
-// transaction also writes the envelope (`#commitReadActivities`).
-const isCfcLabelPath = (path: readonly string[]): boolean =>
-  path.length === 1 && path[0] === "cfc";
 
 const isStrictPrefixPath = (
   prefix: readonly string[],
@@ -9964,7 +9959,7 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcLabelPath(write.path)) {
+        if (write.space !== this.#space || !isCfcEnvelopePath(write.path)) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -10002,7 +9997,7 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcLabelPath(read.path)) {
+      if (isInternalVerifierRead(read.meta) && isCfcEnvelopePath(read.path)) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -10015,7 +10010,10 @@ export class SpaceReplica
         !readsMergeableOpArrayLength &&
         (isMergeableOpRead(read.meta) ||
           isReadMarkedAsAttemptedWrite(read.meta) ||
-          isCfcLabelPath(read.path) ||
+          // A mergeable write reads the CFC envelope as part of the write;
+          // the read leaves the conflict set unless the transaction also
+          // writes the envelope (handled above).
+          isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
