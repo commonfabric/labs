@@ -48,6 +48,7 @@ import type {
   HarnessToolDescriptor,
   HarnessToolEffectClass,
 } from "../contracts/tool-descriptor.ts";
+import type { HarnessPolicyDecisionReasonCode } from "../contracts/policy-trace.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
 import type {
@@ -400,6 +401,33 @@ export interface HarnessToolRun {
   subagentProfiles?: readonly HarnessSubagentProfile[];
 }
 
+/**
+ * What about a run a tool reads to class one of its calls, and the turn's
+ * signal, so classing a call waits on nothing once the turn is cancelled.
+ */
+export type HarnessToolEffectRun = Pick<
+  HarnessToolContext,
+  "loomCommandCatalog" | "signal"
+>;
+
+/** How policy judges one call of a tool: its effect class, and why. */
+export interface HarnessToolCallEffect {
+  effectClass: HarnessToolEffectClass;
+
+  /**
+   * How the class was found, recorded on the policy decision beside the
+   * codes the decision itself adds. Absent when the class needs no saying
+   * beyond the decision's own codes.
+   */
+  reasonCodes?: readonly HarnessPolicyDecisionReasonCode[];
+
+  /**
+   * What the class turns on, in words, which a refusal or a warning carries
+   * in its detail so the model and the trace see which input decided it.
+   */
+  detail?: string;
+}
+
 export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
   descriptor: HarnessToolDescriptor;
 
@@ -416,13 +444,17 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
   ): HarnessToolDescriptor;
 
   /**
-   * The effect class of one call, for a tool whose effect depends on its
-   * input. Policy gates and records the call under this class instead of
+   * The effect of one call, for a tool whose effect depends on its input.
+   * Policy gates and records the call under this class instead of
    * `descriptor.effectClass`, so a call that reaches outside the run is
-   * authorized as one even when the tool's ordinary calls are reads. A tool
+   * authorized as one even when the tool's ordinary calls are reads, and a
+   * call that stays inside it as a read even when the tool may write. A tool
    * without it has the descriptor's class for every call.
    */
-  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
+  effectClassOf?(
+    input: Record<string, unknown>,
+    run: HarnessToolEffectRun,
+  ): HarnessToolCallEffect | Promise<HarnessToolCallEffect>;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }

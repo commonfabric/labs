@@ -273,6 +273,7 @@ import {
   isResearchToolSuccessOutput,
   researchKitGuidance,
 } from "./tools/research.ts";
+import type { HarnessToolCallEffect } from "./tools/types.ts";
 import type { HarnessPatternRef } from "./contracts/pattern-refs.ts";
 import { isRunPatternToolSuccessOutput } from "./tools/run-pattern.ts";
 import {
@@ -3024,7 +3025,50 @@ const hasDirectCommandBinding = (
   promptSlotBinding?: PromptSlotBinding,
 ): boolean => promptSlotBinding?.role === "direct-command";
 
+/**
+ * Judges one call by the run's enforcement mode, the call's effect, and the
+ * prompt slot the run's task is bound as. The call's own reason codes and
+ * detail join the decision's, so the trace says both what was decided and
+ * what about the call decided it.
+ */
 const evaluateToolPolicy = (
+  cfcEnforcementMode: CfcEnforcementMode,
+  descriptor: HarnessToolDescriptor,
+  effect: HarnessToolCallEffect,
+  promptSlotBinding?: PromptSlotBinding,
+  input?: Record<string, unknown>,
+): ToolPolicyDecision => {
+  const decision = evaluateToolPolicyFor(
+    cfcEnforcementMode,
+    descriptor,
+    effect.effectClass,
+    promptSlotBinding,
+    input,
+  );
+  const suffix = effect.detail === undefined ? "" : `: ${effect.detail}`;
+  return {
+    ...decision,
+    reasonCodes: [...decision.reasonCodes, ...(effect.reasonCodes ?? [])],
+    ...(decision.warningDetail !== undefined
+      ? { warningDetail: `${decision.warningDetail}${suffix}` }
+      : {}),
+    ...(decision.denial?.detail !== undefined
+      ? {
+        denial: {
+          ...decision.denial,
+          detail: `${decision.denial.detail}${suffix}`,
+        },
+      }
+      : {}),
+  };
+};
+
+/**
+ * Helper for `evaluateToolPolicy`, which decides by the enforcement mode,
+ * the class alone, and the prompt-slot role, before the call's own reasons
+ * are joined to the decision.
+ */
+const evaluateToolPolicyFor = (
   cfcEnforcementMode: CfcEnforcementMode,
   descriptor: HarnessToolDescriptor,
   effectClass: HarnessToolEffectClass,
@@ -5111,12 +5155,16 @@ export class CfHarnessPromptLoop {
       ? deniedToolInputSummary ??
         await summarizeToolInput(toolId, input)
       : await summarizeToolInput(toolId, input);
-    callEffectClass = tool.effectClassOf?.(input) ??
-      tool.descriptor.effectClass;
+    const callEffect: HarnessToolCallEffect =
+      await tool.effectClassOf?.(input, {
+        loomCommandCatalog: this.engine.loomCommandCatalog,
+        ...(signal !== undefined ? { signal } : {}),
+      }) ?? { effectClass: tool.descriptor.effectClass };
+    callEffectClass = callEffect.effectClass;
     const decision = evaluateToolPolicy(
       this.engine.getRunState().cfcEnforcementMode,
       tool.descriptor,
-      callEffectClass,
+      callEffect,
       promptSlotBinding,
       input,
     );
@@ -5423,7 +5471,7 @@ export class CfHarnessPromptLoop {
           evaluateToolPolicy(
             this.engine.getRunState().cfcEnforcementMode,
             tool.descriptor,
-            "side-effect",
+            { effectClass: "side-effect" },
             promptSlotBinding,
             input,
           ).allowed,

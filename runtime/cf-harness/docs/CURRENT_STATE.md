@@ -697,10 +697,11 @@ The current package provides:
   shows each command as a one-line typed signature; `run_command` takes one call
   or a batch of up to sixteen, run four at a time, refuses a name the held
   listing does not show with the nearest listed names, and returns a host
-  `bad-args` refusal with the command's signature. `run_command` carries write
-  authority. Each answer is measured against the run's observation ceiling like
-  a retrieval row, a batch's answers within one output bound. See
-  [Host commands](LOOM_COMMANDS.md);
+  `bad-args` refusal with the command's signature. A `run_command` call is a
+  read when the listing declares every command it names a read, and a write
+  otherwise, a batch judged whole. Each answer is measured against the run's
+  observation ceiling like a retrieval row, a batch's answers within one output
+  bound. See [Host commands](LOOM_COMMANDS.md);
 - durable local jobs with a 1 MiB enqueue body bound, SQLite FULL
   acknowledgment, and inline image bytes snapshotted into their job workspace. A
   valid structured submission completes the run on its turn, including the last

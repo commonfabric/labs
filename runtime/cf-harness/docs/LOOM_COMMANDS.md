@@ -9,9 +9,9 @@ reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and serves them
 from one endpoint. Two generic tools put that in front of the model:
 `list_commands` shows the commands the host offers, each as a typed signature,
-and `run_command` runs one or a batch of them, as the agent, with write-class
-authority. Which commands those are is the host's decision alone; nothing in
-cf-harness names a command.
+and `run_command` runs one or a batch of them, as the agent, each call classed
+by the effect the host declares for the commands it names. Which commands those
+are is the host's decision alone; nothing in cf-harness names a command.
 
 ## Host configuration
 
@@ -205,13 +205,25 @@ conservative choice.
 
 ### Authorization
 
-The tool's effect class is `write` for every call, a batch included, even when
-the host declares the command a read. Policy judges a tool call, so a batch is
-authorized or refused whole, as one write. Policy treats it as any other write:
-under `enforce-explicit` and `enforce-strict` a call runs only when the run's
-task is bound as a `direct-command` prompt slot, so a task that arrived as
-`context` — a request a pattern submitted through the `agent` built-in, say —
-can list commands but cannot invoke this tool.
+Each call is classed by what the run's held catalog declares for every command
+it names (`effectClassOf`). A call whose every command is declared `read` is a
+read, and runs under `enforce-explicit` for a task bound as `context` — a
+request a pattern submitted through the `agent` built-in, say — as any read
+does. Every other call is a write: one naming a command declared to change data,
+one whose command declares no effect, one naming a command the catalog does not
+list, and one made while the catalog cannot be read. Policy judges a tool call,
+so a batch is classed whole: one command that may change data makes the batch a
+write, authorized or refused as one. A write runs under `enforce-explicit` and
+`enforce-strict` only when the run's task is bound as a `direct-command` prompt
+slot.
+
+The policy decision records the call's class and, beside the decision's own
+reason code, how the class was found: `command_effect_read`,
+`command_effect_change`, `command_effect_undeclared`, `command_unknown`, or
+`command_catalog_unread`. A refusal's detail names the command that decided it,
+or says the catalog could not be read. Classing a call reads the catalog the
+tool itself reads, held once for the run, so the policy check asks the host
+nothing the call would not, and a cancelled turn stops waiting for it.
 
 ## The answer is Loom data
 

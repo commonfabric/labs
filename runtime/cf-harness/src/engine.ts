@@ -1534,6 +1534,18 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /**
+   * The run's command catalog, read from the host on first use and held for
+   * the run, which the command tools and the policy that classes their calls
+   * share. Absent when the run has no command endpoint.
+   */
+  get loomCommandCatalog(): LoomCommandCatalogSource | undefined {
+    if (this.config.loomCommands === undefined) return undefined;
+    return this.#loomCommandCatalog ??= createLoomCommandCatalogSource(
+      this.config.loomCommands,
+    );
+  }
+
   /** Whether this run can acquire a pinned external skill. */
   get skillsShAcquisitionAvailable(): boolean {
     return this.#skillsShAcquisitionClientFactory !== undefined;
@@ -3121,11 +3133,8 @@ export class CfHarnessEngine {
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
       loomCommands: this.config.loomCommands,
-      ...(this.config.loomCommands !== undefined
-        ? {
-          loomCommandCatalog: this.#loomCommandCatalog ??=
-            createLoomCommandCatalogSource(this.config.loomCommands),
-        }
+      ...(this.loomCommandCatalog !== undefined
+        ? { loomCommandCatalog: this.loomCommandCatalog }
         : {}),
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
         this.mintReferentHandle(referent),

@@ -386,7 +386,10 @@ placeholders resolve only at the SQLite query boundary.
    binding. The class is the descriptor's static one unless the tool classes
    each call (`effectClassOf`): `finish_task` is `side-effect` when it carries
    client actions and `read` otherwise, so an answer, question or give-up keeps
-   the read path while actions need a direct-command binding. The decision is
+   the read path while actions need a direct-command binding; `run_command` is
+   `read` when the host's catalog declares every command the call names a read
+   and `write` otherwise, so under `enforce-explicit` a task bound as `context`
+   can read through the host's commands and nothing else. The decision is
    recorded before the tool runs, so it is not a commit point, and it consults
    no sink and no label. `run_pattern` is the exception and shows the shape the
    rest want: a named sink, an explicit ceiling, and the runner's commit
