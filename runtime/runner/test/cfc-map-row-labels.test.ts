@@ -131,7 +131,10 @@ describe("CFC flow labels: a map over rows with different labels", () => {
    * Runs a page that maps the query's rows to one card each, beside an output
    * that reads nothing of the query, and waits for both cards.
    */
-  const runPage = async (cause: string) => {
+  const runPage = async (
+    cause: string,
+    { sql = SELECT_MAIL, rows = 2 }: { sql?: string; rows?: number } = {},
+  ) => {
     const db = await mixedLabelDb();
     const setup = runtime.edit();
     const excluded = runtime.getCell<string>(space, `${cause}-excluded`, {
@@ -155,7 +158,7 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     const page = cf.pattern<{ excluded: string; plain: string }>((input) => {
       const query = cf.sqliteQuery(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
-        { db, reactOn: db, sql: SELECT_MAIL, params: [input.excluded] } as any,
+        { db, reactOn: db, sql, params: [input.excluded] } as any,
       );
       // deno-lint-ignore no-explicit-any -- the builtin's state is untyped
       const cards = (query as any).result.mapWithPattern(
@@ -181,7 +184,7 @@ describe("CFC flow labels: a map over rows with different labels", () => {
       // deno-lint-ignore no-explicit-any -- the builtin's state
       result.key("query") as Cell<any>,
       (value) =>
-        (value?.pending === false && (value?.result ?? []).length === 2) ||
+        (value?.pending === false && (value?.result ?? []).length === rows) ||
         value?.error !== undefined,
     );
     expect(state.error).toBeUndefined();
@@ -191,7 +194,9 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     const cards = (result.key("cards") as Cell<any>).get() as {
       title: string;
     }[];
-    expect(cards.map((c) => c?.title)).toEqual(["mine", "private message"]);
+    expect(cards.map((c) => c?.title)).toEqual(
+      ["mine", "private message"].slice(0, rows),
+    );
     return result;
   };
 
@@ -267,6 +272,21 @@ describe("CFC flow labels: a map over rows with different labels", () => {
 
     expect(count).toContainEqual(space);
     expect(count).toContainEqual(BOB);
+    expect(hasClause(count, SELECTION_CLAUSE)).toBe(true);
+  });
+
+  it("labels the count of an empty result with the selection", async () => {
+    // No row matches, so the membership carries `S` and nothing at any slot:
+    // the only label the coordinator consumed is the one it sends onward.
+    const result = await runPage("empty", {
+      sql: "SELECT id, to_addr, body FROM mail WHERE body = ?1 ORDER BY id",
+      rows: 0,
+    });
+    const count = lengthConfidentiality(
+      // deno-lint-ignore no-explicit-any -- the page's outputs are untyped
+      result.key("cards") as Cell<any>,
+    );
+
     expect(hasClause(count, SELECTION_CLAUSE)).toBe(true);
   });
 

@@ -21,6 +21,8 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
+import type { FabricValue } from "@commonfabric/data-model";
+
 import type { FactoryInput } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
@@ -291,8 +293,97 @@ describe("a read declared onward", () => {
     const list = await seededList("map-carries-slots", LIST_ENTRIES);
     const container = await mapOver("map-carries-slots-page", list);
 
+    // The reference the page holds to the list carries the list's content
+    // label (§8.2), which the coordinator's resolution of its input consumes
+    // on a later reconcile; so the slots carry at least the per-item part,
+    // and never the membership, which went onward.
     const stamped = stampedSlotPointer(container);
-    expect(sameAtoms(stamped, ITEM_ATOMS)).toBe(true);
+    for (const atom of ITEM_ATOMS) expect(stamped).toContainEqual(atom);
+    expect(stamped).not.toContainEqual("root-membership");
+  });
+
+  /** Rewrites the stored envelope of `list`: its rows and its entries. */
+  const reseedList = async (
+    list: IMemorySpaceAddress,
+    value: FabricValue,
+    entries: readonly LabelMapEntry[],
+  ): Promise<void> => {
+    const seed = runtime.edit();
+    seedStoredEnvelope(seed, list, {
+      value,
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: { version: 1, entries: [...entries] },
+      },
+    });
+    expect((await seed.commit().settled).ok).toBeDefined();
+  };
+
+  it("map lands a label the list carries only at itself, with nothing at the slots", async () => {
+    const list = await seededList("map-node-only", [
+      { path: [], label: { confidentiality: ["root-only"] } },
+    ]);
+    const container = await mapOver("map-node-only-page", list);
+
+    expect(stampedMembership(container)).toContainEqual("root-only");
+  });
+
+  it("map lands a label the list inherits from a labeled ancestor", async () => {
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, space);
+    const doc = runtime.getCell(space, "map-ancestor-doc", undefined, seed);
+    const address: IMemorySpaceAddress = {
+      space,
+      scope: "space",
+      id: doc.getAsNormalizedFullLink().id,
+      path: [],
+    };
+    seedStoredEnvelope(seed, address, {
+      value: { secret: 1, items: [{ n: 1 }, { n: 2 }] },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: [], label: { confidentiality: ["doc-root"] } }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).ok).toBeDefined();
+    const container = await mapOver("map-ancestor-page", {
+      ...address,
+      path: ["items"],
+    });
+
+    expect(stampedMembership(container)).toContainEqual("doc-root");
+  });
+
+  it("map re-lands the membership when a later reconcile adds a labeled row", async () => {
+    const membership = (atoms: string[]): LabelMapEntry[] => [{
+      path: [],
+      label: { confidentiality: atoms },
+      origin: "declared",
+      observes: "enumerate",
+    }];
+    const list = await seededList("map-grows", membership(["m1"]));
+    const container = await mapOver("map-grows-page", list);
+    expect(stampedMembership(container)).toContainEqual("m1");
+
+    await reseedList(
+      list,
+      [{ n: 1 }, { n: 2 }, { n: 3 }],
+      membership(["m1", "m2"]),
+    );
+    await runtime.idle();
+    // deno-lint-ignore no-explicit-any -- the container's elements are untyped
+    const mapped = container as Cell<any>;
+    await mapped.pull();
+    await runtime.idle();
+    expect((mapped.get() as { doubled: number }[]).map((m) => m?.doubled))
+      .toEqual([2, 4, 6]);
+
+    expect(stampedMembership(container)).toContainEqual("m2");
   });
 
   it("map stamps nothing over a list whose membership carries nothing", async () => {

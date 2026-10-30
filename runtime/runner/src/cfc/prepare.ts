@@ -4963,25 +4963,26 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
-        if (observation.declaredOnward && entries !== undefined) {
-          // The split a read declared onward is routed by, below: what it
-          // consumed at its own path, and what it consumed at the slots.
+        if (observation.declaredOnward !== undefined && entries !== undefined) {
+          // The split a read declared onward is routed by, below: what the
+          // read resolves to AT its own path — the entries at the path and
+          // the ancestors that cover it, replace-down per component, as a
+          // shallow read there would consume — and what it consumed below,
+          // at the slots.
           const depth = logicalPath.length;
-          const labelWhere = (keep: (entryDepth: number) => boolean) =>
-            labelForConsumedEntries(
-              entries.filter((entry) =>
-                keep(canonicalizeLogicalPath(entry.path).length)
-              ),
-              logicalPath,
-              observation.nonRecursive,
-            );
           document.labels.set(
             `${labelKey}#node`,
-            labelWhere((entryDepth) => entryDepth === depth),
+            labelForConsumedEntries(entries, logicalPath, true),
           );
           document.labels.set(
             `${labelKey}#below`,
-            labelWhere((entryDepth) => entryDepth > depth),
+            labelForConsumedEntries(
+              entries.filter((entry) =>
+                canonicalizeLogicalPath(entry.path).length > depth
+              ),
+              logicalPath,
+              observation.nonRecursive,
+            ),
           );
         }
         // A shallow content read's locations are resolved over what a value
@@ -11981,8 +11982,10 @@ export function* prepareBoundaryCommitSteps(
   // function that computed what it labels.
   const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
+  // What the reads declared onward consumed counts as taint to land: it is
+  // stamped on the target below even when the join itself is empty.
   const flowHasLabels = flowConfidentiality.length > 0 ||
-    flowIntegrity.length > 0;
+    flowIntegrity.length > 0 || flowJoin.declaredOnward.length > 0;
   // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
   // every mode below persists-and-flags, so `enforce-explicit` keeps the
   // shipped behavior where the derived component is a measurement, not a
@@ -12177,6 +12180,9 @@ export function* prepareBoundaryCommitSteps(
     valueTargets,
     bindCreator,
   );
+  // Every target a read was declared onward to must be stamped below; one
+  // that is not would leave the read's membership label nowhere.
+  const landedOnward = new Set<string>();
   for (const key of targetKeys) {
     yield;
     const candidateSchema = candidates.get(key);
@@ -13435,6 +13441,36 @@ export function* prepareBoundaryCommitSteps(
           structureStampPaths.push(structureContainerPath);
         }
       }
+      // Each path a read was declared onward to lands here: its MEMBERSHIP
+      // stamp is replaced from this attempt's join and what went onward,
+      // whether or not the path itself was written (an incremental
+      // reconcile writes slots, never the root), so a row whose label
+      // arrives later reaches the container's membership. Its slot
+      // templates are the root write's, as before: a coordinator's later
+      // reconciles read their own children through the plumbing, and a
+      // template re-minted from that join would carry every child's label
+      // onto every slot.
+      const onwardStampPaths: (readonly string[])[] = [];
+      for (const onward of flowJoin.declaredOnwardAt.values()) {
+        if (targetKey(onward.target) !== key) continue;
+        const onwardPath = canonicalizeLogicalPath(onward.target.path);
+        const onwardPathKey = pathKey(onwardPath);
+        let kept = 0;
+        for (const candidateEntry of persistedLabelEntries) {
+          if (
+            candidateEntry.origin === "structure" &&
+            candidateEntry.observes === "enumerate" &&
+            pathKey(candidateEntry.path) === onwardPathKey
+          ) {
+            continue;
+          }
+          persistedLabelEntries[kept++] = candidateEntry;
+        }
+        persistedLabelEntries.length = kept;
+        if (!structureStampPaths.some((p) => pathKey(p) === onwardPathKey)) {
+          onwardStampPaths.push(onwardPath);
+        }
+      }
       // Writer-fit measures the documents a schema could have declared a
       // policy on, which leaves out two id classes and a document the runtime
       // marked as undeclarable alike (`isDeclarablePolicyStore`). The
@@ -13671,6 +13707,28 @@ export function* prepareBoundaryCommitSteps(
           }
         }
       }
+      for (const path of onwardStampPaths) {
+        const at = declaredOnwardKey({ ...targetFromKey(key), path });
+        const onward = flowJoin.declaredOnwardAt.get(at)?.confidentiality ?? [];
+        landedOnward.add(at);
+        const membershipConfidentiality = uniqueCfcAtoms([
+          ...flowConfidentiality,
+          ...onward,
+        ]);
+        if (membershipConfidentiality.length > 0) {
+          persistedLabelEntries.push(markFlowStampEntry({
+            path,
+            label: {
+              confidentiality: [...membershipConfidentiality],
+              ...(flowTransformedBy.length > 0
+                ? { integrity: [...flowTransformedBy] }
+                : {}),
+            },
+            origin: "structure",
+            observes: "enumerate",
+          }));
+        }
+      }
       for (const path of structureStampPaths) {
         // A covering derived stamp at-or-above already labels the shape;
         // structure stamps don't cover each other (exact-path semantics),
@@ -13703,6 +13761,7 @@ export function* prepareBoundaryCommitSteps(
         const onward = flowJoin.declaredOnwardAt.get(
           declaredOnwardKey({ ...targetFromKey(key), path }),
         )?.confidentiality ?? [];
+        landedOnward.add(declaredOnwardKey({ ...targetFromKey(key), path }));
         const membershipConfidentiality = onward.length === 0
           ? flowConfidentiality
           : uniqueCfcAtoms([...flowConfidentiality, ...onward]);
@@ -14283,6 +14342,18 @@ export function* prepareBoundaryCommitSteps(
     }
     writeStoredCfcEnvelope(tx, { space, id, scope }, metadata);
     metadataResolver.didPrepare(key);
+  }
+  if (flowPersist) {
+    for (const [at, onward] of flowJoin.declaredOnwardAt) {
+      // An attempt that wrote nothing to the target derived nothing from the
+      // read to land; the target's stamp stands as it was.
+      if (!targetKeys.has(targetKey(onward.target))) continue;
+      if (landedOnward.has(at)) continue;
+      throw new Error(
+        "declared-onward read landed nowhere: this attempt did not stamp " +
+          `${onward.target.id} at /${onward.target.path.join("/")}`,
+      );
+    }
   }
   for (const reason of verifySinkRequestCeilings(tx)) reasons.push(reason);
   // Single-use grant consumption (design §2.2): stage every claim the
