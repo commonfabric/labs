@@ -341,10 +341,13 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
  * @fires cf-selection-change - Fired when the main selection changes, with
- *   detail: { from, to, text }. A caret move with nothing selected is not a
- *   change; clearing a selection is, and fires once.
+ *   detail: { from, to, text }, including when an edit of anyone's moves it.
+ *   A caret move with nothing selected is not a change; clearing a selection
+ *   is, and fires once.
  * @fires cf-highlight-click - Fired on a mousedown over a highlight, with
- *   detail: { id }. The editor still places the caret.
+ *   detail: { id }. The editor still places the caret. A mention or backlink
+ *   pill takes the click first: one inside a highlight navigates and emits
+ *   nothing for the highlight.
  * @fires cf-highlights-mapped - Fired after a local edit leaves the editor's
  *   highlights different from the `highlights` property, with detail:
  *   { highlights }, the whole set after the edit. A collaborator's edit is
@@ -475,7 +478,9 @@ export class CFCodeEditor extends BaseElement {
   private _editorView: EditorView | undefined;
   // The main range `cf-selection-change` last reported, so a transaction
   // that sets the selection to what it already was reports nothing.
-  private _lastSelection: { from: number; to: number } | undefined;
+  private _lastSelection:
+    | { from: number; to: number; text: string }
+    | undefined;
   private _lang = new Compartment();
   private _readonly = new Compartment();
   private _wrap = new Compartment();
@@ -2059,6 +2064,8 @@ export class CFCodeEditor extends BaseElement {
     );
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
+    }
+    if (update.selectionSet || update.docChanged) {
       this._reportSelection(update.state);
     }
     if (update.docChanged) {
@@ -2103,20 +2110,23 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Emits `cf-selection-change` for `state`'s main range when it differs
-   * from the one last reported. A caret with nothing selected is reported
-   * once, when a selection collapses to it, and not again as it moves.
+   * from the one last reported, in position or in text. The view maps the
+   * selection through every edit, a collaborator's included, so a host that
+   * holds a selection while others type hears where it moved. A caret with
+   * nothing selected is reported once, when a selection collapses to it, and
+   * not again as it moves.
    */
   private _reportSelection(state: EditorState): void {
     const { from, to } = state.selection.main;
+    const text = state.sliceDoc(from, to);
     const last = this._lastSelection;
-    if (last !== undefined && last.from === from && last.to === to) return;
-    this._lastSelection = { from, to };
+    if (
+      last !== undefined && last.from === from && last.to === to &&
+      last.text === text
+    ) return;
+    this._lastSelection = { from, to, text };
     if (from === to && (last === undefined || last.from === last.to)) return;
-    this.emit("cf-selection-change", {
-      from,
-      to,
-      text: state.sliceDoc(from, to),
-    });
+    this.emit("cf-selection-change", { from, to, text });
   }
 
   /**

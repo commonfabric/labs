@@ -233,9 +233,13 @@ export default pattern(() => {
     myProfile: adaProfile,
     participantName: "Ada",
   });
+  // The same note as a viewer with no profile sees it.
+  const guest = SharedNoteCore({ content, comments, participantName: "" });
   const QUOTE = "- [ ] task";
   const quoteFrom = MARKDOWN.indexOf(QUOTE);
   const quoteTo = quoteFrom + QUOTE.length;
+  const HEADING = "# Team";
+  const INTRO = "Intro\n";
 
   const assert_comment_needs_a_selection = assert(() =>
     commentDisabled(note[UI]) === true &&
@@ -275,6 +279,17 @@ export default pattern(() => {
     note.comments[0].resolved === false &&
     equals(note.comments[0].authorProfile, adaProfile) &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
+  );
+  const assert_reply_needs_a_profile = assert(() =>
+    propValue(
+        findNodeByProp(rowOf(note[UI], "Needs a date"), "aria-label", "Reply"),
+        "disabled",
+      ) === false &&
+    propValue(
+        findNodeByProp(rowOf(guest[UI], "Needs a date"), "aria-label", "Reply"),
+        "disabled",
+      ) === true &&
+    commentDisabled(guest[UI]) === true
   );
   const assert_editor_marks_the_comment = assert(() => {
     const highlights = highlightsOf(note[UI]);
@@ -381,11 +396,67 @@ export default pattern(() => {
   const assert_resolved_by_verb = assert(() =>
     note.comments[1].resolved === true && highlightsOf(note[UI])?.length === 0
   );
+  // A selection made before others typed: the composer is open on the
+  // heading when the body grows ahead of it, and the post lands where the
+  // heading is now.
+  const action_reset_body = action(() => content.set(MARKDOWN));
+  const action_select_heading = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-selection-change",
+      selectionOf(HEADING),
+    )
+  );
+  const action_open_composer_on_heading = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const action_type_heading_comment = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Title?")
+  );
+  const action_body_grows_before_the_heading = action(() =>
+    content.set(INTRO + MARKDOWN)
+  );
+  const action_post_heading_comment = action(() =>
+    clickButton(note[UI], "Post")
+  );
+  const assert_post_lands_where_the_quote_moved = assert(() =>
+    note.comments.length === 3 &&
+    note.comments[2].body === "Title?" &&
+    note.comments[2].anchor.quote === HEADING &&
+    note.comments[2].anchor.from === INTRO.length + MARKDOWN.indexOf(HEADING)
+  );
+  // The same, with the selected text gone before the post: refused, with the
+  // composer left open.
+  const action_select_task = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-selection-change",
+      selectionOf(QUOTE),
+    )
+  );
+  const action_open_composer_on_task = action(() =>
+    clickButton(note[UI], "Comment")
+  );
+  const action_type_task_comment = action(() =>
+    typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Gone")
+  );
+  const action_body_loses_the_task = action(() =>
+    content.set(MARKDOWN.replace(QUOTE, ""))
+  );
+  const action_post_task_comment = action(() => clickButton(note[UI], "Post"));
+  const assert_post_without_its_text_refused = assert(() =>
+    note.comments.length === 3 &&
+    displayOf(findNodeById(note[UI], "shared-note-composer")) === "block"
+  );
 
   return {
     // The one refused `addComment` below throws inside the verb, which the
-    // runner reports as a runtime error; exactly that one is expected.
-    expectRuntimeErrors: ["addComment found no occurrence of `quote`"],
+    // runner reports as a runtime error; it is expected.
+    // The one refused post throws inside its handler the same way.
+    expectRuntimeErrors: [
+      "addComment found no occurrence of `quote`",
+      "The text you selected is no longer in the note.",
+    ],
     [TESTS]: [
       { assertion: assert_imported_content },
       { assertion: assert_collaborative_editor },
@@ -417,6 +488,7 @@ export default pattern(() => {
       { action: action_type_comment },
       { action: action_post_comment },
       { assertion: assert_comment_posted },
+      { assertion: assert_reply_needs_a_profile },
       { assertion: assert_editor_marks_the_comment },
       { action: action_editor_reports_mapped_range },
       { assertion: assert_anchor_follows_the_editor },
@@ -446,6 +518,19 @@ export default pattern(() => {
       { assertion: assert_reply_carries_author },
       { action: action_resolve_by_verb },
       { assertion: assert_resolved_by_verb },
+      { action: action_reset_body },
+      { action: action_select_heading },
+      { action: action_open_composer_on_heading },
+      { action: action_type_heading_comment },
+      { action: action_body_grows_before_the_heading },
+      { action: action_post_heading_comment },
+      { assertion: assert_post_lands_where_the_quote_moved },
+      { action: action_select_task },
+      { action: action_open_composer_on_task },
+      { action: action_type_task_comment },
+      { action: action_body_loses_the_task },
+      { action: action_post_task_comment },
+      { assertion: assert_post_without_its_text_refused },
     ],
     subject,
     note,

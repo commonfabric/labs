@@ -47,7 +47,7 @@ verbs below rather than replacing it with an ordinary whole-value write.
 ## Editing from a handler or an agent
 
 Three verbs edit the body while people are typing in it, so an agent or another
-pattern can add to a note without the editor:
+pattern can add to a note without the editor, and two more work on its comments:
 
 | Verb             | Event             | Effect                                                                                                                                                                                   |
 | ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,13 +61,15 @@ pattern can add to a note without the editor:
 cf piece call --cell <piece> appendLine '{"text": "- [ ] Send the summary"}'
 ```
 
-Each verb reads the body and edits it through `applyChanges()`, by position in
-the text it read. The edit reaches the open editors as an edit they merge with
-their own typing, and lands only while the body still holds the text the verb
-read: if someone typed in the meantime, the commit is refused and the verb runs
-again against the new text. `replaceText` matches `old` exactly, code unit for
-code unit, so an anchor someone has since edited refuses rather than landing
-somewhere else; read the note again and anchor on what it holds.
+Each body-editing verb reads the body and edits it through `applyChanges()`, by
+position in the text it read. The edit reaches the open editors as an edit they
+merge with their own typing, and lands only while the body still holds the text
+the verb read: if someone typed in the meantime, the commit is refused and the
+verb runs again against the new text. `replaceText` matches `old` exactly, code
+unit for code unit, so an anchor someone has since edited refuses rather than
+landing somewhere else; read the note again and anchor on what it holds.
+`addComment` and `resolveComment` change the comment list and leave the body as
+it is; the Comments section below covers them.
 
 The pattern includes no notebook, note registry, or automatic backlink creation.
 Space membership controls access through the host's ordinary sharing flow.
@@ -94,9 +96,12 @@ Two things keep an anchor on its text as the body changes:
   occurs. This is what covers an edit made with no editor open, a verb's
   `applyChanges()` among them.
 
-A comment whose quote is gone from the body, or occurs in it more than once, is
-orphaned: it stays in the panel marked "text no longer in note", marks nothing,
-and comes back as soon as the body holds its quote once again.
+A comment whose stored range still holds its quote stays anchored there, even
+when the quote also occurs elsewhere. One whose range no longer holds the quote
+is orphaned when re-finding fails, because the quote is gone from the body or
+occurs in it more than once: it stays in the panel marked "text no longer in
+note", marks nothing, and comes back as soon as the body holds its quote once
+again.
 
 `addComment` lets an agent comment through `cf piece call`, anchored the way
 `replaceText` anchors: on text the body holds exactly once. The caller's profile

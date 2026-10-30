@@ -110,6 +110,29 @@ Deno.test("a selection fires `cf-selection-change` with the range and its text, 
   }
 });
 
+Deno.test("a collaborator's edit ahead of a selection fires `cf-selection-change` with where it moved", async () => {
+  const { element, done } = await mount("hello world");
+  try {
+    const view = element.editorView!;
+    const selected = nextEvent(element, "cf-selection-change");
+    view.dispatch({ selection: { anchor: 6, head: 11 } });
+    await selected;
+    // The collaborator inserts a copy of the selected text at the selection's
+    // start: the selection stays on the text it was made over.
+    const moved = nextEvent<{ from: number; to: number; text: string }>(
+      element,
+      "cf-selection-change",
+    );
+    view.dispatch({
+      changes: { from: 6, insert: "world " },
+      annotations: Transaction.remote.of(true),
+    });
+    assertEquals(await moved, { from: 12, to: 17, text: "world" });
+  } finally {
+    done();
+  }
+});
+
 Deno.test("a caret move with nothing selected fires no `cf-selection-change`", async () => {
   const { element, done } = await mount("hello world");
   try {

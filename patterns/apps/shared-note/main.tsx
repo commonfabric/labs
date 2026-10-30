@@ -334,6 +334,7 @@ const closeComposer = handler<
 
 const submitComment = handler<unknown, {
   comments: CommentsCell;
+  content: Writable<string>;
   myProfile: ProfileCell | undefined;
   selection: Writable<Selection | null>;
   draft: Writable<string>;
@@ -348,10 +349,23 @@ const submitComment = handler<unknown, {
   }
   const body = state.draft.get().trim();
   if (body === "") throw new Error("This comment has no text.");
+  // The editor reports where edits move a selection, and the body may still
+  // have changed since the last report: anchor on the selected text where
+  // the body holds it now, as a stored comment is placed.
+  const range = resolveAnchor(state.content.get(), {
+    from: selection.from,
+    to: selection.to,
+    quote: selection.text,
+  });
+  if (range === null) {
+    throw new Error(
+      "The text you selected is no longer in the note. Select it again.",
+    );
+  }
   const id = mintCommentId();
   state.comments.push({
     id,
-    anchor: { from: selection.from, to: selection.to, quote: selection.text },
+    anchor: { from: range.from, to: range.to, quote: selection.text },
     authorProfile: profile,
     body,
     createdAt: Date.now(),
@@ -555,6 +569,9 @@ export const SharedNoteCore = pattern<
   const commentDisabled = computed((): PerSession<boolean> =>
     selection.get() === null || myProfile?.get() === undefined
   );
+  const replyDisabled = computed((): PerSession<boolean> =>
+    myProfile?.get() === undefined
+  );
   const selectionExcerpt = computed((): PerSession<string> => {
     const selected = selection.get();
     return selected === null ? "" : excerptOf(selected.text);
@@ -647,6 +664,7 @@ export const SharedNoteCore = pattern<
               size="sm"
               onClick={submitComment({
                 comments,
+                content,
                 myProfile,
                 selection,
                 draft,
@@ -734,6 +752,7 @@ export const SharedNoteCore = pattern<
                   aria-label="Reply"
                   placeholder="Reply…"
                   $value={replyDraft}
+                  disabled={replyDisabled}
                   timingStrategy="immediate"
                   oncf-submit={addReply({
                     comments,
@@ -745,6 +764,7 @@ export const SharedNoteCore = pattern<
                 />
                 <cf-button
                   size="sm"
+                  disabled={replyDisabled}
                   onClick={addReply({
                     comments,
                     comment,

@@ -56,18 +56,24 @@ comparison is what keeps a host and an editor from echoing at each other: the
 host hands back what `cf-highlights-mapped` reported, the editor sees no
 difference, and nothing is dispatched.
 
-The update listener reports in the other direction. After a transaction of the
-user's or the host's that set the selection, it emits `cf-selection-change` for
-the main range. After a local edit it compares the field's ranges with the
-`highlights` property and emits `cf-highlights-mapped` where they differ; after
-a whole-document replacement from outside, it pushes the property in again
+The update listener reports in the other direction. After any transaction that
+set the selection or changed the document, it emits `cf-selection-change` when
+the main range differs, in position or text, from the one last reported. The
+view maps the selection through a collaborator's edit as it does through the
+user's, so a host holding a selection while others type hears where it moved,
+and a selection that an edit shifts onto other text is reported as what it now
+covers. After a local edit it compares the field's ranges with the `highlights`
+property and emits `cf-highlights-mapped` where they differ; after a
+whole-document replacement from outside, it pushes the property in again
 instead. A remote collaborator's edit is mapped but not reported: only the
 editor that made an edit speaks for it, so two editors never hand a host two
 positions for one range.
 
-The mousedown handler that routes clicks on mention pills also looks for a
-`data-highlight-id` ancestor and emits `cf-highlight-click` for it, without
-preventing the default, so the caret still lands where the click did.
+The mousedown handler that routes clicks on mention and backlink pills also
+looks for a `data-highlight-id` ancestor and emits `cf-highlight-click` for it,
+without preventing the default, so the caret still lands where the click did.
+The pills come first: a click on a pill that sits inside a highlight navigates
+as a pill click does and emits nothing for the highlight.
 
 ## How the layers fit together
 
