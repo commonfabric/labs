@@ -47,9 +47,12 @@ many spaces holds that many sockets against one host. The per-host connection
 costs those once per host.
 
 Either way, a connection lost before its first handshake completes is dialed
-again after the memory client's reconnect backoff, as one lost later is, so
-the session waiting on it is still mounted. The factory's create fails only
-when the handshake fails permanently, the mount fails, or its caller aborts.
+again after the memory client's reconnect backoff, up to five handshakes in all
+(`MEMORY_FIRST_HANDSHAKE_ATTEMPTS`), so a refused dial or a brief loss of the
+network still gets its session mounted. When all five fail, the factory's
+create fails with an error naming the address, the attempts and the last
+failure, and the space's session error reports it from then on: loads of the
+space fail with it rather than wait for a session nothing is opening.
 
 ## 2. Goals and non-goals
 

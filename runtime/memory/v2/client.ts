@@ -9,6 +9,7 @@ import {
   isPlainObject,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   type ClientCommit,
@@ -254,13 +255,18 @@ export type ConnectOptions = {
   transport: Transport;
   signal?: AbortSignal;
 
+  /** Where `transport` connects, named in the error of a failed connect. */
+  address?: string;
+
   /**
-   * Whether a first handshake that fails without failing permanently is
-   * retried as a reconnect is, after the same backoff, rather than failing
-   * the connect. The connect then fails only on a permanent failure, or when
-   * `signal` aborts.
+   * How many handshakes the connect may make, one when absent. Each after the
+   * first follows a failed one after the reconnect backoff. A permanent
+   * failure fails the connect at once, and so does any failure on a transport
+   * without `reset()`, which cannot discard a failed connection to try again.
+   * When more than one is allowed and every one fails, the connect rejects
+   * with `firstHandshakeFailedError()`. Must be a positive safe integer.
    */
-  retryFirstHandshake?: boolean;
+  firstHandshakeAttempts?: number;
 };
 
 /**
@@ -829,6 +835,12 @@ export class Client {
   }
 
   static async connect(options: ConnectOptions): Promise<Client> {
+    const attempts = options.firstHandshakeAttempts ?? 1;
+    if (!Number.isSafeInteger(attempts) || attempts < 1) {
+      throw new RangeError(
+        debugStr`Invalid first handshake attempts: $quote${attempts}`,
+      );
+    }
     const info = options.client === undefined
       ? createClientInfo({ application: "memory", gitSha: null })
       : parseClientInfo(options.client);
@@ -844,12 +856,16 @@ export class Client {
     options.signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
       if (options.signal?.aborted) throw abortError();
-      if (options.retryFirstHandshake === true) {
-        await client.#ensureConnected();
-      } else {
+      if (attempts === 1) {
         await client.#hello();
+      } else {
+        await client.#reconnect({ attempts, address: options.address });
+        if (client.#fatalError !== null) throw client.#fatalError;
       }
       if (options.signal?.aborted) throw abortError();
+      if (!client.#connected) {
+        throw new Error("memory client closed before its first handshake");
+      }
       return client;
     } catch (error) {
       await client.close().catch(() => {});
@@ -2502,7 +2518,15 @@ export class Client {
     void this.#reconnect().catch(() => undefined);
   }
 
-  async #reconnect(): Promise<void> {
+  /**
+   * Reconnects, handshaking until one succeeds, the client closes, or a
+   * failure is permanent. `firstHandshake`, for the handshakes a connect
+   * makes, bounds them: the last allowed one to fail fails the client with
+   * `firstHandshakeFailedError()`.
+   */
+  async #reconnect(
+    firstHandshake?: { attempts: number; address?: string },
+  ): Promise<void> {
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
@@ -2555,6 +2579,19 @@ export class Client {
             const err = error instanceof Error
               ? error
               : new Error(String(error));
+            if (
+              firstHandshake !== undefined &&
+              attempt + 1 >= firstHandshake.attempts
+            ) {
+              const failure = firstHandshakeFailedError(
+                attempt + 1,
+                firstHandshake.address,
+                err,
+              );
+              logger.error("first-handshake-failed", () => [failure.message]);
+              this.#discardConnection(failure);
+              return;
+            }
             if (!this.#discardConnection(err)) return;
             await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
             attempt += 1;
@@ -5220,6 +5257,36 @@ export const receiveFailedError = (message: string, cause?: unknown): Error =>
  */
 export const transportClosedError = (message: string): Error =>
   Object.assign(new Error(message), { permanent: true });
+
+/**
+ * Returns the error a connect rejects with when every one of the `attempts`
+ * handshakes it was allowed has failed, `cause` being the last failure. It
+ * names `address` when given, and the client reads it as permanent.
+ */
+export const firstHandshakeFailedError = (
+  attempts: number,
+  address: string | undefined,
+  cause: Error,
+): Error =>
+  Object.assign(
+    connectionError(
+      (address === undefined
+        ? "Memory connection"
+        : `Memory connection to ${backtickQuote(address)}`) +
+        ` failed its first handshake ${attempts} times; the last failure was ` +
+        `${describeError(cause)}`,
+      cause,
+    ),
+    { permanent: true, firstHandshakeFailed: true },
+  );
+
+/**
+ * Returns whether `error` is one `firstHandshakeFailedError()` made: a
+ * connection that never completed a handshake.
+ */
+export const isFirstHandshakeFailure = (error: unknown): boolean =>
+  (error as { firstHandshakeFailed?: unknown } | null)
+    ?.firstHandshakeFailed === true;
 
 const isOwnReceiveFailure = (error: unknown): boolean =>
   (error as { ownReceiveFailed?: unknown } | null)?.ownReceiveFailed === true;

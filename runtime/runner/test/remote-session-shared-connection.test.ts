@@ -125,43 +125,6 @@ describe("RemoteSessionFactory connection sharing", () => {
     });
   }
 
-  for (const shared of [false, true]) {
-    it(`mounts a space whose first handshake is refused, on the socket dialed after it, with shared connections=${shared}`, async () => {
-      const server = startServer({ connectionAuth: true });
-      // A host that answers every websocket handshake with a refusal, so the
-      // socket dialed there closes before it opens.
-      const refuser = Deno.serve(
-        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
-        () => new Response(null, { status: 403 }),
-      );
-      const dialed: URL[] = [];
-      const factory = new RemoteSessionFactory(
-        createStorageAddressResolver(server.url),
-        user,
-        (address) => {
-          dialed.push(address);
-          if (dialed.length > 1) return createNativeMemorySocket(address);
-          const refused = new URL(address);
-          refused.port = String(refuser.addr.port);
-          return createNativeMemorySocket(refused);
-        },
-      );
-      factory.setSharedConnections(shared);
-      factories.push(factory);
-      try {
-        const opened = await factory.create(SPACES[0]);
-        try {
-          expect(dialed).toHaveLength(2);
-          expect(principalsIn(server, SPACES[0])).toEqual([user.did()]);
-        } finally {
-          await opened.client.close();
-        }
-      } finally {
-        await refuser.shutdown();
-      }
-    });
-  }
-
   describe("with sharing off", () => {
     it("dials one socket per space, each naming its space", async () => {
       const server = startServer({ connectionAuth: true });

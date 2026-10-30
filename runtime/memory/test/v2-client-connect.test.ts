@@ -10,6 +10,7 @@ import {
 import {
   connect,
   connectionError,
+  isFirstHandshakeFailure,
   type Transport,
   transportClosedError,
 } from "../v2/client.ts";
@@ -95,13 +96,13 @@ class ScriptedHandshakes implements Transport {
 }
 
 describe("connect()", () => {
-  describe("with `retryFirstHandshake`", () => {
-    // Each retry waits out the client's reconnect backoff on the real clock,
-    // which is tens of milliseconds for the first few attempts.
+  describe("with `firstHandshakeAttempts`", () => {
+    // Each attempt after the first waits out the client's reconnect backoff
+    // on the real clock, which is tens of milliseconds for the first few.
 
-    it("returns a connected client once a handshake after lost ones completes", async () => {
+    it("returns a connected client once a handshake after failed ones completes", async () => {
       const transport = new ScriptedHandshakes(["lost", "lost", "ok"]);
-      const client = await connect({ transport, retryFirstHandshake: true });
+      const client = await connect({ transport, firstHandshakeAttempts: 3 });
       try {
         expect(client.connectionState).toBe("connected");
         expect(transport.hellos).toBe(3);
@@ -110,9 +111,26 @@ describe("connect()", () => {
       }
     });
 
-    it("rejects with the error of a handshake that fails permanently, without retrying it", async () => {
+    it("rejects with `firstHandshakeFailedError()` once every attempt fails, naming the address, the attempts and the last failure", async () => {
+      const transport = new ScriptedHandshakes(["lost", "lost", "lost", "ok"]);
+      const error = await connect({
+        transport,
+        address: "wss://memory.test/api/storage/memory",
+        firstHandshakeAttempts: 3,
+      }).then(() => undefined, (error: Error) => error);
+      expect(transport.hellos).toBe(3);
+      expect(isFirstHandshakeFailure(error)).toBe(true);
+      expect(error?.message).toBe(
+        "Memory connection to `wss://memory.test/api/storage/memory` failed " +
+          "its first handshake 3 times; the last failure was " +
+          '"ConnectionError": "memory transport closed"',
+      );
+      expect(error?.cause).toMatchObject({ name: "ConnectionError" });
+    });
+
+    it("rejects with the error of a handshake that fails permanently, without another attempt", async () => {
       const transport = new ScriptedHandshakes(["lost", "closed", "ok"]);
-      await expect(connect({ transport, retryFirstHandshake: true }))
+      await expect(connect({ transport, firstHandshakeAttempts: 5 }))
         .rejects.toThrow("Memory transport closed");
       expect(transport.hellos).toBe(2);
     });
@@ -124,13 +142,22 @@ describe("connect()", () => {
       await expect(connect({
         transport,
         signal: controller.signal,
-        retryFirstHandshake: true,
+        firstHandshakeAttempts: 5,
       })).rejects.toThrow("route replaced");
       expect(transport.hellos).toBe(1);
     });
+
+    for (const attempts of [0, 1.5]) {
+      it(`throws a \`RangeError\` given ${attempts}`, async () => {
+        const transport = new ScriptedHandshakes(["ok"]);
+        await expect(connect({ transport, firstHandshakeAttempts: attempts }))
+          .rejects.toThrow(RangeError);
+        expect(transport.hellos).toBe(0);
+      });
+    }
   });
 
-  it("rejects when the first handshake is lost, without `retryFirstHandshake`", async () => {
+  it("rejects when its only handshake is lost, without `firstHandshakeAttempts`", async () => {
     const transport = new ScriptedHandshakes(["lost", "lost"]);
     await expect(connect({ transport })).rejects.toMatchObject({
       name: "ConnectionError",
