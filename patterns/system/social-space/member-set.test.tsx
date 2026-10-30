@@ -1,14 +1,14 @@
 /**
  * A social space's members, as `memberSet()` joins its access list and its
- * roster. Alice, the space's OWNER, joins under two profiles of her own, and
- * adds one whose label names no one and one whose name is borrowed from her
- * own profile, which is no one's by the ownership rule though its label names
- * her. Bob, at WRITE, joins under his profile. Carol, at READ, never joins.
- * Dave, whom the list leaves out, joins anyway. The members are Alice, Bob
- * and Carol, sorted by DID: Alice with her two profiles in roster order, Bob
- * with his, and Carol with none, while the two profiles that are no one's and
- * Dave's count toward no one. Once Alice revokes Bob, he is no longer a
- * member, though his profile stays on the roster.
+ * roster. Alice, the space's OWNER, joins under two profiles of their own,
+ * and adds one whose label names no one and one whose name is borrowed from
+ * Alice's own profile, which is no one's by the ownership rule though its
+ * label names Alice. Bob, at WRITE, joins under their own profile. Carol, at
+ * READ, never joins. Dave, whom the list leaves out, joins anyway. The members
+ * are Alice, Bob and Carol, sorted by DID: Alice with two profiles in roster
+ * order, Bob with one, and Carol with none, while the two profiles that are no
+ * one's and Dave's count toward no one. Once Alice revokes Bob, Bob is no
+ * longer a member, though Bob's profile stays on the roster.
  */
 import {
   action,
@@ -178,7 +178,7 @@ export const setup = pattern(() => ({
   daveDid: Writable.of<string>(""),
 }));
 
-// Joins under two profiles of her own, the second-written first, and adds the
+// Joins under two profiles of their own, the second-written first, and adds the
 // two that are no one's between them; checks the members once everyone has
 // acted, then revokes Bob and checks them again.
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
@@ -233,7 +233,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       { await: "carol-noted" },
       { await: "dave-joined" },
       // The borrowing profile's label names Alice, so only the ownership rule
-      // tells it from hers.
+      // tells it from Alice's own.
       {
         assertion: assert(() =>
           setup.aliceDid.get() !== "" &&
@@ -264,7 +264,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
               ?.level === "READ"
         ),
       },
-      // Alice's two profiles, in roster order rather than the order she wrote
+      // Alice's two profiles, in roster order rather than the order Alice wrote
       // them, so the first is the one a reader shows.
       {
         assertion: assert(() => {
@@ -300,7 +300,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
         event: {},
         trustedUi: revokeGesture,
       },
-      // Bob is no longer a member, though his profile is still on the roster.
+      // Bob is no longer a member, though Bob's profile is still on the roster.
       {
         assertion: assert(() =>
           rosterProfiles(setup.roster).length === 6 &&
@@ -312,7 +312,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   };
 });
 
-// Joins under his own profile.
+// Joins under their own profile.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const join = addParticipant({ roster: setup.roster });
@@ -340,7 +340,7 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => ({
   ],
 }));
 
-// Joins, though the list leaves him out, and is given no members to read.
+// Joins, though the list leaves them out, and is given no members to read.
 export const dave = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const join = addParticipant({ roster: setup.roster });
