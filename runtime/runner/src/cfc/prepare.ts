@@ -197,6 +197,7 @@ import {
   renderCfcAtom,
 } from "./refusal-detail.ts";
 import {
+  entryObservationClass,
   type ReadClassSelection,
   readConsumesEntry,
   type ReadObservationShape,
@@ -4974,12 +4975,21 @@ const deriveFlowJoinImpl = (
             `${labelKey}#node`,
             labelForConsumedEntries(entries, logicalPath, true),
           );
+          // What the read consumed at the slots: the entries below the
+          // path, and the covering entries at or above it, which label the
+          // items too (§4.6.3 replace-down) — but not the membership's own
+          // class entries at the path (`shape`, `enumerate`), which are
+          // about the set and resolve at their exact path alone.
           document.labels.set(
             `${labelKey}#below`,
             labelForConsumedEntries(
-              entries.filter((entry) =>
-                canonicalizeLogicalPath(entry.path).length > depth
-              ),
+              entries.filter((entry) => {
+                if (canonicalizeLogicalPath(entry.path).length > depth) {
+                  return true;
+                }
+                const entryClass = entryObservationClass(entry);
+                return entryClass !== "shape" && entryClass !== "enumerate";
+              }),
               logicalPath,
               observation.nonRecursive,
             ),

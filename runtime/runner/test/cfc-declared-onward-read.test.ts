@@ -170,12 +170,18 @@ describe("a read declared onward", () => {
   /** What a read of the list consumes at the list itself: its membership. */
   const NODE_ATOMS = ["root-value", "root-derived", "root-membership"];
 
-  /** What it consumes at the slots: each item's shape, scalar and pointer. */
+  /**
+   * What it consumes at the slots: each item's shape, scalar and pointer,
+   * and the list's covering labels, which reach its items — not the
+   * membership's own, which is about the set.
+   */
   const ITEM_ATOMS = [
     "slot-value",
     "child-shape",
     "slot-pointer",
     "slot-template",
+    "root-value",
+    "root-derived",
   ];
 
   it("keeps what the read consumed at the slots in the join, and its integrity", async () => {
@@ -185,9 +191,12 @@ describe("a read declared onward", () => {
     const declared = joinOfRead(list, ONTO);
 
     expect(
-      sameAtoms(ordinary.confidentiality, [...NODE_ATOMS, ...ITEM_ATOMS]),
+      sameAtoms(ordinary.confidentiality, [
+        ...new Set([...NODE_ATOMS, ...ITEM_ATOMS]),
+      ]),
     ).toBe(true);
     expect(sameAtoms(declared.confidentiality, ITEM_ATOMS)).toBe(true);
+    expect(declared.confidentiality).not.toContainEqual("root-membership");
     expect(declared.integrity).toEqual(ordinary.integrity);
     expect(declared.integrity).toContainEqual(CERTIFIED);
   });
@@ -286,7 +295,8 @@ describe("a read declared onward", () => {
     // The membership stamp carries the coordinator's join as well: what it
     // consumed at the slots is part of the container's membership too.
     const stamped = stampedMembership(container);
-    expect(sameAtoms(stamped, [...NODE_ATOMS, ...ITEM_ATOMS])).toBe(true);
+    expect(sameAtoms(stamped, [...new Set([...NODE_ATOMS, ...ITEM_ATOMS])]))
+      .toBe(true);
   });
 
   it("map carries what it consumed at the slots onto its container's slots", async () => {
@@ -320,13 +330,17 @@ describe("a read declared onward", () => {
     expect((await seed.commit().settled).ok).toBeDefined();
   };
 
-  it("map lands a label the list carries only at itself, with nothing at the slots", async () => {
+  it("map lands a label the list carries only at itself on the membership and on the slots", async () => {
     const list = await seededList("map-node-only", [
       { path: [], label: { confidentiality: ["root-only"] } },
     ]);
     const container = await mapOver("map-node-only-page", list);
 
+    // A label on the list itself covers its items (§4.6.3 replace-down), so
+    // it is part of what a read of each slot resolves to, and a child is set
+    // up under it; the membership carries it too.
     expect(stampedMembership(container)).toContainEqual("root-only");
+    expect(stampedSlotPointer(container)).toContainEqual("root-only");
   });
 
   it("map lands a label the list inherits from a labeled ancestor", async () => {
