@@ -321,6 +321,48 @@ export default pattern(() => {
     note.comments[0].anchor.to === quoteTo + 8 &&
     note.comments[0].anchor.quote === QUOTE
   );
+  // A report that reached the pattern late, from before the one it holds,
+  // leaves the anchor where the later report put it.
+  const action_editor_reports_with_a_version = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-highlights-mapped",
+      {
+        type: "cf-highlights-mapped",
+        detail: {
+          highlights: [{
+            id: note.comments[0].id,
+            from: quoteFrom + 8,
+            to: quoteTo + 8,
+          }],
+          version: { epoch: 1, version: 5 },
+        },
+      },
+    )
+  );
+  const action_editor_replays_an_older_report = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-highlights-mapped",
+      {
+        type: "cf-highlights-mapped",
+        detail: {
+          highlights: [{
+            id: note.comments[0].id,
+            from: quoteFrom + 4,
+            to: quoteTo + 4,
+          }],
+          version: { epoch: 1, version: 4 },
+        },
+      },
+    )
+  );
+  const assert_older_report_leaves_the_anchor = assert(() =>
+    note.comments[0].anchor.from === quoteFrom + 8 &&
+    note.comments[0].anchor.to === quoteTo + 8 &&
+    note.comments[0].anchor.version?.epoch === 1 &&
+    note.comments[0].anchor.version?.version === 5
+  );
   // The body moves on with no editor open, so the stored range no longer
   // holds the quote; the quote re-finds the comment.
   const action_body_grows_before_the_quote = action(() =>
@@ -492,6 +534,9 @@ export default pattern(() => {
       { assertion: assert_editor_marks_the_comment },
       { action: action_editor_reports_mapped_range },
       { assertion: assert_anchor_follows_the_editor },
+      { action: action_editor_reports_with_a_version },
+      { action: action_editor_replays_an_older_report },
+      { assertion: assert_older_report_leaves_the_anchor },
       { action: action_body_grows_before_the_quote },
       { assertion: assert_quote_refinds_the_comment },
       { action: action_body_loses_the_quote },

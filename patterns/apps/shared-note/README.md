@@ -79,18 +79,27 @@ Space membership controls access through the host's ordinary sharing flow.
 A comment is anchored to a range of the body. Select text in the editor, choose
 Comment, and post: the comment stores `{ from, to, quote }`, the range in the
 text as the editor read it and the text it covered, with the viewer's `#profile`
-as its author. Every open editor draws each open comment's range as a highlight,
-and the panel beside the editor lists the comments with the author's profile
-badge, the quoted text, replies, and Resolve. Clicking a highlight or a row
-selects the comment, which opens its reply field; a resolved comment marks no
-text and is listed only under Show resolved.
+as its author. Once an editor has reported where an edit moved the range, the
+anchor also holds the body `version` that report was read at, in the
+collaborative field's numbering. Every open editor draws each open comment's
+range as a highlight, and the panel beside the editor lists the comments with
+the author's profile badge, the quoted text, replies, and Resolve. Clicking a
+highlight or a row selects the comment, which opens its reply field; a resolved
+comment marks no text and is listed only under Show resolved.
 
 Two things keep an anchor on its text as the body changes:
 
 - **Live mapping.** Each open editor maps every highlight through every edit it
-  sees, its own or a collaborator's, and reports its own edits' mapped positions
-  back to the pattern, which writes them onto the comment. Only the editor that
-  made an edit reports, so two editors never write competing positions.
+  sees, its own or a collaborator's, and reports the mapped positions back to
+  the pattern, which writes them onto the comment. An editor reports its own
+  edits, and a collaborator's edit that lands while the pattern has yet to write
+  its last report, so two people typing at once end with both editors reporting
+  the same merged positions. Each report names the body version it was read at,
+  and the pattern writes a report only when it is not earlier than the version
+  the anchor holds: two sessions writing one comment at once have the loser's
+  handler run again after the winner's write, replaying a report the winner has
+  moved past, and the version is what keeps that replay from moving the anchor
+  back.
 - **Re-finding by quote.** Whenever the stored range no longer holds the quote,
   the pattern looks for the quote in the current text and uses the one place it
   occurs. This is what covers an edit made with no editor open, a verb's

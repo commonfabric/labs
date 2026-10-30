@@ -40,6 +40,7 @@ import {
   Prec,
   Transaction,
 } from "@codemirror/state";
+import { getSyncedVersion, sendableUpdates } from "@codemirror/collab";
 import { oneDark } from "@codemirror/theme-one-dark";
 import {
   crosshairCursor,
@@ -117,7 +118,6 @@ import {
   type HighlightRange,
   highlightsOf,
   highlightTheme,
-  mapHighlights,
   sameHighlights,
   setHighlightsEffect,
 } from "./features/highlights.ts";
@@ -144,6 +144,7 @@ import {
   codeMirrorRewriteDedupeEffect,
   type CodeMirrorSynchronizationSnapshot,
 } from "./codemirror-collaboration.ts";
+import type { OpCursor } from "@commonfabric/runtime-client";
 import {
   codeMirrorPresence,
   codeMirrorPresenceClearEffect,
@@ -381,11 +382,16 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   detail: { id }. The editor still places the caret. A mention or backlink
  *   pill takes the click first: one inside a highlight navigates and emits
  *   nothing for the highlight.
- * @fires cf-highlights-mapped - Fired after a local edit leaves the editor's
- *   highlights different from the `highlights` property, with detail:
- *   { highlights }, the whole set after the edit. A collaborator's edit is
- *   mapped but not reported, so only the editor that made an edit speaks for
- *   it.
+ * @fires cf-highlights-mapped - Fired after an edit leaves the editor's
+ *   highlights different from what the host holds, with detail:
+ *   { highlights, version }: the whole set after the edit, and, under
+ *   collaboration, the `{ epoch, version }` of the document the positions
+ *   are read against, so a host can tell a report that reaches it late from
+ *   a newer one. A local edit is reported against the `highlights` property,
+ *   or against the last report while the host has yet to catch up to it. A
+ *   collaborator's edit is reported only while a report of this editor's is
+ *   outstanding, since the host is about to store positions that edit has
+ *   moved; otherwise the collaborator's own editor speaks for it.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -2193,9 +2199,14 @@ export class CFCodeEditor extends BaseElement {
    * collaboration snapshot installing, or the bound cell mirroring its value
    * — maps every range to nothing, so the host's ranges are set again, read
    * against the text they were made for. Any other change of the user's or
-   * the host's is reported where it moved the ranges; a collaborator's edit
-   * is mapped and not reported, since the collaborator's own editor reports
-   * it.
+   * the host's is reported where it left the ranges when that differs from
+   * what the host holds: the `highlights` property, or the last report while
+   * the host has yet to catch up to it, so an edit undone before the host
+   * answers reports the restored positions. A collaborator's edit is the
+   * collaborator's editor's to report, except while a report of this editor's
+   * is outstanding: the host is about to store positions that edit has moved,
+   * and both editors map the same edits, so both report the same merged
+   * positions.
    */
   private _trackHighlights(update: ViewUpdate, fromOutside: boolean): void {
     if (fromOutside && replacesWholeDocument(update)) {
@@ -2207,23 +2218,31 @@ export class CFCodeEditor extends BaseElement {
       transaction.annotation(Transaction.remote)
     );
     const report = this._unmatchedHighlightReport;
-    if (remote) {
-      if (report !== undefined) {
-        this._unmatchedHighlightReport = mapHighlights(report, update.changes);
-      }
-      return;
-    }
+    if (remote && report === undefined) return;
     const mapped = highlightsOf(update.state);
-    // A report the host has yet to catch up to follows the view through
-    // every later edit, including one that brings the view back onto the
-    // host's value: a delayed echo of the earlier positions must not pass
-    // for the host catching up.
-    if (report !== undefined) this._unmatchedHighlightReport = mapped;
-    if (sameHighlights(mapped, this.highlights ?? [])) return;
+    if (sameHighlights(mapped, report ?? this.highlights ?? [])) return;
     this._unmatchedHighlightReport = mapped;
+    const version = this._documentVersion(update.state);
     this.emit("cf-highlights-mapped", {
       highlights: mapped.map((range) => ({ ...range })),
+      ...(version === undefined ? {} : { version }),
     });
+  }
+
+  /**
+   * The version of the document `state` shows, in the collaborative field's
+   * numbering: its confirmed cursor, advanced by the edits of this editor's
+   * that Memory has yet to confirm. Two editors showing the same text name
+   * the same version; while this editor has unconfirmed edits, its number is
+   * one the field has yet to reach. Undefined outside collaboration.
+   */
+  private _documentVersion(state: EditorState): OpCursor | undefined {
+    const snapshot = this._collaboration?.synchronizationSnapshot;
+    if (!snapshot) return undefined;
+    return {
+      epoch: snapshot.confirmedCursor.epoch,
+      version: getSyncedVersion(state) + sendableUpdates(state).length,
+    };
   }
 
   private _cellSyncUnsub: (() => void) | null = null;

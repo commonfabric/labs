@@ -73,7 +73,7 @@ function mapRange(
 }
 
 /** `ranges` after `changes`, without those the edits leave empty. */
-export function mapHighlights(
+function mapHighlights(
   ranges: readonly HighlightRange[],
   changes: ChangeDesc,
 ): readonly HighlightRange[] {

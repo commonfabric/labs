@@ -60,6 +60,11 @@ const editorEquals = (probe: ProbeApi, expected: string): boolean =>
   (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
     ?._editorView?.state.doc.toString() === expected;
 
+/** The editor's document has `length` characters, whatever they are. */
+const editorLengthIs = (probe: ProbeApi, length: number): boolean =>
+  (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
+    ?._editorView?.state.doc.length === length;
+
 const profileResolved = (probe: ProbeApi, name: string): boolean =>
   (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
       ?.participantName === name &&
@@ -389,13 +394,44 @@ describe("shared-note", () => {
       { stuckLabel: "the comment's anchor follows Grace's edit" },
     );
 
+    // Both type ahead of the quote at once. Each editor reports its own
+    // keystroke, then the other's as it lands, so the stored anchor ends on
+    // the merged text whichever report the pattern writes last.
+    await Promise.all(
+      pages.map((page) => editorState(page, { anchor: 0, head: 0 })),
+    );
+    await Promise.all([
+      adaPage.keyboard.type("a"),
+      gracePage.keyboard.type("b"),
+    ]);
+    await waitForCondition(adaPage, editorLengthIs, {
+      args: [moved.length + 2],
+    });
+    const merged = await editorState(adaPage);
+    await waitForCondition(gracePage, editorEquals, { args: [merged] });
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; quote: string } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === merged.indexOf("Café") &&
+        value.comments[0].anchor.quote === "Café",
+      { stuckLabel: "the comment's anchor follows both editors' edits" },
+    );
+
     // The highlight is there again for Ada once her editor reloads: the
     // comment reaches a fresh editor before its document does.
     await adaPage.reload({ waitUntil: "load" });
     await adaPage.applyConsoleFormatter();
     await adaShell.login(ada);
     await waitForCondition(adaPage, editorReady);
-    await waitForCondition(adaPage, editorEquals, { args: [moved] });
+    await waitForCondition(adaPage, editorEquals, { args: [merged] });
     await waitForCondition(adaPage, highlightOver, { args: ["Café"] });
   });
 });

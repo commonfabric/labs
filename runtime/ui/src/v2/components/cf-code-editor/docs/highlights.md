@@ -22,11 +22,11 @@ clamped, and one that is empty after that is dropped.
 
 Three events come back, each a `CustomEvent` with the detail named:
 
-| Event                  | Detail               | When                                                                                                                                                                   |
-| ---------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cf-selection-change`  | `{ from, to, text }` | The main selection changed, through the user or a dispatch the host made. A caret move with nothing selected is not a change; clearing a selection is, and fires once. |
-| `cf-highlight-click`   | `{ id }`             | A mousedown landed on a mark. The editor still places the caret, so the host hears the click without taking the gesture.                                               |
-| `cf-highlights-mapped` | `{ highlights }`     | A local edit moved or resized the ranges, so the set the editor holds no longer equals the `highlights` property. The detail is the whole set after the edit.          |
+| Event                  | Detail                    | When                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cf-selection-change`  | `{ from, to, text }`      | The main selection changed, through the user or a dispatch the host made. A caret move with nothing selected is not a change; clearing a selection is, and fires once.                                                                                                                            |
+| `cf-highlight-click`   | `{ id }`                  | A mousedown landed on a mark. The editor still places the caret, so the host hears the click without taking the gesture.                                                                                                                                                                          |
+| `cf-highlights-mapped` | `{ highlights, version }` | An edit left the set the editor holds different from what the host has: the `highlights` property, or the last report while the host has yet to catch up to it. The detail is the whole set after the edit and, under collaboration, the `{ epoch, version }` of the document it is read against. |
 
 ## The two CM6 building blocks
 
@@ -65,10 +65,10 @@ the last report, a `highlights` value is taken for its ids and kinds only: a
 range the view already holds keeps the position the view mapped it to, and one
 the view does not hold is added where the host put it. The host has caught up
 once its positions agree with the last report for every id both name, and from
-then on its values are set as given. The report the host has yet to match
-follows the view through every later edit, a collaborator's included, so an edit
-that brings the view back onto the host's value leaves no earlier positions for
-a delayed echo to pass as the host catching up.
+then on its values are set as given. While a report is outstanding, a later edit
+is reported against it rather than against the property, so an edit undone
+before the host answers reports the restored positions and the host ends on
+them, and a delayed echo of the undone edit finds the view past it.
 
 The update listener reports in the other direction. After any transaction that
 set the selection or changed the document, it emits `cf-selection-change` when
@@ -79,13 +79,25 @@ a collaborator's edit as it does through the user's, so a host holding a
 selection while others type hears where it moved, and a selection that an edit
 shifts onto other text is reported as what it now covers.
 
-The highlight ranges are reported more narrowly. After a local edit the listener
-compares the field's ranges with the `highlights` property and emits
-`cf-highlights-mapped` where they differ; after a whole-document replacement
-from outside, it pushes the property in again instead. A remote collaborator's
-edit maps the ranges but is not reported as `cf-highlights-mapped`: only the
-editor that made an edit speaks for it, so two editors never hand a host two
-positions for one range.
+The highlight ranges are reported more narrowly. After an edit the listener
+compares the field's ranges with what the host holds, the `highlights` property
+or the outstanding report, and emits `cf-highlights-mapped` where they differ;
+after a whole-document replacement from outside, it pushes the property in again
+instead. A collaborator's edit is reported only while a report of this editor's
+is outstanding: the host is about to store positions that edit has moved, and
+every editor maps the same edits, so two editors that typed at once both report
+the same merged positions. With nothing outstanding the collaborator's own
+editor speaks for the edit, so a host does not hear one edit once from every
+editor open on the document.
+
+Under collaboration each report also names the document it is read against: the
+collaborative field's `{ epoch, version }`, with the confirmed version advanced
+by this editor's own edits Memory has yet to confirm. Two editors showing the
+same text name the same version. A host that stores reported positions can be
+handed reports out of order, a write of its own that lost a race re-run after
+the winner's write among them, and the version is what lets it refuse a report
+earlier than the one it holds, as a receiver of presence discards a selection
+for a version that has passed.
 
 The mousedown handler that routes clicks on mention and backlink pills also
 looks for a `data-highlight-id` ancestor and emits `cf-highlight-click` for it,
@@ -124,9 +136,13 @@ user edits ────► transaction.changes ──► mapped ranges
   collaboration snapshot installing is handled the same way, whether it arrives
   into an empty editor or over text the cell mirrored first: any whole-document
   replacement that is not the user's own typing sets the host's ranges again.
-- **A collaborator's edit maps the highlights silently.** The field keeps a
-  range on its text through a remote edit, and the editor emits no
-  `cf-highlights-mapped` for it. The collaborator's own editor reports the same
-  edit to the host, and the host's next `highlights` value arrives equal to what
-  the field already holds. The selection is the exception: the editor whose
-  selection a remote edit moved is the only one that can report it, and does.
+- **A collaborator's edit is reported only over an outstanding report.** The
+  field keeps a range on its text through a remote edit, and an editor with
+  nothing outstanding emits no `cf-highlights-mapped` for it: the collaborator's
+  own editor reports the same edit, and the host's next `highlights` value
+  arrives equal to what the field already holds. A host value and a
+  collaborator's edit reach an editor on separate paths, so a value read against
+  a document the view has yet to receive is set against the text the view has;
+  whatever the host keeps beside a range to re-find it is what covers that. The
+  selection is the exception: the editor whose selection a remote edit moved is
+  the only one that can report it, and does.

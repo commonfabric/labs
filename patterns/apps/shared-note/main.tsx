@@ -21,7 +21,13 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import { excerptOf, locateQuote, resolveAnchor } from "./anchors.ts";
+import {
+  type AnchorVersion,
+  excerptOf,
+  locateQuote,
+  precedes,
+  resolveAnchor,
+} from "./anchors.ts";
 import { normalizePresenceParticipantName } from "./participant-name.ts";
 
 /** What a viewer's Fabric profile shows: a name and an avatar, where set. */
@@ -46,6 +52,14 @@ export interface CommentAnchor {
    * comment once the range no longer holds it.
    */
   quote: string;
+
+  /**
+   * The body version the range was last read at, as the editor that
+   * reported it numbers the collaborative field. Absent until an editor has
+   * reported. A report of an earlier version is one that reached the
+   * pattern late, and leaves the anchor where a later one put it.
+   */
+  version?: AnchorVersion;
 }
 
 /** A reply under a comment, which shares the comment's anchor. */
@@ -467,22 +481,41 @@ const selectHighlight = handler<
   selectedCommentId.set(event.detail.id);
 });
 
-// Only the editor that made an edit reports where it moved the ranges, so two
-// editors never write competing positions. The quote stays as it was: the
-// range follows the text, and the quote is what re-finds it when the range
-// does not.
+// An editor reports its own edits, and a collaborator's edit that lands while
+// a report of its own is still on its way here; every editor maps the same
+// edits, so concurrent edits end with each reporting the same merged
+// positions. Reports can still reach this handler out of order: two sessions
+// writing one comment at once have the loser run again against the winner's
+// write, replaying a report the winner has moved past. The version each
+// report carries is what tells such a replay from news. The quote stays as it
+// was: the range follows the text, and the quote is what re-finds it when the
+// range does not.
 const rebaseHighlights = handler<
-  { detail: { highlights: HighlightRange[] } },
+  { detail: { highlights: HighlightRange[]; version?: AnchorVersion } },
   { comments: CommentsCell }
 >((event, { comments }) => {
   const list = comments.get();
+  const version = event.detail.version;
   for (const range of event.detail.highlights) {
     const index = list.findIndex((each) => each.id === range.id);
     if (index === -1) continue;
     const anchor = comments.key(index).key("anchor");
     const current = anchor.get();
-    if (current.from === range.from && current.to === range.to) continue;
-    anchor.set({ from: range.from, to: range.to, quote: current.quote });
+    if (
+      version !== undefined && current.version !== undefined &&
+      precedes(version, current.version)
+    ) continue;
+    const moved = current.from !== range.from || current.to !== range.to;
+    const advances = version !== undefined &&
+      (current.version === undefined || precedes(current.version, version));
+    if (!moved && !advances) continue;
+    const stamped = version ?? current.version;
+    anchor.set({
+      from: range.from,
+      to: range.to,
+      quote: current.quote,
+      ...(stamped === undefined ? {} : { version: stamped }),
+    });
   }
 });
 

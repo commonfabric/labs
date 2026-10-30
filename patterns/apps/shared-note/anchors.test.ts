@@ -4,6 +4,7 @@ import {
   EXCERPT_CODE_POINTS,
   excerptOf,
   locateQuote,
+  precedes,
   resolveAnchor,
 } from "./anchors.ts";
 
@@ -58,6 +59,27 @@ describe("anchors", () => {
     it("returns `null` for an empty quote, even at a stored range it trivially matches", () => {
       expect(resolveAnchor("one two", { from: 3, to: 3, quote: "" }))
         .toBeNull();
+    });
+  });
+
+  describe("precedes()", () => {
+    it("returns `true` for an earlier version of the same epoch", () => {
+      expect(precedes({ epoch: 1, version: 4 }, { epoch: 1, version: 5 }))
+        .toBe(true);
+    });
+
+    it("returns `false` for the same version, and for a later one", () => {
+      expect(precedes({ epoch: 1, version: 5 }, { epoch: 1, version: 5 }))
+        .toBe(false);
+      expect(precedes({ epoch: 1, version: 6 }, { epoch: 1, version: 5 }))
+        .toBe(false);
+    });
+
+    it("orders by epoch first, whatever the versions", () => {
+      expect(precedes({ epoch: 1, version: 500 }, { epoch: 2, version: 1 }))
+        .toBe(true);
+      expect(precedes({ epoch: 2, version: 1 }, { epoch: 1, version: 500 }))
+        .toBe(false);
     });
   });
 

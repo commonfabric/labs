@@ -17,6 +17,28 @@ export interface AnchorLike extends AnchorRange {
   quote: string;
 }
 
+/**
+ * A version of the body, as the collaborative field numbers it: epochs in
+ * order, and versions in order within an epoch.
+ */
+export interface AnchorVersion {
+  epoch: number;
+  version: number;
+}
+
+/**
+ * Returns whether `candidate` names an earlier body than `held`: an earlier
+ * epoch, or an earlier version of the same epoch.
+ */
+export function precedes(
+  candidate: AnchorVersion,
+  held: AnchorVersion,
+): boolean {
+  return candidate.epoch !== held.epoch
+    ? candidate.epoch < held.epoch
+    : candidate.version < held.version;
+}
+
 /** Why `locateQuote()` found no place for a quote. */
 export type QuoteMiss = "empty" | "absent" | "repeated";
 
