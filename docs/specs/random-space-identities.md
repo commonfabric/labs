@@ -182,9 +182,9 @@ leaves it in place.
   no further commit on any write path, the serving plane's included, so deletion
   is not undone. The refusal says that the space is deleted, which a reader can
   tell apart from a refusal of access to a space that goes on, and it comes
-  before the checks of an access-control change's shape.
-- Redeeming an invitation to a deleted space is refused with a code of its own,
-  `space-deleted`
+  before every check of access, shape and genesis.
+- Every invitation operation on a deleted space is refused with a code of its
+  own, `space-deleted`, once its proof has verified
   ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
   so an invitation to a deleted space reads differently from one that has
   expired or been revoked.
@@ -215,15 +215,36 @@ list.
 
 ### Reaping a deleted space
 
-Reaping reclaims a deleted space's storage. It is an operator's act on the
-host that holds the space's store, made against the store itself rather than
-through the Memory protocol, which refuses a deleted space to everyone.
+Reaping reclaims a deleted space's storage. It is an operator's call to the
+Memory server that hosts the space's store, made through that server's process,
+so that it coordinates with the store the server holds open, and it is an
+operation of its own rather than a compaction.
 
-A reap keeps the tombstone in place at a nonzero server sequence. So the space
-goes on refusing every principal as deleted, and its DID never again has no
-history. What else a reap keeps, and what it removes, is not specified yet.
+- A reap takes only a space whose access-control document holds a tombstone,
+  and refuses any other.
+- It keeps the tombstone at the `seq` its deletion commit gave it, and a server
+  sequence no lower than that `seq`. So the space goes on refusing every
+  principal as deleted, its refusal names the same `aclRevision` as before, and
+  its DID never again has no history.
+- It removes everything else the store holds for the space: every other
+  document and its history, the earlier revisions of the access-control
+  document, the genesis receipt, the private tables such as an invitation's
+  admission records and receipts, and the cell databases beside the store.
 
 Reaping is not implemented yet.
+
+### Deleting a space from the command line
+
+`cf space delete` deletes a space as its sole member. While the access list
+names any principal besides the one the command connects as, it refuses, and
+names those principals, so that each one's removal is an ordinary
+`cf acl remove` of its own. Since deletion cannot be undone, it also refuses to
+run without an explicit confirmation flag. It deletes only a space whose list
+names the connecting principal; deleting a self-owned space through a
+delegation chain is not part of this command.
+
+The command is not implemented yet. Once it is, the CLI's own documentation
+describes it beside `cf space create`.
 
 ## Routing across provider processes
 

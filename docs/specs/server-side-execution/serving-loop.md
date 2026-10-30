@@ -467,6 +467,26 @@ processes* (deploy overlap, partition) it holds via the lease:
 FORBIDDEN: per-action leases, lease fencing tokens per commit, lease
 renewal via the commit stream, more than one lease shape.
 
+### A deleted space
+
+A deleted space
+([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) is not served.
+The memory server refuses every commit to one, a derived commit and a
+delegated append included, with a `ProtocolError` naming the deletion, and that
+refusal is deterministic: no successor tenure could have it admitted.
+
+- When the SpaceServer serving a space learns that the space is deleted, from
+  such a refusal or from the revocation of its session with the reason
+  `deleted`, it ends the tenure for good. It stops committing at once, as on a
+  lease loss, disposes of the runtime, releases the lease, and does not
+  re-acquire it. §1's re-evaluation starts no tenure for a deleted space,
+  whatever demand it sees.
+- An outbox row whose target space is deleted is refused at delivery like any
+  other deterministic admission refusal (§5), and is deleted with the
+  source-side notice written first.
+
+Deletion is not implemented yet.
+
 ## 3. The loop, normatively
 
 State per SpaceServer: `W` = watermark, the highest space seq whose

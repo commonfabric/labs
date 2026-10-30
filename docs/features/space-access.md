@@ -221,10 +221,10 @@ A deleted space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
 has a tombstone where its access list was. A memory server that checks access,
 in `observe` or `enforce` mode, refuses it to every principal for good, with a
-refusal marked `deleted`; in `off` mode it checks nothing, tombstones included,
-and serves a deleted space like any other
+refusal marked `deleted`; in `off` mode it checks no session's access, and
+serves a deleted space to a session like any other
 ([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)), so
-there `spaceDeleted(target)` never returns `true`. To the access
+there a client's `spaceDeleted(target)` never returns `true`. To the access
 calls that is a refusal like any other permanent one: `spaceAccess(target)`
 returns `"none"`, `spaceMembers(target)` returns `undefined`, and
 `retrySpaceAccess(space)` is refused again. A tombstone is not a list, so

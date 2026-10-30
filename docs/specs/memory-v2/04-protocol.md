@@ -32,6 +32,9 @@ rewrite. In particular:
   validity clause, as it refuses any ACL document that is not an access list.
   The client's support for the `deleted` marker and `session/revoked` reason
   lands before the server sends either
+- an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
+  4.5.1) is specified and not yet implemented: the server sends its current
+  sequence
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -818,7 +821,9 @@ interface ResponseMessage<Result> {
     // verdict. Delivery recovery may use this to distinguish a permanent
     // protocol failure from an ambiguous transport or storage outcome.
     permanentEvidence?: true;
-    // Engine revision whose ACL state produced an authorization denial.
+    // The `seq` at which the space's ACL document is stored, on a refusal its
+    // state decided (section 4.5.1): the document's revision, not the server's
+    // current sequence.
     aclRevision?: number;
     // On an AuthorizationError, present and `true` when the space is deleted
     // (section 4.5.1): every principal is refused it for good. An older client
@@ -1815,6 +1820,12 @@ control. The one ACL mutation a principal without OWNER may make, in both modes,
 is removing its own entry: a replacement whose document is the stored one less
 that principal's entry, and nothing else, from a list with no `"*"` entry.
 
+A refusal on account of a space's ACL carries `permanentEvidence` and
+`aclRevision`, the `seq` at which the space's ACL document is stored: the
+revision of the document whose state decided the refusal, not the server's
+current sequence. It names the same revision for as long as the document stands,
+and a new one once the document changes.
+
 A space's sole member deletes it, which ends it for everyone and for good.
 Deleting a space writes its ACL document and never removes it: the deletion
 commit is an ACL-only commit, shaped as any other, whose document is a
@@ -1850,16 +1861,18 @@ write holds them to.
 
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
-carrying `deleted: true` and, as `aclRevision`, the `seq` at which the ACL
-document is stored. That refusal comes before the ACL shape and capability
-checks, so a commit to a deleted space reports the deletion and never a shape
-or capability failure. The server revokes the sessions open on the space with
-the `session/revoked` reason `deleted`, in `observe` as in `enforce`, and
-admits no further commit to it on any write path, engine-direct writes from the
-serving plane included, so no principal can undo the deletion. A tombstone is
-not an access list, so a server rolled back to a release that does not know
-tombstones finds the ACL malformed, and refuses the space to every principal but
-a service DID.
+carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`.
+The server checks for deletion once it has routed the command and found the
+session it names, and before every other check, so a command to a deleted space
+reports the deletion and never a shape, capability or genesis failure. The
+server revokes the sessions open on the space with the `session/revoked` reason
+`deleted`, in `observe` as in `enforce`, the deleting session's own after its
+transact response. It admits no further commit to the space on any write path,
+engine-direct writes from the serving plane included, so no principal can undo
+the deletion. A commit that writes a tombstone is held to the admission rules
+above in every ACL mode, `off` included. A tombstone is not an access list, so a
+server rolled back to a release that does not know tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
 
 The server sends the `deleted` marker and the `deleted` reason to every client,
 whatever the client advertises. A client that predates the marker reads the
