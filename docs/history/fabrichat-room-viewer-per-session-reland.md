@@ -39,19 +39,23 @@ session of the same person reads, so the failure reaches the sessions that
 found the profile, and they derive "no profile" from it.
 
 `patterns/integration/fabrichat-room-profile-wish-multi-runtime.test.ts` shows
-this with server execution off (RUN). One runtime acts as a profile its home
-does not list, so its wish fails; another of the same person's runtimes found
-the profile. Afterwards, the room's stored `viewer` that the second runtime
-reads lacks the profile:
+this (RUN). One runtime acts as a profile its home does not list, so its wish
+fails; another of the same person's runtimes found the profile. The test then
+checks, in this order, that the room's stored `viewer` the second runtime reads
+still holds the profile, and that the first runtime's room offers the
+profile-setup form. At `d0ba3b63a0`, 10 runs of each design:
 
-| design | result |
-| --- | --- |
-| `main` before this change (everything per user) | red, 10 of 10 |
-| values per session, wish per user (#9360's design) | red, 5 of 5 |
-| this change (wish per session too) | green, 10 of 10 |
+| design | server execution off | on |
+| --- | --- | --- |
+| `main` at `9b1cf10426` (everything per user) | red, 10 of 10 | red, 10 of 10 |
+| values per session, wishes per user (#9360's design) | red, 10 of 10 | red, 10 of 10 |
+| this change (wishes per session too) | green, 10 of 10 | green, 10 of 10 |
 
-With server execution on, served values ignore a client's preferred profile, so
-nothing is written over them, and the test passes on all three.
+With server execution off, both alternatives fail at the stored `viewer`. With
+it on, they fail at the setup form: one served per-user wish answers both
+runtimes and finds the person's profile, so the failing runtime is offered no
+form. The test as first written showed the overwrite with server execution off
+only, since it had no setup-form check yet.
 
 ## What it costs
 
