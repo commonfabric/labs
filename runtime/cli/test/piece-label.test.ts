@@ -1113,6 +1113,65 @@ describe("cf piece CFC labels", () => {
       expect(cfcLabelViewForCell(linked)).toBeUndefined();
     });
 
+    it("lowers a wildcard label at a path naming `*`, though no value is there", async () => {
+      const declared = runtime.getCell<{ items: string[] }>(
+        signer.did(),
+        "cf-piece-label-wildcard",
+        {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { type: "string", ifc: { confidentiality: [owner] } },
+            },
+          },
+        },
+      );
+      const seed = runtime.edit();
+      declared.withTx(seed).set({ items: ["personal"] });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      const list = runtime.getCell<{ items: string[] }>(
+        signer.did(),
+        "cf-piece-label-wildcard",
+        {
+          type: "object",
+          properties: { items: { type: "array", items: { type: "string" } } },
+        },
+      );
+      const listDeps = {
+        ...deps,
+        loadPieces: () =>
+          Promise.resolve({
+            runtime,
+            get: () =>
+              Promise.resolve({
+                input: { getCell: () => Promise.resolve(list) },
+                result: { getCell: () => Promise.resolve(list) },
+              }),
+            synced: () => Promise.resolve(),
+          }),
+      };
+      expect(
+        await getCellCfcLabel(pieceConfig, ["items", 0], {}, listDeps as never),
+      ).toEqual({
+        version: 1,
+        entries: [{ path: [], label: { confidentiality: [owner] } }],
+      });
+
+      await setCellCfcLabel(
+        pieceConfig,
+        ["items", "*"],
+        { confidentiality: [] },
+        lower,
+        listDeps as never,
+      );
+
+      expect(
+        await getCellCfcLabel(pieceConfig, ["items", 0], {}, listDeps as never),
+      ).toBeNull();
+    });
+
     it("refuses a clause that names anyone but the identity, and keeps it", async () => {
       const other = (await Identity.fromPassphrase("cf-piece-label-other"))
         .did();

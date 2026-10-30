@@ -332,6 +332,18 @@ that authorization does not establish specification conformance or amend this
 procedure. The conformance statement records the gap until a ruling and a
 reconciled pin address it.
 
+An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
+nonconforming semantic gap pending
+[specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route
+releases at exactly one path; such a release reaches every stored position the
+segment matches at its depth. It lowers clauses at strict, with no default-off
+dial and no `SPEC-PENDING` marker, since the three marker slots are occupied.
+This does not satisfy step 4 above. @danfuzz's authorization of regular labs
+pull requests ahead of unresolved specs dependencies covers landing it; that
+authorization does not establish specification conformance or amend this
+procedure. The conformance statement's §8 records the gap until a ruling and
+a reconciled pin address it.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's
