@@ -800,14 +800,13 @@ Environment:
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host, in Docker's words (default:
                                 bridge, which runsc reports as sandbox: on macOS the
-                                VM's network; on Linux under the default, pasta's, with
-                                egress and the host as host.docker.internal; for a run
-                                that forwards host ports, or a named runsc under bridge,
-                                pasta's, with egress and of the host's loopback the
-                                forwarded ports alone, none where none are; for a named
-                                runsc on Linux whose network is unnamed and that
-                                forwards no host ports, loopback alone. Each with no
-                                pasta on PATH refuses to run)
+                                VM's network; on Linux pasta's, with egress, and the host
+                                as host.docker.internal: every port of its loopback for
+                                the default, the forwarded ports alone for a run that
+                                forwards some or a named runsc that names bridge. A
+                                named runsc on Linux whose network is unnamed and that
+                                forwards no host ports gets runsc's own, loopback alone.
+                                A run that needs pasta refuses to start without it)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url

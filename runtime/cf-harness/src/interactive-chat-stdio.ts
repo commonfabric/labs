@@ -175,7 +175,8 @@ Environment:
                                        forwards them into its VM; on Linux
                                        pasta forwards them and no other port of
                                        the host's loopback, for a named runsc
-                                       too
+                                       too, which under bridge reaches no port
+                                       of it where none are listed
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY           Default value for --fabric-identity

@@ -133,7 +133,9 @@ What works today:
   the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists, which for
   a named `runsc` under `bridge` may be none. `CF_HARNESS_DOCKER_NETWORK_MODE`
   names one: `bridge` is that default, and `none` and `host` are the others; the
-  name is kept from the Docker driver, as is its vocabulary
+  name is kept from the Docker driver, as is its vocabulary. A named Linux
+  `runsc` whose network is unnamed and that lists no port has runsc's own,
+  loopback alone, and needs no `pasta`
 - a kitchen-sink rootfs from the native store, as the sibling `gvisor` repo's
   installers write it; name another with `--sandbox-rootfs` or
   `CF_HARNESS_SANDBOX_ROOTFS`
@@ -1194,14 +1196,22 @@ named `runsc` under `bridge` gets the same network where the run lists no port,
 with none forwarded: egress, and no port of the host's loopback, since runsc's
 own `sandbox` network is loopback alone, and a rootless `runsc` refuses it.
 Egress is kept, so a service the host binds to an address of another interface
-is reached at that address, as from any other machine. A user id, or a kernel
-parameter, that cannot be read refuses the default rather than being guessed at.
-Where no `pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the
-default is refused, saying to install passt (`sudo apt install passt`) or
-util-linux, or to name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives
-the container loopback alone, and `host` the host's own network, interfaces and
-all. Those two need none of `pasta`, `setpriv` or `unshare`; a process that is
-not root still needs user namespaces for the store's rootless `runsc`, as above.
+is reached at that address, as from any other machine. Under pasta's network the
+driver also binds a resolver configuration over `/etc/resolv.conf` that names
+the gateway, where pasta answers DNS with the host's resolver, so names resolve
+whatever the rootfs holds; a mount at or over it is refused, as one at or over
+`/etc/hosts` is. The few lines pasta writes to its stderr before the call's
+command starts (root's two about user mappings, and, under `--no-map-gw` on a
+host whose nameservers are all on its loopback, one saying it finds no
+nameserver to hand the container) are dropped from the start of a call's stderr.
+A user id, or a kernel parameter, that cannot be read refuses the default rather
+than being guessed at. Where no `pasta` is on `PATH`, no `setpriv`, or for root
+no `unshare`, the default is refused, saying to install passt
+(`sudo apt install passt`) or util-linux, or to name a network:
+`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
+`host` the host's own network, interfaces and all. Those two need none of
+`pasta`, `setpriv` or `unshare`; a process that is not root still needs user
+namespaces for the store's rootless `runsc`, as above.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and

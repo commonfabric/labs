@@ -1425,13 +1425,11 @@ describe("sandbox-runtime-default", () => {
 
           expect(refusal).toBeInstanceOf(HarnessControlError);
           expect(messageOf(refusal)).toBe(
-            (listed === undefined
-              ? "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge`, which for " +
-                "a named `runsc` on Linux is `pasta`'s network"
-              : "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to " +
-                "reach, which only `pasta`'s network forwards") +
-              ", and pasta cannot run here: no `pasta`, from passt, is on " +
-              "`PATH`. Install passt (`sudo apt install passt`), or name " +
+            "A named `runsc` on Linux runs under `pasta`'s network where " +
+              "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+              "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot " +
+              "run here: no `pasta`, from passt, is on `PATH`. Install " +
+              "passt (`sudo apt install passt`), or name " +
               "`CF_HARNESS_DOCKER_NETWORK_MODE=none`" +
               (listed === undefined ? "" : " and forward no host ports") +
               ".",
@@ -1506,8 +1504,9 @@ describe("sandbox-runtime-default", () => {
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
         expect(messageOf(refusal)).toBe(
-          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
-            "which only `pasta`'s network forwards, and pasta cannot run " +
+          "A named `runsc` on Linux runs under `pasta`'s network where " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+            "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot run " +
             "here: no `pasta`, from passt, is on `PATH`. Install passt " +
             "(`sudo apt install passt`), or forward no host ports.",
         );
@@ -1555,8 +1554,9 @@ describe("sandbox-runtime-default", () => {
         );
 
         expect(messageOf(refusal)).toBe(
-          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
-            "which only `pasta`'s network forwards, and pasta cannot run " +
+          "A named `runsc` on Linux runs under `pasta`'s network where " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+            "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot run " +
             "here: which user this process runs as is not known (the " +
             "platform reports none), so whether `pasta` runs as root, in a " +
             "mount namespace of its own, or in a user namespace of its own " +

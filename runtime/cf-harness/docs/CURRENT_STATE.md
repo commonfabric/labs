@@ -193,22 +193,27 @@ whoever else runs, a named `runsc` included, has pasta make a user namespace),
 runs runsc there through `setpriv --pdeathsig KILL` (util-linux, refused where
 no `setpriv` is on `PATH`) with `--network=host` and a bundle with no network
 namespace of its own, and binds a hosts file over `/etc/hosts` that names the
-gateway, which pasta maps to the host's loopback, `host.docker.internal`. The
-container has egress and the host, and sees none of the host's interfaces. Pasta
-starts what it runs in a PID namespace of its own, so a session's container
-started under it would record pids that `exec` and the control commands, run
-outside it, cannot find: under pasta's network the runtime describes no
-sessions, the `bash` tool offers no `session`, and a session asked of the
-runtime directly is refused as `start-failed`. For the same reason no control
-command reaches a container under pasta from outside. Pasta clears the
-parent-death signal of what it runs, so `setpriv` sets one, SIGKILL: when pasta
-goes (a call's timeout, a close of the runtime, which stops each call in flight
-through its pasta), the first process of its PID namespace dies, and every
-process of the namespace, the container's included, with it. Each such container
-keeps its state in a runsc root of its own call's, which goes when the call
-ends. A mount at or over `/etc/hosts` is refused under pasta's network. `none`
-gives the container loopback alone, and `host` the host's own network, with no
-network namespace of its own either.
+gateway, which pasta maps to the host's loopback, `host.docker.internal`, and a
+resolver configuration over `/etc/resolv.conf` that names the gateway, where
+pasta answers DNS with the host's resolver. The container has egress, by address
+and by name, and the host, and sees none of the host's interfaces. What pasta
+writes to its stderr before the call's command starts (root's two warnings about
+user mappings, and the one below) is dropped from the start of the call's
+stderr, which pasta shares with that command. Pasta starts what it runs in a PID
+namespace of its own, so a session's container started under it would record
+pids that `exec` and the control commands, run outside it, cannot find: under
+pasta's network the runtime describes no sessions, the `bash` tool offers no
+`session`, and a session asked of the runtime directly is refused as
+`start-failed`. For the same reason no control command reaches a container under
+pasta from outside. Pasta clears the parent-death signal of what it runs, so
+`setpriv` sets one, SIGKILL: when pasta goes (a call's timeout, a close of the
+runtime, which stops each call in flight through its pasta), the first process
+of its PID namespace dies, and every process of the namespace, the container's
+included, with it. Each such container keeps its state in a runsc root of its
+own call's, which goes when the call ends. A mount at or over `/etc/hosts` or
+`/etc/resolv.conf` is refused under pasta's network. `none` gives the container
+loopback alone, and `host` the host's own network, with no network namespace of
+its own either.
 
 On Linux a run that lists host ports in `CFC_VM_FORWARD_PORTS` reaches those
 ports of the host's loopback and no other port of it, whether its `runsc` is
@@ -227,11 +232,14 @@ needs pasta, and offer `none`. Pasta runs with `--no-map-gw`, so the gateway
 does not lead to the host's loopback; with `-T <ports>` in place of `-T none`,
 so pasta listens on each port at the container's loopback and forwards it to the
 host's, and a command in the container cannot listen on a forwarded port itself;
-and with `--dns-forward 10.0.2.2 --dns 10.0.2.2`, so the gateway answers DNS as
-it does for the default and pasta does not warn into the call's output that it
-finds no nameserver. The hosts file names the container's own loopback
-`host.docker.internal`. Egress is kept, so a service the host binds to an
-address of another interface is reached at that address, as from any other
+and with `--dns-forward 10.0.2.2`, so the gateway answers DNS as it does for the
+default. It is given no `--dns`: pasta (passt 2024-02, Ubuntu 24.04's) then
+forwards queries to the address that names rather than to the host's resolver,
+and none is answered. On a host whose nameservers are all on its loopback pasta
+warns, before the call's command starts, that it finds no nameserver to hand the
+container, and the driver drops that line. The hosts file names the container's
+own loopback `host.docker.internal`. Egress is kept, so a service the host binds
+to an address of another interface is reached at that address, as from any other
 machine. Such a run offers no sandbox session, as any run under pasta's network
 does. On macOS the variable is the macOS `runsc`'s, which forwards the listed
 ports into its VM, and the selection does not read it.

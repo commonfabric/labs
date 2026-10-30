@@ -17,6 +17,7 @@ import {
   PASTA_FORWARDING_HOSTS_FILE,
   PASTA_HOSTS_FILE,
   PASTA_ROOT_ARGS,
+  PASTA_STARTUP_NOTICES,
   pastaArgs,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
@@ -24,6 +25,7 @@ import {
   SETPRIV_ARGS,
   UNSHARE_ARGS,
   verifyPrivateScratchParent,
+  withoutPastaNotices,
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
@@ -1826,6 +1828,48 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   });
   assertEquals(await Deno.readTextFile(hosts.source), PASTA_HOSTS_FILE);
   assertMatch(PASTA_HOSTS_FILE, /^10\.0\.2\.2\thost\.docker\.internal$/m);
+  // The gateway is the container's resolver, whatever the rootfs holds.
+  const resolv = spec.mounts.find((m: { destination: string }) =>
+    m.destination === "/etc/resolv.conf"
+  );
+  assertEquals(resolv, {
+    destination: "/etc/resolv.conf",
+    type: "bind",
+    source: join(c.scratchDir, "resolv.conf"),
+    options: ["rbind", "ro"],
+  });
+  assertEquals(await Deno.readTextFile(resolv.source), "nameserver 10.0.2.2\n");
+});
+
+Deno.test("under pasta, a call's stderr is given without the notices pasta writes before the call's command starts", async () => {
+  const notices = PASTA_STARTUP_NOTICES.join("");
+  /** A runner under pasta whose pasta writes every notice it can. */
+  class NoisyPasta extends UnderPasta {
+    override async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+      const result = await super.run(request);
+      return { ...result, stderr: notices + result.stderr };
+    }
+  }
+
+  const result = await new RunscSandboxRuntime(pastaConfig(), new NoisyPasta())
+    .runShell({ command: "echo hi" });
+
+  assertEquals([result.exitCode, result.stderr], [0, ""]);
+  // Only the run they begin with: the same words from the command stay.
+  assertEquals(
+    withoutPastaNotices(`${notices}own\n${notices}`),
+    `own\n${notices}`,
+  );
+  // Not under pasta, nothing is taken.
+  class Noisy extends FakeRunscRunner {
+    override async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+      const result = await super.run(request);
+      return { ...result, stderr: notices + result.stderr };
+    }
+  }
+  const plain = await new RunscSandboxRuntime(config({}), new Noisy())
+    .runShell({ command: "echo hi" });
+  assertEquals(plain.stderr, notices);
 });
 
 Deno.test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {
@@ -1849,8 +1893,6 @@ Deno.test("under pasta, a call that forwards host ports gives pasta those ports 
     "none",
     "--no-map-gw",
     "--dns-forward",
-    "10.0.2.2",
-    "--dns",
     "10.0.2.2",
   ];
   assertEquals(pastaArgs([8000, 9000]), forwarding);
@@ -2095,8 +2137,8 @@ Deno.test("a network other than runsc's own takes no pasta, whatever is configur
   }
 });
 
-Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is refused", () => {
-  for (const sandboxPath of ["/etc/hosts", "/etc"]) {
+Deno.test("under pasta, a mount that covers the hosts file or the resolver configuration, or sits in either, is refused", () => {
+  for (const sandboxPath of ["/etc/hosts", "/etc/resolv.conf", "/etc"]) {
     assertThrows(
       () =>
         pastaConfig({
@@ -2109,7 +2151,8 @@ Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is re
           }],
         }),
       Error,
-      "where pasta's network binds the hosts file naming `host.docker.internal`",
+      "where pasta's network binds the hosts file naming " +
+        "`host.docker.internal` and the resolver configuration",
     );
   }
   // Without pasta's network the hosts file is the image's, and `/etc/hosts`
