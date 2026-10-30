@@ -1235,6 +1235,51 @@ describe("SchemaGenerator", () => {
         { ...objectX, asCell: [{ kind: "cell", scope: "user" }] },
       ],
       [
+        "caps the cell a scoped constituent meets apart from the scope of what it holds",
+        `
+          type M1 = PerUser<{ x: string }>;
+          type M2 = Cell<PerSession<{ x: string }>>;
+        `,
+        {
+          ...objectX,
+          scope: "session",
+          asCell: [{ kind: "cell", scope: "user" }],
+        },
+      ],
+      [
+        "keeps the scope of what a cell holds beside an array",
+        `type M1 = Cell<PerUser<string>>; type M2 = string[];`,
+        { type: "string", scope: "user", asCell: ["cell"] },
+      ],
+      [
+        "keeps the scope and default of what a cell holds beside an array",
+        `type M1 = Cell<PerUser<Default<string, "x">>>; type M2 = string[];`,
+        { type: "string", default: "x", scope: "user", asCell: ["cell"] },
+      ],
+      [
+        "keeps the scope of what a cell holds where another cell meets it",
+        `type M1 = { a: Cell<PerUser<string>> }; type M2 = { a: Cell<string> };`,
+        propertyA({ type: "string", scope: "user", asCell: ["cell"] }),
+      ],
+      [
+        "keeps a cell's cap and the scope of what it holds beside an array",
+        `type M1 = PerUser<Cell<PerSession<string>>>; type M2 = string[];`,
+        {
+          type: "string",
+          scope: "session",
+          asCell: [{ kind: "cell", scope: "user" }],
+        },
+      ],
+      [
+        "keeps the scope of what an inner cell holds beside an array",
+        `type M1 = Cell<PerUser<Cell<PerSession<string>>>>; type M2 = string[];`,
+        {
+          type: "string",
+          scope: "session",
+          asCell: ["cell", { kind: "cell", scope: "user" }],
+        },
+      ],
+      [
         "joins the labels a labeled definition and the reference to it state",
         `
           type Secret = Confidential<{ x: string }, readonly ["inner"]>;

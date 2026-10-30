@@ -863,9 +863,9 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
 
 /**
  * What a schema states about its whole value besides which values it is: the
- * scope the value is stored in, and the default it takes. A value of an
- * intersection is a value of every constituent at once, so it takes what any
- * of them states.
+ * scope the value is stored in (`wholeValueScopeOf()`), and the default it
+ * takes. A value of an intersection is a value of every constituent at once,
+ * so it takes what any of them states.
  */
 type WholeValueKeywords = {
   readonly scope?: SchemaScope;
@@ -891,7 +891,10 @@ function wholeValueKeywordsOf(
     .filter(isObjectOrArray);
   const scopes = [
     ...new Set(
-      resolved.flatMap(({ scope }) => scope ? [scope as SchemaScope] : []),
+      resolved.flatMap((schema) => {
+        const scope = wholeValueScopeOf(schema, context);
+        return scope ? [scope] : [];
+      }),
     ),
   ];
   if (scopes.length > 1) throw nestedScopeError();
@@ -1129,6 +1132,22 @@ function establishedUnnamedKeysOf(
 }
 
 /**
+ * The scope `schema` states of its whole value (`WholeValueKeywords`): its
+ * `scope`, except a cell's. The scope a cell's schema writes beside its
+ * handles is that of what the cell holds, and is part of the cell
+ * (`Cell<PerUser<T>>`); the cell's own is the cap on its handle
+ * (`PerUser<Cell<T>>`), which its value keeps.
+ */
+function wholeValueScopeOf(
+  schema: MutableJSONSchemaObj,
+  context: GenerationContext,
+): SchemaScope | undefined {
+  return isCellValue(schema, context)
+    ? undefined
+    : schema.scope as SchemaScope | undefined;
+}
+
+/**
  * `schema` as the value it denotes, without what it states about its whole
  * value (`WholeValueKeywords`), read as `withBesideKeywords()` reads it. A
  * schema stating neither, beside a reference or in it, is returned as it
@@ -1139,13 +1158,20 @@ function valueOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const stated = withBesideKeywords(schema, context);
+  const scope = isObjectOrArray(stated)
+    ? wholeValueScopeOf(stated, context)
+    : undefined;
   if (
-    !isObjectOrArray(stated) || (!("scope" in stated) && !("default" in stated))
+    !isObjectOrArray(stated) || (scope === undefined && !("default" in stated))
   ) {
     return stated === resolveLocalRef(schema, context) ? schema : stated;
   }
-  const { scope: _, default: __, ...value } = stated;
-  return withOriginOf(value, stated, context);
+  const { scope: own, default: _, ...value } = stated;
+  return withOriginOf(
+    scope === undefined && own !== undefined ? { ...value, scope: own } : value,
+    stated,
+    context,
+  );
 }
 
 /**

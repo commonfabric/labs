@@ -253,7 +253,15 @@ holds is set aside while the values are settled and stated of what they
 settle to, as the type path reads it from the checker's type: its scope and
 its default belong to the whole value, so two scopes refuse the
 intersection, as a scope wrapper nested in another with no cell between
-them, and defaults that differ leave none; its labels are placed as the type
+them, and defaults that differ leave none. Neither of a cell's scopes is
+set aside: its own is the cap on its handle, and the one written beside its
+handles is that of what it holds, so `Cell<PerUser<string>> & string[]` is
+`Cell<PerUser<string>>`
+(`{ type: "string", scope: "user", asCell: ["cell"] }`), while a scope
+another constituent states of the whole value caps the handle of the cell
+the intersection is, `PerUser<{ x: string }> & Cell<PerSession<{ x: string }>>`
+giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
+its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
 none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
