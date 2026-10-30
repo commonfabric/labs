@@ -107,6 +107,14 @@ a record: archive it to `docs/history/plans/` following the procedure in
   commit SHA answers for the bytes, the text loads by handle into a child the
   chooser never reads, and a split-mint provenance mark records where it came
   from without declassifying anything.
+- [Mention references at scale](mention-references-at-scale.md) asks what `#42`
+  costs when a collection has a million members, and separates the three
+  concerns one static array currently serves: authoring a mention, resolving
+  one for display or navigation, and completing one while somebody types. Its
+  decisions store a mention as the collection and member name beside the
+  destination, resolve it on render from one key of the collection's
+  namespace, and make completion best-effort, asked of the collection over a
+  browser verb call this work adds. Eight stages; nothing is built.
 - [Collection naming: the first customer](collection-naming-topics.md)
   builds [Naming in collections](../specs/collection-naming.md) on a parallel
   exemplar board — a naming library, a member namespace the CLI and the shell
