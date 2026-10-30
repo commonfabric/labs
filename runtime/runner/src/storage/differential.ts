@@ -110,6 +110,20 @@ const collectChangedPaths = (
     return;
   }
 
+  // A document's `cfc` member, its label map, changes as a whole. Its readers
+  // decode the whole envelope, and trigger matching compares each reader's own
+  // path in the values a change carries, so one change here wakes the same
+  // readers a change per leaf would. Per leaf, a label map whose entries move
+  // (a list grown at the front) is reported once per entry it holds, and each
+  // report walks every reader again.
+  if (depth === 1 && currentPath[0] === "cfc") {
+    const equal = isFabricObjectOrArray(before) && isFabricObjectOrArray(after)
+      ? valueEqualByWalk(before, after)
+      : valueEqual(before, after);
+    if (!equal) pushChangedPath(paths, currentPath, depth);
+    return;
+  }
+
   if (isFabricObjectOrArray(before) && isFabricObjectOrArray(after)) {
     // By walk, so that the subtrees a revision shares with what it revised
     // are settled by identity rather than hashed whole at every level.
