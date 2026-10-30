@@ -248,6 +248,11 @@ export function listSlotResolutions(
 } {
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
   const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
+  // A declared-onward read (CFC spec §18.6.2): the declaration lands on the
+  // caller's result container, through `listContainerWriteSchema`, before
+  // the transaction's writes are measured. Every other write the caller
+  // derives from this read is a child's setup, which the slot resolution
+  // below decides: that read stays in the join.
   const rawList = declare === undefined
     ? readRawList()
     : tx.runWithAmbientReadMeta(declaredOnwardRead, readRawList);
