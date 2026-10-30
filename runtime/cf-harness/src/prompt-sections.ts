@@ -120,7 +120,7 @@ export const PROMPT_SECTION_AUDIENCE: Readonly<
   "loom-commands-tools": { anyOf: ["find", "act"] },
   "loom-retrieval-tools": { anyOf: ["find", "act"] },
   // How far to take the work (`strategy.ts`): a quick run answers directly or
-  // stops when evidence answers the task or a refusal ends it; a deep run searches the
+  // stops when evidence answers the task or a final refusal ends it; a deep run searches the
   // person's data exhaustively or reads several independent web sources, where
   // its domains say, holds what it leaves to a bar, and reads its result back
   // before it finishes.

@@ -516,9 +516,15 @@ describe("grant context with an explicit tool allow-list", () => {
       await runTurn(service, "turn-1", "what is in this space?");
       expect(setups).toBe(grants ? 1 : 0);
       expect(seen).toHaveLength(1);
+      const grantMessages = seen[0].filter((message) =>
+        message.content.includes("cfh:a:grant")
+      );
+      expect(grantMessages).toHaveLength(grants ? 1 : 0);
       expect(
-        seen[0].filter((message) => message.content.includes("cfh:a:grant")),
-      ).toHaveLength(grants ? 1 : 0);
+        grantMessages.some((message) =>
+          message.content.includes("Use describe_handle on a granted token")
+        ),
+      ).toBe(grants && tools.includes("describe_handle"));
       expect(seen[0].at(-1)?.content).toBe("what is in this space?");
     });
   }

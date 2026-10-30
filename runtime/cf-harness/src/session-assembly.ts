@@ -531,6 +531,10 @@ const establishContextMessages = async (
     try {
       const grantMessage = wellKnownGrantsContextMessage(
         await engine.establishWellKnownGrants(),
+        {
+          describeHandleAvailable: config.allowedToolIds === undefined ||
+            config.allowedToolIds.includes("describe_handle"),
+        },
       );
       if (grantMessage !== undefined) {
         messages.push(grantMessage);

@@ -1495,13 +1495,16 @@ A run configured with a Fabric session seeds a handle when any of
 `describe_handle`, `run_pattern`, `read_value` or `call_verb` is allowed,
 including when no tool allow-list is configured: before the first model turn,
 the CLI establishes the session, mints a token for the space's piece registry —
-the same discovery root behind `cf piece ls` — and announces it in a context
-message pairing the token with a fixed, harness-authored description. The
-address stays trusted-side in the handle table like any other entry. This is
-what lets an agent find pieces to compute over without an operator handing it
-references one by one: discovery is `run_pattern` over the granted token, not a
-tool of its own, and `describe_handle` answers the registry's shape like any
-other reference.
+the same discovery root behind `cf piece ls` — and one for each configured
+connector grant (a read-only connector database, described with its label, CFC
+classes, account identity, row count and newest observation), and announces them
+in a context message pairing each token with a harness-authored description. The
+`describe_handle` instructions in that message appear only when
+`describe_handle` is allowed. The address stays trusted-side in the handle table
+like any other entry. This is what lets an agent find pieces to compute over
+without an operator handing it references one by one: discovery is `run_pattern`
+over the granted token, not a tool of its own, and `describe_handle` answers the
+registry's shape like any other reference.
 
 What the model receives is a token and fixed prose, never data. Reading anything
 behind the token means running a pattern over it, or `read_value` once
