@@ -99,7 +99,7 @@ const RULES = [
   "untrusted external data",
   "withheld with a reason code",
   "one buildable piece",
-  "call resolve_piece before author delegation",
+  "resolve_piece resolves a slug",
 ];
 
 describe("tool-guidance", () => {

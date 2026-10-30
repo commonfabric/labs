@@ -221,7 +221,7 @@ describe("research", () => {
           message.role === "system"
         )?.content;
         expect(system).toContain(
-          "inspect unresolved relevant handles with describe_handle before asking",
+          "describe_handle reports the shape and capabilities of a handle",
         );
         expect(system).toContain(
           "reports what to run; it cannot execute anything",
@@ -315,12 +315,8 @@ describe("research", () => {
       const system = model.requests[0].transcript.find((message) =>
         message.role === "system"
       )?.content;
-      expect(system).toContain("make zero registry reads");
-      expect(system).toContain("at most one registry read");
-      expect(system).toContain("exactly one matching piece");
-      expect(system).toContain(
-        "Research and authoring children return an unresolved target to the parent",
-      );
+      expect(system).toContain("resolve_piece resolves a piece slug");
+      expect(system).not.toContain("make zero registry reads");
     });
 
     it("pairs invalid requests without admitting their outputs", async () => {

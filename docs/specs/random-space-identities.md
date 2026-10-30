@@ -2,7 +2,8 @@
 
 ## Status
 
-Implemented in this repository. The
+Implemented in this repository, except for deletion, which is specified and
+not yet implemented: "Deleting a space" below says what it does. The
 [implementation plan](../plans/random-space-identities.md) says what is built
 and the deployment steps that remain.
 
@@ -154,6 +155,57 @@ run and resolves before it is retried, and a name that has resolved once must
 resolve again without suspending, for as long as the run is being retried.
 A resolver that can forget a name it has resolved, or that can leave a name
 unresolved after an attempt, turns the retry into a loop with no bound.
+
+## Deleting a space
+
+A space lives from its genesis commit until it is deleted, and deletion ends
+it for everyone, for good. Nothing else a principal does ends a space:
+removing members, forgetting it in a list, or losing every reference to it
+leaves it in place.
+
+- Only the space's sole member deletes it, holding OWNER: the access list's one
+  entry has to be the deleting principal, or, for a space that owns itself, the
+  space's own DID, which the deleting principal acts for through a [delegation
+  chain](memory-v2/04-protocol.md#proof-chains). A space with other members is
+  deleted once an OWNER has removed them, each removal an ordinary access-list
+  change of its own. Other holders of a delegation are not members of the list,
+  and lose access with no change of their own first.
+- Deletion is one access-list-only commit, which replaces the access list
+  with a tombstone naming the deleting principal. It writes the
+  access-control document and never removes it.
+- A Home space is never deleted, whoever asks. Its DID is its user's identity
+  DID, so its access list grants its own DID OWNER, and it declares no kind,
+  which is how the Memory server tells it from a self-owned space of a declared
+  kind such as a profile's.
+- From that commit on, wherever the Memory server checks access, the space
+  refuses every principal, a deployment's service identities included, and takes
+  no further commit, so deletion is not undone. The refusal says that the space
+  is deleted, which a reader can tell apart from a refusal of access to a space
+  that goes on.
+
+Deleting a space reclaims no storage by itself. A deleted space's contents
+become unreadable at once, and its storage is the operator's to reclaim, which
+leaves the tombstone in place. A store removed outright would leave a DID with
+no history, and that DID would then be a space its key could create again: no
+one holds the key of a space created under this specification, but a legacy
+space's key can be recomputed from its name.
+
+References to a deleted space keep their DID: a Home list entry, a link stored
+in another space, an `inSpace` allocation record. They reach the refusal.
+Removing them is the work of whatever holds them, and an allocation record,
+being immutable, is never removed. A person's shared-space catalog keeps its
+entry for the space and records the deletion in it
+([`shared-space-catalog.md`](../features/shared-space-catalog.md#deleted-spaces)).
+The refusal reaches a client as an `AuthorizationError` marked `deleted`, and
+pattern code as `spaceDeleted(target)`
+([`space-access.md`](../features/space-access.md#a-deleted-space)).
+
+The admission rule and the refusal are
+[INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
+[the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
+Deleting a space is not implemented yet: the Memory server refuses a
+tombstone as it refuses any access-control document that is not an access
+list.
 
 ## Routing across provider processes
 

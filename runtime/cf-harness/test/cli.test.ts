@@ -4598,7 +4598,7 @@ Deno.test({
       expect(runPromptOptions?.contextMessages).toEqual([
         expect.stringContaining('<skill_context name="pattern-dev"'),
         expect.stringContaining("No input cells are attached for this run"),
-        expect.stringContaining("at most one registry read"),
+        expect.stringContaining("resolve_piece resolves a piece slug"),
         REVISION_VERIFICATION_GUIDANCE,
       ]);
       assertEquals(
@@ -4848,7 +4848,12 @@ Deno.test("resolveCfHarnessCliSystemPrompt offers the pattern index only to a ru
   });
   const unindexed = resolveCfHarnessCliSystemPrompt(config);
 
-  assertStringIncludes(indexed!, "Search the pattern index");
+  assertEquals(
+    indexed?.includes(
+      "Search the pattern index for an applicable space-search pattern",
+    ),
+    false,
+  );
   assertStringIncludes(
     indexed!,
     "The parent can run an indexed pattern with run_pattern",

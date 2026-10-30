@@ -65,9 +65,8 @@ export interface SandboxRuntimeSelection {
   sandboxRunscRootless?: true;
 
   /**
-   * The `pasta` that gives a container its `sandbox` network on Linux, for
-   * the Linux default and for a run that forwards host ports, its `runsc`
-   * named or not. Absent otherwise.
+   * The `pasta` that gives a container its `sandbox` network on Linux, its
+   * `runsc` named or the default. Absent otherwise.
    */
   sandboxRunscNetworkHelper?: string;
 
@@ -85,8 +84,10 @@ export interface SandboxRuntimeSelection {
 
   /**
    * The host ports a container under pasta reaches, and the only ones, beside
-   * `sandboxRunscNetworkHelper` on Linux where `CFC_VM_FORWARD_PORTS` names
-   * any. Absent otherwise.
+   * `sandboxRunscNetworkHelper`: those `CFC_VM_FORWARD_PORTS` names, and for
+   * a named `runsc` an empty list where it names none. Absent for the Linux
+   * default that forwards none, which reaches every port of the host's
+   * loopback, and wherever there is no pasta.
    */
   sandboxRunscForwardedHostPorts?: readonly number[];
 
@@ -725,19 +726,19 @@ const nativeDefaultRefusal = (
 
 /**
  * Helper for `resolveSandboxRuntimeSelection()`, which builds the refusal of
- * a run that forwards host ports where pasta, which forwards them, cannot
- * run. It says what is in the way, and what to do about it where `remedy`
- * says.
+ * a named `runsc`'s run on Linux under pasta, where pasta cannot run. It says
+ * what is in the way, and what to do about it where `remedy` says.
  */
-const forwardingRefusal = (
+const namedPastaRefusal = (
   problem: string,
   remedy: string | undefined,
 ): HarnessControlError =>
   new HarnessControlError(
     "invalid-request",
-    `\`${FORWARD_PORTS_ENV}\` names host ports for the sandbox to reach, ` +
-      `which only \`pasta\`'s network forwards, and pasta cannot run here: ` +
-      `${problem}.${remedy === undefined ? "" : ` ${remedy}.`}`,
+    "A named `runsc` on Linux runs under `pasta`'s network where " +
+      `\`${SANDBOX_NETWORK_MODE_ENV}\` names \`bridge\` or ` +
+      `\`${FORWARD_PORTS_ENV}\` lists host ports, and pasta cannot run ` +
+      `here: ${problem}.${remedy === undefined ? "" : ` ${remedy}.`}`,
   );
 
 /**
@@ -980,14 +981,14 @@ export const resolveSandboxRuntimeSelection = async (
   let nativeStore: string | undefined;
   let rootless = false;
   // A default that cannot be provided is refused as the default; what else
-  // looks at the process does so for the host ports a run forwards.
+  // looks at the process does so for a named `runsc`'s pasta.
   const refusal = (
     problem: string,
     remedy: string | undefined,
   ): HarnessControlError =>
     nativePlatform !== undefined
       ? nativeDefaultRefusal(nativePlatform, problem, remedy)
-      : forwardingRefusal(problem, remedy);
+      : namedPastaRefusal(problem, remedy);
   // The user this process runs as, read once, where something turns on it.
   let uidRead: number | undefined;
   const processUid = (turnsOn: string): number => {
@@ -1197,9 +1198,9 @@ export const resolveSandboxRuntimeSelection = async (
   }
   // The network vocabulary is Docker's, and maps onto runsc's: none stays
   // none, host is the host's stack, and bridge is runsc's own `sandbox`
-  // network, which on macOS is the VM's, and on Linux, where the default hands
-  // the driver a `pasta` below, is pasta's namespace taken as runsc's host
-  // network; with no helper Linux's is loopback alone.
+  // network, the driver's default, which on macOS is the VM's, and on Linux
+  // is pasta's namespace taken as runsc's host network where there is a pasta
+  // (below), and loopback alone where there is none.
   const sandboxRunscNetworkMode: RunscNetworkMode | undefined =
     rawNetwork === "none"
       ? "none"
@@ -1210,13 +1211,14 @@ export const resolveSandboxRuntimeSelection = async (
       : undefined;
   // The ports are read on Linux alone, named runtime or not: on macOS the
   // variable is the macOS `runsc`'s, which forwards them into its VM.
-  const forwardedHostPorts = nativeRuntimePlatformOf(
-      options.platform ?? options.processPlatform ?? Deno.build.os,
-    ) === "linux"
+  const onLinux = nativeRuntimePlatformOf(
+    options.platform ?? options.processPlatform ?? Deno.build.os,
+  ) === "linux";
+  const listedHostPorts = onLinux
     ? forwardedHostPortsOf(env[FORWARD_PORTS_ENV])
     : undefined;
   if (
-    forwardedHostPorts !== undefined &&
+    listedHostPorts !== undefined &&
     sandboxRunscNetworkMode !== undefined &&
     sandboxRunscNetworkMode !== "sandbox"
   ) {
@@ -1228,25 +1230,38 @@ export const resolveSandboxRuntimeSelection = async (
         "`bridge`, or forward no ports.",
     );
   }
-  // Linux's runsc gives a container of its own `sandbox` network loopback
-  // alone; pasta is what gives it egress and the host, as Docker's bridge did,
-  // for the Linux default and for any run that forwards host ports.
+  // On Linux runsc's own `sandbox` network is loopback alone, and a rootless
+  // `runsc` refuses it, so pasta gives the network: to the default, whose
+  // pasta reaches every port of the host's loopback unless ports are listed,
+  // and to a named `runsc` that lists ports or names `bridge`, whose pasta
+  // reaches the listed ports alone, none where none are listed. A named
+  // `runsc` that names no network and lists no port keeps runsc's own, so
+  // naming a runtime needs no pasta unless the run asks for a network.
+  const underSandboxNetwork = sandboxRunscNetworkMode === undefined ||
+    sandboxRunscNetworkMode === "sandbox";
+  const forwardedHostPorts = listedHostPorts ??
+    (onLinux && nativePlatform === undefined && rawNetwork === "bridge"
+      ? []
+      : undefined);
   let networkHelper: string | undefined;
   let unshare: string | undefined;
   let setpriv: string | undefined;
   if (
     (forwardedHostPorts !== undefined || nativePlatform === "linux") &&
-    (sandboxRunscNetworkMode === undefined ||
-      sandboxRunscNetworkMode === "sandbox")
+    underSandboxNetwork
   ) {
     // Each problem is said as the default's where the default selected pasta,
-    // and otherwise as the forwarded ports'. The way around it is a network
-    // that needs no pasta, which a run forwarding ports cannot have, or no
-    // ports.
-    const problem = (asDefault: string, asForwarding: string): string =>
-      nativePlatform !== undefined ? asDefault : asForwarding;
+    // and otherwise as a named `runsc`'s. The way around it is what asked for
+    // pasta taken away: `bridge` for `none`, and the listed ports, which no
+    // other network forwards.
+    const problem = (asDefault: string, asNamed: string): string =>
+      nativePlatform !== undefined ? asDefault : asNamed;
     const otherwise = nativePlatform === undefined
-      ? "or forward no host ports"
+      ? rawNetwork === "bridge"
+        ? `or name \`${SANDBOX_NETWORK_MODE_ENV}=none\`${
+          listedHostPorts !== undefined ? " and forward no host ports" : ""
+        }`
+        : "or forward no host ports"
       : `or name a network with \`${SANDBOX_NETWORK_MODE_ENV}=none\` or ` +
         `\`${SANDBOX_NETWORK_MODE_ENV}=host\`${
           forwardedHostPorts !== undefined ? " and forward no host ports" : ""

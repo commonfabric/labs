@@ -3,8 +3,8 @@
  * `list_commands` shows them as signatures, and `run_command` runs one or a
  * batch of them, as the actor the host configured (`loom-commands.ts`). The
  * host decides what runs. The tools read the run's catalog, held for the
- * run, and `run_command` refuses a name the catalog does not show before
- * anything is sent; the host checks the args of every call it is sent.
+ * run, for schemas and effects. The host admits each invocation and checks
+ * its arguments.
  *
  * A command's answer is Loom data, so it is measured the way the retrieval
  * tools measure a row: one row, labeled by its own `ifc` or else by the query
@@ -15,7 +15,7 @@
  */
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
-import type { JSONObject } from "@commonfabric/api";
+import type { JSONObject, JSONValue } from "@commonfabric/api";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -45,7 +45,6 @@ import {
   type LoomCommandCatalogSource,
   type LoomCommandEntry,
   type LoomCommandInvocation,
-  nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
 import {
@@ -54,6 +53,39 @@ import {
   measureLoomRows,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
+import { InvalidPatternReference, patternReference } from "./loom-authoring.ts";
+import { defineOwnEntry, swapTokensForRefs } from "../handle-table.ts";
+
+/** Commands whose reference fields name durable Loom components. */
+const COMPONENT_COMMANDS = new Set([
+  "loom.compose",
+  "loom.create-child",
+  "loom.add",
+  "loom.replace",
+  "loom.revise",
+]);
+
+/** Resolves held component identities before generic Fabric-link substitution. */
+const componentReferences = async (
+  context: HarnessToolContext,
+  value: JSONValue,
+): Promise<JSONValue> => {
+  if (Array.isArray(value)) {
+    return await Promise.all(
+      value.map((item) => componentReferences(context, item)),
+    );
+  }
+  if (!isObjectNotArray(value)) return value;
+  const result: { [key: string]: JSONValue } = {};
+  for (const [key, item] of Object.entries(value)) {
+    const resolved = (key === "ref" || key === "if_ref") &&
+        typeof item === "string" && item.startsWith("cfh:")
+      ? await patternReference(context, item)
+      : await componentReferences(context, item);
+    defineOwnEntry(result, key, resolved);
+  }
+  return result;
+};
 
 /** The notice every listing carries beside its entries. */
 export const LOOM_COMMANDS_EFFECT_NOTICE =
@@ -91,10 +123,6 @@ const BAD_ARGS_HOST_CODE = "bad-args";
 /** What the model is told when a command is not this run's to run. */
 const notGrantedHint = (command: string): string =>
   `This run may not run \`${command}\`. Do not retry it; if the person should run it, name it in your result as an offer for them.`;
-
-/** What the model is told when a name is not in the run's listing. */
-const unknownCommandHint = (command: string): string =>
-  `No command named \`${command}\` is listed for this run. Use a name list_commands showed; a command it does not list is not this run's to run.`;
 
 /** What `list_commands` takes: command names to keep whole when bounded. */
 export interface ListCommandsInput {
@@ -244,16 +272,6 @@ export type RunCommandCallOutput =
     /** `no` when nothing was sent; `unknown` when the answer was lost. */
     landed: "no" | "unknown";
     hint?: string;
-  }
-  | {
-    /** The listing names no such command; nothing was sent. */
-    outputId: ToolOutputId;
-    status: "unknown_command";
-    command: string;
-
-    /** The listed names nearest the one called, nearest first. */
-    suggestions: string[];
-    hint: string;
   };
 
 /** What became of a batch: one result per call, in the calls' order. */
@@ -477,7 +495,7 @@ const notSent = (
 
 /** What a malformed call is told. */
 const INVALID_CALL_REASON =
-  `run_command requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`;
+  `run_command requires a command name, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`;
 
 /**
  * Helper for command tools, which reads one call's shape: the invocation it
@@ -523,7 +541,7 @@ const readCall = (
 interface SendableCall {
   outputId: ToolOutputId;
   invocation: LoomCommandInvocation;
-  entry: LoomCommandEntry;
+  entry?: LoomCommandEntry;
 }
 
 /**
@@ -540,18 +558,6 @@ const checkCall = (
   const { invocation } = read;
   const { command } = invocation;
   const entry = catalog.entries.find((candidate) => candidate.name === command);
-  if (entry === undefined) {
-    return {
-      outputId,
-      status: "unknown_command",
-      command,
-      suggestions: nearestCommandNames(
-        command,
-        catalog.entries.map((candidate) => candidate.name),
-      ),
-      hint: unknownCommandHint(command),
-    };
-  }
   return { outputId, invocation, entry };
 };
 
@@ -583,7 +589,48 @@ const sendCall = async (
   // `runLoomCommand` reads every failure of the request itself as an answer
   // that may have been lost; what it throws is an invalid configuration,
   // found before anything is sent, which is not this call's to absorb.
-  const answered = await runLoomCommand(config, invocation, context.signal);
+  let args: JSONValue = invocation.args;
+  if (
+    COMPONENT_COMMANDS.has(invocation.command) &&
+    JSON.stringify(args).includes("cfh:")
+  ) {
+    try {
+      args = await componentReferences(context, args);
+    } catch (error) {
+      if (!(error instanceof InvalidPatternReference)) {
+        return notSent(
+          outputId,
+          "command_failed",
+          "The held reference could not be read. Keep the same ref and try again when the Fabric session is available.",
+        );
+      }
+      return notSent(
+        outputId,
+        "invalid_input",
+        "Use the ref returned by run_pattern or assign_slug for a held, unrestricted whole Pattern Instance in this run's own space. Read source material with source.read, then retain it with page.write and use that receipt's ref.",
+      );
+    }
+  }
+  const resolved = context.handleTable === undefined
+    ? args
+    : swapTokensForRefs(context.handleTable, args);
+  if (
+    !isObjectNotArray(resolved) || !isHarnessCommandJsonValue(resolved) ||
+    harnessCommandJsonBytes(resolved) > HARNESS_COMMAND_ARGS_MAX_BYTES
+  ) {
+    return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
+  }
+  if (context.signal?.aborted) {
+    return notSent(
+      outputId,
+      "cancelled",
+      "The turn was cancelled before the command.",
+    );
+  }
+  const answered = await runLoomCommand(config, {
+    ...invocation,
+    args: resolved,
+  }, context.signal);
   if (answered.status === "error") {
     return {
       outputId,
@@ -607,7 +654,7 @@ const sendCall = async (
       ...(outcome.code === "not_granted"
         ? { hint: notGrantedHint(command) }
         : {}),
-      ...(outcome.code === BAD_ARGS_HOST_CODE
+      ...(outcome.code === BAD_ARGS_HOST_CODE && entry !== undefined
         ? { signature: renderCommandSignature(entry) }
         : {}),
     },
@@ -707,12 +754,9 @@ export const runCommandTool: HarnessToolDefinition<
   descriptor: {
     toolId: "run_command",
     title: "Run Command",
-    // A command's effect is unknown until the host declares it, so every
-    // call — a batch as a whole included — is authorized as one that may
-    // change something.
     effectClass: "write",
     description:
-      `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; an unlisted name returns unknown_command and sends nothing.`,
+      `Run host commands as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; CFS decides whether the caller may attempt each command.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -732,6 +776,24 @@ export const runCommandTool: HarnessToolDefinition<
       },
     },
     tags: ["loom", "command"],
+  },
+  async effectClassOf(input, context) {
+    const source = catalogSourceOf(context);
+    if (source === undefined || context.signal?.aborted) return "write";
+    const listed = await unlessCancelled(source.current(), context.signal);
+    if (listed === "cancelled" || listed.status !== "ok") return "write";
+    const calls = Array.isArray(input.calls) ? input.calls : [input];
+    if (calls.length === 0) return "write";
+    let effect: "read" | "write" | "side-effect" = "read";
+    for (const call of calls) {
+      if (!isObjectNotArray(call)) return "write";
+      const entry = listed.catalog.entries.find((row) =>
+        row.name === call.command
+      );
+      if (entry?.effect === "external") return "side-effect";
+      if (entry?.effect !== "read") effect = "write";
+    }
+    return effect;
   },
   async invoke(context, input) {
     const outputId = context.nextOutputId("run_command");
@@ -802,10 +864,8 @@ export const runCommandTool: HarnessToolDefinition<
 
 /**
  * Helper for `run_command`, which reads the run's catalog, or says why no
- * call was sent. What the run can call is what it can see: a call naming a
- * command the catalog leaves out is refused before it reaches the host. The
- * catalog is held for the run, and the host refuses a command it has
- * withdrawn since it was read.
+ * call was sent. The catalog supplies schemas and effects; the host decides
+ * whether each invocation is admitted.
  */
 const readCatalog = async (
   context: HarnessToolContext,

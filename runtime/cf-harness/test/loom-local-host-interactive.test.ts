@@ -616,14 +616,16 @@ Deno.test("local Loom interactive host selects the sandbox runtime its environme
     CF_HARNESS_SANDBOX_ROOTFS: "/images/kitchensink",
     CF_HARNESS_RUNSC_CFC_POLICY: "/policy.json",
     CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
-    CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+    // `host`, which needs nothing of the machine this runs on: `bridge` is
+    // pasta's network on Linux, looked for on this process's `PATH`.
+    CF_HARNESS_DOCKER_NETWORK_MODE: "host",
   })).basePromptLoopOptions;
   assertEquals(native?.sandboxRuntimeKind, "runsc");
   assertEquals(native?.sandboxRootfs, "/images/kitchensink");
   assertEquals(native?.sandboxCfcPolicy, "/policy.json");
   assertEquals(native?.sandboxRunscBinary, "/opt/runsc");
-  // docker's network vocabulary maps onto runsc's, as it does for a batch run.
-  assertEquals(native?.sandboxRunscNetworkMode, "sandbox");
+  // The network is read, as it is for a batch run.
+  assertEquals(native?.sandboxRunscNetworkMode, "host");
 
   // Docker named: the driver is gone, and the host says so up front.
   await assertRejects(

@@ -324,10 +324,11 @@ export interface ManagerActState {
   act: ManagerAct;
 
   /**
-   * The user's profile, which holds no value until it resolves. An act reads
-   * no more of it than a room does: the profile's inbox pointer can carry its
-   * inbox's label, which a start's writes into a new room's space would then
-   * be held to.
+   * The profile of the session acting, which holds no value until it
+   * resolves: a start needs one, and the user joins a room they create or
+   * accept as it. An act reads no more of it than a room does: the profile's
+   * inbox pointer can carry its inbox's label, which a start's writes into a
+   * new room's space would then be held to.
    */
   myProfile: ProfileCell | undefined;
 
@@ -1880,8 +1881,19 @@ const counterpartOf = (
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
-  /** The user's profile, which holds no value until it resolves. */
+  /**
+   * The user's profile, which holds no value until it resolves. The rooms and
+   * people lists, which are the user's, are derived from it.
+   */
   myProfile: ManagerProfileCell | undefined;
+
+  /**
+   * The profile this session finds, which holds no value until it resolves,
+   * and none where it is absent. What the manager says about whether its
+   * reader can start a chat, and the address it shows them, are derived from
+   * it, and the manager's acts are taken as it.
+   */
+  sessionProfile?: ManagerProfileCell;
 }
 
 /**
@@ -1910,6 +1922,7 @@ export const FabriChatManagerCore = pattern<
   (
     {
       myProfile,
+      sessionProfile,
       sharedSpaceCatalog,
       direct,
       requests,
@@ -2039,7 +2052,7 @@ export const FabriChatManagerCore = pattern<
     );
     const joining = joinRooms({});
     const records = {
-      myProfile,
+      myProfile: sessionProfile,
       catalog: sharedSpaceCatalog,
       roomMembership,
       direct,
@@ -2103,12 +2116,27 @@ export const FabriChatManagerCore = pattern<
         )
       )
     );
-    const cannotStart = computed(() => myProfile?.get() === undefined);
-    // The principal this user's profile attests, which someone starting a
+    // Whether this reader can start a chat, and their address, are each
+    // session's own, as the profile they are derived from is. A session
+    // whose profile hasn't resolved, or which finds none, would otherwise
+    // tell another session of the same user, whose profile has, that it
+    // can't start one. Each binding's name is its cause, the identity of the
+    // document that stores it, so renaming one moves its data. The first two
+    // default to what a reader with no profile reads until this session has
+    // derived them.
+    const cannotStartForSession = computed(
+      (): PerSession<boolean | Default<true>> =>
+        sessionProfile?.get() === undefined,
+    );
+    // The principal this session's profile attests, which someone starting a
     // chat with them needs; empty when the profile attests none.
-    const myAddress = computed(() => profileOwnerOf(myProfile) ?? "");
-    const addressDisplay = computed(
-      (): ChatDisplay => (myAddress === "" ? "none" : "block"),
+    const myAddressForSession = computed(
+      (): PerSession<string | Default<"">> =>
+        profileOwnerOf(sessionProfile) ?? "",
+    );
+    const addressDisplayForSession = computed(
+      (): PerSession<ChatDisplay> =>
+        myAddressForSession === "" ? "none" : "block",
     );
     const createDraftedGroup = commitStart({
       act: "createGroup",
@@ -2166,13 +2194,13 @@ export const FabriChatManagerCore = pattern<
           <div
             id="fabrichat-my-address"
             hidden
-            style={{ display: addressDisplay }}
+            style={{ display: addressDisplayForSession }}
           >
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
-                Your chat address: {myAddress}
+                Your chat address: {myAddressForSession}
               </cf-text>
-              <cf-copy-button text={myAddress} size="sm" icon-only />
+              <cf-copy-button text={myAddressForSession} size="sm" icon-only />
             </cf-hstack>
           </div>
           <div
@@ -2185,7 +2213,7 @@ export const FabriChatManagerCore = pattern<
                 inputId="fabrichat-start-direct"
                 placeholder="Their chat address (did:key:…)"
                 buttonText="Chat"
-                disabled={cannotStart}
+                disabled={cannotStartForSession}
                 onClick={streams.openDirect}
               />
               <cf-input
@@ -2228,7 +2256,7 @@ export const FabriChatManagerCore = pattern<
               </cf-checkbox>
               <cf-button
                 data-ui-action={CHAT_START_ACTION}
-                disabled={cannotStart}
+                disabled={cannotStartForSession}
                 onClick={createDraftedGroup}
               >
                 Create group
@@ -2281,10 +2309,19 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
+  // The rooms and people lists are the user's, and are derived from the
+  // user's profile. What the manager says about whether its reader can act
+  // is derived from the profile each session finds for itself: a session
+  // whose wish finds none, or fails, writes that into its own instance, never
+  // over the one a session that found the profile reads.
   const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
+  const sessionProfileWish = wish<PerSession<ChatManagerProfile>>({
+    query: "#profile",
+  });
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,
+      sessionProfile: sessionProfileWish.result,
       sharedSpaceCatalog: input.sharedSpaceCatalog,
       direct: input.direct,
       requests: input.requests,

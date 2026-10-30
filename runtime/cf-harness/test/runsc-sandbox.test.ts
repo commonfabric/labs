@@ -1826,6 +1826,70 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   });
   assertEquals(await Deno.readTextFile(hosts.source), PASTA_HOSTS_FILE);
   assertMatch(PASTA_HOSTS_FILE, /^10\.0\.2\.2\thost\.docker\.internal$/m);
+  // The gateway is the container's resolver, whatever the rootfs holds.
+  const resolv = spec.mounts.find((m: { destination: string }) =>
+    m.destination === "/etc/resolv.conf"
+  );
+  assertEquals(resolv, {
+    destination: "/etc/resolv.conf",
+    type: "bind",
+    source: join(c.scratchDir, "resolv.conf"),
+    options: ["rbind", "ro"],
+  });
+  assertEquals(await Deno.readTextFile(resolv.source), "nameserver 10.0.2.2\n");
+});
+
+Deno.test("under pasta, a call's stderr is given from after the line its shell writes before runsc starts", async () => {
+  const pastaSays = "Couldn't get any nameserver address\n";
+  /**
+   * A runner under pasta whose pasta writes a warning, then whose shell
+   * writes its start mark (its `$0`), then whose command writes `own`.
+   */
+  class NoisyPasta extends UnderPasta {
+    constructor(readonly own: string, readonly marks = true) {
+      super();
+    }
+    override async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+      const result = await super.run(request);
+      const shell = this.fake.requests.at(-1)!;
+      const mark = this.marks ? `${shell.args[2]}\n` : "";
+      return { ...result, stderr: pastaSays + mark + this.own };
+    }
+  }
+
+  const quiet = new NoisyPasta("");
+  const result = await new RunscSandboxRuntime(pastaConfig(), quiet)
+    .runShell({ command: "echo hi" });
+  assertEquals([result.exitCode, result.stderr], [0, ""]);
+  const shell = quiet.fake.requests.at(-1)!;
+  assertMatch(shell.args[1], /^printf '%s\\n' "\$0" >&2; exec 3</);
+  assertMatch(shell.args[2], /^cf-harness-call:/);
+
+  // What the command writes stays, pasta's own words included.
+  const own = await new RunscSandboxRuntime(
+    pastaConfig(),
+    new NoisyPasta(pastaSays),
+  ).runShell({ command: "echo hi" });
+  assertEquals(own.stderr, pastaSays);
+
+  // A pasta that stopped before its command wrote no mark: all it said stays.
+  const stopped = await new RunscSandboxRuntime(
+    pastaConfig(),
+    new NoisyPasta("", false),
+  ).runShell({ command: "echo hi" });
+  assertEquals(stopped.stderr, pastaSays);
+
+  // Not under pasta, the shell writes no mark and nothing is taken.
+  const plain = new FakeRunscRunner();
+  plain.runResult = { stderr: pastaSays };
+  const direct = await new RunscSandboxRuntime(config({}), plain)
+    .runShell({ command: "echo hi" });
+  assertEquals(direct.stderr, pastaSays);
+  const directShell = plain.requests.find((r) => r.command === "/bin/sh")!;
+  assertEquals(directShell.args.slice(1, 3), [
+    'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
+    "sh",
+  ]);
 });
 
 Deno.test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {
@@ -1849,8 +1913,6 @@ Deno.test("under pasta, a call that forwards host ports gives pasta those ports 
     "none",
     "--no-map-gw",
     "--dns-forward",
-    "10.0.2.2",
-    "--dns",
     "10.0.2.2",
   ];
   assertEquals(pastaArgs([8000, 9000]), forwarding);
@@ -2095,8 +2157,8 @@ Deno.test("a network other than runsc's own takes no pasta, whatever is configur
   }
 });
 
-Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is refused", () => {
-  for (const sandboxPath of ["/etc/hosts", "/etc"]) {
+Deno.test("under pasta, a mount that covers the hosts file or the resolver configuration, or sits in either, is refused", () => {
+  for (const sandboxPath of ["/etc/hosts", "/etc/resolv.conf", "/etc"]) {
     assertThrows(
       () =>
         pastaConfig({
@@ -2109,7 +2171,8 @@ Deno.test("under pasta, a mount that covers the hosts file, or sits in it, is re
           }],
         }),
       Error,
-      "where pasta's network binds the hosts file naming `host.docker.internal`",
+      "where pasta's network binds the hosts file naming " +
+        "`host.docker.internal` and the resolver configuration",
     );
   }
   // Without pasta's network the hosts file is the image's, and `/etc/hosts`

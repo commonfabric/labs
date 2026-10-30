@@ -251,8 +251,10 @@ export default pattern<MainInput, MainOutput>((
     offers: {},
   }).for("sharedSpaceCatalog");
   const inbox = new Writable<InboxOffers>([]).for("inbox");
+  const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct,
     requests,

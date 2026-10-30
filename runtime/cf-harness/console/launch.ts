@@ -61,6 +61,7 @@ import {
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
   RUNSC_CFC_POLICY_ENV,
+  SANDBOX_NETWORK_MODE_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
@@ -716,17 +717,30 @@ const runscResolvedValues = (
         ? fromStore
         : "harness default",
     },
-    ...(selection.sandboxRunscForwardedHostPorts !== undefined
-      ? [{
-        name: "host ports",
-        value: `${
-          selection.sandboxRunscForwardedHostPorts.join(", ")
-        }, and no other port of the host's loopback`,
-        source: inherited(FORWARD_PORTS_ENV),
-      }]
-      : []),
+    ...hostPortsRow(selection.sandboxRunscForwardedHostPorts),
   ];
 };
+
+/**
+ * Helper for `runscResolvedValues()`, which returns the `host ports` row for
+ * the ports a run under pasta forwards: no row for a run that reaches every
+ * port of the host's loopback, and for an empty list the network that asked
+ * for it.
+ */
+const hostPortsRow = (ports: readonly number[] | undefined) =>
+  ports === undefined ? [] : [
+    ports.length > 0
+      ? {
+        name: "host ports",
+        value: `${ports.join(", ")}, and no other port of the host's loopback`,
+        source: inherited(FORWARD_PORTS_ENV),
+      }
+      : {
+        name: "host ports",
+        value: "none of the host's loopback",
+        source: inherited(SANDBOX_NETWORK_MODE_ENV),
+      },
+  ];
 
 /** The lines the launcher prints before the server binds. */
 export const consoleLaunchReport = (

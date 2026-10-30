@@ -1371,7 +1371,7 @@ describe("sandbox-runtime-default", () => {
         }
       });
 
-      it("gives a named `runsc` no pasta, and looks for none, where no port is listed", async () => {
+      it("gives a named `runsc` no pasta, and looks for none, where no port is listed under the network left unnamed", async () => {
         for (const listed of [undefined, "", " "]) {
           const selection = await select(
             listed !== undefined ? { CFC_VM_FORWARD_PORTS: listed } : {},
@@ -1380,6 +1380,60 @@ describe("sandbox-runtime-default", () => {
 
           expect(selection.sandboxRunscNetworkHelper).toBeUndefined();
           expect(selection.sandboxRunscForwardedHostPorts).toBeUndefined();
+        }
+      });
+
+      it("gives a named `runsc` under `bridge` pasta's network forwarding no port, where no port is listed", async () => {
+        for (const listed of [undefined, "", " "]) {
+          expect(
+            await select({
+              CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+              ...(listed !== undefined ? { CFC_VM_FORWARD_PORTS: listed } : {}),
+            }),
+          ).toMatchObject({
+            sandboxRunscBinary: "/opt/runsc",
+            sandboxRunscNetworkMode: "sandbox",
+            sandboxRunscNetworkHelper: PASTA,
+            sandboxRunscUnshare: UNSHARE,
+            sandboxRunscSetpriv: SETPRIV,
+            sandboxRunscForwardedHostPorts: [],
+          });
+        }
+      });
+
+      it("gives the Linux default under `bridge` its own pasta network, which forwards nothing and reaches the host's loopback", async () => {
+        const store = await installLinuxStore(home);
+
+        expect(
+          await select({ CF_HARNESS_DOCKER_NETWORK_MODE: "bridge" }, {
+            named: false,
+          }),
+        ).toEqual({
+          ...fromLinuxStore(store),
+          sandboxRunscNetworkMode: "sandbox",
+        });
+      });
+
+      it("throws for a named `runsc` under `bridge` where no `pasta` is on `PATH`, offering no network, and to forward no host ports where some are listed", async () => {
+        for (const listed of [undefined, "8000"]) {
+          const refusal = await rejection(
+            select({
+              CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+              ...(listed !== undefined ? { CFC_VM_FORWARD_PORTS: listed } : {}),
+            }, { which: () => undefined }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(messageOf(refusal)).toBe(
+            "A named `runsc` on Linux runs under `pasta`'s network where " +
+              "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+              "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot " +
+              "run here: no `pasta`, from passt, is on `PATH`. Install " +
+              "passt (`sudo apt install passt`), or name " +
+              "`CF_HARNESS_DOCKER_NETWORK_MODE=none`" +
+              (listed === undefined ? "" : " and forward no host ports") +
+              ".",
+          );
         }
       });
 
@@ -1394,14 +1448,21 @@ describe("sandbox-runtime-default", () => {
         });
       });
 
-      it("reads no ports on macOS, where the macOS `runsc` forwards them into its VM", async () => {
-        const selection = await select(
-          { CFC_VM_FORWARD_PORTS: "8000" },
-          { processPlatform: "darwin", which: looksForNothing },
-        );
+      it("reads no ports on macOS, where the macOS `runsc` forwards them into its VM, and gives `bridge` no pasta there", async () => {
+        for (const network of [undefined, "bridge"]) {
+          const selection = await select(
+            {
+              CFC_VM_FORWARD_PORTS: "8000",
+              ...(network !== undefined
+                ? { CF_HARNESS_DOCKER_NETWORK_MODE: network }
+                : {}),
+            },
+            { processPlatform: "darwin", which: looksForNothing },
+          );
 
-        expect(selection.sandboxRunscNetworkHelper).toBeUndefined();
-        expect(selection.sandboxRunscForwardedHostPorts).toBeUndefined();
+          expect(selection.sandboxRunscNetworkHelper).toBeUndefined();
+          expect(selection.sandboxRunscForwardedHostPorts).toBeUndefined();
+        }
       });
 
       it("throws for ports listed beside a network that forwards none", async () => {
@@ -1443,8 +1504,9 @@ describe("sandbox-runtime-default", () => {
 
         expect(refusal).toBeInstanceOf(HarnessControlError);
         expect(messageOf(refusal)).toBe(
-          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
-            "which only `pasta`'s network forwards, and pasta cannot run " +
+          "A named `runsc` on Linux runs under `pasta`'s network where " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+            "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot run " +
             "here: no `pasta`, from passt, is on `PATH`. Install passt " +
             "(`sudo apt install passt`), or forward no host ports.",
         );
@@ -1492,8 +1554,9 @@ describe("sandbox-runtime-default", () => {
         );
 
         expect(messageOf(refusal)).toBe(
-          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
-            "which only `pasta`'s network forwards, and pasta cannot run " +
+          "A named `runsc` on Linux runs under `pasta`'s network where " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE` names `bridge` or " +
+            "`CFC_VM_FORWARD_PORTS` lists host ports, and pasta cannot run " +
             "here: which user this process runs as is not known (the " +
             "platform reports none), so whether `pasta` runs as root, in a " +
             "mount namespace of its own, or in a user namespace of its own " +
@@ -4036,8 +4099,8 @@ describe("sandbox-runtime-default", () => {
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
     });
 
-    it("reports the host ports a Linux launch forwards, and reports none where it forwards none", async () => {
-      await installLinuxStore(home);
+    it("reports the host ports a Linux launch forwards, none of the host's loopback for a named `runsc` under `bridge`, and no row where nothing is forwarded", async () => {
+      const store = await installLinuxStore(home);
       const launchIo = io();
       const hostPorts = async (env: Record<string, string>) =>
         sandboxRows(
@@ -4053,6 +4116,17 @@ describe("sandbox-runtime-default", () => {
         name: "host ports",
         value: "8000, 9000, and no other port of the host's loopback",
         source: "`CFC_VM_FORWARD_PORTS`, inherited",
+      }]);
+      expect(
+        await hostPorts({
+          CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+          CF_HARNESS_RUNSC_BINARY: join(store, LINUX_RUNSC),
+          CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+        }),
+      ).toEqual([{
+        name: "host ports",
+        value: "none of the host's loopback",
+        source: "`CF_HARNESS_DOCKER_NETWORK_MODE`, inherited",
       }]);
       expect(await hostPorts({})).toEqual([]);
     });

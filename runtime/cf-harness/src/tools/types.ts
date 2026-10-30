@@ -422,7 +422,10 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
    * authorized as one even when the tool's ordinary calls are reads. A tool
    * without it has the descriptor's class for every call.
    */
-  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
+  effectClassOf?(
+    input: Record<string, unknown>,
+    context: HarnessToolContext,
+  ): HarnessToolEffectClass | Promise<HarnessToolEffectClass>;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }

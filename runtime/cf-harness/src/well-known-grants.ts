@@ -47,7 +47,7 @@ export type {
  */
 const GRANT_DESCRIPTIONS: Record<HarnessWellKnownGrantName, string> = {
   "piece-registry":
-    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so a refused name read leaves the name unknown. For an explicit reference-listing task, a pattern can return entry references without reading values; that is not a fallback for identifying an unspecified target.",
+    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so a refused name read leaves the name unknown. A pattern can return entry references without reading values.",
 };
 
 const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;

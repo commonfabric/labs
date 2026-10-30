@@ -102,6 +102,9 @@ export interface RunPatternToolSuccessOutput {
   /** Canonical LLM-friendly link to the piece's result cell. */
   resultRef: string;
 
+  /** Whole-piece reference, usable directly as a Loom component ref. */
+  ref: string;
+
   /** Declared pending read in the captured root; omitted if the fit refuses it. */
   pending?: boolean;
 
@@ -353,7 +356,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" or a published patternId; returns a reference to its live result cell and, when released, the values resultSchema selects.`,
+    `Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" or a published patternId; returns a whole-piece ref for Loom composition, resultRef to its live result cell and, when released, the values resultSchema selects.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -363,6 +366,10 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         outputId: { type: "string" },
         status: { type: "string", enum: ["ok"] },
         resultRef: { type: "string" },
+        ref: {
+          type: "string",
+          description: "Composition-ready whole-piece reference.",
+        },
         pending: { type: "boolean" },
         hasError: { type: "boolean" },
         resultRefSchema: {},
@@ -2082,6 +2089,10 @@ export const runPatternTool: HarnessToolDefinition<
       outputId,
       status: "ok",
       resultRef,
+      ref: createLLMFriendlyLink(
+        piece.getCell().getAsNormalizedFullLink(),
+        space,
+      ),
       resultRefSchema: pattern.resultSchema,
       pieceId: piece.id,
       ...(withheld === undefined

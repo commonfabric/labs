@@ -132,8 +132,10 @@ export interface MainOutput {
 export default pattern<MainInput, MainOutput>((
   { profiles, sharedSpaceCatalog, direct, requests, outgoingNotices },
 ) => {
+  const profile = firstProfileOf(profiles);
   const chats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog,
     direct,
     requests,

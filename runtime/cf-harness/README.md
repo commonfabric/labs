@@ -38,6 +38,14 @@ boolean, an enum or const string) as themselves, and everything else as a
 reference token addressing that position. So a total comes back as `42` and a
 free-text description comes back as something to point at.
 
+`run_pattern` and `assign_slug` also return `ref`, a whole-piece handle that can
+be passed directly as a component's `ref` to `loom_compose` or through
+`run_command` to `loom.compose`, `loom.add`, `loom.replace`, `loom.revise`, and
+`loom.create-child`. The trusted bridge resolves it to the session's space and
+piece identity after checking that the run holds an unrestricted whole piece.
+Source-reader references need a retained Page first: read the source, write the
+relevant material with `page.write`, then compose the Page receipt's `ref`.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
@@ -126,14 +134,16 @@ What works today:
   see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions: a long-lived container that later calls execute in,
   offered to the model only where the run's CFC enforcement mode allows them,
-  and not under `pasta`'s network: the Linux default's, and that of any Linux
-  run that forwards host ports
+  and not under `pasta`'s network: the Linux default's, that of any Linux run
+  that forwards host ports, and that of a named Linux `runsc` under `bridge`
 - a sandbox network that defaults to `sandbox`, the driver's own: on Linux
   `pasta` gives it egress and the host at `host.docker.internal`, every port of
-  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists.
-  `CF_HARNESS_DOCKER_NETWORK_MODE` names one: `bridge` is that default, and
-  `none` and `host` are the others; the name is kept from the Docker driver, as
-  is its vocabulary
+  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists, which for
+  a named `runsc` under `bridge` may be none. `CF_HARNESS_DOCKER_NETWORK_MODE`
+  names one: `bridge` is that default, and `none` and `host` are the others; the
+  name is kept from the Docker driver, as is its vocabulary. A named Linux
+  `runsc` whose network is unnamed and that lists no port has runsc's own,
+  loopback alone, and needs no `pasta`
 - a kitchen-sink rootfs from the native store, as the sibling `gvisor` repo's
   installers write it; name another with `--sandbox-rootfs` or
   `CF_HARNESS_SANDBOX_ROOTFS`
@@ -251,8 +261,9 @@ What works today:
     `commands` entry with the job's own id as the run id; the commands the host
     offers, run as the actor the host names; the listing shows each command as a
     one-line signature and is the host's command metadata, unmeasured;
-    `run_command` refuses a name the listing does not show, takes one call or a
-    batch of up to sixteen, and measures each answer like a retrieval row)
+    `run_command` sends names to CFS for admission, takes one call or a batch of
+    up to sixteen, derives its effect from host metadata (missing effects are
+    writes), and measures each answer like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -339,9 +350,11 @@ execution. The refusal states that rule and names no host to try instead, since
 what answers on those names is the platform's. On Linux, under `pasta`'s
 network, `host.docker.internal` reaches any port of the host's loopback for the
 default, or only the ports a run lists in `CFC_VM_FORWARD_PORTS`; a named
-`runsc` that lists none has no `pasta`, and its loopback is its own. On macOS it
-reaches only the ports the launch forwards into the VM. This is an integration
-unblock, not a complete network confinement model.
+`runsc` under `bridge` that lists none reaches no port of the host's loopback,
+and one whose network is unnamed and that lists none has no `pasta`, and its
+loopback is its own. On macOS it reaches only the ports the launch forwards into
+the VM. This is an integration unblock, not a complete network confinement
+model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -656,30 +669,12 @@ transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
-For a request about an existing piece, the parent first uses an explicit
-attachment, a user-supplied reference, or an unambiguous target established in
-the conversation. With none of those and no piece name from the user, it asks
-which piece to use with zero registry reads. A user-supplied slug is resolved
-with the parent tool `resolve_piece` before author delegation or any registry
-read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
-and uses the same exact-address resolver as input-cell attachments. It returns
-only a handle, so a display name differing from the slug does not affect
-resolution and source remains on the child-only read/revise path. Foreign spaces
-are refused. An unheld slug or a readable target that is not a usable piece
-returns recoverable `not-found` without failing the run. A failed read returns
-`unavailable` and does not establish absence. The same path serves a fresh
-request and a follow-up answering which piece the user meant.
-
-A display name without a slug permits at most one registry read across the
-parent and its children, proceeding only on exactly one released match. An
-ambiguous, missing, or unreadable match leads to a question, without candidate
-inspection, retrying discovery through another delegation, or replacement
-authoring. The one lookup must return the match count and usable reference or
-requested data together; a lost reference or missing requested value is a reason
-to ask for an attachment, not to reread the registry or infer a value from the
-piece name. This is shared model guidance, not a runtime quota, and does not
-limit an explicit request to list or analyze the space. A failed exact-slug
-lookup does not fall back to authoring a name matcher or crawling the registry.
+The parent can use `resolve_piece` to resolve a bare slug in the session's space
+or `pattern:<space>/<slug>`. It uses the same exact-address resolver as
+input-cell attachments and returns only a handle; source remains on the
+child-only read/revise path. Foreign spaces are refused. An unheld slug or a
+readable target that is not a usable piece returns recoverable `not-found`. A
+failed read returns `unavailable` and does not establish absence.
 
 Private research receives the same explicit input-cell names and tokens as the
 parent, separately from the general handle inventory. Registry and connector
@@ -1205,16 +1200,28 @@ loopback and no other port of it. Pasta runs with `--no-map-gw`, so the gateway
 does not lead to the host, and listens on each listed port at the container's
 loopback, which the hosts file then names `host.docker.internal`, forwarding it
 to the host's. A named `runsc` gets pasta's network for such a run too, and the
-run is refused under the `none` or `host` network, which forward nothing. Egress
-is kept, so a service the host binds to an address of another interface is
-reached at that address, as from any other machine. A user id, or a kernel
-parameter, that cannot be read refuses the default rather than being guessed at.
-Where no `pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the
-default is refused, saying to install passt (`sudo apt install passt`) or
-util-linux, or to name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives
-the container loopback alone, and `host` the host's own network, interfaces and
-all. Those two need none of `pasta`, `setpriv` or `unshare`; a process that is
-not root still needs user namespaces for the store's rootless `runsc`, as above.
+run is refused under the `none` or `host` network, which forward nothing. A
+named `runsc` under `bridge` gets the same network where the run lists no port,
+with none forwarded: egress, and no port of the host's loopback, since runsc's
+own `sandbox` network is loopback alone, and a rootless `runsc` refuses it.
+Egress is kept, so a service the host binds to an address of another interface
+is reached at that address, as from any other machine. Under pasta's network the
+driver also binds a resolver configuration over `/etc/resolv.conf` that names
+the gateway, where pasta answers DNS with the host's resolver, so names resolve
+whatever the rootfs holds; a mount at or over it is refused, as one at or over
+`/etc/hosts` is. Pasta shares its stderr with the call, and writes to it before
+the call's command starts (root's two warnings about user mappings, and, under
+`--no-map-gw` on a host whose nameservers are all on its loopback, one saying it
+finds no nameserver to hand the container). The driver's shell writes a line
+naming the call before it starts runsc, and the call's stderr is what follows
+that line. A user id, or a kernel parameter, that cannot be read refuses the
+default rather than being guessed at. Where no `pasta` is on `PATH`, no
+`setpriv`, or for root no `unshare`, the default is refused, saying to install
+passt (`sudo apt install passt`) or util-linux, or to name a network:
+`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
+`host` the host's own network, interfaces and all. Those two need none of
+`pasta`, `setpriv` or `unshare`; a process that is not root still needs user
+namespaces for the store's rootless `runsc`, as above.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1307,7 +1314,8 @@ rest of this section says of that driver, and these differences of platform:
   the VM.
 - **On Linux** there is no VM; the default network is pasta's, above, and the
   host is reached at `host.docker.internal` on every port its loopback serves,
-  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone.
+  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone, which for a named
+  `runsc` under `bridge` may be none.
 
 The driver keeps its `runsc` state under the run's own scratch directory and
 registers nothing anywhere. The `runsc` it invokes is gVisor's own on Linux, and
@@ -1494,12 +1502,9 @@ behind the token means running a pattern over it, or `read_value` once
 `describe_handle` has answered for it, where the CFC boundary rules as it does
 for every other flow — in particular, a piece's `$NAME` is a value, and a name
 computed from labeled data taints a name-listing pattern's result, which strict
-enforcement refuses whole. A refused name read leaves the name unknown. For an
-explicit reference-listing task, a pattern can return entry references without
-reading values, with addresses returned as tokens through the ordinary outbound
-swap. This does not authorize crawling references to identify an unspecified
-edit target; the shared target-selection guidance applies to the registry
-announcement too.
+enforcement refuses whole. A refused name read leaves the name unknown. A
+pattern can return entry references without reading values, with addresses
+returned as tokens through the ordinary outbound swap.
 
 The grants are recorded in run state (`wellKnownGrants`), replayed rather than
 re-minted on resume, and reported in the operator summary as `fabricGrants:`. A
@@ -2078,12 +2083,10 @@ they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
-They inspect relevant grants or reuse established descriptions before asking the
-user to connect a source; a grant's name alone does not establish its contents.
-For findable inputs, private research can identify an applicable space-search
-pattern from the index and tell the parent how to run it. The parent executes
-discovery under the existing tool, piece-targeting, and release rules. An
-indexed pattern does not grant access to another store.
+A grant's name alone does not establish its contents. Private research can
+identify an applicable space-search pattern from the index and tell the parent
+how to run it. Tool and release rules govern execution; an indexed pattern does
+not grant access to another store.
 
 The action path is checked before collecting execution details: a read-only
 mailbox does not establish the ability to send, and an unavailable send path

@@ -9,7 +9,7 @@ import { runPatternToolDescriptor } from "../src/tools/run-pattern.ts";
 describe("run-pattern description", () => {
   it("states what the tool takes and returns and no rule for using it", () => {
     expect(runPatternToolDescriptor.description).toEqual(
-      'Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "commonfabric" or a published patternId; returns a reference to its live result cell and, when released, the values resultSchema selects.',
+      'Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "commonfabric" or a published patternId; returns a whole-piece ref for Loom composition, resultRef to its live result cell and, when released, the values resultSchema selects.',
     );
   });
 

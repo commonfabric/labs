@@ -161,6 +161,7 @@ export default pattern(() => {
   const directCatalog = emptyCatalog();
   const direct = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: directCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: directRequests,
@@ -217,6 +218,7 @@ export default pattern(() => {
   const groupCatalog = emptyCatalog();
   const group = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: groupCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: groupRequests,
@@ -246,6 +248,7 @@ export default pattern(() => {
   const acceptCatalog = emptyCatalog();
   const accepting = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: acceptCatalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: acceptRequests,
@@ -311,6 +314,7 @@ export default pattern(() => {
   const deliveredNotices = Writable.of<ChatManagerNotice[]>([]);
   const delivering = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),

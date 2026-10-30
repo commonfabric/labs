@@ -282,6 +282,7 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -360,6 +361,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -381,6 +383,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const otherNotices = Writable.of<ChatManagerNotice[]>([]);
   const other = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: otherRequests,
