@@ -384,7 +384,7 @@ What this leaves open:
   The `instanceNames` flag stays off until such a runtime is kept away from a
   space whose data a naming runtime wrote. The memory server is to do that by
   marking a space at the first commit from a naming runtime and admitting no
-  other runtime to it afterward (INV-16 in
+  runtime with naming off to it afterward (INV-16 in
   [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission),
   not yet built);
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
