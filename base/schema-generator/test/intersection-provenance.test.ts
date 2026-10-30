@@ -1354,6 +1354,16 @@ describe("SchemaGenerator", () => {
         { asCell: ["opaque"], ifc: labelS },
       ],
       [
+        "returns `undefined` for a union of `void` and an opaque cell beside it",
+        `type M1 = void | OpaqueCell<any>; type M2 = undefined;`,
+        { type: "undefined" },
+      ],
+      [
+        "returns `undefined` for a union of an opaque cell and `void` beside it",
+        `type M1 = OpaqueCell<any> | void; type M2 = undefined;`,
+        { type: "undefined" },
+      ],
+      [
         "labels the branded arms a labeled folded union keeps beside a primitive",
         `
           type Branded = (string & { a: 1 }) | (number & { b: 2 });
@@ -1386,6 +1396,54 @@ describe("SchemaGenerator", () => {
         expect(byNode()).toEqual(expected);
       });
     }
+
+    it("keeps the scope of what a cell holds where it names a union that folded", async () => {
+      // A reference with the cell written beside it holds the definition, and
+      // is not the union the definition's record says it folded from. The type
+      // path keeps the reference that the node path reads through.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type Branded = (string & { a: 1 }) | (string & { b: 2 });
+        type M1 = Cell<PerUser<Branded>>;
+        type M2 = Cell<string>;
+      `);
+
+      expect(byType()).toEqual({
+        $ref: "#/$defs/Branded",
+        asCell: ["cell"],
+        scope: "user",
+        $defs: { Branded: UNSUPPORTED_NON_OBJECT },
+      });
+      expect(byNode()).toEqual({
+        ...UNSUPPORTED_NON_OBJECT as object,
+        asCell: ["cell"],
+        scope: "user",
+      });
+    });
+
+    it("keeps the scope of what a cell holds where it names an intersection that fell back", async () => {
+      // A reference with the cell written beside it holds the fallback, and
+      // does not stand for the constituents the fallback hides. The type path
+      // keeps the reference that the node path reads through.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type Fallback = { x: string } & string[];
+        type M1 = Cell<PerUser<Fallback>>;
+        type M2 = Cell<string>;
+      `);
+
+      expect(byType()).toEqual({
+        $ref: "#/$defs/Fallback",
+        asCell: ["cell"],
+        scope: "user",
+        $defs: { Fallback: UNSUPPORTED_INDEX_SIGNATURE },
+      });
+      expect(byNode()).toEqual({
+        ...UNSUPPORTED_INDEX_SIGNATURE as object,
+        asCell: ["cell"],
+        scope: "user",
+      });
+    });
 
     it("keeps apart recursive merges of equal schemas from different types", async () => {
       // `A`'s and `C`'s schemas are equal, as both branded primitives fall

@@ -293,7 +293,10 @@ fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over
 them, and the labels the survivor states are that union's (an arm accepting
-nothing is no arm, and is neither counted nor kept).
+nothing is no arm, and is neither counted nor kept). A cell written around
+such a schema, in place or beside a reference to it, holds it and keeps none
+of this: `Cell<PerUser<F>>` with `F` a union that folded or an intersection
+that fell back is one cell, whose scope stays beside its handle.
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.

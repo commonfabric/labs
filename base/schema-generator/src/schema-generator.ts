@@ -922,8 +922,11 @@ function wholeValueKeywordsOf(
  * is generated, the label beside a reference is that declaration's alone,
  * and the definition's are those of the value it wraps (`declaredIfcLabels()`).
  * A definition that is itself a reference is read the same way, and a
- * reference to no definition reads as itself. A schema that is no reference
- * is returned as it came.
+ * reference to no definition reads as itself. A cell written beside a
+ * reference holds what the definition denotes, so it reads as that cell, with
+ * no record of the definition's source (`schemaOrigins`), as a cell written
+ * around it in place does. A schema that is no reference is returned as it
+ * came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -946,14 +949,11 @@ function withBesideKeywords(
     return withBesideKeywords(resolved, context, followed);
   }
   const read = { ...resolved, ...beside };
+  const labeled = isObjectOrArray(ifc)
+    ? withIfcLabels(read, ifc as Record<string, unknown>)
+    : read;
   return withBesideKeywords(
-    withOriginOf(
-      isObjectOrArray(ifc)
-        ? withIfcLabels(read, ifc as Record<string, unknown>)
-        : read,
-      resolved,
-      context,
-    ),
+    "asCell" in beside ? labeled : withOriginOf(labeled, resolved, context),
     context,
     followed,
   );
@@ -1340,15 +1340,17 @@ function isUnknownValue(part: MutableJSONSchema): boolean {
 }
 
 /**
- * Whether `part` declares a cell: an `asCell` entry on a schema that is not
- * `void`'s, which lowers to the opaque marker too (`schemaOrigins`).
+ * Whether `part` declares a cell: an `asCell` entry on a schema that is
+ * neither `void`'s, which lowers to the opaque marker too, nor a union's that
+ * folded to one, as `void | OpaqueCell<any>` does (`schemaOrigins`).
  */
 function isCellValue(
   part: MutableJSONSchemaObj,
   context: GenerationContext,
 ): boolean {
+  const origin = context.schemaOrigins?.get(part)?.kind;
   return Array.isArray(part.asCell) && part.asCell.length > 0 &&
-    context.schemaOrigins?.get(part)?.kind !== "void";
+    origin !== "void" && origin !== "union";
 }
 
 /**
@@ -1412,9 +1414,9 @@ function intersectionOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const expand = (schema: MutableJSONSchema): MutableJSONSchema[] => {
-    const resolved = resolveLocalRef(schema, context);
-    const origin = isObjectOrArray(resolved)
-      ? context.schemaOrigins?.get(resolved)
+    const stated = withBesideKeywords(schema, context);
+    const origin = isObjectOrArray(stated)
+      ? context.schemaOrigins?.get(stated)
       : undefined;
     return origin?.kind === "intersection"
       ? origin.parts().flatMap(expand)
