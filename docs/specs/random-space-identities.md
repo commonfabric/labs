@@ -218,25 +218,29 @@ list.
 
 Reaping reclaims a deleted space's storage. It is an operation of its own rather
 than a compaction, which refuses a store whose access-control document is not an
-access list. The Memory server that hosts the space's store performs it, in its
-own process, so that it coordinates with the store the server holds open. It is
-not a Memory protocol command, since the protocol refuses a deleted space to
-every principal, service identities included. The server offers it as a
-host-local operator operation, reachable only from the host it runs on, and its
-authority is that access to the host rather than any principal's grant.
-`cf space reap <space>`, run on that host, makes the call.
+access list, and it is not a Memory protocol command, since the protocol refuses
+a deleted space to every principal, service identities included. Like
+compaction, it runs offline against the space's store file and never against a
+file a server has open
+([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
+and its authority is the operator's access to that file.
+`cf space reap <store.sqlite>` performs it.
 
-- A reap takes only a space whose access-control document holds a tombstone,
+- A reap takes only a store whose access-control document holds a tombstone,
   and refuses any other.
-- It keeps the tombstone's document row at the `seq` its deletion commit gave
-  it, and a server sequence no lower than that `seq`, and nothing else. So the
-  space goes on refusing every principal as deleted, its refusal names the same
-  `aclRevision` as before, and its DID never again has no history.
-- It removes everything else the store holds for the space: every other
-  document and its history, the earlier revisions of the access-control
-  document, the commit log, the deletion commit's own record included, the
-  genesis receipt, the private tables such as an invitation's admission records
-  and receipts, and the cell databases beside the store.
+- It keeps the deletion commit and what that commit needs to stand: the
+  commit's own row in the commit log, the invocation and authorization rows it
+  references, and the tombstone's revision and head rows. The server sequence
+  is the highest `seq` in the commit log, so keeping the deletion commit keeps
+  it at that commit's `seq`. The space therefore goes on refusing every
+  principal as deleted, its refusal names the same `aclRevision` as before,
+  and its DID never again has no history.
+- It removes everything else the store holds for the space: every earlier
+  commit, every other document and its history, the earlier revisions of the
+  access-control document, the genesis receipt, the private tables such as an
+  invitation's admission records and receipts, the outbox, and the cell
+  databases beside the store. Rows the engine's schema itself needs to open a
+  store, such as the default branch's, stay.
 
 Reaping is not implemented yet.
 
@@ -251,8 +255,9 @@ that a mistyped `--space` deletes nothing. It deletes only a space whose list
 names the connecting principal; deleting a self-owned space through a
 delegation chain is not part of this command.
 
-Neither command is implemented yet. Once each is, the CLI's own documentation
-describes it beside `cf space create`.
+`cf space delete` is not implemented yet. Once it is, the CLI's own
+documentation describes it beside `cf space create`, and `cf space reap` beside
+`cf space compact`.
 
 ## Routing across provider processes
 

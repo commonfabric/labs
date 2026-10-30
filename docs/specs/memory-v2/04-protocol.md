@@ -1794,7 +1794,7 @@ Opening a previously unused space may initialize empty backing storage, but
 
 When ACL policy is active, the authenticated principal is evaluated against
 the space ACL document (wire entity id `of:<space DID>`) for every command. The
-deleted space's row holds whether the policy is active or not:
+row for a deleted space applies whether or not the policy is active:
 
 | Stored ACL state | Effective access |
 | --- | --- |
@@ -1865,11 +1865,13 @@ write holds them to.
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
 carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`.
-The server checks for deletion once it has routed the command and found the
-session it names, and before every other check, so a command to a deleted space
-reports the deletion and never a shape, capability or genesis failure. The
-server revokes the sessions open on the space with the `session/revoked` reason
-`deleted`, the deleting session's own after its transact response. It admits
+The server checks for deletion once it has routed the command and, for a
+command that names a session, found that session open, and before every other
+check, so a command to a deleted space reports the deletion and never a shape,
+capability or genesis failure. The server revokes the sessions open on the
+space with the `session/revoked` reason `deleted`. The session that committed
+the deletion receives its transact response first and its revocation after, as
+a member's session does when it removes its own entry. The server admits
 no further commit to the space on any write path, engine-direct writes from the
 serving plane included, so no principal can undo the deletion. All of this
 holds in every ACL mode, `off` included, as do the admission rules above for a

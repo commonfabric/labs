@@ -798,12 +798,14 @@ is committed and not in an earlier authority probe that a deletion could land
 after. It refuses with a `ProtocolError` naming the deletion, the deterministic
 refusal a wave's commit step and the outbox already handle
 ([`serving-loop.md`](../server-side-execution/serving-loop.md#a-deleted-space)).
-A session's authored commit and the invitation service's system commit are
-checked at the server's admission instead. The operator `writeDocument` path is
-refused like any other commit to a deleted space. The invitation service refuses
-every operation on a deleted space with its own code, `space-deleted`, once the
-request has passed rate limiting, its proof has verified, and its body has
-validated
+A session's authored commit is checked at the server's transact admission
+instead. The operator `writeDocument` path is refused like any other commit to
+a deleted space. The invitation service's system commit is checked in
+`invite()`, the server's invitation entry point: after it finds the space's
+store and before it runs the operation (`executeInvite`), it refuses every one
+of the five invitation operations on a deleted space with its own code,
+`space-deleted`. The router reaches `invite()` only once the request has passed
+rate limiting, its proof has verified, and its body has validated
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 
 What follows the deletion commit revokes every session open on the space with
@@ -828,8 +830,9 @@ in any case. The foreign grant's refusal of a deleted space carries
 space reads the deletion as a client's does.
 
 Deleting a space reclaims no storage by itself. An operator reclaims it by
-reaping the space, which leaves the tombstone in place at a nonzero server
-sequence
+reaping the space, which keeps the deletion commit and its tombstone, and so a
+server sequence no lower than that commit's `seq`, and removes every earlier
+commit
 ([random space identities](../random-space-identities.md#reaping-a-deleted-space)).
 A store removed outright leaves a DID with no history, and INV-13 lets that
 DID's own key write a new genesis there. A space created under
@@ -845,7 +848,7 @@ session's `capabilityPrincipal`, which
 verified chain's root issuer); engine admission of engine-direct commits
 (`applyCommitTransaction` in `runtime/memory/v2/engine.ts`); the foreign grant
 (`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
-(`executeInvite` in `runtime/memory/v2/invites.ts`); client emission
+(`invite()` in `runtime/memory/v2/server.ts`); client emission
 (`writeAcl()` in `runtime/runner/src/acl-manager.ts`). The chain clause applies
 only where the server admits delegations (`acl.delegations`, which toolshed sets
 from `MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none

@@ -479,18 +479,30 @@ successor tenure could have it admitted.
 - Activation reads the space's access list before it acquires a lease. When
   it finds a tombstone there, it starts no tenure, and §1's re-evaluation
   starts none for that space again, whatever demand it sees.
-- When the SpaceServer serving a space learns that the space is deleted, from
-  such a refusal or from the revocation of its session with the reason
-  `deleted`, it ends the tenure for good. It stops committing at once, as on a
-  lease loss, disposes of the runtime, releases the lease, and does not
-  re-acquire it.
+- A tenure reads and commits its own space engine-direct, and holds no session
+  on it, so no session revocation tells it of the deletion. What tells it is
+  the host's notice that an admitted commit wrote the space's ACL document
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs.
+  On that notice for its own space the SpaceServer reads the ACL document, and
+  when it holds a tombstone it ends the tenure for good. It stops committing at
+  once, as on a lease loss, disposes of the runtime, releases the lease, and
+  does not re-acquire it. A refused commit naming the deletion ends it the same
+  way, which is the backstop for a deletion committed through another process,
+  whose commit the host does not see.
+- A tenure serving another space that holds a session on the deleted one, as a
+  cross-space replica, learns of the deletion from that session's `deleted`
+  revocation. It goes on serving its own space.
 - An outbox row whose target space is deleted is refused at delivery like any
   other deterministic admission refusal (§5), and is deleted with the
   source-side notice written first.
-- An outbox row that a deleted space's own waves wrote, and that was not
-  delivered before the deletion, is never delivered. The tenure that would
-  re-send it at activation (§6 step 5) never starts, and a reap removes it with
-  the rest of the store.
+- An outbox drain reads its own space's ACL document first, and delivers
+  nothing when it holds a tombstone. So a row that a deleted space's own waves
+  wrote is never delivered once its drain has read the deletion, and a reap
+  removes it with the rest of the store. The window that remains is a single
+  drain: a row whose delivery the drain had begun before the deletion
+  committed may still be admitted at its target. A drain's own commits after
+  the deletion, such as a failure notice, are refused like any other commit to
+  the space.
 
 Deletion is not implemented yet.
 
