@@ -619,13 +619,17 @@ is no estimate of tokens still being generated within a provider call.
 
 For an ordinary task with a configured Fabric session, the parent completes
 either after `assign_slug` successfully names a UI piece in that run or through
-`finish_task` with outcome `completed`. A task that builds or shows something
-leaves a piece, created through the ordinary authoring and tool policy path.
-Data-only probes stay unnamed. An existing piece can keep its address: after a
-revision, `assign_slug` confirms the same piece under its existing slug. Its
-pending-read and UI checks apply in either case. A task whose answer is words
-ends with `finish_task` completed and the answer as its message, without a
-pattern built to hold it.
+`finish_task` with outcome `completed`. A task that builds or revises a reactive
+pattern leaves a piece, created through the ordinary authoring and tool policy
+path. Requested durable material can instead be saved through the host's Page
+and Loom commands; verified receipts satisfy that request, following the host's
+placement instructions. Data-only probes stay unnamed. An existing piece can
+keep its address: after a revision, `assign_slug` confirms the same piece under
+its existing slug. Its pending-read and UI checks apply in either case. A task
+whose answer is words ends with `finish_task` completed and the answer as its
+message, without a pattern built to hold it. Saved durable material also ends
+with `finish_task` completed once the host's placement requirements are
+satisfied.
 
 Outside a budget-finalizing turn, a plain-text final answer without that receipt
 gets a host correction within the existing model-turn bound. Exhausting a strict
@@ -1487,15 +1491,16 @@ in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 #### Well-known grants
 
-A run configured with a Fabric session starts with a seeded handle: before the
-first model turn, the CLI establishes the session, mints a token for the space's
-piece registry — the same discovery root behind `cf piece ls` — and announces it
-in a context message pairing the token with a fixed, harness-authored
-description. The address stays trusted-side in the handle table like any other
-entry. This is what lets an agent find pieces to compute over without an
-operator handing it references one by one: discovery is `run_pattern` over the
-granted token, not a tool of its own, and `describe_handle` answers the
-registry's shape like any other reference.
+A run configured with a Fabric session seeds a handle when `describe_handle` is
+allowed, including when no tool allow-list is configured: before the first model
+turn, the CLI establishes the session, mints a token for the space's piece
+registry — the same discovery root behind `cf piece ls` — and announces it in a
+context message pairing the token with a fixed, harness-authored description.
+The address stays trusted-side in the handle table like any other entry. This is
+what lets an agent find pieces to compute over without an operator handing it
+references one by one: discovery is `run_pattern` over the granted token, not a
+tool of its own, and `describe_handle` answers the registry's shape like any
+other reference.
 
 What the model receives is a token and fixed prose, never data. Reading anything
 behind the token means running a pattern over it, or `read_value` once
@@ -2139,15 +2144,15 @@ framing (reading docs and skills, repairing code, acquiring a skill by its id),
 `pieces` a short held-pieces block (the input cells are the pieces of the loom
 the person is in; `describe_handle`, `read_value`, and `call_verb` read and act
 on them) where any other task gets one sentence saying handles may be held,
-`author` alone the piece-targeting guidance, the instruction to verify an
-effect, and the revision-verification guidance, `pieces` and `find` the
-held-handle and grant guidance, `find` and `author` the findable and
-pattern-index guidance, `author` what research is (a private pass that reports
-what to run and cannot execute) and the opening-research rule, `act`, `pieces`
-and `author` delegation, `find` and `act` the Weaver command guidance, and `act`
-the browser guidance. The tool allow-list does not narrow, so a task given too
-few tags can still reach what it needs; a run with no classification carries all
-of the orientation.
+`author` alone the piece-targeting guidance when input pieces are attached, the
+instruction to verify an effect, and the revision-verification guidance,
+`pieces` and `find` the held-handle and grant guidance, `find` and `author` the
+findable and pattern-index guidance, `author` what research is (a private pass
+that reports what to run and cannot execute) and the opening-research rule,
+`act`, `pieces` and `author` delegation, `find` and `act` the Weaver command
+guidance, and `act` the browser guidance. The tool allow-list does not narrow,
+so a task given too few tags can still reach what it needs; a run with no
+classification carries all of the orientation.
 
 The caller chooses the run's depth before it starts, with `--depth quick`,
 `standard` (the default) or `deep`; the tags say what kind of work a task is,
@@ -2158,15 +2163,18 @@ classifier's, which decides any part the caller leaves out; the record says
 `caller` for a part it stated. None of these grants authority. An agent-runner
 local job takes `depth`, `tags` and `domains` from its request, and
 `reasoningEffort` from its profile, which a request may lower but not raise. A
-`standard` run's prompt has no strategy section. A `quick` run is told to answer
-directly when it can, and otherwise to take the shortest path that does what was
-asked, adding nothing beyond it. A `deep` run is told to search every source of
-the person's data (`personal` domain) or to read several web sources (`web`), to
-leave only material worth opening, and to read its result back before it
-finishes (`src/strategy.ts`). A `deep` run also adds the opening research pass
-for a classified task in the `fabric` domain; an `author` task gets that pass at
-any depth. The effort applies to the job's own model calls and children on its
-model; research keeps its own effort setting.
+`standard` run's prompt has no strategy section. A `quick` run is told to do the
+requested work, including its destination, and stop when evidence answers the
+task and requested changes are verified, or a refusal leaves no authorized
+route. Permission refusals are final; bad arguments can be repaired and an
+unsupported reader can be replaced by an authorized source. Remaining unknowns
+are reported without claiming completion. A `deep` run is told to search every
+source of the person's data (`personal` domain) or to read several web sources
+(`web`), to leave only material worth opening, and to read its result back
+before it finishes (`src/strategy.ts`). A `deep` run also adds the opening
+research pass for a classified task in the `fabric` domain; an `author` task
+gets that pass at any depth. The effort applies to the job's own model calls and
+children on its model; research keeps its own effort setting.
 
 A tool descriptor is a contract: its name, its parameters with one-line
 descriptions, and a sentence or two on what the tool does and returns. Task tags
@@ -2181,10 +2189,13 @@ branch, pending results, `resultSchema`) and `pattern-author` delegation;
 handle); `pieces` gets reading and acting on pieces (verbs, `fill`,
 `rowLabelReads`, research handles); `find` and `act` get the host's commands
 (`loomId`, `expectedVersion`, batching, `not_granted`) and how loom retrieval
-withholds a row; `find`, `act` and `pieces` get when to resolve a named piece,
-which `author` has inside piece targeting. A rule needed only once it fires is
-left to the tool's refusal or result, which explains itself. A subagent whose
-profile holds `run_pattern` carries its rules in its own system prompt.
+withholds a row, when their respective command and retrieval tools are allowed.
+Command-enforcement guidance is included only under `enforce-explicit` or
+`enforce-strict`. `pieces` gets when to resolve a named piece, which `author`
+has inside piece targeting when input pieces are attached. No targeting context
+is emitted for empty inputs. A rule needed only once it fires is left to the
+tool's refusal or result, which explains itself. A subagent whose profile holds
+`run_pattern` carries its rules in its own system prompt.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
