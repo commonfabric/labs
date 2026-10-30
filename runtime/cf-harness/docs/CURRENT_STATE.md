@@ -780,12 +780,11 @@ The current package provides:
   persisted-policy alias and is normalized without rewriting old transcript or
   run-state evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
-  discovery within the granted scope, and unavailable actions before asking or
-  giving up. Private research identifies applicable space-search patterns for
-  the parent to execute under existing targeting and release rules. The agent
-  offers the closest achievable outcome, checks a send path before asking for a
-  recipient, and never asks for a nonexistent release permission. Targeted
-  research answers keep their focused question guidance;
+  discovery within the granted scope, and unavailable actions. Private research
+  can identify space-search patterns for the parent to execute under tool and
+  release rules. The agent offers the closest achievable outcome, checks a send
+  path before asking for a recipient, and never asks for a nonexistent release
+  permission. Targeted research answers keep their focused question guidance;
 - caller and profile return-schema definitions checked before child creation,
   with bounded argument errors for malformed contracts and unresolved
   references; valid child results remain schema-validated and sanitized, with

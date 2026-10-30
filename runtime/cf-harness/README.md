@@ -2057,12 +2057,10 @@ they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
-They inspect relevant grants or reuse established descriptions before asking the
-user to connect a source; a grant's name alone does not establish its contents.
-For findable inputs, private research can identify an applicable space-search
-pattern from the index and tell the parent how to run it. The parent executes
-discovery under the existing tool, piece-targeting, and release rules. An
-indexed pattern does not grant access to another store.
+A grant's name alone does not establish its contents. Private research can
+identify an applicable space-search pattern from the index and tell the parent
+how to run it. Tool and release rules govern execution; an indexed pattern does
+not grant access to another store.
 
 The action path is checked before collecting execution details: a read-only
 mailbox does not establish the ability to send, and an unavailable send path
