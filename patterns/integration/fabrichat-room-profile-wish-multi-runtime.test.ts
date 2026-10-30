@@ -14,6 +14,11 @@
  * served wish, which finds the person's profile, so the failing runtime is
  * offered no form.
  *
+ * The stored documents are read before the failing runtime's rendering. Read
+ * the other way around, the rendering's reads give the runtime that found the
+ * profile time to derive its answers again and write them back, which hides
+ * the overwrite with server execution off.
+ *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
