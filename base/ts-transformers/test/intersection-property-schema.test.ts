@@ -269,4 +269,47 @@ describe("intersection-property-schema", () => {
         "space. Declare that value without `any`.",
     );
   });
+
+  it("keeps a scope beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<PerUser<Fallback> & { y: unknown }>();
+    `);
+
+    expect(schema?.scope).toEqual("user");
+  });
+
+  it("keeps a label beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<
+        Confidential<Fallback, readonly ["s"]> & { y: unknown }
+      >();
+    `);
+
+    expect(schema?.ifc).toEqual({ confidentiality: ["s"] });
+  });
+
+  it("keeps a label a union arm writes beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<
+        (Confidential<Fallback, readonly ["s"]> | null) & { y: unknown }
+      >();
+    `);
+
+    expect(schema?.ifc).toEqual({ confidentiality: ["s"] });
+  });
 });
