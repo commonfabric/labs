@@ -1081,17 +1081,20 @@ interface Output {
 ## `apps/shared-note/main.tsx`
 
 A shared Markdown document built on `cf-code-editor` in collaborative prose
-mode. The title and body are durable per-space state; body edits synchronize
-through Memory's operation protocol. Names, carets, and selections travel
-separately as ephemeral co-presence data over each viewer's memory connection.
-Each viewer selects or creates a Fabric profile with
+mode. The title, body, and comments are durable per-space state; body edits
+synchronize through Memory's operation protocol. Names, carets, and selections
+travel separately as ephemeral co-presence data over each viewer's memory
+connection. Each viewer selects or creates a Fabric profile with
 `wish({ query: "#profile" })`, and the editor uses that profile's `#profileName`
-field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
-so the note embeds in other surfaces, and editing or live-cursor failures show
-as notices above the editor.
+field as its cursor label. A comment is anchored to a range of the body and
+authored by the viewer's profile: open editors keep its range on its text as
+they edit, and the quote it stores re-finds it after an edit no editor saw.
+Verbs let an agent edit the body and comment on it. The same compact view serves
+as `UI` and `TILE_UI`, so the note embeds in other surfaces, and editing or
+live-cursor failures show as notices above the editor.
 
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
-co-presence, CodeMirror
+co-presence, CodeMirror, comments, annotations
 
 ### Input Schema
 
@@ -1099,6 +1102,21 @@ co-presence, CodeMirror
 interface SharedNoteInput {
   title?: PerSpace<string | Default<"Untitled note">>;
   content?: PerSpace<string | Default<"">>;
+  comments?: PerSpace<NoteComment[] | Default<[]>>;
+}
+
+interface NoteComment {
+  id: string;
+  anchor: { from: number; to: number; quote: string };
+  authorProfile: Cell<{ name?: string; avatar?: string }>;
+  body: string;
+  createdAt: number;
+  resolved: boolean;
+  replies: {
+    authorProfile: Cell<{ name?: string; avatar?: string }>;
+    body: string;
+    createdAt: number;
+  }[];
 }
 ```
 
@@ -1108,7 +1126,13 @@ interface SharedNoteInput {
 interface SharedNoteOutput {
   title: PerSpace<string>;
   content: PerSpace<string>;
+  comments: PerSpace<NoteComment[]>;
   participantName: PerUser<string>;
+  appendLine: Stream<{ text: string }>;
+  prependLine: Stream<{ text: string }>;
+  replaceText: Stream<{ old: string; new: string }>;
+  addComment: Stream<{ quote: string; body: string }>;
+  resolveComment: Stream<{ id: string }>;
 }
 ```
 

@@ -15,10 +15,13 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 
 import {
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
+  fillCfTextarea,
   waitForActiveSpaceRoot,
   waitForRuntimeIdle,
+  waitForSettledText,
 } from "./cfc-browser-helpers.ts";
 import {
   initializePiecesController,
@@ -70,6 +73,15 @@ const remoteSelectionVisible = (probe: ProbeApi, name: string): boolean =>
   ) && probe.collect(".cm-remote-presence-selection").some((element) =>
     element.getAttribute("title") === `${name}'s selection`
   );
+
+/**
+ * The editor marks `text` and nothing else. One mark can render as several
+ * spans where another decoration, such as a collaborator's selection, cuts
+ * across it, so the spans are read together.
+ */
+const highlightOver = (probe: ProbeApi, text: string): boolean =>
+  probe.collect(".cm-highlight").map((element) => element.textContent)
+    .join("") === text;
 
 /**
  * The editor has joined the shared field's presence room. The pattern names the
@@ -337,5 +349,53 @@ describe("shared-note", () => {
       (value) => value?.content === settled.content,
       { stuckLabel: "shared note undo materializes" },
     );
+
+    // A comment Ada anchors on "Café" reaches Grace as a highlight over that
+    // text, under Ada's profile.
+    const quoteFrom = settled.content.indexOf("Café");
+    await editorState(adaPage, { anchor: quoteFrom, head: quoteFrom + 4 });
+    await clickCfButton(adaPage, "#shared-note-comment-button");
+    await fillCfTextarea(adaPage, "#shared-note-comment-draft", "Lunch spot?");
+    await clickCfButton(adaPage, "#shared-note-post-button");
+    await Promise.all(pages.map(async (page) => {
+      await waitForSettledText(page, "#shared-note-comments", "Lunch spot?");
+      await waitForSettledText(page, "#shared-note-comments", "Ada Lovelace");
+      await waitForCondition(page, highlightOver, { args: ["Café"] });
+    }));
+
+    // Grace types ahead of the quote. Her editor maps the highlight and
+    // reports the moved range, which the comment's stored anchor follows.
+    await editorState(gracePage, { anchor: 0, head: 0 });
+    await gracePage.keyboard.type("Note: ");
+    const moved = "Note: " + settled.content;
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, editorEquals, { args: [moved] })
+      ),
+    );
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; quote: string } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === moved.indexOf("Café") &&
+        value.comments[0].anchor.quote === "Café",
+      { stuckLabel: "the comment's anchor follows Grace's edit" },
+    );
+
+    // The highlight is there again for Ada once her editor reloads: the
+    // comment reaches a fresh editor before its document does.
+    await adaPage.reload({ waitUntil: "load" });
+    await adaPage.applyConsoleFormatter();
+    await adaShell.login(ada);
+    await waitForCondition(adaPage, editorReady);
+    await waitForCondition(adaPage, editorEquals, { args: [moved] });
+    await waitForCondition(adaPage, highlightOver, { args: ["Café"] });
   });
 });

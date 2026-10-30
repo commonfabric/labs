@@ -113,6 +113,14 @@ import {
   createBacklinkDecorationPlugin,
 } from "./features/backlinks.ts";
 import {
+  highlightField,
+  type HighlightRange,
+  highlightsOf,
+  highlightTheme,
+  sameHighlights,
+  setHighlightsEffect,
+} from "./features/highlights.ts";
+import {
   atomicMentionRefRanges,
   createMentionRefDecorationPlugin,
   findRefToken,
@@ -149,6 +157,21 @@ import {
   caretFacetOf,
   participantFromRecord,
 } from "./presence-facets.ts";
+
+/**
+ * Whether a transaction of `update` replaces the whole of the document it
+ * started from, an empty document included.
+ */
+function replacesWholeDocument(update: ViewUpdate): boolean {
+  return update.transactions.some((transaction) => {
+    const length = transaction.startState.doc.length;
+    let whole = false;
+    transaction.changes.iterChangedRanges((fromA, toA) => {
+      if (fromA === 0 && toA === length) whole = true;
+    });
+    return whole;
+  });
+}
 
 /** A unique noteId, so notes created from a mention do not collide. */
 function generateNoteId(): string {
@@ -301,6 +324,12 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   publishes its caret there with `focused` reporting whether it owns focus.
  *   Presence travels over the runtime's memory connection; no endpoint is
  *   configured.
+ * @attr {HighlightRange[]} highlights - Ranges the host marks, each
+ *   `{ id, from, to, kind? }` in the coordinates of the document the host
+ *   read. Setting it replaces the set. The editor keeps each range on its
+ *   text through edits, draws it as a `cm-highlight` mark carrying the id as
+ *   `data-highlight-id`, and reports where edits moved the set.
+ *   `docs/highlights.md` has the whole of it.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -311,6 +340,16 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   of document collaboration. Detail contains a safe failure category.
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
+ * @fires cf-selection-change - Fired when the main selection changes, with
+ *   detail: { from, to, text }. A caret move with nothing selected is not a
+ *   change; clearing a selection is, and fires once.
+ * @fires cf-highlight-click - Fired on a mousedown over a highlight, with
+ *   detail: { id }. The editor still places the caret.
+ * @fires cf-highlights-mapped - Fired after a local edit leaves the editor's
+ *   highlights different from the `highlights` property, with detail:
+ *   { highlights }, the whole set after the edit. A collaborator's edit is
+ *   mapped but not reported, so only the editor that made an edit speaks for
+ *   it.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -361,6 +400,7 @@ export class CFCodeEditor extends BaseElement {
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
+    highlights: { type: Array, attribute: false },
   };
 
   declare value: CellHandle<string> | string;
@@ -405,6 +445,12 @@ export class CFCodeEditor extends BaseElement {
   declare presenceRoom: string;
   declare participantName: string;
 
+  /**
+   * Ranges the host marks, which the editor keeps on their text through
+   * edits. The class JSDoc's `@attr highlights` says the rest.
+   */
+  declare highlights: HighlightRange[];
+
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
   accessor runtime: RuntimeClient | undefined = undefined;
@@ -427,6 +473,9 @@ export class CFCodeEditor extends BaseElement {
   accessor ambientTheme: CFTheme = { ...defaultTheme, colorScheme: "light" };
 
   private _editorView: EditorView | undefined;
+  // The main range `cf-selection-change` last reported, so a transaction
+  // that sets the selection to what it already was reports nothing.
+  private _lastSelection: { from: number; to: number } | undefined;
   private _lang = new Compartment();
   private _readonly = new Compartment();
   private _wrap = new Compartment();
@@ -616,6 +665,7 @@ export class CFCodeEditor extends BaseElement {
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
+    this.highlights = [];
   }
 
   /** Whether a reference map is available to mint mentions into. */
@@ -1511,6 +1561,13 @@ export class CFCodeEditor extends BaseElement {
           setTimeout(() => this.handlePillClick(view, event), 0);
           return true;
         }
+        // A highlight is the host's to act on; the caret still lands where
+        // the click did.
+        const highlight = target.closest("[data-highlight-id]");
+        if (highlight instanceof HTMLElement) {
+          const id = highlight.dataset.highlightId;
+          if (id !== undefined) this.emit("cf-highlight-click", { id });
+        }
         return false;
       },
     });
@@ -1979,6 +2036,9 @@ export class CFCodeEditor extends BaseElement {
         CFCodeEditor._cellSyncAnnotation.of("mirror"),
         Transaction.addToHistory.of(false),
       ],
+      // A whole-document replace maps every highlight to nothing, so the
+      // host's ranges are set again, read against the new text.
+      effects: setHighlightsEffect.of(this.highlights ?? []),
     });
 
     // Content that arrived from outside replaces what "already there" means,
@@ -1999,6 +2059,10 @@ export class CFCodeEditor extends BaseElement {
     );
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
+      this._reportSelection(update.state);
+    }
+    if (update.docChanged) {
+      this._trackHighlights(update, isRemote || isCellSync);
     }
     if (!update.docChanged || isCellSync) return;
 
@@ -2022,6 +2086,63 @@ export class CFCodeEditor extends BaseElement {
       this._detectAndSyncNameChanges();
       this._syncMentionRefs();
     }
+  }
+
+  /**
+   * Hands the `highlights` property to the view, unless the view holds the
+   * same ranges already. The comparison is what keeps a host that hands back
+   * the ranges `cf-highlights-mapped` reported from echoing with the editor.
+   */
+  private _pushHighlights(): void {
+    const view = this._editorView;
+    if (!view) return;
+    const ranges = this.highlights ?? [];
+    if (sameHighlights(ranges, highlightsOf(view.state))) return;
+    view.dispatch({ effects: setHighlightsEffect.of(ranges) });
+  }
+
+  /**
+   * Emits `cf-selection-change` for `state`'s main range when it differs
+   * from the one last reported. A caret with nothing selected is reported
+   * once, when a selection collapses to it, and not again as it moves.
+   */
+  private _reportSelection(state: EditorState): void {
+    const { from, to } = state.selection.main;
+    const last = this._lastSelection;
+    if (last !== undefined && last.from === from && last.to === to) return;
+    this._lastSelection = { from, to };
+    if (from === to && (last === undefined || last.from === last.to)) return;
+    this.emit("cf-selection-change", {
+      from,
+      to,
+      text: state.sliceDoc(from, to),
+    });
+  }
+
+  /**
+   * Keeps the host and the field in step after a document change. A change
+   * from outside the user's typing that replaces the whole document — a
+   * collaboration snapshot installing, or the bound cell mirroring its value
+   * — maps every range to nothing, so the host's ranges are set again, read
+   * against the text they were made for. Any other change of the user's or
+   * the host's is reported where it moved the ranges; a collaborator's edit
+   * is mapped and not reported, since the collaborator's own editor reports
+   * it.
+   */
+  private _trackHighlights(update: ViewUpdate, fromOutside: boolean): void {
+    if (fromOutside && replacesWholeDocument(update)) {
+      this._pushHighlights();
+      return;
+    }
+    const remote = update.transactions.some((transaction) =>
+      transaction.annotation(Transaction.remote)
+    );
+    if (remote) return;
+    const mapped = highlightsOf(update.state);
+    if (sameHighlights(mapped, this.highlights ?? [])) return;
+    this.emit("cf-highlights-mapped", {
+      highlights: mapped.map((range) => ({ ...range })),
+    });
   }
 
   private _cellSyncUnsub: (() => void) | null = null;
@@ -2818,6 +2939,8 @@ export class CFCodeEditor extends BaseElement {
       }
     }
 
+    if (changedProperties.has("highlights")) this._pushHighlights();
+
     // A handle bound or re-wrapped in this update starts in the refusal it
     // was made from.
     this._syncRefusalGate();
@@ -3058,6 +3181,10 @@ export class CFCodeEditor extends BaseElement {
       backlinkField,
       atomicBacklinkRanges,
       backlinkEditFilter,
+      // The host's highlights: the field that keeps them on their text, and
+      // the wash that draws them.
+      highlightField,
+      highlightTheme,
       // The same four blocks for the reference form. They are inert until the
       // map announces a key, so an editor with no `references` cell carries
       // them at the cost of an empty parse.
@@ -3238,6 +3365,7 @@ export class CFCodeEditor extends BaseElement {
       parent: editorElement,
     });
     this._refusedShown = this._readsWithheld;
+    this._pushHighlights();
   }
 
   override render() {
