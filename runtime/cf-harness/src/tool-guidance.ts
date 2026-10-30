@@ -72,7 +72,7 @@ export const PIECES_TOOL_GUIDANCE = [
 
 /** When to resolve a piece the user names, for any task that may name one. */
 export const RESOLVE_PIECE_TOOL_GUIDANCE =
-  "When the user names a piece by its slug, including in a question, call resolve_piece before author delegation or a registry lookup, and pass the resultRef it returns to the pattern-author child to read or revise the piece. A missing or refused address means asking for the exact slug or an attachment, not authoring a name matcher.";
+  "resolve_piece resolves a slug to a resultRef that can be passed to a pattern-author child to read or revise the piece. A missing or refused address does not establish the contents of a piece.";
 
 /** How to run the host's commands, for a task that finds or acts. */
 export const LOOM_COMMANDS_TOOL_GUIDANCE = [

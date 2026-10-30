@@ -4598,7 +4598,7 @@ Deno.test({
       expect(runPromptOptions?.contextMessages).toEqual([
         expect.stringContaining('<skill_context name="pattern-dev"'),
         expect.stringContaining("No input cells are attached for this run"),
-        expect.stringContaining("at most one registry read"),
+        expect.stringContaining("resolve_piece resolves a piece slug"),
         REVISION_VERIFICATION_GUIDANCE,
       ]);
       assertEquals(

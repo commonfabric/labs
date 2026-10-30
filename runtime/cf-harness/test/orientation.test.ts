@@ -29,7 +29,7 @@ describe("orientation", () => {
   it("gives the parent a shared inspection path for calendar and document requests before asking for the source", () => {
     const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex: true });
     expect(prompt).toContain(
-      "inspect unresolved relevant handles with describe_handle before asking the user to connect or attach that source",
+      "describe_handle reports the shape and capabilities of a handle",
     );
     expect(prompt).toContain("A grant's name is a lead, not its contents");
     expect(prompt).toContain("not given does not mean absent");
@@ -37,7 +37,7 @@ describe("orientation", () => {
       "The parent can run an indexed pattern with run_pattern",
     );
     expect(finishTaskTool.descriptor.description).toContain(
-      "any applicable bounded discovery route over the granted scope",
+      "Found requires released evidence",
     );
   });
 
@@ -68,11 +68,8 @@ describe("orientation", () => {
 
   it("keeps discovery scoped and a release refusal out of the question path", () => {
     const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex: true });
-    expect(PIECE_TARGETING_GUIDANCE).toContain("call resolve_piece");
-    expect(PIECE_TARGETING_GUIDANCE).toContain("make zero registry reads");
-    expect(PIECE_TARGETING_GUIDANCE).toContain("at most one registry read");
     expect(PIECE_TARGETING_GUIDANCE).toContain(
-      "not to an explicit request to list or analyze the space",
+      "resolve_piece resolves a piece slug",
     );
     expect(prompt).toContain(
       "An unavailable, refused, or pending read stays unknown",
@@ -189,7 +186,7 @@ describe("orientation", () => {
       });
 
       expect(prompt).toContain(
-        "inspect unresolved relevant handles with describe_handle",
+        "describe_handle reports the shape and capabilities of a handle",
       );
       expect(prompt).not.toContain("opening research");
     });
