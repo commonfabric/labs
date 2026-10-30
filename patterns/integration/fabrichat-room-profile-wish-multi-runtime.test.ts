@@ -7,9 +7,12 @@
  * runtime that found the profile reads, as stored there, still hold the
  * profile, and still say it can send.
  *
- * With server execution on, the room's values are served, and a served value
- * is derived without a client's preferred profile, so the failing runtime
- * writes nothing over them; the same documents hold the profile there too.
+ * With server execution on, the room's values are served, and each runtime's
+ * come from its own instance of the wish: the failing runtime's room offers
+ * the profile form, while the documents the other reads still hold the
+ * profile. A room whose wish is per user answers both runtimes from one
+ * served wish, which finds the person's profile, so the failing runtime is
+ * offered no form.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -143,13 +146,15 @@ describe("fabrichat room profile wish across runtimes", () => {
         });
         await failed.read(["viewer"]);
         await harness.settle();
-        expect(await setupDisplay(failed)).toBe("block");
-
         expect(await stored(found, ["viewer"])).toMatchObject({
           profile: expect.anything(),
           principal: person.did(),
         });
         expect(await stored(found, ["canSend"])).toBe(true);
+        // Read after the stored documents: the reads of a rendering give the
+        // other runtime time to derive its answers again and write them back
+        // over the failing runtime's, which would hide that overwrite.
+        expect(await setupDisplay(failed)).toBe("block");
       });
     });
   }
