@@ -1,11 +1,11 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
 import {
   ensureExternalSchemaClosure,
   markIfcBearingLinkCrossing,
 } from "./schema-ifc.ts";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { debugStr } from "@commonfabric/data-model";
 import {
   linkPayloadAtProbe,

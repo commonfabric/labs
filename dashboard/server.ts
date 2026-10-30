@@ -29,8 +29,8 @@
  *                                     authenticate as in place of GH_TOKEN
  */
 
-import { minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { minOf } from "@commonfabric/collections/math";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { latestCiJobs, TILES } from "./registry.ts";
 import { changesRunSource, makeCtx } from "./ctx.ts";

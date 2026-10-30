@@ -1,11 +1,13 @@
 /**
- * Where the Topics board keeps its mention pivot, as a session that never runs
- * the board reads it. The pivot's rows are stored in the document its binding
- * names. Where that document's space-scope value is a link to each reader's own
- * session instance, a run stores the rows behind the link, in the running
- * session's instance, and every other session reads an empty index. Each case
- * starts from a board whose pivot is bound as `crossrefs` over a document
- * holding such a link, the state a deployed board is in.
+ * Where the Topics board keeps its mention pivot and a topic keeps its
+ * backlinks, as a session that never runs either reads them. Each derivation is
+ * stored in the document its binding names. Where that document's space-scope
+ * value is a link to each reader's own session instance, a run stores the
+ * derivation behind the link, in the running session's instance, and every
+ * other session reads it empty. Each case starts from a board whose pivot is
+ * bound as `crossrefs` over a document holding such a link, the state a
+ * deployed board is in, and whose topics bind their backlinks as
+ * `referencedBy`.
  */
 
 import { expect } from "@std/expect";
@@ -34,6 +36,9 @@ import {
 
 const BOARD_PATH = fromFileUrl(
   new URL("../apps/topics/main.tsx", import.meta.url),
+);
+const TOPIC_PATH = fromFileUrl(
+  new URL("../apps/topics/topic.tsx", import.meta.url),
 );
 const ROOT_PATH = fromFileUrl(new URL("..", import.meta.url));
 const signer = await Identity.fromPassphrase("topic board pivot sessions");
@@ -107,49 +112,86 @@ async function openSessionOn(server: ReturnType<typeof newLoopbackServer>) {
   return { runtime, storage, pieces };
 }
 
-/** The board's current source. */
-function currentSource(runtime: Runtime): Promise<RuntimeProgram> {
+/** The current source with `main` as its entry. */
+function currentSource(runtime: Runtime, main = BOARD_PATH) {
   return resolveLocalProgram(
     (resolver) => runtime.harness.resolve(resolver),
-    { main: BOARD_PATH, root: ROOT_PATH },
+    { main, root: ROOT_PATH },
   );
 }
 
 /**
- * The board's current source with its pivot bound as `crossrefs`. The rest of
- * the board reaches the pivot by the name the current source binds it as,
- * which here aliases `crossrefs`.
+ * `program` with the derivation `statement` matches in `file` stored in the
+ * document `name`. The rest of the file reaches the derivation by the name the
+ * current source binds it as, which here aliases `name`. `statement` captures
+ * the binding's name and the expression it binds.
  */
-async function crossrefsSource(runtime: Runtime): Promise<RuntimeProgram> {
-  const program = await currentSource(runtime);
-  const binding = /const (\w+) = crossrefTable\(\{ sources: topics \}\);/;
+function storedAs(
+  program: RuntimeProgram,
+  file: string,
+  statement: RegExp,
+  name: string,
+): RuntimeProgram {
   return {
     ...program,
-    files: program.files.map((file) => {
-      if (file.name !== program.main) return file;
-      const name = file.contents.match(binding)?.[1];
-      if (name === undefined) {
-        throw new Error(`${BOARD_PATH} binds no \`crossrefTable\` pivot`);
+    files: program.files.map((each) => {
+      if (!file.endsWith(each.name)) return each;
+      const [, bound, expression] = each.contents.match(statement) ?? [];
+      if (bound === undefined) {
+        throw new Error(`${file} has no binding matching ${statement}`);
       }
-      if (name === "crossrefs") return file;
+      if (bound === name) return each;
       return {
-        ...file,
-        contents: file.contents.replace(
-          binding,
-          "const crossrefs = crossrefTable({ sources: topics });\n" +
-            `  const ${name} = crossrefs;`,
+        ...each,
+        contents: each.contents.replace(
+          statement,
+          `const ${name} = ${expression};\n  const ${bound} = ${name};`,
         ),
       };
     }),
   };
 }
 
-/** The document the board's `crossrefs` output reads its rows from. */
-function pivotDocumentOf(runtime: Runtime, board: PieceController) {
-  const result = board.getCell() as Cell<Record<string, unknown>>;
-  const link = parseLink(result.getRaw()?.crossrefs, result);
-  if (link === undefined) throw new Error("the board has no pivot link");
+/**
+ * The board's current source with its pivot bound as `crossrefs` and each
+ * topic's backlinks bound as `referencedBy`.
+ */
+async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
+  return storedAs(
+    storedAs(
+      await currentSource(runtime),
+      BOARD_PATH,
+      /const (\w+) = (crossrefTable\(\{ sources: topics \}\));/,
+      "crossrefs",
+    ),
+    TOPIC_PATH,
+    /const (\w+) = (backlinksOf\(\{[^}]*\}\));/,
+    "referencedBy",
+  );
+}
+
+/** The document `result`'s `key` output reads its value from. */
+function documentOf(runtime: Runtime, result: Cell<unknown>, key: string) {
+  const raw = result.getRaw() as Record<string, unknown> | undefined;
+  const link = parseLink(raw?.[key], result);
+  if (link === undefined) throw new Error(`the result has no \`${key}\` link`);
   return runtime.getCellFromLink<unknown>({ ...link, overwrite: undefined });
+}
+
+/**
+ * Sets `document`'s space-scope value to a link to each reader's own session
+ * instance of it.
+ */
+async function redirectToSession(runtime: Runtime, document: Cell<unknown>) {
+  await runtime.editWithRetry((tx) => {
+    const broad = document.withTx(tx);
+    const own = runtime.getCellFromLink(
+      { ...document.getAsNormalizedFullLink(), scope: "session" },
+      undefined,
+      tx,
+    );
+    broad.setRaw(own.getAsLink({ base: broad }));
+  });
 }
 
 /** The titles in `board`'s topics and pivot rows, and in `topic`'s backlinks. */
@@ -193,27 +235,19 @@ describe("topic-board-pivot-sessions", () => {
   };
 
   /**
-   * A board started from `crossrefsSource()` in a session of its own, whose
+   * A board started from `deployedSource()` in a session of its own, whose
    * pivot document holds at space scope a link to each reader's session
    * instance, and which holds two topics, Beta mentioning Alpha.
    */
   const boardOverSessionRedirect = async () => {
     const writer = await openSession();
     const board = await writer.pieces.create(
-      await crossrefsSource(writer.runtime),
+      await deployedSource(writer.runtime),
       { input: {} },
     );
     await writer.runtime.idle();
-    const pivot = pivotDocumentOf(writer.runtime, board);
-    await writer.runtime.editWithRetry((tx) => {
-      const broad = pivot.withTx(tx);
-      const own = writer.runtime.getCellFromLink(
-        { ...pivot.getAsNormalizedFullLink(), scope: "session" },
-        undefined,
-        tx,
-      );
-      broad.setRaw(own.getAsLink({ base: broad }));
-    });
+    const pivot = documentOf(writer.runtime, board.getCell(), "crossrefs");
+    await redirectToSession(writer.runtime, pivot);
 
     const result = board.getCell() as Cell<Record<string, unknown>>;
     for (const title of ["Alpha", "Beta"]) {
@@ -238,6 +272,53 @@ describe("topic-board-pivot-sessions", () => {
     await topic.key("referencedBy").pull();
     await session.runtime.idle();
     await session.pieces.synced();
+  };
+
+  /**
+   * `boardOverSessionRedirect()` with Alpha run in the writer's session before
+   * the update, and Alpha's backlinks document holding at space scope a link to
+   * each reader's session instance, the state many deployed topics are in.
+   */
+  const topicOverSessionRedirect = async () => {
+    const setup = await boardOverSessionRedirect();
+    await runTopic(setup.writer, setup.alpha);
+    const backlinks = documentOf(
+      setup.writer.runtime,
+      setup.alpha,
+      "referencedBy",
+    );
+    await redirectToSession(setup.writer.runtime, backlinks);
+    return { ...setup, backlinks };
+  };
+
+  /**
+   * The update in the rollout's order: the board takes the current source,
+   * then each topic is rebound to the board's `crossrefs` output and, when
+   * `topicsTakeSource` is set, takes the current topic source, without being
+   * started.
+   */
+  const update = async (
+    { writer, board, alpha, beta }: Awaited<
+      ReturnType<typeof boardOverSessionRedirect>
+    >,
+    topicsTakeSource: boolean,
+  ) => {
+    await board.setPattern(await currentSource(writer.runtime));
+    const topicSource = await currentSource(writer.runtime, TOPIC_PATH);
+    for (const topic of [alpha, beta]) {
+      await writer.pieces.link(
+        board.id,
+        ["crossrefs"],
+        pieceId(topic)!,
+        ["boardCrossrefs"],
+        { start: false },
+      );
+      if (topicsTakeSource) {
+        const controller = await writer.pieces.get(pieceId(topic)!, false);
+        await controller.setPattern(topicSource);
+      }
+    }
+    await board.getCell().key("crossrefs").pull();
   };
 
   /** What a new session that starts nothing reads of `board` and `topic`. */
@@ -293,21 +374,47 @@ describe("topic-board-pivot-sessions", () => {
     // source, then each topic is rebound to the board's `crossrefs` output
     // without being started. Alpha first runs after that rebinding.
 
-    const { writer, board, alpha, beta } = await boardOverSessionRedirect();
-    await board.setPattern(await currentSource(writer.runtime));
-    for (const topic of [alpha, beta]) {
-      await writer.pieces.link(
-        board.id,
-        ["crossrefs"],
-        pieceId(topic)!,
-        ["boardCrossrefs"],
-        { start: false },
-      );
-    }
-    await board.getCell().key("crossrefs").pull();
-    await runTopic(writer, alpha);
+    const setup = await boardOverSessionRedirect();
+    await update(setup, false);
+    await runTopic(setup.writer, setup.alpha);
 
-    expect(await readInFreshSession(board, alpha)).toEqual({
+    expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
+      topics: ["Alpha", "Beta"],
+      rows: ROWS,
+      referencedBy: ["Beta"],
+    });
+  });
+
+  it("leaves a fresh session no inbound reference for a topic that ran over the redirect and keeps its backlinks bound as `referencedBy`", async () => {
+    // The writer's session reads Alpha's backlink after the update, so what
+    // the fresh session misses is there to be read.
+
+    const setup = await topicOverSessionRedirect();
+    await update(setup, false);
+    await runTopic(setup.writer, setup.alpha);
+
+    expect(
+      (setup.alpha.asSchema(TOPIC_READ).get() as unknown as TopicRead)
+        .referencedBy.map((each) => each.title),
+    ).toEqual(["Beta"]);
+    expect(parseLink(setup.backlinks.getRaw(), setup.backlinks))
+      .toMatchObject({
+        id: setup.backlinks.getAsNormalizedFullLink().id,
+        scope: "session",
+      });
+    expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
+      topics: ["Alpha", "Beta"],
+      rows: ROWS,
+      referencedBy: [],
+    });
+  });
+
+  it("gives a fresh session the inbound reference of a topic that ran over the redirect once the topic takes the current source", async () => {
+    const setup = await topicOverSessionRedirect();
+    await update(setup, true);
+    await runTopic(setup.writer, setup.alpha);
+
+    expect(await readInFreshSession(setup.board, setup.alpha)).toEqual({
       topics: ["Alpha", "Beta"],
       rows: ROWS,
       referencedBy: ["Beta"],

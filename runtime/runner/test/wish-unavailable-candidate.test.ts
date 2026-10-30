@@ -4,7 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { NAME } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";

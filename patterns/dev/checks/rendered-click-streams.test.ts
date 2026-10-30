@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import { decodeJsonPointer } from "@commonfabric/utils/json-pointer";
+import { decodeJsonPointer } from "@commonfabric/json/json-pointer";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 

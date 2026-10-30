@@ -1,4 +1,4 @@
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 import { describeThrown } from "./describe-thrown.ts";
 import type { Page } from "./page.ts";
 import { readAndDescribeShellPage } from "./shell-page-probe.ts";

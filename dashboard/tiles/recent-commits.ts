@@ -37,7 +37,7 @@
  * reads nothing.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   runSource,
   type Run,

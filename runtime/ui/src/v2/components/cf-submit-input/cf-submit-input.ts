@@ -1,6 +1,6 @@
 import { SubmitInputDraftSchema } from "@commonfabric/runner/component-read-contract";
 import type { CellHandle } from "@commonfabric/runtime-client";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
 import { CellController } from "../../core/cell-controller.ts";

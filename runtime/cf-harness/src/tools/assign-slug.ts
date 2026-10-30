@@ -18,7 +18,7 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
 import { pieceUrl } from "../piece-url.ts";

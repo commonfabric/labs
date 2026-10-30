@@ -1,5 +1,5 @@
-import { isDeno } from "@commonfabric/utils/env";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isDeno } from "@commonfabric/platform/env";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * A per-frame record of what the memory client exchanges with its server,

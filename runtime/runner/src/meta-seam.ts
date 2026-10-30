@@ -1,4 +1,7 @@
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 /** The meta fields whose value is a link to another cell. */
 export const META_LINK_FIELDS = Object.freeze(

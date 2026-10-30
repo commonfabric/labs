@@ -40,7 +40,7 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { isLink } from "@commonfabric/runner";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   normalizePlan,

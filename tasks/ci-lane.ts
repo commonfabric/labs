@@ -61,7 +61,7 @@ import {
   commitMoment,
   pinShuffleSeed,
 } from "@commonfabric/test-support/shuffle";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   type CapabilityId,
   COMPILE_CACHE_FILE,

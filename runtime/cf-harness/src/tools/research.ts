@@ -5,7 +5,10 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   RESEARCH_CFC_SCHEMA,
   RESEARCH_KIT_SCHEMA,

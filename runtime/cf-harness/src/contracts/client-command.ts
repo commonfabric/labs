@@ -25,8 +25,8 @@
  */
 
 import type { JSONObject, JSONValue } from "@commonfabric/api";
-import { isPureJson } from "@commonfabric/pure-json";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isPureJson } from "@commonfabric/json";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { REFERENT_TOKEN_PATTERN } from "./handle-table.ts";
 
 /**

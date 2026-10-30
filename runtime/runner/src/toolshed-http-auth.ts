@@ -8,7 +8,7 @@ import { sha256 } from "@commonfabric/content-hash";
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 
 const textEncoder = new TextEncoder();
 

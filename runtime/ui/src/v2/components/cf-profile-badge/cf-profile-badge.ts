@@ -2,7 +2,7 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import { isWrittenProfileName } from "@commonfabric/runner/cfc/represents-principal";
 import { ProfileBadgeSchema } from "@commonfabric/runner/component-read-contract";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { consume } from "@lit/context";
 import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";

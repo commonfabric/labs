@@ -15,7 +15,7 @@ import * as path from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "../src/harness/local-program.deno.ts";
-import { getTimingStatsBreakdown } from "@commonfabric/utils/logger";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 
 import type { Engine } from "../src/harness/engine.ts";
 import { Runtime } from "../src/runtime.ts";

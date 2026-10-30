@@ -2,8 +2,11 @@
 // need. They live here rather than on either, so that neither has to import the
 // other to reach them.
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { ProblematicStateError } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";

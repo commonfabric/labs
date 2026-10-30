@@ -42,8 +42,8 @@ import {
   routerRecords,
   routerRoute,
 } from "@commonfabric/memory/v2/router-protocol";
-import { getLogger } from "@commonfabric/utils/logger";
-import { utf8ByteLength } from "@commonfabric/utils/utf8";
+import { getLogger } from "@commonfabric/logger";
+import { utf8ByteLength } from "@commonfabric/text/utf8";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
 import type { MemoryConnectionSizes } from "./diagnostics.ts";
@@ -161,6 +161,16 @@ export interface SessionFactory {
    * a chain whose delegations do not decode, verify, or link.
    */
   addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
+
+  /**
+   * The chain a session opened on `space` as `principal` presents now,
+   * root first, as copies of the delegations' bytes, or `undefined` where
+   * none is held: what `addDelegationChain` was given and still holds.
+   */
+  delegationChainFor?(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined;
 
   /**
    * The flags the memory server serving `space` advertises, read from a
@@ -1257,6 +1267,16 @@ export class RemoteSessionFactory implements SessionFactory {
   /** @inheritDoc */
   async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
     await this.#delegations.add(chain);
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(
+    space: MemorySpace,
+    principal: string,
+  ): readonly Uint8Array[] | undefined {
+    return this.#delegations.chainFor(space, principal)?.map((delegation) =>
+      delegation.bytes.slice()
+    );
   }
 
   /** Changes compression on live sessions and the default for later ones. */

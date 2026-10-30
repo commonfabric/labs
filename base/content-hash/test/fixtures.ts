@@ -6,7 +6,7 @@
  * output will give you the values.
  */
 
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { sha256 } from "@commonfabric/content-hash";
 
 /** A fixture as authored: the payload as numbers, and its expected hash. */

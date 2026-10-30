@@ -10,7 +10,7 @@ import {
   type Transport,
 } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { Runtime } from "../src/runtime.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";

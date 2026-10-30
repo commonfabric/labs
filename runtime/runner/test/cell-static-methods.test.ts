@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";

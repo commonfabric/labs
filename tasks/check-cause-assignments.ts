@@ -20,7 +20,9 @@
  * Usage: check-cause-assignments.ts [base-ref]   (default: origin/main)
  */
 
-import { join } from "@std/path";
+import { parse as parseJsonc } from "@std/jsonc";
+import { join, toFileUrl } from "@std/path";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 import {
   type AmbiguousCells,
@@ -306,12 +308,124 @@ async function git(...args: string[]): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
+/** What the dumper needs of a workspace package to load it by name. */
+export interface WorkspacePackage {
+  /** The URL of the package's directory, with a trailing slash. */
+  dir: string;
+
+  /** Each specifier the package exports, mapped to the URL of its file. */
+  exports: Map<string, string>;
+
+  /**
+   * The package's own import map, which its modules resolve through, with
+   * each relative target made a URL.
+   */
+  imports: Record<string, string>;
+}
+
+/** The workspace packages of the checkout at `root`, by package name. */
+export async function workspacePackages(
+  root: string,
+): Promise<Map<string, WorkspacePackage>> {
+  const config = parseJsonc(await Deno.readTextFile(join(root, "deno.jsonc")));
+  const members = isObjectNotArray(config) && Array.isArray(config.workspace)
+    ? config.workspace
+    : [];
+  const packages = new Map<string, WorkspacePackage>();
+  for (const member of members) {
+    if (typeof member !== "string") continue;
+    const manifest = await memberManifest(join(root, member));
+    if (!isObjectNotArray(manifest) || typeof manifest.name !== "string") {
+      continue;
+    }
+    const name = manifest.name;
+    const dir = toFileUrl(join(root, member, "/")).href;
+    const exports = typeof manifest.exports === "string"
+      ? { ".": manifest.exports }
+      : isObjectNotArray(manifest.exports)
+      ? manifest.exports
+      : {};
+    const specifiers = new Map<string, string>();
+    for (const [key, file] of Object.entries(exports)) {
+      if (typeof file !== "string") continue;
+      specifiers.set(
+        key === "." ? name : `${name}${key.slice(1)}`,
+        new URL(file, dir).href,
+      );
+    }
+    const imports: Record<string, string> = {};
+    if (isObjectNotArray(manifest.imports)) {
+      for (const [key, target] of Object.entries(manifest.imports)) {
+        if (typeof target !== "string") continue;
+        imports[key] = target.startsWith(".")
+          ? new URL(target, dir).href
+          : target;
+      }
+    }
+    packages.set(name, { dir, exports: specifiers, imports });
+  }
+  return packages;
+}
+
+/** The parsed manifest of the workspace member at `dir`, if it has one. */
+async function memberManifest(dir: string): Promise<unknown> {
+  for (const file of ["deno.jsonc", "deno.json"]) {
+    try {
+      return parseJsonc(await Deno.readTextFile(join(dir, file)));
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The configuration the dumper runs under against the checkout at `root`.
+ * The dumper's own modules come from the change at `head`, so they may name a
+ * package that the change adds and `root` lacks. The configuration is the
+ * checkout's own, with an import for every module of each such package, which
+ * then comes from the change as the dumper does, and that package's own
+ * import map scoped to its directory. It is written beside the checkout's
+ * own, so that the paths of its workspace members still resolve.
+ */
+export async function dumperConfig(
+  root: string,
+  head: string,
+): Promise<string> {
+  const own = join(root, "deno.jsonc");
+  const present = await workspacePackages(root);
+  const added: Record<string, string> = {};
+  const scopes: Record<string, Record<string, string>> = {};
+  for (const [name, pkg] of await workspacePackages(head)) {
+    if (present.has(name)) continue;
+    for (const [specifier, url] of pkg.exports) added[specifier] = url;
+    if (Object.keys(pkg.imports).length > 0) scopes[pkg.dir] = pkg.imports;
+  }
+  if (Object.keys(added).length === 0) return own;
+  const config = parseJsonc(await Deno.readTextFile(own));
+  if (!isObjectNotArray(config)) throw new Error(`${own} is not an object`);
+  const imports = isObjectNotArray(config.imports) ? config.imports : {};
+  const ownScopes = isObjectNotArray(config.scopes) ? config.scopes : {};
+  const path = join(root, "deno.cause-assignments.json");
+  await Deno.writeTextFile(
+    path,
+    JSON.stringify({
+      ...config,
+      imports: { ...imports, ...added },
+      scopes: { ...ownScopes, ...scopes },
+    }),
+  );
+  return path;
+}
+
 /**
  * Helper for `main()`, which dumps the patterns `files` names with the
- * compiler of the checkout at `root`, in `shards` processes at once.
+ * compiler of the checkout at `root`, in `shards` processes at once, running
+ * the dumper under the configuration at `config`.
  */
 async function dumpTree(
   root: string,
+  config: string,
   files: readonly string[],
   shards: number,
   outDir: string,
@@ -329,7 +443,7 @@ async function dumpTree(
       args: [
         "run",
         "--config",
-        join(root, "deno.jsonc"),
+        config,
         "-A",
         dumper,
         "--root",
@@ -416,8 +530,15 @@ async function main() {
     );
     const started = performance.now();
     const [baseDump, headDump] = await Promise.all([
-      dumpTree(baseTree, inBase, shards, scratch, "base"),
-      dumpTree(head, files, shards, scratch, "head"),
+      dumpTree(
+        baseTree,
+        await dumperConfig(baseTree, head),
+        inBase,
+        shards,
+        scratch,
+        "base",
+      ),
+      dumpTree(head, join(head, "deno.jsonc"), files, shards, scratch, "head"),
     ]);
     const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES, {
       base: await unevaluableIn(baseTree),

@@ -20,9 +20,12 @@ import {
   isExternalSchemaRef,
   parseExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { decodeJsonPointer, encodeJsonPointer } from "../link-types.ts";
 

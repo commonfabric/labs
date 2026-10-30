@@ -3,7 +3,7 @@ import {
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";

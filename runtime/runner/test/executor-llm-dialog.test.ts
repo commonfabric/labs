@@ -14,7 +14,7 @@ import {
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { sendEvent } from "../src/cell.ts";

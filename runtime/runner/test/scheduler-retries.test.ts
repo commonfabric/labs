@@ -1,6 +1,6 @@
 // Scheduler reactive retry tests.
 
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import {
   afterEach,

@@ -1,0 +1,350 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AtlasLayers": {
+        "properties": {
+          "propagation": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "boolean"
+          },
+          "terrain": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "terrain",
+          "propagation",
+          "routes"
+        ],
+        "type": "object"
+      },
+      "AtlasViewport": {
+        "properties": {
+          "scale": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "IframeInputData": {
+        "properties": {
+          "fieldSeed": {
+            "type": "number"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "timeEnd": {
+            "type": "number"
+          },
+          "timeStart": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "subtitle",
+          "fieldSeed",
+          "timeStart",
+          "timeEnd"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "band": {
+            "enum": [
+              "pulse",
+              "drift",
+              "echo",
+              "all"
+            ]
+          },
+          "layers": {
+            "$ref": "#/$defs/AtlasLayers"
+          },
+          "selectedObservationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeCursor": {
+            "type": "number"
+          },
+          "viewport": {
+            "$ref": "#/$defs/AtlasViewport"
+          }
+        },
+        "required": [
+          "timeCursor",
+          "band",
+          "selectedObservationId",
+          "layers",
+          "viewport"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "What a Signal Propagation Atlas piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "fieldSeed": 7391,
+          "subtitle": "A shared temporal field study of the fictional Pelagic Reach",
+          "timeEnd": 100,
+          "timeStart": 0,
+          "title": "Signal Propagation Atlas"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "session"
+          }
+        ],
+        "default": {
+          "band": "all",
+          "layers": {
+            "propagation": true,
+            "routes": true,
+            "terrain": true
+          },
+          "selectedObservationId": null,
+          "timeCursor": 72,
+          "viewport": {
+            "scale": 1,
+            "x": 0,
+            "y": 0
+          }
+        },
+        "description": "Where this session has the map panned and zoomed."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-signal-atlas/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AtlasLayers": {
+        "properties": {
+          "propagation": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "boolean"
+          },
+          "terrain": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "terrain",
+          "propagation",
+          "routes"
+        ],
+        "type": "object"
+      },
+      "AtlasViewport": {
+        "properties": {
+          "scale": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "scale"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "band": {
+            "enum": [
+              "pulse",
+              "drift",
+              "echo",
+              "all"
+            ]
+          },
+          "layers": {
+            "$ref": "#/$defs/AtlasLayers"
+          },
+          "selectedObservationId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeCursor": {
+            "type": "number"
+          },
+          "viewport": {
+            "$ref": "#/$defs/AtlasViewport"
+          }
+        },
+        "required": [
+          "timeCursor",
+          "band",
+          "selectedObservationId",
+          "layers",
+          "viewport"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "observations": {
+            "items": {
+              "$ref": "#/$defs/SignalObservation"
+            },
+            "type": "array"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/$defs/SignalRoute"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "observations",
+          "routes"
+        ],
+        "type": "object"
+      },
+      "SignalBand": {
+        "enum": [
+          "pulse",
+          "drift",
+          "echo"
+        ]
+      },
+      "SignalObservation": {
+        "properties": {
+          "band": {
+            "$ref": "#/$defs/SignalBand"
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "observedAt": {
+            "type": "number"
+          },
+          "strength": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "x",
+          "y",
+          "observedAt",
+          "strength",
+          "band"
+        ],
+        "type": "object"
+      },
+      "SignalRoute": {
+        "properties": {
+          "band": {
+            "$ref": "#/$defs/SignalBand"
+          },
+          "departedAt": {
+            "type": "number"
+          },
+          "duration": {
+            "type": "number"
+          },
+          "fromObservationId": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "toObservationId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fromObservationId",
+          "toObservationId",
+          "departedAt",
+          "duration",
+          "band"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A Signal Propagation Atlas piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each browser session."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

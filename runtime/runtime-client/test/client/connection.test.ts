@@ -13,7 +13,7 @@ import {
 import type { FabricValue } from "@commonfabric/data-model";
 import type { DID } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";

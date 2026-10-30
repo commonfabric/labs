@@ -19,7 +19,10 @@
  * export imports, and the test file holds a check that it stayed there.
  */
 
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 export const repoRoot = new URL("..", import.meta.url);
 

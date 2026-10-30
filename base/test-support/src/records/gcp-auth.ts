@@ -10,7 +10,7 @@
 import {
   toUnpaddedBase64url,
   toUnpaddedBase64urlFromText,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 
 export interface ServiceAccountKey {
   client_email: string;

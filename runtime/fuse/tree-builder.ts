@@ -1,7 +1,10 @@
 // tree-builder.ts — Convert JSON values to FsTree nodes
 
 import { isLinkRef, type SigilLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { CfcJsonAnnotationContext } from "./annotations.ts";
 import {

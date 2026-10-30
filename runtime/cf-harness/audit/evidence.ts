@@ -14,7 +14,7 @@
  */
 
 import { basename, join, resolve } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { HarnessCellLabels } from "../src/contracts/cell-labels.ts";
 import type { HarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snapshot.ts";

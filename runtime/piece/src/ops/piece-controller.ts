@@ -5,7 +5,7 @@ import {
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   applyPieceSourceTransition,
   Cell,
@@ -77,7 +77,7 @@ import {
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { pieceId } from "../piece-id.ts";
 import {

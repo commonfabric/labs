@@ -38,8 +38,8 @@
  */
 
 import type { TestRecord } from "@commonfabric/test-support/records";
-import { maxOf, minOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { maxOf, minOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Calibration, SuiteFit } from "./manifest.ts";
 import {
   batchMeasurement,

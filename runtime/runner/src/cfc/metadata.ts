@@ -14,7 +14,10 @@
 
 import { isDeepFrozen } from "@commonfabric/data-model";
 import type { URI } from "@commonfabric/memory/interface";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type { CellScope } from "../builder/types.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {

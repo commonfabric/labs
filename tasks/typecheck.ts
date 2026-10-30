@@ -23,6 +23,9 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 // Directory paths (no glob expansion needed).
 const DIRS = [
   ".claude/scripts",
+  "base/async",
+  "base/bytes",
+  "base/collections",
   "docs",
   "runtime/agent-runner",
   "base/api",
@@ -48,11 +51,14 @@ const DIRS = [
   "base/iframe-sandbox",
   "runtime/integration",
   "base/js-compiler",
-  "base/leb128",
+  "base/js-values",
+  "base/json",
   "runtime/lib-shell",
   "base/llm",
+  "base/logger",
   "runtime/memory",
   "runtime/navigation",
+  "base/pattern-contract",
   "patterns/apps/annotation",
   "patterns/apps/annotation-manager",
   "patterns/apps/bookmarks",
@@ -152,7 +158,7 @@ const DIRS = [
   "patterns/tools",
   "runtime/pattern-index",
   "runtime/piece",
-  "base/pure-json",
+  "base/platform",
   "runtime/runner",
   "runtime/runtime-client",
   "base/schema-generator/src",
@@ -162,13 +168,13 @@ const DIRS = [
   "base/static/scripts",
   "base/static/test",
   "base/test-support",
+  "base/text",
   "runtime/toolshed",
   "base/ts-transformers/lint-plugins",
   "base/ts-transformers/src",
   "base/ts-transformers/test/diagnostics",
   "base/ts-transformers/test/reactive",
   "runtime/ui",
-  "base/utils",
   "skills",
   "scripts/implementation-progress",
   "scripts/server-execution-topics",
@@ -183,8 +189,8 @@ const GLOBS = [
   "patterns/*.ts",
   // Iframe guests and the contracts they are written against compile as
   // ordinary browser modules, and `isPatternSource()` excludes them for
-  // exactly that reason, so this task is what checks them. Their generated
-  // pattern wrappers remain under the classic JSX environment owned by
+  // exactly that reason, so this task is what checks them. The patterns that
+  // host them remain under the classic JSX environment owned by
   // `deno task cfcheck`. The depth is open because a guest sits wherever the
   // pattern that hosts it puts it; the `iframe-` prefix is not, because that
   // is the condition under which the exclusion applies. A file of the same

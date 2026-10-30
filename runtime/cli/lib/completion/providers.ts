@@ -1043,6 +1043,9 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
   // `--remote` takes what `--api-url` takes: the toolshed to read from.
   remote: () => Promise.resolve(apiUrlCandidates()),
   identity: () => Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  // A delegation chain file, as `cf delegation issue --out` writes one.
+  delegations: () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   // `cf agent runner`: the toolshed it sits beside, the host-owned Loom tool
   // configuration it reads, and the directory its runs' workspaces go under.
   "local-api-url": () => Promise.resolve(apiUrlCandidates()),
@@ -1218,6 +1221,8 @@ const ARGUMENT_PROVIDERS: Readonly<
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),
+  "delegation show:file": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.json" })),
   "fuse mount:mountpoint": () => Promise.resolve(directive({ kind: "dirs" })),
   "fuse unmount:mountpoint": () => Promise.resolve(directive({ kind: "dirs" })),
   "wish:target": () => Promise.resolve(wishTargetCandidates()),

@@ -45,13 +45,16 @@ import {
   toDocumentPath,
   type ValuePath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
-import { getLogger } from "@commonfabric/utils/logger";
-import { minOf } from "@commonfabric/utils/math";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import { getLogger } from "@commonfabric/logger";
+import { minOf } from "@commonfabric/collections/math";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type { JSONSchema } from "../builder/types.ts";

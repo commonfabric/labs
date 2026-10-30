@@ -20,7 +20,7 @@
  */
 
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import { createHarnessHandleTable, mintAddressHandle } from "./handle-table.ts";

@@ -149,6 +149,7 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  pullProjected,
   readProjected,
   sendEvent,
   setCell,
@@ -384,7 +385,7 @@ export {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
-export type { Mutable } from "@commonfabric/utils/types";
+export type { Mutable } from "@commonfabric/js-values/types";
 export {
   type ActionReadStats,
   RuntimeTelemetry,
@@ -409,7 +410,7 @@ export type {
 
 // Utility functions (split from utils.ts)
 export { createJsonSchema } from "./builder/create-json-schema.ts";
-export { deepEqual } from "@commonfabric/utils/deep-equal";
+export { deepEqual } from "@commonfabric/js-values/deep-equal";
 export { getValueAtPath, setValueAtPath } from "./path-utils.ts";
 export { schemaToTypeString } from "./schema-format.ts";
 export type { SchemaFormatOptions } from "./schema-format.ts";

@@ -8,7 +8,7 @@ import { getPatternIdentityRef } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { pieceId } from "@commonfabric/piece";
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef, resolveHandleToken } from "../handle-table.ts";
 import {

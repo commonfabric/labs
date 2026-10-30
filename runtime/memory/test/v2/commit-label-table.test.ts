@@ -11,7 +11,7 @@ import {
   isValidFabricValue,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   decodeTrustedMemoryBoundary,

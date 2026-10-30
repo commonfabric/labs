@@ -11,8 +11,8 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
-import { defer } from "@commonfabric/utils/defer";
-import { getLogger } from "@commonfabric/utils/logger";
+import { defer } from "@commonfabric/async/defer";
+import { getLogger } from "@commonfabric/logger";
 
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";

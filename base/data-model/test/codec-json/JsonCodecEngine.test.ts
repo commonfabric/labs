@@ -63,8 +63,8 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test

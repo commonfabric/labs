@@ -35,7 +35,7 @@ import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import {
   assertParticipantRung,

@@ -14,7 +14,7 @@ import type {
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import type { CellRef, JSONValue } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { VDomOp } from "../vdom-ops.ts";
 
 /**

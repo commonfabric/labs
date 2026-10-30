@@ -1,5 +1,5 @@
 import type { FabricValue } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { ChangeSet } from "@codemirror/state";
 import { toFileUrl } from "@std/path";
 

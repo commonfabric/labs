@@ -13,9 +13,12 @@ import {
   forEachSubschema,
   mapSubschemas,
 } from "@commonfabric/data-model-schema/schema-walk";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";

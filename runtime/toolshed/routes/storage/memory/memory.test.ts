@@ -13,7 +13,7 @@ import {
 import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { resolvedSchema } from "../../../../runner/test/schema-ref-helpers.ts";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import app from "@/app.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";

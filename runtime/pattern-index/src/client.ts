@@ -14,7 +14,7 @@ import {
   type FirstPartyHttpSigner,
   signFirstPartyHttpRequest,
 } from "@commonfabric/runner/toolshed-http-auth";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { PatternIndexFetch } from "./http-fetch.ts";
 import { resolvePatternIndexSuccessors } from "./successors.ts";
 

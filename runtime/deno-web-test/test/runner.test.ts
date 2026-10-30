@@ -6,7 +6,7 @@ import {
   parseRecordLine,
   RECORDS_DIR_VARIABLE,
 } from "@commonfabric/test-support/records";
-import { removeDirectory } from "@commonfabric/utils/remove-directory";
+import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { HarnessRun, runDenoWebTest } from "./utils.ts";
 

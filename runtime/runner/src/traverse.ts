@@ -35,14 +35,14 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 
 import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
-import { getLogger } from "../../../base/utils/src/logger.ts";
-// TODO(@ubik2): Ideally this would import from "@commonfabric/utils/types",
+import { getLogger } from "../../../base/logger/src/logger.ts";
+// TODO(@ubik2): Ideally this would import from "@commonfabric/js-values/types",
 // but rollup has issues
 import {
   type Immutable,
@@ -51,7 +51,7 @@ import {
   isObjectOrArray,
   isPrimitive,
   isString,
-} from "../../../base/utils/src/types.ts";
+} from "../../../base/js-values/src/types.ts";
 import {
   externalResolutionMissCount,
   lookupSchemaDocument,

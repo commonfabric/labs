@@ -16,8 +16,8 @@
 
 import { isKeyableObjectOrArray } from "@commonfabric/data-model";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
-import { maxOf, minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { maxOf, minOf } from "@commonfabric/collections/math";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * A document value reduced to JSON. A link is written as a {@link LinkMark};

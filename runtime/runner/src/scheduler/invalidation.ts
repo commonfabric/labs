@@ -1,5 +1,5 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 
 import type {
   ChangeGroup,

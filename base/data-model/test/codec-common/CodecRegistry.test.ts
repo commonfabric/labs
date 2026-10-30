@@ -22,7 +22,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import { type FabricValue, toCompactDebugString } from "@";
 import {

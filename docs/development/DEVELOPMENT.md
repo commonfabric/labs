@@ -49,7 +49,7 @@ about one aspect of the runtime, are indexed in
   `@commonfabric/api/interface` (external API), but not both.
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
-  `@commonfabric/utils/base64url` next to `@commonfabric/utils/types`,
+  `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
   `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
@@ -547,8 +547,8 @@ For import-map placement and dependency boundaries, follow
   only e.g. types are needed.
   - If needed, environment specific exports can be provided e.g.
     `@workspace/module/browser` | `@workspace/module/deno`.
-- Consider leaf nodes in the graph: A `utils` module should not be heavy with
-  dependencies, external or otherwise.
+- Consider leaf nodes in the graph: a package that many others import, such as
+  `js-values`, should not be heavy with dependencies, external or otherwise.
 - Clean separation of public and private facing interfaces: only export what's
   needed.
 
@@ -646,14 +646,14 @@ export function isEvent(value: unknown): boolean {
 > **✅ Prefer**
 
 ```ts
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 export function isEvent(value: unknown): boolean {
   return isObjectNotArray(value) && typeof value.type === "string";
 }
 ```
 
-The predicates live in `@commonfabric/utils/types`, and each name settles the
+The predicates live in `@commonfabric/js-values/types`, and each name settles the
 array question in its own final word. `isObjectOrArray()` admits any non-`null`
 value whose `typeof` is `"object"`, arrays included. `isObjectNotArray()` asks
 the same question with arrays removed. `isPlainObject()` additionally requires
@@ -1046,13 +1046,13 @@ hundred thousand the call throws `RangeError: Maximum call stack size
 exceeded`. A collection whose size the code does not fix can reach that. Append
 it in a loop, `for (const record of more) records.push(record);`, and take its
 largest or smallest value with `maxOf` or `minOf` from
-`@commonfabric/utils/math`, which walk the collection and otherwise return what
+`@commonfabric/collections/math`, which walk the collection and otherwise return what
 `Math.max` and `Math.min` would. An array cell is the exception to the loop:
 each `push()` on a cell rebuilds the cell's local copy of the array and records
 an append of its own, so pass the list to `pushAll()` instead, which does that
 once for the whole list.
 
-Replace a range with `spliceAll` from `@commonfabric/utils/arrays`, which gives
+Replace a range with `spliceAll` from `@commonfabric/collections/splice`, which gives
 what `splice` would.
 
 The `cf-spread/no-spread-arguments` lint rule (`tasks/lint-spread-arguments.ts`,
@@ -1130,7 +1130,7 @@ suite will break.
    }
    ```
 
-See `base/utils` and `base/leb128` for real examples.
+See `base/text` and `base/async` for real examples.
 If the new package needs registry dependencies, follow
 [Adding dependencies](DEPENDENCIES.md#adding-dependencies).
 

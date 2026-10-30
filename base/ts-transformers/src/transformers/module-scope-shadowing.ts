@@ -1,4 +1,4 @@
-import { SHADOWED_FACTORY_BINDINGS } from "@commonfabric/utils/sandbox-contract";
+import { SHADOWED_FACTORY_BINDINGS } from "@commonfabric/pattern-contract/sandbox-contract";
 import ts from "typescript";
 
 import { TransformationContext, Transformer } from "../core/mod.ts";

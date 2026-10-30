@@ -5,7 +5,7 @@
  * spend is known before collection starts.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const GITHUB_RATE_LIMIT_FRACTION = 0.8;

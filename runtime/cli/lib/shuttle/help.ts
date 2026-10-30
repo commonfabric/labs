@@ -14,7 +14,7 @@
  * verb accepts, and the two would part company at the first option added.
  */
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import type { VerbOption } from "./options.ts";
 

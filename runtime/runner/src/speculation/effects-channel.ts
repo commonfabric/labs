@@ -60,8 +60,11 @@ import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type SessionEffectsDocValue,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace, URI } from "../storage/interface.ts";
 import { CoalescedDocListener } from "./doc-notification-listener.ts";

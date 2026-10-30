@@ -19,7 +19,7 @@ import type { JSONObject } from "@commonfabric/api";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { boundCatalogForModel } from "../client-actions/command-result.ts";
 import {

@@ -5,7 +5,7 @@
 // reachable from a cell sink alone, which is what made a poll loop the reflex.
 // Each wait here names the event it sleeps on instead.
 
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import { stuckNet, withStuckNet } from "@commonfabric/test-support/stuck-net";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { Runtime } from "../../src/runtime.ts";

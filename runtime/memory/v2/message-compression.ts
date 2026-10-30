@@ -4,7 +4,7 @@
  * payload travels without another encoding layer.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 /** Frames produced by the compression encoder. */
 export type EncodedMemoryMessage = string | Uint8Array<ArrayBuffer>;

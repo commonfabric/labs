@@ -9,7 +9,7 @@ import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { getCellValue } from "../lib/piece.ts";
 

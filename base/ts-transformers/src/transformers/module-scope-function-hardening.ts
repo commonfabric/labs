@@ -3,7 +3,7 @@ import {
   BINDING_IDENTITY_HELPER_NAME,
   FUNCTION_HARDENING_HELPER_NAME,
   VERIFIED_BINDING_METADATA_FIELD,
-} from "@commonfabric/utils/sandbox-contract";
+} from "@commonfabric/pattern-contract/sandbox-contract";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 import { isImportedFromCommonFabric } from "@commonfabric/schema-generator/common-fabric-symbols";

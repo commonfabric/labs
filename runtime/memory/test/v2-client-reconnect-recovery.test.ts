@@ -4,7 +4,7 @@ import { stub } from "@std/testing/mock";
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   decodeMemoryBoundary,

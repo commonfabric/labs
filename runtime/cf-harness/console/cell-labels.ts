@@ -33,7 +33,7 @@ import {
   type LabelObservationClass,
   rebaseCfcLabelView,
 } from "@commonfabric/runner/cfc/label-view-core";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { parseConsoleReference } from "./reference.ts";
 
 import type {

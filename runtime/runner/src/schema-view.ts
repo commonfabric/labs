@@ -45,9 +45,9 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";

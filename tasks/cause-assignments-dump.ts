@@ -9,7 +9,9 @@
  * is in: the gate runs this file against a checkout of the base revision, so
  * that one description of a cell, this file's, is applied to what each of the
  * two compilers built. It reaches the checkout's compiler only through modules
- * it loads from under `--root`, and runs under that checkout's configuration.
+ * it loads from under `--root`, and runs under that checkout's configuration,
+ * with imports added for any package this file's checkout has and that one
+ * lacks (`dumperConfig()` in `check-cause-assignments.ts`).
  *
  *   cause-assignments-dump.ts --root <dir> --out <file> <pattern path>...
  *
@@ -19,7 +21,7 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { patternKey } from "./pattern-files.ts";
 import {
   assignmentLevels,

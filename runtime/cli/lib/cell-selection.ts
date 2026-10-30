@@ -50,7 +50,7 @@ import {
   isInstance,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { runtimeErrorLog } from "./callable.ts";
 import { timeCliPhase } from "./trace-timing.ts";
 

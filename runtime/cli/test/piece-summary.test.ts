@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 import {
   listPiecesFromCommand,
   piece,

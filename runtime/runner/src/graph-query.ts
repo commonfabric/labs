@@ -21,7 +21,7 @@ import type {
   ScopeKey,
   ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "./builder/types.ts";
 import { ownImmutableCells } from "./immutable-cell.ts";

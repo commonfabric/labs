@@ -29,6 +29,12 @@ form for Common Fabric controls. No handler is needed for simple updates.
 <cf-select $value={category} items={[...]} />
 ```
 
+A `$` property binds a cell, or a record whose every field is a cell, such as
+`<cf-iframe $context={{ state, output }} />`, whose component reaches each
+field's cell by name. Anything else, a record with a field that is not a cell
+among them, is refused when the view is built, since the binding would have
+nothing live to hand over for it.
+
 **Native HTML inputs are one-way only.** Always use the Common Fabric form
 components for inputs.
 
@@ -147,7 +153,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities | |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
 | `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression, EXIF, camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |

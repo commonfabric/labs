@@ -16,7 +16,10 @@ import {
   newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
-import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import {
+  isPlainObject,
+  unsafeObjectKeyIn,
+} from "@commonfabric/js-values/types";
 import type { ClientInfo } from "./v2/client-info.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 

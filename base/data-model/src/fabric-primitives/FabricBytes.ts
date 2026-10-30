@@ -1,8 +1,8 @@
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { toOwnedUint8Array } from "@commonfabric/utils/buffers";
+} from "@commonfabric/bytes/base64url";
+import { toOwnedUint8Array } from "@commonfabric/bytes/buffers";
 
 import type {
   FabricBytes as ApiFabricBytes,

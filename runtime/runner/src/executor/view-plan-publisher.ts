@@ -8,8 +8,8 @@ import type {
   ViewPlan,
   ViewQuery,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
-import { PathKeyMap } from "@commonfabric/utils/path-key-map";
+import { getLogger } from "@commonfabric/logger";
+import { PathKeyMap } from "@commonfabric/collections/path-key-map";
 
 import { COMPONENT_READ_CONTRACT_VERSION } from "../component-read-contract.ts";
 import {

@@ -13,7 +13,7 @@
  */
 
 import { readCeilingShapeError, toDocumentPath } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type {
   IExtendedStorageTransaction,

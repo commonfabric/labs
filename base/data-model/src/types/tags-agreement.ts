@@ -25,7 +25,7 @@
  * `Uint8Array<ArrayBufferLike>`, rather than `Uint8Array<ArrayBuffer>`.
  */
 
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
 
 import type { FabricConvertibleJsObject } from "@/interface.ts";
 

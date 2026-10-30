@@ -46,9 +46,9 @@ import {
   mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -476,6 +476,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscUnshare?: string;
   /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** runsc runtime: the host ports a container under pasta reaches. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1025,6 +1027,7 @@ export class CfHarnessEngine {
         ...(options.sandboxRunscSetpriv !== undefined
           ? { setpriv: options.sandboxRunscSetpriv }
           : {}),
+        forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined

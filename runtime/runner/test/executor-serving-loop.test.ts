@@ -58,7 +58,7 @@ import {
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 class SharedServerStorageManager extends EmulatedStorageManager {

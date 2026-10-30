@@ -6,8 +6,8 @@
  * drawing the tiles chart their history with.
  */
 
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/js-values/types";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {

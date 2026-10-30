@@ -12,7 +12,7 @@
  * shared across that boundary instead of restarting inside it.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { FabricValue } from "./interface.ts";
 import {
   BaseFabricInstance,

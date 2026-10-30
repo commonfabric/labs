@@ -44,11 +44,11 @@
 import { debugStr } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { getLogger } from "@commonfabric/utils/logger";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { getLogger } from "@commonfabric/logger";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { Pattern } from "./builder/types.ts";
 import type { Cancel } from "./cancel.ts";
