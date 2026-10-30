@@ -17,7 +17,7 @@ const KEPT_TAIL = 4;
 export const shortDid = (did: string | undefined): string => {
   if (did === undefined) return "";
   const [prefix, method, ...rest] = did.split(":");
-  if (prefix !== "did" || !method || rest.length === 0) return did;
+  if (prefix !== "did" || !method) return did;
   const part = [...rest.join(":")];
   return part.length > LONGEST_SHOWN_WHOLE
     ? `did:${method}:…${part.slice(-KEPT_TAIL).join("")}`
