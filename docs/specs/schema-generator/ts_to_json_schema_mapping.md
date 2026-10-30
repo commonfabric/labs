@@ -221,7 +221,8 @@ keeps it on this path alone, as the checker hands the type path `any`
 itself, which holds nothing of the constituents beside it; a constituent
 whose value, with its labels and whole-value keywords set aside, is `{}` or
 `{ not: true }` is read as `any` or `never`; otherwise a union constituent
-distributes and every combination of arms is settled on its own; `unknown`
+distributes and every combination of arms is settled on its own, a cell
+holding a union being no union, as `Cell<A | B>` is one cell; `unknown`
 is the identity; an empty object part drops out and takes `null` and
 `undefined` with it, as `T & {}` does; primitives are narrowed or found
 disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`

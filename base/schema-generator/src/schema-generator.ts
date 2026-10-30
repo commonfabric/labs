@@ -977,14 +977,17 @@ type LabeledArm = {
  * reads a schema and flattened through nested unions, a union whose arms
  * folded to one schema included (`schemaOrigins`), with the labels of the
  * unions it is an arm of (`LabeledArm`). A schema that is no union is its
- * own single arm.
+ * own single arm, and so is a cell, whose union is what it holds
+ * (`Cell<A | B>`) and not the value it is.
  */
 function labeledArms(
   schema: MutableJSONSchema,
   context: GenerationContext,
 ): LabeledArm[] {
   const stated = withBesideKeywords(schema, context);
-  if (!isObjectOrArray(stated)) return [{ schema: stated, labels: [] }];
+  if (!isObjectOrArray(stated) || isCellValue(stated, context)) {
+    return [{ schema: stated, labels: [] }];
+  }
   const origin = context.schemaOrigins?.get(stated);
   if (origin?.kind === "union") {
     return armsOfUnion(stated, origin.parts(), context);

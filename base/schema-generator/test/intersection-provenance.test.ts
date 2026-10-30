@@ -1262,6 +1262,23 @@ describe("SchemaGenerator", () => {
         propertyA({ type: "string", scope: "user", asCell: ["cell"] }),
       ],
       [
+        "keeps the union a cell holds, and its scope, where another cell meets it",
+        `type M1 = Cell<PerUser<string | null>>; type M2 = Cell<string>;`,
+        {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          scope: "user",
+          asCell: ["cell"],
+        },
+      ],
+      [
+        "keeps the union a capped cell holds where another cell meets it",
+        `type M1 = PerUser<Cell<string | null>>; type M2 = Cell<string>;`,
+        {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          asCell: [{ kind: "cell", scope: "user" }],
+        },
+      ],
+      [
         "keeps a cell's cap and the scope of what it holds beside an array",
         `type M1 = PerUser<Cell<PerSession<string>>>; type M2 = string[];`,
         {
