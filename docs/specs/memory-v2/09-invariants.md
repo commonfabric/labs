@@ -848,10 +848,10 @@ session's `capabilityPrincipal`, which
 verified chain's root issuer); engine admission of engine-direct commits
 (`applyCommitTransaction` in `runtime/memory/v2/engine.ts`); the foreign grant
 (`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
-(`invite()` in `runtime/memory/v2/server.ts`); client emission
-(`writeAcl()` in `runtime/runner/src/acl-manager.ts`). The chain clause applies
-only where the server admits delegations (`acl.delegations`, which toolshed sets
-from `MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
+(`invite()` in `runtime/memory/v2/server.ts`); client emission (`writeAcl()` in
+`runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
+server admits delegations (`acl.delegations`, which toolshed sets from
+`MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
 refuses every chain, and there the clause's other branch is the only one.
 
 Soundness direction: none — exact. Over-acceptance destroys a space a member
