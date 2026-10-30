@@ -95,11 +95,13 @@ Two things keep an anchor on its text as the body changes:
   edits, and a collaborator's edit that lands while the pattern has yet to write
   its last report, so two people typing at once end with both editors reporting
   the same merged positions. Each report names the body version it was read at,
-  and the pattern writes a report only when it is not earlier than the version
-  the anchor holds: two sessions writing one comment at once have the loser's
+  and the pattern writes a report only when it is later than the version the
+  anchor holds: two sessions writing one comment at once have the loser's
   handler run again after the winner's write, replaying a report the winner has
   moved past, and the version is what keeps that replay from moving the anchor
-  back.
+  back. Two editors with different unconfirmed edits name one version for
+  different text, and the first of their reports to arrive stands until the next
+  report from either.
 - **Re-finding by quote.** Whenever the stored range no longer holds the quote,
   the pattern looks for the quote in the current text and uses the one place it
   occurs. This is what covers an edit made with no editor open, a verb's

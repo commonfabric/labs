@@ -487,9 +487,12 @@ const selectHighlight = handler<
 // positions. Reports can still reach this handler out of order: two sessions
 // writing one comment at once have the loser run again against the winner's
 // write, replaying a report the winner has moved past. The version each
-// report carries is what tells such a replay from news. The quote stays as it
-// was: the range follows the text, and the quote is what re-finds it when the
-// range does not.
+// report carries is what tells such a replay from news, and a report has to
+// be later than the version the anchor holds: two editors with different
+// unconfirmed edits name one version for different text, and the first of
+// their reports to arrive stands until the next report from either. The quote
+// stays as it was: the range follows the text, and the quote is what re-finds
+// it when the range does not.
 const rebaseHighlights = handler<
   { detail: { highlights: HighlightRange[]; version?: AnchorVersion } },
   { comments: CommentsCell }
@@ -503,12 +506,10 @@ const rebaseHighlights = handler<
     const current = anchor.get();
     if (
       version !== undefined && current.version !== undefined &&
-      precedes(version, current.version)
+      !precedes(current.version, version)
     ) continue;
     const moved = current.from !== range.from || current.to !== range.to;
-    const advances = version !== undefined &&
-      (current.version === undefined || precedes(current.version, version));
-    if (!moved && !advances) continue;
+    if (!moved && version === undefined) continue;
     const stamped = version ?? current.version;
     anchor.set({
       from: range.from,

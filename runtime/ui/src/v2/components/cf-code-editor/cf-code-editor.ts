@@ -2232,9 +2232,10 @@ export class CFCodeEditor extends BaseElement {
   /**
    * The version of the document `state` shows, in the collaborative field's
    * numbering: its confirmed cursor, advanced by the edits of this editor's
-   * that Memory has yet to confirm. Two editors showing the same text name
-   * the same version; while this editor has unconfirmed edits, its number is
-   * one the field has yet to reach. Undefined outside collaboration.
+   * that Memory has yet to confirm. Two editors that have received the same
+   * updates with nothing pending name the same version; while this editor
+   * has unconfirmed edits, its number is one the field has yet to reach.
+   * Undefined outside collaboration.
    */
   private _documentVersion(state: EditorState): OpCursor | undefined {
     const snapshot = this._collaboration?.synchronizationSnapshot;

@@ -340,6 +340,25 @@ export default pattern(() => {
       },
     )
   );
+  // A report with the anchor's own stamp comes from a document with a
+  // different unconfirmed edit; the one that arrived first stands.
+  const action_other_editor_reports_the_same_version = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-highlights-mapped",
+      {
+        type: "cf-highlights-mapped",
+        detail: {
+          highlights: [{
+            id: note.comments[0].id,
+            from: quoteFrom + 6,
+            to: quoteTo + 6,
+          }],
+          version: { epoch: 1, version: 5 },
+        },
+      },
+    )
+  );
   const action_editor_replays_an_older_report = action(() =>
     fireEvent(
       findElement(note[UI], "cf-code-editor"),
@@ -535,6 +554,7 @@ export default pattern(() => {
       { action: action_editor_reports_mapped_range },
       { assertion: assert_anchor_follows_the_editor },
       { action: action_editor_reports_with_a_version },
+      { action: action_other_editor_reports_the_same_version },
       { action: action_editor_replays_an_older_report },
       { assertion: assert_older_report_leaves_the_anchor },
       { action: action_body_grows_before_the_quote },

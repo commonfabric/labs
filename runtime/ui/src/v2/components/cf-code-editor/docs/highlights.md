@@ -92,12 +92,14 @@ editor open on the document.
 
 Under collaboration each report also names the document it is read against: the
 collaborative field's `{ epoch, version }`, with the confirmed version advanced
-by this editor's own edits Memory has yet to confirm. Two editors showing the
-same text name the same version. A host that stores reported positions can be
-handed reports out of order, a write of its own that lost a race re-run after
-the winner's write among them, and the version is what lets it refuse a report
-earlier than the one it holds, as a receiver of presence discards a selection
-for a version that has passed.
+by this editor's own edits Memory has yet to confirm. Two editors that have
+received the same updates and have nothing pending name the same version; one
+with edits pending names a version the field has yet to reach, and two editors
+with different edits pending can name one version for different text. A host
+that stores reported positions can be handed reports out of order, a write of
+its own that lost a race re-run after the winner's write among them, and the
+version is what lets it refuse a report not later than the one it holds, as a
+receiver of presence discards a selection for a version that has passed.
 
 The mousedown handler that routes clicks on mention and backlink pills also
 looks for a `data-highlight-id` ancestor and emits `cf-highlight-click` for it,
