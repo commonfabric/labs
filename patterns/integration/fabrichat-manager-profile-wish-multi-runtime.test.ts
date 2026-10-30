@@ -19,6 +19,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -88,6 +89,20 @@ const stored = async (
   return (value as { value?: unknown } | undefined)?.value;
 };
 
+/**
+ * Each scope, as a scope key, in which `commits` wrote the document `id`, once.
+ */
+const writtenScopes = (
+  commits: AdmittedCommitNotice[],
+  id: string,
+): string[] => [
+  ...new Set(
+    commits.flatMap((commit) => commit.writes)
+      .filter((write) => write.id === id)
+      .map((write) => write.scopeKey),
+  ),
+];
+
 describe("fabrichat-manager-profile-wish-multi-runtime", () => {
   let harness: MultiRuntimeHarness | undefined;
 
@@ -135,6 +150,7 @@ describe("fabrichat-manager-profile-wish-multi-runtime", () => {
           "inputId",
           "fabrichat-start-direct",
         );
+        const disabled = await found.link([...start, "disabled"]);
         const address = await propsPath(found, "id", "fabrichat-my-address");
         expect(await found.read([...start, "disabled"])).toBe(false);
         expect(await found.read([...address, "style", "display"])).toBe(
@@ -148,15 +164,26 @@ describe("fabrichat-manager-profile-wish-multi-runtime", () => {
           "fabrichat-manager-profile-wish-unlisted",
           { implementation: "noble" },
         );
-        const failed = await harness.addSession({
-          label: "fabrichat-manager-profile-wish-failed",
-          identity: person,
-          cfc,
-          preferredProfileSpace: unlisted.did(),
+        let failed!: MultiRuntimeSession;
+        const failedRunning = await harness.admittedCommitsDuring(async () => {
+          failed = await harness!.addSession({
+            label: "fabrichat-manager-profile-wish-failed",
+            identity: person,
+            cfc,
+            preferredProfileSpace: unlisted.did(),
+          });
+          await failed.readRaw(["$UI"]);
+          await harness!.settle();
         });
-        await failed.readRaw(["$UI"]);
-        await harness.settle();
         expect(await failed.read([...start, "disabled"])).toBe(true);
+
+        // The session whose wish failed writes its own answer, and none into
+        // the instance every session of the person's reads.
+        const written = writtenScopes(failedRunning, disabled.id);
+        expect(written).not.toHaveLength(0);
+        expect(written).not.toContain(
+          `user:${encodeURIComponent(person.did())}`,
+        );
 
         expect(await stored(found, [...start, "disabled"])).toBe(false);
         expect(await stored(found, [...address, "style", "display"])).toBe(
