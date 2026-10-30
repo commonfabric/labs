@@ -188,6 +188,55 @@ Deno.test("highlights set before the document arrives are drawn once it does", a
   }
 });
 
+Deno.test("a host handing back an older report after a later one leaves the editor's set where typing moved it", async () => {
+  const { element, done } = await mount("hello world");
+  try {
+    element.highlights = [{ id: "one", from: 6, to: 11 }];
+    await element.updateComplete;
+    const reports: { id: string; from: number; to: number }[][] = [];
+    element.addEventListener(
+      "cf-highlights-mapped",
+      (event) => reports.push((event as CustomEvent).detail.highlights),
+    );
+    const view = element.editorView!;
+    // Two keystrokes before the host has answered the first.
+    view.dispatch({ changes: { from: 0, insert: "a" } });
+    view.dispatch({ changes: { from: 0, insert: "b" } });
+    assertEquals(reports, [
+      [{ id: "one", from: 7, to: 12 }],
+      [{ id: "one", from: 8, to: 13 }],
+    ]);
+    // The first report comes back: the view is past it, and stays put.
+    element.highlights = reports[0];
+    await element.updateComplete;
+    assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
+    // A host still behind can change what is marked and how, over the text
+    // the view has the ranges on.
+    element.highlights = [
+      { id: "one", from: 7, to: 12, kind: "selected" },
+      { id: "two", from: 0, to: 1 },
+    ];
+    await element.updateComplete;
+    assertEquals(
+      marks(element).map((mark) => [
+        mark.textContent,
+        mark.classList.contains("cm-highlight-selected"),
+      ]),
+      [["b", false], ["world", true]],
+    );
+    // The host catches up to the second report and takes back its addition;
+    // from here its positions are set as given.
+    element.highlights = reports[1];
+    await element.updateComplete;
+    assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
+    element.highlights = [{ id: "one", from: 2, to: 7 }];
+    await element.updateComplete;
+    assertEquals(marks(element).map((mark) => mark.textContent), ["hello"]);
+  } finally {
+    done();
+  }
+});
+
 Deno.test("a host handing back the ranges the editor reported leaves the editor's set as it is", async () => {
   const { element, done } = await mount("hello world");
   try {

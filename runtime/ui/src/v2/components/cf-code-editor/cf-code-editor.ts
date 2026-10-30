@@ -173,6 +173,38 @@ function replacesWholeDocument(update: ViewUpdate): boolean {
   });
 }
 
+/**
+ * Whether `ranges` place every id that `report` also names where the report
+ * placed it. Kinds are not compared: a host that has caught up may still be
+ * changing which range is selected.
+ */
+function agreesWithReport(
+  ranges: readonly HighlightRange[],
+  report: readonly HighlightRange[],
+): boolean {
+  return report.every((reported) => {
+    const range = ranges.find((each) => each.id === reported.id);
+    return range === undefined ||
+      (range.from === reported.from && range.to === reported.to);
+  });
+}
+
+/**
+ * `ranges` with the positions of `current` for every id both hold: the
+ * host's ids, order, and kinds, over the text the view has the ranges on.
+ */
+function withPositionsOf(
+  ranges: readonly HighlightRange[],
+  current: readonly HighlightRange[],
+): HighlightRange[] {
+  return ranges.map((range) => {
+    const held = current.find((each) => each.id === range.id);
+    return held === undefined
+      ? { ...range }
+      : { ...range, from: held.from, to: held.to };
+  });
+}
+
 /** A unique noteId, so notes created from a mention do not collide. */
 function generateNoteId(): string {
   return `${Date.now().toString(36)}-${
@@ -481,6 +513,10 @@ export class CFCodeEditor extends BaseElement {
   private _lastSelection:
     | { from: number; to: number; text: string }
     | undefined;
+
+  // The last `cf-highlights-mapped` report the host has yet to catch up to,
+  // or undefined while the host's `highlights` agree with the field.
+  private _unmatchedHighlightReport: readonly HighlightRange[] | undefined;
   private _lang = new Compartment();
   private _readonly = new Compartment();
   private _wrap = new Compartment();
@@ -2097,14 +2133,32 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Hands the `highlights` property to the view, unless the view holds the
-   * same ranges already. The comparison is what keeps a host that hands back
-   * the ranges `cf-highlights-mapped` reported from echoing with the editor.
+   * same ranges already. The host hands back what `cf-highlights-mapped`
+   * reported a round trip at a time, and typing can run ahead of it, so a
+   * value that arrives while the host has yet to catch up to the last report
+   * may carry positions read against a document the view has left. Such a
+   * value is taken for its ids and kinds, with the positions of ranges the
+   * view already holds kept as the view mapped them. The host has caught up
+   * once its positions agree with the last report for every id both name,
+   * and from then on its values are set as given.
    */
   private _pushHighlights(): void {
     const view = this._editorView;
     if (!view) return;
     const ranges = this.highlights ?? [];
-    if (sameHighlights(ranges, highlightsOf(view.state))) return;
+    const current = highlightsOf(view.state);
+    if (sameHighlights(ranges, current)) {
+      this._unmatchedHighlightReport = undefined;
+      return;
+    }
+    const report = this._unmatchedHighlightReport;
+    if (report !== undefined && !agreesWithReport(ranges, report)) {
+      const merged = withPositionsOf(ranges, current);
+      if (sameHighlights(merged, current)) return;
+      view.dispatch({ effects: setHighlightsEffect.of(merged) });
+      return;
+    }
+    this._unmatchedHighlightReport = undefined;
     view.dispatch({ effects: setHighlightsEffect.of(ranges) });
   }
 
@@ -2141,6 +2195,7 @@ export class CFCodeEditor extends BaseElement {
    */
   private _trackHighlights(update: ViewUpdate, fromOutside: boolean): void {
     if (fromOutside && replacesWholeDocument(update)) {
+      this._unmatchedHighlightReport = undefined;
       this._pushHighlights();
       return;
     }
@@ -2150,6 +2205,7 @@ export class CFCodeEditor extends BaseElement {
     if (remote) return;
     const mapped = highlightsOf(update.state);
     if (sameHighlights(mapped, this.highlights ?? [])) return;
+    this._unmatchedHighlightReport = mapped;
     this.emit("cf-highlights-mapped", {
       highlights: mapped.map((range) => ({ ...range })),
     });

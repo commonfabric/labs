@@ -56,6 +56,17 @@ comparison is what keeps a host and an editor from echoing at each other: the
 host hands back what `cf-highlights-mapped` reported, the editor sees no
 difference, and nothing is dispatched.
 
+Typing can run ahead of that round trip, and a host whose copy of the text is
+behind the view can hand back positions read against a document the view has
+left: an earlier report, or a range the host re-found in its older text. Setting
+those would move the ranges back onto the wrong text, and the next keystroke
+would map that wrong position onward. So while the host has yet to catch up to
+the last report, a `highlights` value is taken for its ids and kinds only: a
+range the view already holds keeps the position the view mapped it to, and one
+the view does not hold is added where the host put it. The host has caught up
+once its positions agree with the last report for every id both name, and from
+then on its values are set as given.
+
 The update listener reports in the other direction. After any transaction that
 set the selection or changed the document, it emits `cf-selection-change` when
 the main range differs, in position or text, from the one last reported, with
