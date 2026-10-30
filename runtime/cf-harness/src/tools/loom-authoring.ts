@@ -136,9 +136,12 @@ const projectManifest = (value: unknown) => {
   };
 };
 
+/** A reference that fails composition's held whole-piece contract. */
+export class InvalidPatternReference extends Error {}
+
 /**
- * Helper for composition, which accepts only held whole Pattern Instances in
- * the session's own space. Restricted skill handles never grant composition.
+ * Resolves a held whole-piece token in the session's own space to its durable
+ * composition identity. Restricted skill handles never grant composition.
  */
 export const patternReference = async (
   context: HarnessToolContext,
@@ -148,7 +151,9 @@ export const patternReference = async (
     ? undefined
     : resolveHandleToken(context.handleTable, token);
   if (entry === undefined || entry.capability !== undefined) {
-    throw new Error("Use a general Pattern Instance token this run holds.");
+    throw new InvalidPatternReference(
+      "Use a general Pattern Instance token this run holds.",
+    );
   }
   if (context.getFabricSession === undefined) {
     throw new Error("Pattern Instance composition requires a Fabric session.");
@@ -160,7 +165,9 @@ export const patternReference = async (
     (link.space !== undefined && link.space !== space) ||
     link.path.length > 0 || link.scope !== "space"
   ) {
-    throw new Error("Use a whole Pattern Instance in this run's own space.");
+    throw new InvalidPatternReference(
+      "Use a whole Pattern Instance in this run's own space.",
+    );
   }
   const cell = pieces.runtime.getCellFromLink({
     ...link,
@@ -170,7 +177,9 @@ export const patternReference = async (
   await cell.sync();
   const id = pieceId(cell);
   if (id === undefined || getPatternIdentityRef(cell) === undefined) {
-    throw new Error("The held token does not identify a Pattern Instance.");
+    throw new InvalidPatternReference(
+      "The held token does not identify a Pattern Instance.",
+    );
   }
   return `pattern:${space}/${id}`;
 };
@@ -310,7 +319,12 @@ const invoke = async (
           const ref = await patternReference(context, token);
           const { pattern_token: _token, ...rest } = item;
           normalized.push({ ...rest, ref });
-        } catch {
+        } catch (error) {
+          if (!(error instanceof InvalidPatternReference)) {
+            return fail(
+              "The Pattern Instance could not be read. Keep its ref and try again when the Fabric session is available.",
+            );
+          }
           return fail(
             "Use a held, unrestricted whole Pattern Instance in this run's own space.",
           );

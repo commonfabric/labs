@@ -20,6 +20,10 @@ import {
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
 import {
+  createHarnessHandleTable,
+  mintAddressHandle,
+} from "../../src/handle-table.ts";
+import {
   createLoomCommandCatalogSource,
   type HarnessLoomCommandsConfig,
 } from "../../src/loom-commands.ts";
@@ -526,6 +530,71 @@ describe("loom-commands tools", () => {
         });
         expect(calls).toHaveLength(0);
       }
+    });
+
+    it("refuses args whose resolved handles exceed the contract's bound before posting", async () => {
+      const { context, calls } = contextWith();
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable("expanded-args"),
+        "/of:fid1:" + "a".repeat(43),
+      );
+      const args = {
+        text: minted.token + " ".repeat(
+          HARNESS_COMMAND_ARGS_MAX_BYTES - minted.token.length - 11,
+        ),
+      };
+      expect(JSON.stringify(args).length).toBe(HARNESS_COMMAND_ARGS_MAX_BYTES);
+      const output = await runCommandTool.invoke({
+        ...context,
+        handleTable: minted.table,
+      }, {
+        command: "loom.inspect",
+        args,
+      });
+      expect(output).toMatchObject({
+        status: "failed_to_deliver",
+        code: "invalid_input",
+      });
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
+    });
+
+    it("preserves own prototype-named keys while resolving component arguments", async () => {
+      const { context, calls } = contextWith();
+      const args = JSON.parse(
+        '{"__proto__":{"retained":true},"title":"cfh:ordinary"}',
+      );
+      const output = await runCommandTool.invoke(context, {
+        command: "loom.compose",
+        args,
+      });
+      expect(output.status).toBe("executed");
+      expect(JSON.stringify(calls.at(-1)?.body)).toContain(
+        '"__proto__":{"retained":true}',
+      );
+    });
+
+    it("reports a failed Fabric session read without blaming a held reference", async () => {
+      const { context, calls } = contextWith();
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable("session-read"),
+        "/of:fid1:" + "a".repeat(43),
+      );
+      const output = await runCommandTool.invoke({
+        ...context,
+        handleTable: minted.table,
+        getFabricSession: () =>
+          Promise.reject(new Error("private session failure")),
+      }, {
+        command: "loom.compose",
+        args: { components: [{ ref: minted.token }] },
+      });
+      expect(output).toMatchObject({
+        status: "failed_to_deliver",
+        code: "command_failed",
+      });
+      expect(JSON.stringify(output)).not.toContain("private session failure");
+      expect(JSON.stringify(output)).not.toContain("source.read");
+      expect(calls.filter((call) => call.method === "POST")).toHaveLength(0);
     });
 
     it("refuses args larger than the contract's bound before sending a request", async () => {

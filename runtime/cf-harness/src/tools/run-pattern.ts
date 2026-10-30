@@ -356,7 +356,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" or a published patternId; returns ref (usable directly as a Loom component reference), resultRef to its live result cell and, when released, the values resultSchema selects.`,
+    `Compile and run a Common Fabric pattern in the configured space, given source that imports its runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" or a published patternId; returns a whole-piece ref for Loom composition, resultRef to its live result cell and, when released, the values resultSchema selects.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -2089,7 +2089,10 @@ export const runPatternTool: HarnessToolDefinition<
       outputId,
       status: "ok",
       resultRef,
-      ref: resultRef,
+      ref: createLLMFriendlyLink(
+        piece.getCell().getAsNormalizedFullLink(),
+        space,
+      ),
       resultRefSchema: pattern.resultSchema,
       pieceId: piece.id,
       ...(withheld === undefined

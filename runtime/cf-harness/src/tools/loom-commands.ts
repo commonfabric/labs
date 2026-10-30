@@ -54,8 +54,8 @@ import {
   measureLoomRows,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
-import { patternReference } from "./loom-authoring.ts";
-import { swapTokensForRefs } from "../handle-table.ts";
+import { InvalidPatternReference, patternReference } from "./loom-authoring.ts";
+import { defineOwnEntry, swapTokensForRefs } from "../handle-table.ts";
 
 /** Commands whose reference fields name durable Loom components. */
 const COMPONENT_COMMANDS = new Set([
@@ -79,10 +79,11 @@ const componentReferences = async (
   if (!isObjectNotArray(value)) return value;
   const result: { [key: string]: JSONValue } = {};
   for (const [key, item] of Object.entries(value)) {
-    result[key] = (key === "ref" || key === "if_ref") &&
+    const resolved = (key === "ref" || key === "if_ref") &&
         typeof item === "string" && item.startsWith("cfh:")
       ? await patternReference(context, item)
       : await componentReferences(context, item);
+    defineOwnEntry(result, key, resolved);
   }
   return result;
 };
@@ -622,7 +623,14 @@ const sendCall = async (
   ) {
     try {
       args = await componentReferences(context, args);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof InvalidPatternReference)) {
+        return notSent(
+          outputId,
+          "command_failed",
+          "The held reference could not be read. Keep the same ref and try again when the Fabric session is available.",
+        );
+      }
       return notSent(
         outputId,
         "invalid_input",
@@ -633,7 +641,10 @@ const sendCall = async (
   const resolved = context.handleTable === undefined
     ? args
     : swapTokensForRefs(context.handleTable, args);
-  if (!isObjectNotArray(resolved) || !isHarnessCommandJsonValue(resolved)) {
+  if (
+    !isObjectNotArray(resolved) || !isHarnessCommandJsonValue(resolved) ||
+    harnessCommandJsonBytes(resolved) > HARNESS_COMMAND_ARGS_MAX_BYTES
+  ) {
     return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
   }
   if (context.signal?.aborted) {
