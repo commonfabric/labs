@@ -90,9 +90,9 @@ const CREATE_HOST = [
 
 /**
  * A host with the same list and stream that creates each profile with an
- * anonymous `inSpace()` granting every principal `WILDCARD`, passing
- * `ROOT_OPTION` in its place: nothing, for a profile that is not its space's
- * root, or `root: true` for one that is.
+ * anonymous `inSpace()` granting every principal `WRITE`, passing `ROOT_OPTION`
+ * in its place: nothing, for a profile that is not its space's root, or
+ * `root: true` for one that is.
  */
 const SHAPED_HOST = [
   "import { handler, pattern, Writable } from 'commonfabric';",
@@ -103,7 +103,7 @@ const SHAPED_HOST = [
   "  { profiles: Writable<ProfileHomeOutput[]> }",
   ">((event, { profiles }) => {",
   "  profiles.push(",
-  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WILDCARD' }ROOT_OPTION })({",
+  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' }ROOT_OPTION })({",
   "      initialName: event.name,",
   "    }) as ProfileHomeOutput,",
   "  );",
@@ -125,23 +125,30 @@ export type WildcardGrant = "READ" | "WRITE";
 const CREATE_WILDCARD = 'grants: { "*": "WRITE" }';
 
 /**
- * The host program that creates a profile of `shape`, in a space granting
- * every principal `wildcard`, or for `create` what the create pattern grants
- * when `wildcard` is omitted.
+ * The host program that creates a profile of `shape`, with the create
+ * pattern granting every principal `wildcard` in place of its own grant when
+ * `wildcard` is given.
  *
- * @throws Error when `wildcard` is given and the create pattern does not
- *   write its grant to every principal exactly once, as `CREATE_WILDCARD`.
+ * @throws Error when `wildcard` is given with a shape other than `create`, or
+ *   the create pattern does not write its grant to every principal exactly
+ *   once, as `CREATE_WILDCARD`.
  */
 function hostProgram(
   shape: ProfileShape,
   wildcard: WildcardGrant | undefined,
 ): RuntimeProgram {
-  const main = shape === "create"
-    ? CREATE_HOST
-    : SHAPED_HOST.replace("ROOT_OPTION", shape === "root" ? ", root: true" : "")
-      .replace("WILDCARD", wildcard ?? "WRITE");
+  const main = shape === "create" ? CREATE_HOST : SHAPED_HOST.replace(
+    "ROOT_OPTION",
+    shape === "root" ? ", root: true" : "",
+  );
   let create = read("system/profile-create/profile-create.tsx");
-  if (shape === "create" && wildcard !== undefined) {
+  if (wildcard !== undefined) {
+    if (shape !== "create") {
+      throw new Error(
+        `The \`${shape}\` shape does not run the create pattern, so it ` +
+          "takes no `wildcard`",
+      );
+    }
     if (create.split(CREATE_WILDCARD).length !== 2) {
       throw new Error(
         `\`profile-create.tsx\` does not write \`${CREATE_WILDCARD}\` ` +
@@ -199,13 +206,15 @@ function createEvent(name: string): { name: string } {
  * reserves no root.
  * The host's root lives at `hostCause` in the home space, and with
  * `hostIsRoot` the home space cell links it as the space's root, as a real
- * Home is. With `wildcard`, the profile's space grants every principal that
- * and nothing more, in place of what the shape grants.
+ * Home is. With `wildcard`, which only `create` takes, the profile's space
+ * grants every principal that and nothing more, in place of what the create
+ * pattern grants.
  *
  * @throws Error when a commit fails or the list does not end up holding
  *   exactly one profile in a space other than the home space, or when
- *   `wildcard` is given and the create pattern does not write its grant to
- *   every principal in the one form this replaces.
+ *   `wildcard` is given with a shape other than `create` or the create
+ *   pattern does not write its grant to every principal in the one form this
+ *   replaces.
  */
 export async function createProfileThroughHome(
   runtime: Runtime,
