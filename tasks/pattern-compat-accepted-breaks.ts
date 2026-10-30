@@ -2442,6 +2442,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261029T202339Z-2KlMuVmNHF1ZdGpD",
       "20261030T003239Z-a5yji6_jkan05l2M",
       "20261030T013530Z-fN90yJB73fOsh8QD",
+      "20261030T025928Z-Ny4QaF78bLH0Gwg8",
     ],
     paths: [
       "result.$VIEWS.room.canAdd",
