@@ -1491,12 +1491,13 @@ in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 #### Well-known grants
 
-A run configured with a Fabric session seeds a handle when `describe_handle` is
-allowed, including when no tool allow-list is configured: before the first model
-turn, the CLI establishes the session, mints a token for the space's piece
-registry — the same discovery root behind `cf piece ls` — and announces it in a
-context message pairing the token with a fixed, harness-authored description.
-The address stays trusted-side in the handle table like any other entry. This is
+A run configured with a Fabric session seeds a handle when any of
+`describe_handle`, `run_pattern`, `read_value` or `call_verb` is allowed,
+including when no tool allow-list is configured: before the first model turn,
+the CLI establishes the session, mints a token for the space's piece registry —
+the same discovery root behind `cf piece ls` — and announces it in a context
+message pairing the token with a fixed, harness-authored description. The
+address stays trusted-side in the handle table like any other entry. This is
 what lets an agent find pieces to compute over without an operator handing it
 references one by one: discovery is `run_pattern` over the granted token, not a
 tool of its own, and `describe_handle` answers the registry's shape like any

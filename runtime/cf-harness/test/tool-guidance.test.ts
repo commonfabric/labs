@@ -3,6 +3,8 @@
  * guidance a run's task tags load.
  */
 
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
@@ -15,6 +17,7 @@ import { orientContextMessages } from "../src/session-assembly.ts";
 import type { HarnessTaskTag } from "../src/task-classification.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
+  COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
@@ -194,5 +197,127 @@ describe("tool-guidance", () => {
       RESOLVE_PIECE_TOOL_GUIDANCE,
       LOOM_RETRIEVAL_TOOL_GUIDANCE,
     ]);
+  });
+});
+
+describe("conditional host guidance", () => {
+  it("requires command backing and run_command in an explicit allow-list", () => {
+    for (
+      const allowedToolIds of [[], ["bash"], [
+        "list_commands",
+      ]] satisfies BuiltinToolId[][]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+    for (
+      const allowedToolIds of [undefined, [
+        "run_command",
+      ]] satisfies (BuiltinToolId[] | undefined)[]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([LOOM_COMMANDS_TOOL_GUIDANCE]);
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("distinguishes retrieval tools from Loom authoring tools", () => {
+    for (
+      const allowedToolIds of [[], [
+        "loom_compose",
+        "loom_inspect",
+        "loom_authoring_context",
+      ], ["run_command"]] satisfies BuiltinToolId[][]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: true,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+    for (const tool of CARRY_TOOL_IDS.filter((id) => id.startsWith("loom_"))) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: true,
+          allowedToolIds: [tool],
+        }),
+      ).toEqual([LOOM_RETRIEVAL_TOOL_GUIDANCE]);
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: false,
+          allowedToolIds: [tool],
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("emits enforcement guidance only for an enforcing command tool and retains it for find and act", () => {
+    for (
+      const cfcEnforcementMode of [
+        undefined,
+        "disabled",
+        "observe",
+        "enforce-explicit",
+        "enforce-strict",
+      ] satisfies (CfcEnforcementMode | undefined)[]
+    ) {
+      const enforcing = cfcEnforcementMode === "enforce-explicit" ||
+        cfcEnforcementMode === "enforce-strict";
+      const messages = toolGuidanceContextMessages({
+        fabricSessionAvailable: false,
+        loomCommandsAvailable: true,
+        loomRetrievalAvailable: false,
+        allowedToolIds: ["run_command"],
+        cfcEnforcementMode,
+      });
+      expect(messages).toEqual(
+        enforcing
+          ? [LOOM_COMMANDS_TOOL_GUIDANCE, COMMAND_ENFORCEMENT_GUIDANCE]
+          : [LOOM_COMMANDS_TOOL_GUIDANCE],
+      );
+      for (const tag of ["find", "act"] satisfies HarnessTaskTag[]) {
+        expect(
+          orientContextMessages(messages, {
+            tags: new Set([tag]),
+            depth: "standard",
+          }),
+        ).toEqual(messages);
+      }
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds: [],
+          cfcEnforcementMode,
+        }),
+      ).toEqual([]);
+    }
   });
 });

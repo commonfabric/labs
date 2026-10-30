@@ -457,8 +457,9 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, host-supplied input
- * cells, the guidance for selecting a piece target, for a run whose host
+ * skills, the well-known grants of the session's space when a tool can use
+ * them (`describe_handle`, `run_pattern`, `read_value` or `call_verb`),
+ * host-supplied input cells, the guidance for selecting a piece target, for a run whose host
  * opted in to `weaver_action` the guidance for using the Weaver's commands,
  * and the guidance for using the tools the session's backings carry.
  *
@@ -522,7 +523,10 @@ const establishContextMessages = async (
   if (
     engine.fabricSessionAvailable &&
     (config.allowedToolIds === undefined ||
-      config.allowedToolIds.includes("describe_handle"))
+      config.allowedToolIds.some((tool) =>
+        tool === "describe_handle" || tool === "run_pattern" ||
+        tool === "read_value" || tool === "call_verb"
+      ))
   ) {
     try {
       const grantMessage = wellKnownGrantsContextMessage(

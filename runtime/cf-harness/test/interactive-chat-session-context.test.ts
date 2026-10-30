@@ -15,6 +15,7 @@ import {
   HARNESS_CHAT_PROTOCOL_VERSION,
   HARNESS_CHAT_REQUEST_TYPE,
 } from "../src/contracts/interactive-chat.ts";
+import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import type { HarnessInputCellSpec } from "../src/contracts/input-cells.ts";
 import type {
   HarnessPatternRef,
@@ -464,4 +465,61 @@ describe("interactive chat session context", () => {
     // it does not run without it.
     expect(seen).toEqual([]);
   });
+});
+
+describe("grant context with an explicit tool allow-list", () => {
+  const cases: readonly {
+    name: string;
+    tools: readonly BuiltinToolId[];
+    grants: boolean;
+  }[] = [
+    { name: "empty", tools: [], grants: false },
+    { name: "bash only", tools: ["bash"], grants: false },
+    { name: "run_pattern only", tools: ["run_pattern"], grants: true },
+    { name: "describe_handle only", tools: ["describe_handle"], grants: true },
+    { name: "read_value only", tools: ["read_value"], grants: true },
+    { name: "call_verb only", tools: ["call_verb"], grants: true },
+    {
+      name: "both discovery tools",
+      tools: ["run_pattern", "describe_handle"],
+      grants: true,
+    },
+  ];
+  for (const { name, tools, grants } of cases) {
+    it(`establishes and announces grants when usable: ${name}`, async () => {
+      const seen: HarnessTranscriptMessage[][] = [];
+      const engine = stubEngine({ inputCells: [] });
+      let setups = 0;
+      engine.establishWellKnownGrants = () => {
+        setups += 1;
+        return Promise.resolve([{
+          name: "piece-registry",
+          token: "cfh:a:grant",
+          ref: "/of:fid1:registry",
+        }]);
+      };
+      const service = new HarnessInteractiveChatService({
+        basePromptLoopOptions: { engine },
+        createPromptLoop: recordingLoop(seen),
+      });
+      await service.startSession("req-session", {
+        sessionId: "session-1",
+        workspace: { hostPath: "/workspace" },
+        model: "gpt-test",
+        policy: {
+          type: "cf-harness.chat-policy",
+          toolMode: "workspace-write",
+          allowedToolIds: tools,
+          allowedSubagentProfiles: [],
+        },
+      });
+      await runTurn(service, "turn-1", "what is in this space?");
+      expect(setups).toBe(grants ? 1 : 0);
+      expect(seen).toHaveLength(1);
+      expect(
+        seen[0].filter((message) => message.content.includes("cfh:a:grant")),
+      ).toHaveLength(grants ? 1 : 0);
+      expect(seen[0].at(-1)?.content).toBe("what is in this space?");
+    });
+  }
 });
