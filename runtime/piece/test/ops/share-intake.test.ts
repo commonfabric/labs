@@ -2048,6 +2048,58 @@ describe("share-intake", () => {
       expect(restored).toEqual([]);
     });
 
+    it("stops following the offer's space once sending it to Home fails, after vetting it had failed, so a change to the space sends it no more", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      const original = ACLManager.prototype.getStored;
+      let failures = 1;
+      using _flaky = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          return failures-- > 0
+            ? Promise.reject(new Error("temporary read failure"))
+            : original.call(this);
+        },
+      );
+      let sendable = false;
+      let unsent = 0;
+      // Home, but for a `registerSharedSpace` that is no stream until
+      // `sendable`, so that sending to it throws; `unsent` counts the
+      // attempts.
+      const unsendable = {
+        key: (name: string) => {
+          if (name !== "registerSharedSpace" || sendable) {
+            return home.key(name as never);
+          }
+          unsent++;
+          return { getRaw: () => ({ $stream: true }) };
+        },
+      };
+      const intake = startShareIntakeOf(
+        runtime,
+        unsendable as never,
+        identity.did(),
+      );
+      if (intake === undefined) throw new Error("Home has no stream");
+      after = () => intake.stop();
+      await deliver([offerOf(space, "sent after vetting")]);
+      await runtime.idle();
+      await intake.idle();
+      const tried = unsent;
+      expect(tried).toBeGreaterThan(0);
+      expect(intake.accessForTestingOnly.followedSpaces).toBe(0);
+
+      await new ACLManager(runtime, space).set(someoneElse, "READ");
+      await runtime.idle();
+      await intake.idle();
+      expect(unsent).toBe(tried);
+
+      sendable = true;
+      await deliver([offerOf(space, "after the failed send")]);
+      expect(registeredIds(await registeredThrough("sent after vetting")))
+        .toContain("sent after vetting");
+    });
+
     it("logs the failure, and vets the offer again at once, with no other change to its inbox, when the host cannot tell its space's kind once", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       const original = runtime.spaceKind.bind(runtime);

@@ -690,7 +690,9 @@ export class ShareIntake {
       );
     } catch (error) {
       // The row is left undecided, to be vetted again when its inbox next
-      // changes or a lost connection to the host comes back.
+      // changes or a lost connection to the host comes back. Its space,
+      // which vetting has just passed, no longer keeps it waiting.
+      this.#stopWaiting(row);
       logger.warn("send-failed", () => [
         `Sending Home the offer ${receipt}:`,
         error,
