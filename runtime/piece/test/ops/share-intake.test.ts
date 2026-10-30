@@ -1952,7 +1952,7 @@ describe("share-intake", () => {
             : original.call(this);
         },
       );
-      const intake = start();
+      start();
       const before = vettingFailuresLogged();
       await deliver([offerOf(space, "read again")]);
 
@@ -2112,7 +2112,7 @@ describe("share-intake", () => {
             ? Promise.reject(new Error("kind unknown"))
             : original(each),
       );
-      const intake = start();
+      start();
       const before = vettingFailuresLogged();
       await deliver([offerOf(space, "kind unknown")]);
 
