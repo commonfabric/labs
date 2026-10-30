@@ -244,13 +244,20 @@ const engineWith = (
   options: {
     ceiling?: readonly unknown[];
     cfcEnforcementMode?: CfcEnforcementMode;
-    manifest?: () => string;
+
+    /** The listing's body, or the whole response, in place of the manifest. */
+    manifest?: () => string | Response;
   } = {},
 ) => {
   const processes: ProcessRunRequest[] = [];
   host.requests.length = 0;
   answers = {
-    list: () => new Response(options.manifest?.() ?? JSON.stringify(MANIFEST)),
+    list: () => {
+      const manifest = options.manifest?.();
+      return manifest instanceof Response
+        ? manifest
+        : new Response(manifest ?? JSON.stringify(MANIFEST));
+    },
     run: () => new Response(answer),
   };
   const engine = new CfHarnessEngine({
@@ -1302,6 +1309,90 @@ describe("loom-commands tools", () => {
     });
   });
 
+  describe("runCommandTool.effectClassOf()", () => {
+    /** Classes `input` against the stub host's listing. */
+    const effectOf = (
+      input: Record<string, unknown>,
+      options: Parameters<typeof contextWith>[0] = {},
+    ) => runCommandTool.effectClassOf!(input, contextWith(options).context);
+
+    it("classes a call a read when every command it names is declared `read`", async () => {
+      const read = { command: "people-discovery.dossier", args: {} };
+      for (const input of [read, { calls: [read, read] }]) {
+        expect(await effectOf(input)).toEqual({
+          effectClass: "read",
+          reasonCodes: ["command_effect_read"],
+        });
+      }
+    });
+
+    it("classes a call a write when a command it names is declared to change data, or declares no effect", async () => {
+      expect(
+        await effectOf({ command: "loom.compose", args: {} }),
+      ).toMatchObject({
+        effectClass: "write",
+        reasonCodes: ["command_effect_undeclared"],
+      });
+      expect(
+        await effectOf({ command: "loom.compose", args: {} }, {
+          manifest: JSON.stringify({
+            commands: [{ id: "loom.compose", effect: "change" }],
+          }),
+        }),
+      ).toMatchObject({
+        effectClass: "write",
+        reasonCodes: ["command_effect_change"],
+        detail: "`loom.compose` is declared to change data",
+      });
+    });
+
+    it("classes a batch a write when any of its calls is one, naming the first", async () => {
+      expect(
+        await effectOf({
+          calls: [
+            { command: "people-discovery.dossier", args: {} },
+            { command: "loom.gone", args: {} },
+            { command: "loom.compose", args: {} },
+          ],
+        }),
+      ).toMatchObject({
+        effectClass: "write",
+        reasonCodes: ["command_unknown"],
+        detail: "`loom.gone` is not listed for this run",
+      });
+    });
+
+    it("classes a call a write when the host's list cannot be read, or the run has no catalog, or the call names no command", async () => {
+      expect(
+        await effectOf({ command: "people-discovery.dossier", args: {} }, {
+          manifest: "Traceback",
+        }),
+      ).toMatchObject({
+        effectClass: "write",
+        reasonCodes: ["command_catalog_unread"],
+      });
+      expect(
+        await effectOf({ command: "people-discovery.dossier", args: {} }, {
+          configured: false,
+        }),
+      ).toEqual({ effectClass: "write" });
+      expect(await effectOf({ calls: [{ args: {} }] })).toEqual({
+        effectClass: "write",
+      });
+    });
+
+    it("shares the run's one catalog read with the call it classes", async () => {
+      const { context, calls } = contextWith();
+      const input = { command: "people-discovery.dossier", args: {} };
+      await runCommandTool.effectClassOf!(input, context);
+      await runCommandTool.invoke(context, input);
+      expect(calls.map((call) => call.path)).toEqual([
+        "/commands",
+        "/command",
+      ]);
+    });
+  });
+
   describe("engine wiring", () => {
     it("measures a command's answer against the fabric session's read ceiling", async () => {
       const answer = JSON.stringify({
@@ -1380,63 +1471,57 @@ describe("loom-commands tools", () => {
       });
     };
 
-    it("runs a command at `enforce-explicit` only for a direct command, refusing one a `context` task asks for", async () => {
-      // A request a pattern submitted binds its task as `context`; a person's
-      // own request binds as a direct command.
-      const context: PromptSlotBinding = {
-        type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
-        source: { type: "test.prompt-slot", subject: "pattern-request" },
-        role: "context",
-        kernelName: "cf-harness",
-        surface: "test",
-        subject: "pattern-request",
-        eventId: "event-pattern-request",
-      };
-      for (
-        const [binding, decision, hostCalls] of [
-          [context, "denied", []],
-          [directPromptSlotBindingFor("loom-commands"), "allowed", [
-            "/commands",
-            "/command",
-          ]],
-        ] as const
-      ) {
-        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
-          cfcEnforcementMode: "enforce-explicit",
-          manifest: () =>
-            JSON.stringify({
-              commands: [{ id: "loom.compose", effect: "read" }],
-            }),
-        });
-        const result = await composeOnce(engine, binding);
-        const record = (result.runState.policyDecisions ?? []).find((entry) =>
-          entry.toolId === "run_command"
-        );
-        expect(record?.decision).toBe(decision);
-        expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
-      }
+    /** A request a pattern submitted, whose task binds as `context`. */
+    const contextBinding: PromptSlotBinding = {
+      type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
+      source: { type: "test.prompt-slot", subject: "pattern-request" },
+      role: "context",
+      kernelName: "cf-harness",
+      surface: "test",
+      subject: "pattern-request",
+      eventId: "event-pattern-request",
+    };
+
+    /** The decisions a run recorded for `run_command`. */
+    const decisionsOf = (result: { runState: { policyDecisions?: unknown } }) =>
+      ((result.runState.policyDecisions ?? []) as {
+        toolId: string;
+        decision: string;
+        effectClass?: string;
+        reasonCodes: readonly string[];
+        detail?: string;
+      }[]).filter((entry) => entry.toolId === "run_command");
+
+    it("runs a call for a `context` task at `enforce-explicit` when the host declares every command it names a read, recording the call as one", async () => {
+      const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+        cfcEnforcementMode: "enforce-explicit",
+      });
+      const result = await composeOnce(engine, contextBinding, {
+        command: "people-discovery.dossier",
+        args: { entity_id: "p1" },
+      });
+      expect(decisionsOf(result)).toEqual([expect.objectContaining({
+        decision: "allowed",
+        effectClass: "read",
+        reasonCodes: ["cfc_enforce_explicit_read", "command_effect_read"],
+      })]);
+      expect(calls.map((call) => call.path)).toEqual([
+        "/commands",
+        "/command",
+      ]);
     });
 
-    it("judges a batch as one write: refused whole for a `context` task, and sent whole for a direct command", async () => {
-      const context: PromptSlotBinding = {
-        type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
-        source: { type: "test.prompt-slot", subject: "pattern-request" },
-        role: "context",
-        kernelName: "cf-harness",
-        surface: "test",
-        subject: "pattern-request",
-        eventId: "event-pattern-request",
-      };
+    it("judges a batch whole: one command that may change data refuses it for a `context` task, and a direct command sends all of it", async () => {
       const input = {
         calls: [
+          { command: "people-discovery.dossier", args: { entity_id: "p1" } },
           { command: "loom.compose", args: {} },
-          { command: "loom.inspect", args: {} },
         ],
       };
       for (
-        const [binding, decisions, hostCalls] of [
-          [context, ["denied"], []],
-          [directPromptSlotBindingFor("loom-commands"), ["allowed"], [
+        const [binding, decision, hostCalls] of [
+          [contextBinding, "denied", ["/commands"]],
+          [directPromptSlotBindingFor("loom-commands"), "allowed", [
             "/commands",
             "/command",
             "/command",
@@ -1447,13 +1532,62 @@ describe("loom-commands tools", () => {
           cfcEnforcementMode: "enforce-explicit",
         });
         const result = await composeOnce(engine, binding, input);
-        expect(
-          (result.runState.policyDecisions ?? [])
-            .filter((entry) => entry.toolId === "run_command")
-            .map((entry) => entry.decision),
-        ).toEqual([...decisions]);
+        const [record] = decisionsOf(result);
+        expect(record).toMatchObject({
+          decision,
+          effectClass: "write",
+          reasonCodes: [
+            decision === "denied"
+              ? "cfc_enforce_explicit_requires_direct_command"
+              : "cfc_enforce_explicit_direct_command",
+            "command_effect_undeclared",
+          ],
+        });
+        if (decision === "denied") {
+          expect(record.detail).toContain("`loom.compose` declares no effect");
+        }
         expect(calls.map((call) => call.path)).toEqual([...hostCalls]);
       }
+    });
+
+    it("refuses a call naming a command the host does not list for a `context` task, sending nothing", async () => {
+      const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+        cfcEnforcementMode: "enforce-explicit",
+      });
+      const result = await composeOnce(engine, contextBinding, {
+        command: "loom.delete",
+        args: {},
+      });
+      expect(decisionsOf(result)).toEqual([expect.objectContaining({
+        decision: "denied",
+        effectClass: "write",
+        reasonCodes: [
+          "cfc_enforce_explicit_requires_direct_command",
+          "command_unknown",
+        ],
+        detail: expect.stringContaining("`loom.delete` is not listed"),
+      })]);
+      expect(calls.map((call) => call.path)).toEqual(["/commands"]);
+    });
+
+    it("refuses a call for a `context` task when the host's list cannot be read, as a write", async () => {
+      const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+        cfcEnforcementMode: "enforce-explicit",
+        manifest: () => new Response("no", { status: 503 }),
+      });
+      const result = await composeOnce(engine, contextBinding, {
+        command: "people-discovery.dossier",
+        args: { entity_id: "p1" },
+      });
+      expect(decisionsOf(result)).toEqual([expect.objectContaining({
+        decision: "denied",
+        effectClass: "write",
+        reasonCodes: [
+          "cfc_enforce_explicit_requires_direct_command",
+          "command_catalog_unread",
+        ],
+      })]);
+      expect(calls.map((call) => call.path)).toEqual(["/commands"]);
     });
 
     it("shows the model a batch's answers without their labels, and records one observation joining them", async () => {

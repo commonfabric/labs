@@ -122,11 +122,12 @@ export const finishTaskTool: HarnessToolDefinition<
   // gate today (prompt-slot role, not flow labels); when release checks
   // judge a tool's arguments against the run's labels, action payloads join
   // them here.
-  effectClassOf: (input) =>
-    input.actions === undefined ||
-      (Array.isArray(input.actions) && input.actions.length === 0)
+  effectClassOf: (input) => ({
+    effectClass: input.actions === undefined ||
+        (Array.isArray(input.actions) && input.actions.length === 0)
       ? "read"
       : "side-effect",
+  }),
   // The shared tool contract is asynchronous, including host-only reports.
   // deno-lint-ignore require-await
   async invoke(context, input) {

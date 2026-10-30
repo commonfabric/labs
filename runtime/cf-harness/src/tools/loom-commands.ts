@@ -36,6 +36,7 @@ import {
   type HarnessCfcModelContextObservationInput,
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
+import type { HarnessPolicyDecisionReasonCode } from "../contracts/policy-trace.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import { renderCommandSignature } from "../loom-command-signature.ts";
 import {
@@ -53,7 +54,12 @@ import {
   type LoomRetrievalEntry,
   measureLoomRows,
 } from "./loom-retrieval.ts";
-import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
+import type {
+  HarnessToolCallEffect,
+  HarnessToolContext,
+  HarnessToolDefinition,
+  HarnessToolEffectRun,
+} from "./types.ts";
 
 /** The notice every listing carries beside its entries. */
 export const LOOM_COMMANDS_EFFECT_NOTICE =
@@ -691,6 +697,74 @@ const mapWithFanIn = async <T, R>(
   return results;
 };
 
+/**
+ * Helper for `run_command`'s effect, which reads the command names a call
+ * carries, alone or in its `calls`, without yet checking anything else about
+ * it. A name that is not a string is left out, so the input's shape decides
+ * nothing here; the tool refuses a malformed call on its own.
+ */
+const commandNamesOf = (input: Record<string, unknown>): string[] => {
+  const calls = Array.isArray(input.calls) ? input.calls : [input];
+  return calls.flatMap((call) =>
+    isRecord(call) && typeof call.command === "string" ? [call.command] : []
+  );
+};
+
+/**
+ * Helper for `run_command`'s effect, which classes a call by what the run's
+ * catalog declares for every command it names: a read when each is declared
+ * `read`, and otherwise a write, as the descriptor says. A name the catalog
+ * leaves out, a command whose effect is undeclared, and a catalog that
+ * cannot be read are each a write, since nothing then says the call changes
+ * nothing. The catalog read is the one the tool itself shares, so classing a
+ * call asks the host nothing the call would not.
+ */
+const runCommandEffectOf = async (
+  input: Record<string, unknown>,
+  run: HarnessToolEffectRun,
+): Promise<HarnessToolCallEffect> => {
+  const write = (
+    reasonCode: HarnessPolicyDecisionReasonCode,
+    detail: string,
+  ): HarnessToolCallEffect => ({
+    effectClass: "write",
+    reasonCodes: [reasonCode],
+    detail,
+  });
+  const names = commandNamesOf(input);
+  if (run.loomCommandCatalog === undefined || names.length === 0) {
+    return { effectClass: "write" };
+  }
+  const listed = await run.loomCommandCatalog.current();
+  if (listed.status === "error") {
+    return write(
+      "command_catalog_unread",
+      "the host's command list could not be read, so the call may change data",
+    );
+  }
+  for (const name of names) {
+    const entry = listed.catalog.entries.find((candidate) =>
+      candidate.name === name
+    );
+    if (entry === undefined) {
+      return write("command_unknown", `\`${name}\` is not listed for this run`);
+    }
+    if (entry.effect === undefined) {
+      return write(
+        "command_effect_undeclared",
+        `\`${name}\` declares no effect, so it may change data`,
+      );
+    }
+    if (entry.effect !== "read") {
+      return write(
+        "command_effect_change",
+        `\`${name}\` is declared to change data`,
+      );
+    }
+  }
+  return { effectClass: "read", reasonCodes: ["command_effect_read"] };
+};
+
 /** The properties one call carries, alone or as an element of `calls`. */
 const CALL_PROPERTIES = {
   command: COMMAND_NAME_SCHEMA,
@@ -707,9 +781,9 @@ export const runCommandTool: HarnessToolDefinition<
   descriptor: {
     toolId: "run_command",
     title: "Run Command",
-    // A command's effect is unknown until the host declares it, so every
-    // call — a batch as a whole included — is authorized as one that may
-    // change something.
+    // The class of a call the catalog does not show to be reads throughout
+    // (`effectClassOf`): a batch is judged whole, so one command that may
+    // change something makes the whole batch a write.
     effectClass: "write",
     description:
       `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; an unlisted name returns unknown_command and sends nothing.`,
@@ -733,6 +807,7 @@ export const runCommandTool: HarnessToolDefinition<
     },
     tags: ["loom", "command"],
   },
+  effectClassOf: runCommandEffectOf,
   async invoke(context, input) {
     const outputId = context.nextOutputId("run_command");
     const config = context.loomCommands;
