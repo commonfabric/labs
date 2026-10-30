@@ -499,7 +499,9 @@ A release path holding a `*` segment reaches every stored position the segment
 matches at its depth, the wildcard entry there and each concrete position's
 entries, in one release whose receipt names each position. The pinned route
 removes clauses "from exactly the one path", and does not say whether a
-wildcard entry's path is one a request may name; no ruling covers this yet.
+wildcard entry's path is one a request may name. This implements the proposal
+in [specs#86](https://github.com/commonfabric/specs/pull/86), which the pin
+does not incorporate.
 Against the pin it errs toward under-taint: it lowers clauses at positions no
 release under the pin reaches, since the route's recommended refusal reads a
 wildcard entry and the concrete positions it matches as labeling each other,
