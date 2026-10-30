@@ -10,10 +10,18 @@ import type {
   MemorySpace,
 } from "../src/storage/interface.ts";
 import { txToReactivityLog } from "../src/scheduler/reactivity.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("served derivation unseen write");
 const space = signer.did() as MemorySpace;
 const alice = { principal: "did:key:z6Mk-unseen-alice", sessionId: "a-s1" };
+
+// Someone who is neither this space nor its signer, whose personal-space
+// clause the space's own residency does not admit.
+const OTHER_PRINCIPAL = "did:key:zOtherPerson";
 
 describe("served derivation write to an unseen instance", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -26,6 +34,11 @@ describe("served derivation write to an unseen instance", () => {
       storageManager,
       servingPosture: true,
       experimental: { serverExecution: true },
+      // A writer-fit misfit lands as a diagnostic on the transaction, so a
+      // label a run's flow join takes in shows up whether or not the commit
+      // goes through.
+      cfcEnforcementMode: "enforce-explicit",
+      cfcFlowLabels: "persist",
     });
   });
 
@@ -176,6 +189,120 @@ describe("served derivation write to an unseen instance", () => {
         shallow: [],
       });
       tx.abort();
+    });
+  });
+
+  describe("the CFC flow join", () => {
+    // Alice's instance of the output, as the store holds it: a payload
+    // confidential to someone the space's residency does not admit.
+    const labeledInstance = {
+      value: { value: 7 },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: OTHER_PRINCIPAL,
+              }],
+            },
+          }],
+        },
+      },
+    };
+
+    beforeEach(async () => {
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      expect((await seed.commit().settled).error).toBeUndefined();
+    });
+
+    /**
+     * Runs a served derivation for Alice that writes `output` and a
+     * space-scoped `sink`, which declares no store policy, so a confidential
+     * label taken into the run's flow join cannot fit it. `beforeCommit`
+     * runs between the writes and the commit. Returns the transaction, the
+     * writer-fit diagnostics its preparation recorded, and the commit's
+     * result.
+     */
+    const deriveForAlice = async (
+      output: ReturnType<typeof scopedCell>,
+      sinkCause: string,
+      options: {
+        readOutput?: boolean;
+        beforeCommit?: () => Promise<void>;
+      } = {},
+    ) => {
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "derive-for-alice",
+        kind: "derivation",
+        scopeKeyIdentity: alice,
+        actionScopeKey: resolveScopeKey("user", alice),
+      });
+      if (options.readOutput === true) output.withTx(tx).get();
+      output.withTx(tx).set({ value: 1 });
+      scopedCell(sinkCause, "space").withTx(tx).set({ value: 1 });
+      await options.beforeCommit?.();
+      tx.prepareCfc();
+      const writerFit = tx.getCfcState().diagnostics.filter((diagnostic) =>
+        diagnostic.includes("writer-fit")
+      );
+      return { tx, writerFit, result: await tx.commit().settled };
+    };
+
+    it("records no writer-fit misfit for a first write over an unseen labeled instance that arrives before the commit, and refuses the commit as inconsistent", async () => {
+      const output = scopedCell("flow-unseen-output");
+      const { tx, writerFit, result } = await deriveForAlice(
+        output,
+        "flow-unseen-sink",
+        {
+          // The instance lands in the replica after the run wrote over its
+          // absence and before the run commits.
+          beforeCommit: () => sealAsAlice(output, labeledInstance),
+        },
+      );
+
+      expect(rootReadsOf(tx, output.getAsNormalizedFullLink().id).shallow)
+        .toHaveLength(1);
+      expect(writerFit).toEqual([]);
+      // The commit-time claim re-reads the instance the run saw as absent,
+      // finds it there, and refuses the run as built on a stale view.
+      expect(result.error?.name).toBe("StorageTransactionInconsistent");
+    });
+
+    it("records no writer-fit misfit and no root read for the re-run's write once the instance has arrived", async () => {
+      const output = scopedCell("flow-arrived-output");
+      await sealAsAlice(output, labeledInstance);
+      const { tx, writerFit } = await deriveForAlice(
+        output,
+        "flow-arrived-sink",
+      );
+
+      expect(rootReadsOf(tx, output.getAsNormalizedFullLink().id)).toEqual({
+        deep: [],
+        shallow: [],
+      });
+      expect(writerFit).toEqual([]);
+    });
+
+    it("records a writer-fit misfit when the run reads the labeled instance itself", async () => {
+      // The control for the two above: the instance's label does reach a
+      // flow join that observes it, and the space-scoped sink then cannot
+      // hold what the run wrote.
+
+      const output = scopedCell("flow-read-output");
+      await sealAsAlice(output, labeledInstance);
+      const { writerFit } = await deriveForAlice(output, "flow-read-sink", {
+        readOutput: true,
+      });
+
+      expect(writerFit.length).toBeGreaterThan(0);
+      expect(writerFit[0]).toContain("writer-fit confidentiality misfit");
     });
   });
 });
