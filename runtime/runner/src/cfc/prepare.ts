@@ -110,8 +110,9 @@ import type {
   TransactionWriteDetail,
 } from "../storage/interface.ts";
 import {
+  type DeclaredOnwardTarget,
+  declaredOnwardTarget,
   internalVerifierRead,
-  isDeclaredOnwardRead,
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
@@ -3031,6 +3032,10 @@ const targetKey = (target: {
 }): string =>
   `${target.space}\u0000${normalizeCellScope(target.scope)}\u0000${target.id}`;
 
+/** The key `deriveFlowJoin` answers a read declared onward under. */
+const declaredOnwardKey = (target: DeclaredOnwardTarget): string =>
+  `${targetKey(target)}\u0000${pathKey(target.path)}`;
+
 const targetFromKey = (key: string): {
   space: MemorySpace;
   scope: ReturnType<typeof normalizeCellScope>;
@@ -4197,14 +4202,14 @@ const forEachFlowObservation = (
       // them, which is what leaves `flowLabelWorkExists` — and with it
       // whether the flow stage runs at all — exactly as it was.
       writeDestination: boolean;
-      // True for a CONTENT observation of a read carrying
-      // `declaredOnwardRead`: what it consumed at its own path is declared
-      // by the reader on what it writes, so `deriveFlowJoin` leaves that out
-      // of the join's confidentiality (what it consumed at the slots is
-      // per-item and joins) and keeps its integrity in the meet. The pointer
-      // observations such a read's scope makes are never declared onward.
-      // Every other consumer of this walk keeps the read.
-      declaredOnward: boolean;
+      // Set for a CONTENT observation of a read carrying
+      // `declaredOnwardRead`: what it consumed at its own path lands on the
+      // target named here, as its membership stamp, so `deriveFlowJoin`
+      // leaves that out of the join's confidentiality (what it consumed at
+      // the slots is per-item and joins) and keeps its integrity in the
+      // meet. The pointer observations such a read's scope makes are never
+      // declared onward. Every other consumer of this walk keeps the read.
+      declaredOnward: DeclaredOnwardTarget | undefined;
       // True for the probe of a slot this transaction went on to follow: a
       // `followRef` observation made by a dereference rather than standing
       // alone.
@@ -4387,8 +4392,9 @@ const forEachFlowObservation = (
           // at each slot, the identity a child is set up from — stay the
           // attempt's own, so a child's setup and the container's slot
           // templates carry them (spec §8.5.4.3).
-          declaredOnward: shape !== "followRef" &&
-            isDeclaredOnwardRead(read.meta),
+          declaredOnward: shape === "followRef"
+            ? undefined
+            : declaredOnwardTarget(read.meta),
           followedSlot: followsSlot,
         },
       )
@@ -4419,7 +4425,7 @@ const forEachFlowObservation = (
           },
           machinery: false,
           writeDestination: isWriteDestinationRead(read.meta),
-          declaredOnward: isDeclaredOnwardRead(read.meta),
+          declaredOnward: declaredOnwardTarget(read.meta),
           followedSlot: false,
         },
       )
@@ -4466,7 +4472,7 @@ const forEachFlowObservation = (
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
-          declaredOnward: false,
+          declaredOnward: undefined,
           followedSlot: false,
         },
       )
@@ -4492,7 +4498,7 @@ const forEachFlowObservation = (
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
-          declaredOnward: false,
+          declaredOnward: undefined,
           followedSlot: false,
         },
       )
@@ -4653,13 +4659,6 @@ const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
   options?: {
     /**
-     * Resolve only the reads declared onward (`declaredOnwardRead`), for
-     * the reader that declares what they consumed: every other read is
-     * passed over unresolved, and only `declaredOnward` is answered.
-     */
-    declaredOnwardOnly?: boolean;
-
-    /**
      * Collect the spaces of observations that contributed label content to
      * the join (inv-12 Stage 1). The per-target predicates in
      * `prepareBoundaryCommit` test whether any labeled contribution
@@ -4677,10 +4676,15 @@ const deriveFlowJoinImpl = (
   confidentiality: CfcConfClause[];
   integrity: CfcAtom[];
   /**
-   * The confidentiality the reads declared onward consumed, which the join
-   * leaves out of `confidentiality`: what their reader declares.
+   * The confidentiality the reads declared onward consumed at their own
+   * paths, which the join leaves out of `confidentiality`: what lands on
+   * the targets those reads named, all together and per target.
    */
   declaredOnward: CfcConfClause[];
+  declaredOnwardAt: ReadonlyMap<string, {
+    target: DeclaredOnwardTarget;
+    confidentiality: CfcConfClause[];
+  }>;
   labeledSpaces?: ReadonlySet<MemorySpace>;
 
   /**
@@ -4692,7 +4696,10 @@ const deriveFlowJoinImpl = (
 } => {
   const atoms: unknown[] = [];
   const declaredAtoms: unknown[] = [];
-  const declaredOnwardOnly = options?.declaredOnwardOnly === true;
+  const declaredAtomsAt = new Map<
+    string,
+    { target: DeclaredOnwardTarget; atoms: unknown[] }
+  >();
   // Class-aware integrity meet (§8.9.3 / §3.1.6.2): hereditary atoms
   // survive only when EVERY contributing observation carries them. An
   // observation with no resolved label has empty integrity and empties the
@@ -4823,9 +4830,6 @@ const deriveFlowJoinImpl = (
       if (observation.writeDestination) {
         return false;
       }
-      if (declaredOnwardOnly && !observation.declaredOnward) {
-        return false;
-      }
       const key = targetKey({ space, id, scope });
       if (identity !== undefined && observation.shape !== "followRef") {
         const recursive = observation.shape === "value" &&
@@ -4922,7 +4926,7 @@ const deriveFlowJoinImpl = (
         observation.shape,
         String(observation.nonRecursive === true),
         String(observation.coveredByTrace || observation.machinery),
-        String(observation.declaredOnward),
+        String(observation.declaredOnward !== undefined),
         encodePointer(logicalPath),
       ]);
       let label = document.labels.get(labelKey);
@@ -5093,13 +5097,23 @@ const deriveFlowJoinImpl = (
       // reference-valued-children rule, spec §4.6.3), which a child is set
       // up from, so it joins like any content read's. The read's integrity
       // meets below like any content read's.
-      if (observation.declaredOnward) {
+      if (observation.declaredOnward !== undefined) {
         const node = document.labels.get(`${labelKey}#node`);
-        for (const atom of node?.confidentiality ?? []) {
-          declaredAtoms.push(atom);
+        if (node?.confidentiality?.length) {
+          const target = observation.declaredOnward;
+          const at = declaredOnwardKey(target);
+          let onward = declaredAtomsAt.get(at);
+          if (onward === undefined) {
+            onward = { target, atoms: [] };
+            declaredAtomsAt.set(at, onward);
+          }
+          for (const atom of node.confidentiality) {
+            declaredAtoms.push(atom);
+            onward.atoms.push(atom);
+          }
         }
       }
-      const joined = observation.declaredOnward
+      const joined = observation.declaredOnward !== undefined
         ? document.labels.get(`${labelKey}#below`)?.confidentiality
         : label?.confidentiality;
       if (joined?.length) {
@@ -5147,7 +5161,6 @@ const deriveFlowJoinImpl = (
   // stamped entry representation-eligible, same posture as a foreign labeled
   // read.
   for (const observation of tx.getCfcState().labelMetadataObservations) {
-    if (declaredOnwardOnly) break;
     noteLabelSource(observation.target, "application/json");
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
@@ -5161,7 +5174,6 @@ const deriveFlowJoinImpl = (
   for (
     const observation of tx.getCfcState().externalContentObservations ?? []
   ) {
-    if (declaredOnwardOnly) break;
     labelWithoutDocument = true;
     if (
       labeledSpaces !== undefined &&
@@ -5343,6 +5355,12 @@ const deriveFlowJoinImpl = (
   if (labelWithoutDocument) labelSources = undefined;
   return {
     declaredOnward: uniqueCfcAtoms(declaredAtoms),
+    declaredOnwardAt: new Map(
+      [...declaredAtomsAt].map(([at, onward]) => [at, {
+        target: onward.target,
+        confidentiality: uniqueCfcAtoms(onward.atoms),
+      }]),
+    ),
     confidentiality,
     integrity: uniqueCfcAtoms(integrity),
     ...(labeledSpaces !== undefined ? { labeledSpaces } : {}),
@@ -11933,7 +11951,12 @@ export function* prepareBoundaryCommitSteps(
   const valueTargets = valueWriteTargets(tx);
   const flowTargets = flowMode === "off" ? undefined : valueTargets;
   const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
-    ? { confidentiality: [], integrity: [], declaredOnward: [] }
+    ? {
+      confidentiality: [],
+      integrity: [],
+      declaredOnward: [],
+      declaredOnwardAt: new Map(),
+    }
     : deriveFlowJoin(tx, {
       collectLabeledSpaces: true,
       collectLabelSources: flowPersist,
@@ -13671,11 +13694,23 @@ export function* prepareBoundaryCommitSteps(
         // `TransformedBy`, so a reader of the node has the derivation
         // evidence an exchange rule matches (`carriedStampLabel` withdraws
         // it once another writer touches the container).
-        if (flowHasLabels && flowConfidentiality.length > 0) {
+        // What a read declared onward onto this container consumed at its
+        // own path lands here, on the membership alone: a coordinator's
+        // list read sends its list's membership label to its container
+        // (`declaredOnwardRead`), replaced from the join each reconcile
+        // like the rest of the stamp. The per-item part of that read is in
+        // J already, so the slot templates below need nothing of it.
+        const onward = flowJoin.declaredOnwardAt.get(
+          declaredOnwardKey({ ...targetFromKey(key), path }),
+        )?.confidentiality ?? [];
+        const membershipConfidentiality = onward.length === 0
+          ? flowConfidentiality
+          : uniqueCfcAtoms([...flowConfidentiality, ...onward]);
+        if (membershipConfidentiality.length > 0) {
           persistedLabelEntries.push(markFlowStampEntry({
             path,
             label: {
-              confidentiality: [...flowConfidentiality],
+              confidentiality: [...membershipConfidentiality],
               ...(flowTransformedBy.length > 0
                 ? { integrity: [...flowTransformedBy] }
                 : {}),

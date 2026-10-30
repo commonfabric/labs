@@ -21,7 +21,6 @@ import {
 } from "./list-element-keys.ts";
 import {
   listContainerStoreWrites,
-  listContainerWriteSchema,
   listCoordinatorPlan,
   listElementResultCell,
   listMembershipRead,
@@ -58,13 +57,10 @@ export const MAP_INPUT_SCHEMA = internSchema({
 // element contents. A content-schema get() here would journal real value
 // reads of every element result — under flow labels (S16) that smears every
 // element's taint into the coordinator's per-tx join and from there onto
-// sibling scaffolding (the read-own-output feedback). The slots claim no
-// type: the container's stored schema claims the element's, and a write
-// through this view that declares the membership (`listContainerWriteSchema`)
-// is merged with the stored schema, which refuses a differing type.
+// sibling scaffolding (the read-own-output feedback).
 const RESULT_PRESENCE_SCHEMA = internSchema({
   type: "array",
-  items: { asCell: ["cell"] },
+  items: { asCell: ["cell"], type: "unknown" },
 });
 
 const logger = getLogger("runner.map", { enabled: true, level: "warn" });
@@ -240,23 +236,18 @@ function createMapInstance(
             // The list is read as the reconcile reads it, its membership
             // declared onward onto the container. Only the raw list is
             // needed here, so the slots are not resolved.
-            const { rawList: raw, membership } = listMembershipRead(
+            const { rawList: raw } = listMembershipRead(
               settleTx,
               inputsCell,
               "list",
-              "declared",
+              result,
             );
             if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
-              const container = result;
               settleTx.runWithAmbientReadMeta(
                 { ...linkResolutionProbe, ...machineryRead },
                 () =>
-                  container.asSchema(listContainerWriteSchema(
-                    settleTx,
-                    container,
-                    RESULT_PRESENCE_SCHEMA,
-                    membership,
-                  )).withTx(settleTx).set([]),
+                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                    .set([]),
               );
             }
           }).then(({ error }) => {
@@ -336,14 +327,6 @@ function createMapInstance(
     // every element's taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
-    // The same view for writes, declaring on the container's membership what
-    // the list's membership carries (`listContainerWriteSchema`).
-    const resultForWrite = result.asSchema(listContainerWriteSchema(
-      tx,
-      result,
-      RESULT_PRESENCE_SCHEMA,
-      plan.membership,
-    )).withTx(tx);
 
     const droppedArgumentFields = unusedListOpArgumentFields(argumentUsage);
     const createRunInput = (element: Cell<any>, index: number) => ({
@@ -420,7 +403,7 @@ function createMapInstance(
     // Correspondingly, the result should be []. TODO: Maybe it's important to
     // distinguish empty inputs from undefined inputs?
     if (list === undefined) {
-      probeScoped(() => resultForWrite.set([]));
+      probeScoped(() => resultWithLog.set([]));
       releaseRemovedElements(runtime, elementRuns, new Set());
       return;
     }
@@ -515,7 +498,7 @@ function createMapInstance(
         newArrayValue[i] = exposedResultCell(runtime, tx, resultCell);
       }
     }
-    probeScoped(() => resultForWrite.set(newArrayValue));
+    probeScoped(() => resultWithLog.set(newArrayValue));
   };
 
   // Child-starting coordinator: its reconcile must run on resume to

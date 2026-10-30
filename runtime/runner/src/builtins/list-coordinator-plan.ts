@@ -1,12 +1,8 @@
-import type { JSONSchema, JSONSchemaObj, Pattern } from "../builder/types.ts";
+import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
 import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
-import type { CfcConfClause } from "../cfc/clause.ts";
-import { cfcDeclaredLabelAt, readStoredCfcMetadata } from "../cfc/metadata.ts";
-import { joinCfcObservedConfidentiality } from "../cfc/observation.ts";
-import { deriveFlowJoin } from "../cfc/prepare.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { declaredOnwardRead } from "../storage/reactivity-log.ts";
 import { listElementKeys } from "./list-element-keys.ts";
@@ -61,13 +57,6 @@ export type ListCoordinatorPlan = {
   container: Cell<any[]>;
   /** Element identity keys by position (empty when `list` is not an array). */
   elementKeys: Map<number, string>;
-  /**
-   * The confidentiality the list's membership carries, for `map` to declare
-   * on its container through `listContainerWriteSchema`; undefined for the
-   * other ops, whose membership reads join their transaction. See
-   * `listSlotResolutions`.
-   */
-  membership: readonly CfcConfClause[] | undefined;
 };
 
 /**
@@ -86,9 +75,9 @@ export type ListCoordinatorPlan = {
  * resolutions are link-resolution probes, which flow derivation treats
  * as resolution machinery rather than observations.
  *
- * `map` reads the list-doc with its membership declared onward: the label
- * goes on its container's membership, and a child it sets up carries its
- * own slot's label and the selection's (`listSlotResolutions`).
+ * `map` reads the list-doc with its membership declared onward onto its
+ * container: the list's membership label lands there, and a child it sets up
+ * carries its own slot's label and the selection's (`listMembershipRead`).
  *
  * The result container is keyed on the node's reserved output spot — a
  * stable, position-derived, program-independent identity (CT-1623) —
@@ -118,36 +107,12 @@ export function listCoordinatorPlan(
       "writeRedirect",
     )
     : undefined;
-  // `array` callback arguments should observe the actual list entity, not
-  // the alias/boxed reference used to pass that list into the builtin.
-  const { listCell, rawList, slots, membership } = listSlotResolutions(
-    runtime,
-    tx,
-    inputsCell,
-    "list",
-    op === "map" ? "declared" : undefined,
-  );
-  const list: Cell<any>[] | undefined = rawList === undefined
-    ? undefined
-    : !Array.isArray(rawList)
-    ? rawList as unknown as Cell<any>[] // non-array: the caller's guard
-    : slots.map((resolved) => runtime.getCellFromLink(resolved, undefined, tx));
   // `.getRaw()` because the pattern itself is wanted, not what its aliases
   // reach: a compact `{ $patternRef }` sentinel (resolved to the live
   // canonical pattern by identity) or, on the legacy path, the embedded
   // pattern graph itself.
   const opPattern = resolveOpPattern(runtime, opCell.getRaw(), op, inputsCell);
   const argumentUsage = inferListOpArgumentUsage(opPattern);
-  const scope = op === "map" ? listTarget!.scope : narrowestCellScope(
-    runtime,
-    tx,
-    [
-      inputsCell.key("list"),
-      ...(Array.isArray(list) && argumentUsage.usesElement ? list : []),
-      argumentUsage.usesArray ? inputsCell.key("list") : undefined,
-      argumentUsage.usesParams ? inputsCell.key("params") : undefined,
-    ],
-  );
   const outputSpot = outputSpotFromBinding(outputBinding);
   if (!outputSpot) {
     throw new Error(
@@ -157,14 +122,48 @@ export function listCoordinatorPlan(
   const resultSchema = op === "map"
     ? listResultSchema(opPattern.resultSchema)
     : listResultSchema();
-  const container = ownedCell<any[]>(
+  const mintContainer = (scope: ReturnType<typeof narrowestCellScope>) =>
+    ownedCell<any[]>(
+      runtime,
+      tx,
+      parentCell,
+      listContainerCause(op, parentCell, outputSpot),
+      resultSchema,
+      scope,
+    );
+  // `map` knows its container before it reads the list, since the list read
+  // names the container its membership label lands on. The other two bind
+  // their container to a scope the list's elements decide.
+  const mapContainer = op === "map"
+    ? mintContainer(listTarget!.scope)
+    : undefined;
+  // `array` callback arguments should observe the actual list entity, not
+  // the alias/boxed reference used to pass that list into the builtin.
+  const { listCell, rawList, slots } = listSlotResolutions(
     runtime,
     tx,
-    parentCell,
-    listContainerCause(op, parentCell, outputSpot),
-    resultSchema,
-    scope,
+    inputsCell,
+    "list",
+    mapContainer,
   );
+  const list: Cell<any>[] | undefined = rawList === undefined
+    ? undefined
+    : !Array.isArray(rawList)
+    ? rawList as unknown as Cell<any>[] // non-array: the caller's guard
+    : slots.map((resolved) => runtime.getCellFromLink(resolved, undefined, tx));
+  const scope = mapContainer !== undefined
+    ? listTarget!.scope
+    : narrowestCellScope(
+      runtime,
+      tx,
+      [
+        inputsCell.key("list"),
+        ...(Array.isArray(list) && argumentUsage.usesElement ? list : []),
+        argumentUsage.usesArray ? inputsCell.key("list") : undefined,
+        argumentUsage.usesParams ? inputsCell.key("params") : undefined,
+      ],
+    );
+  const container = mapContainer ?? mintContainer(scope);
   const elementKeys = Array.isArray(list)
     ? listElementKeys(list)
     : new Map<number, string>();
@@ -176,37 +175,7 @@ export function listCoordinatorPlan(
     scope,
     container,
     elementKeys,
-    membership,
   };
-}
-
-/**
- * The schema a list coordinator writes its container through: `schema`,
- * declaring `membership` on the container's membership, joined with what
- * the container declares there already. A declaration only grows, so every
- * write carries the prior one forward, whatever the list carries now; a
- * container that declares nothing and a list that carries nothing leave
- * `schema` as it is.
- */
-export function listContainerWriteSchema(
-  tx: IExtendedStorageTransaction,
-  container: Cell<any[]>,
-  schema: JSONSchemaObj,
-  membership: readonly CfcConfClause[] | undefined,
-): JSONSchema {
-  const link = container.getAsNormalizedFullLink();
-  const confidentiality = joinCfcObservedConfidentiality([
-    cfcDeclaredLabelAt(
-      readStoredCfcMetadata(tx, link),
-      link.path,
-      "enumerate",
-      "node",
-    ).confidentiality,
-    membership,
-  ]);
-  return confidentiality.length === 0
-    ? schema
-    : { ...schema, ifc: { confidentiality, observes: "enumerate" } };
 }
 
 /**
@@ -214,42 +183,40 @@ export function listContainerWriteSchema(
  * membership and order, which ARE the list's content.
  *
  * That read observes the membership, and the transaction's join charges it
- * to everything the transaction writes. With `declare` set, the read is
- * declared onward instead (`declaredOnwardRead`): the confidentiality the
- * join resolves for it, slot probes included, comes back as `membership`,
- * for the caller to declare on the container it writes from it
- * (`listContainerWriteSchema`), and a child the caller sets up in the same
- * transaction carries its own slot's label and the selection's, not every
- * element's. A list whose membership carries every element's label, a query
- * result (CFC spec §8.17.6), is the case that tells the two apart. The join
- * reads the list's labels through verifier reads reactivity sees, so a label
- * that grows runs the caller again.
+ * to everything the transaction writes. With `onto` given, the read is
+ * declared onward instead (`declaredOnwardRead`): what it consumed at the
+ * list itself, the membership label, lands on `onto`'s membership as the
+ * flow stage stamps it, and what it consumed at the slots, each item's
+ * shape and reference identity, joins as before, so a child the caller sets
+ * up in the same transaction carries its own slot's label and the
+ * selection's, not every element's. A list whose membership carries every
+ * element's label, a query result (CFC spec §8.17.6), is the case that
+ * tells the two apart.
  */
 export function listMembershipRead(
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
-  declare?: "declared",
+  onto?: Cell<any[]>,
 ): {
   listCell: Cell<any>;
   rawList: unknown;
-  membership: readonly CfcConfClause[] | undefined;
 } {
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
   const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
   // A declared-onward read (proposed CFC spec §18.6.2, commonfabric/specs#85):
-  // the declaration lands on the caller's result container, through
-  // `listContainerWriteSchema`, before the transaction's writes are
-  // measured. Every other write the caller derives from this read is a
-  // child's setup, which the caller's resolution of that child's slot
-  // (`listSlotResolutions`) decides: that read stays in the join.
-  const rawList = declare === undefined
+  // the list's membership label lands on `onto`, the caller's result
+  // container, as its membership stamp. Every other write the caller
+  // derives from this read is a child's setup, which the caller's
+  // resolution of that child's slot (`listSlotResolutions`) decides: that
+  // read stays in the join.
+  const rawList = onto === undefined
     ? readRawList()
-    : tx.runWithAmbientReadMeta(declaredOnwardRead, readRawList);
-  const membership = declare === undefined
-    ? undefined
-    : deriveFlowJoin(tx, { declaredOnwardOnly: true }).declaredOnward;
-  return { listCell, rawList, membership };
+    : tx.runWithAmbientReadMeta(
+      declaredOnwardRead(onto.getAsNormalizedFullLink()),
+      readRawList,
+    );
+  return { listCell, rawList };
 }
 
 /**
@@ -264,25 +231,24 @@ export function listMembershipRead(
  * ends on, until a round ends where the last one did, before deriving a
  * plan. A slot whose links run in a cycle names no value and resolves to its
  * own place in the list. `slots` is empty when the list is not an array.
- * The list itself is read by `listMembershipRead`, `declare` included.
+ * The list itself is read by `listMembershipRead`, `onto` included.
  */
 export function listSlotResolutions(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
-  declare?: "declared",
+  onto?: Cell<any[]>,
 ): {
   listCell: Cell<any>;
   rawList: unknown;
   slots: NormalizedFullLink[];
-  membership: readonly CfcConfClause[] | undefined;
 } {
-  const { listCell, rawList, membership } = listMembershipRead(
+  const { listCell, rawList } = listMembershipRead(
     tx,
     inputsCell,
     listKey,
-    declare,
+    onto,
   );
   const listBase = listCell.getAsNormalizedFullLink();
   // An element whose links run in a cycle, back to a place they passed or
@@ -295,7 +261,7 @@ export function listSlotResolutions(
       ) ?? listSlotPlace(listBase, i)
     )
     : [];
-  return { listCell, rawList, slots, membership };
+  return { listCell, rawList, slots };
 }
 
 /**

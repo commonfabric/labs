@@ -23,10 +23,7 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import type { FactoryInput } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
-import {
-  cfcDeclaredLabelAt,
-  readStoredCfcMetadata,
-} from "../src/cfc/metadata.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -45,6 +42,14 @@ import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-declared-onward");
 const space = signer.did();
+
+/** Where the reads below are declared onward to: any document will do. */
+const ONTO: IMemorySpaceAddress = {
+  space,
+  scope: "space",
+  id: "of:declared-onward-target",
+  path: [],
+};
 
 /** An integrity atom the join carries through its meet. */
 const CERTIFIED = { type: "https://commonfabric.org/cfc/atom/PolicyCertified" };
@@ -143,13 +148,13 @@ describe("a read declared onward", () => {
   /** The join of one raw read of `list`, made under `meta` if given. */
   const joinOfRead = (
     list: IMemorySpaceAddress,
-    meta?: typeof declaredOnwardRead,
+    onto?: IMemorySpaceAddress,
   ) => {
     const tx = runtime.edit();
     try {
       const read = () => runtime.getCellFromLink(list, undefined, tx).getRaw();
-      if (meta === undefined) read();
-      else tx.runWithAmbientReadMeta(meta, read);
+      if (onto === undefined) read();
+      else tx.runWithAmbientReadMeta(declaredOnwardRead(onto), read);
       return deriveFlowJoin(tx);
     } finally {
       tx.abort("observation only");
@@ -175,7 +180,7 @@ describe("a read declared onward", () => {
     const list = await seededList("declared-onward-join", LIST_ENTRIES);
 
     const ordinary = joinOfRead(list);
-    const declared = joinOfRead(list, declaredOnwardRead);
+    const declared = joinOfRead(list, ONTO);
 
     expect(
       sameAtoms(ordinary.confidentiality, [...NODE_ATOMS, ...ITEM_ATOMS]),
@@ -189,10 +194,15 @@ describe("a read declared onward", () => {
     const list = await seededList("declared-onward-answer", LIST_ENTRIES);
 
     const ordinary = joinOfRead(list);
-    const declared = joinOfRead(list, declaredOnwardRead);
+    const declared = joinOfRead(list, ONTO);
 
     expect(sameAtoms(declared.declaredOnward, NODE_ATOMS)).toBe(true);
+    const at = [...declared.declaredOnwardAt.values()];
+    expect(at).toHaveLength(1);
+    expect(at[0].target).toEqual(ONTO);
+    expect(sameAtoms(at[0].confidentiality, NODE_ATOMS)).toBe(true);
     expect(ordinary.declaredOnward).toEqual([]);
+    expect(ordinary.declaredOnwardAt.size).toBe(0);
   });
 
   /**
@@ -227,18 +237,19 @@ describe("a read declared onward", () => {
     return mapped.resolveAsCell();
   };
 
-  /** The confidentiality `container` declares on its membership. */
+  /** The confidentiality the runtime stamped on `container`'s membership. */
   // deno-lint-ignore no-explicit-any -- any container
-  const declaredMembership = (container: Cell<any>): unknown[] => {
+  const stampedMembership = (container: Cell<any>): unknown[] => {
     const tx: IExtendedStorageTransaction = runtime.edit();
     try {
       const link = container.getAsNormalizedFullLink();
-      return cfcDeclaredLabelAt(
-        readStoredCfcMetadata(tx, link),
-        link.path,
-        "enumerate",
-        "node",
-      ).confidentiality ?? [];
+      const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
+      return entries
+        .filter((entry) =>
+          entry.origin === "structure" && entry.observes === "enumerate" &&
+          entry.path.length === link.path.length
+        )
+        .flatMap((entry) => entry.label.confidentiality ?? []);
     } finally {
       tx.abort("label read");
     }
@@ -266,12 +277,14 @@ describe("a read declared onward", () => {
     }
   };
 
-  it("map declares on its container's membership what a read consumes at the list itself", async () => {
+  it("map lands on its container's membership what a read consumes at the list itself", async () => {
     const list = await seededList("map-declares", LIST_ENTRIES);
     const container = await mapOver("map-declares-page", list);
 
-    const declared = declaredMembership(container);
-    expect(sameAtoms(declared, NODE_ATOMS)).toBe(true);
+    // The membership stamp carries the coordinator's join as well: what it
+    // consumed at the slots is part of the container's membership too.
+    const stamped = stampedMembership(container);
+    expect(sameAtoms(stamped, [...NODE_ATOMS, ...ITEM_ATOMS])).toBe(true);
   });
 
   it("map carries what it consumed at the slots onto its container's slots", async () => {
@@ -282,11 +295,11 @@ describe("a read declared onward", () => {
     expect(sameAtoms(stamped, ITEM_ATOMS)).toBe(true);
   });
 
-  it("map declares nothing over a list whose membership carries nothing", async () => {
+  it("map stamps nothing over a list whose membership carries nothing", async () => {
     const list = await seededList("map-declares-nothing", []);
     const container = await mapOver("map-declares-nothing-page", list);
 
-    expect(declaredMembership(container)).toEqual([]);
+    expect(stampedMembership(container)).toEqual([]);
     expect(stampedSlotPointer(container)).toEqual([]);
   });
 });

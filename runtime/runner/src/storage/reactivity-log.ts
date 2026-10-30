@@ -1,7 +1,10 @@
-import { normalizeCellScope } from "../scope.ts";
+import { isDID } from "@commonfabric/identity/did";
+import { isCellScope, normalizeCellScope } from "../scope.ts";
+import type { CellScope } from "../builder/types.ts";
 import type {
   Activity,
   IMemorySpaceAddress,
+  MemorySpace,
   Metadata,
   StorageTransactionRejected,
   TransactionReactivityLog,
@@ -154,10 +157,19 @@ export const writeDestinationRead: Metadata = {
 
 const declaredOnwardReadMarker = Symbol("declaredOnwardRead");
 
+/** Where a read declared onward lands: one path of one document. */
+export interface DeclaredOnwardTarget {
+  space: MemorySpace;
+  id: string;
+  scope: CellScope;
+  path: readonly string[];
+}
+
 /**
- * Marks a read whose confidentiality the reader declares on the document it
- * writes from it, so the flow join charges that confidentiality there and
- * not on everything else the transaction writes. A list coordinator reads
+ * Marks a read whose confidentiality the reader sends onward to one path of
+ * one document it writes from it, so the flow stage lands it there, as that
+ * path's membership stamp, and not on everything else the transaction
+ * writes. A list coordinator reads
  * its input's membership to decide which children exist and sets those
  * children up in the same transaction; the membership's label belongs on
  * the container's membership, which the coordinator declares, and not on a
@@ -169,12 +181,23 @@ const declaredOnwardReadMarker = Symbol("declaredOnwardRead");
  * still joins the transaction's meet: evidence withheld can only weaken a
  * claim, and a declaration carries no integrity. Scheduling, conflict
  * detection and the read ceiling are unaffected. What the reader declares
- * is what the join resolved for the read, which `deriveFlowJoin` answers as
- * `declaredOnward`.
+ * lands is what the join resolved for the read, which `deriveFlowJoin`
+ * answers as `declaredOnward`, per target, and the flow stage joins into the
+ * target's `enumerate` stamp, replaced from criteria like every stamp.
  */
-export const declaredOnwardRead: Metadata = {
-  [declaredOnwardReadMarker]: true,
-};
+export const declaredOnwardRead = (onto: {
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+  path: readonly string[];
+}): Metadata => ({
+  [declaredOnwardReadMarker]: {
+    space: onto.space,
+    id: onto.id,
+    scope: normalizeCellScope(onto.scope),
+    path: [...onto.path],
+  },
+});
 
 export function isReadIgnoredForScheduling(meta?: Metadata): boolean {
   return meta?.[ignoreReadForSchedulingMarker] === true;
@@ -448,7 +471,28 @@ export function isWriteDestinationRead(meta?: Metadata): boolean {
 }
 
 export function isDeclaredOnwardRead(meta?: Metadata): boolean {
-  return meta?.[declaredOnwardReadMarker] === true;
+  return declaredOnwardTarget(meta) !== undefined;
+}
+
+/** The document and path a read declared onward lands on, if it is one. */
+export function declaredOnwardTarget(
+  meta?: Metadata,
+): DeclaredOnwardTarget | undefined {
+  const onto = meta?.[declaredOnwardReadMarker];
+  if (onto === undefined || onto === null || typeof onto !== "object") {
+    return undefined;
+  }
+  const { space, id, scope, path } = onto as Record<string, unknown>;
+  if (
+    !isDID(space) || typeof id !== "string" || !Array.isArray(path) ||
+    !path.every((segment) => typeof segment === "string")
+  ) {
+    throw new Error("declaredOnwardRead: malformed target");
+  }
+  if (!isCellScope(scope)) {
+    throw new Error("declaredOnwardRead: malformed target scope");
+  }
+  return { space, id, scope, path };
 }
 
 export function isMutableTransactionReadAllowed(meta?: Metadata): boolean {

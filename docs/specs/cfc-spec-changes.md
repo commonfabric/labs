@@ -123,10 +123,10 @@ assignment `J` through the `*`-path `followRef` template — on declared
 list-coordinator containers since Stage A, and on ALL pure-link containers
 since the machinery-read marker landed (#4674; see the SC-8 note below).
 Implementation note 2026-10-30: a map's read of its list's
-membership is declared onward (`declaredOnwardRead`) and the label it
-consumes declared on the container's membership, so a child the same
-transaction sets up carries its own slot's label; `cfc-observation-classes.md`
-§6 has the arrangement.)
+membership is declared onward (`declaredOnwardRead`) and what it consumes
+at the list itself lands in the container's membership stamp, so a child the
+same transaction sets up carries its own slot's label;
+`cfc-observation-classes.md` §6 has the arrangement.)
 
 **SC-8 [normative] Read-API → observation-class mapping — §4.6.3.** The
 primitive read profile defines `shape`/`value`/`enumerate`/`count`/ `followRef`,

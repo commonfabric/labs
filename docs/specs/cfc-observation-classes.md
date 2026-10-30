@@ -352,9 +352,10 @@ republishes references, so what protects an element in its output is the
 element's own label, at the element. Its one read outside the marked scope
 is of the list's membership, which it declares onward (`declaredOnwardRead`,
 `reactivity-log.ts`): the join leaves what that read consumed at the list
-itself out and keeps its integrity in the meet, and the coordinator declares
-that, as the join resolved it (`deriveFlowJoin`'s `declaredOnward`), on its
-container's membership as an `enumerate` entry that only grows. What the
+itself out and keeps its integrity in the meet, and the flow stage lands
+that, as the join resolved it (`deriveFlowJoin`'s `declaredOnwardAt`), in
+the container's `enumerate` stamp, replaced from the join each reconcile
+like the rest of the stamp — a measurement, never a declaration. What the
 read consumed at the slots — each item's shape, the reference scalar there,
 the pointer a probe finds — is per-item and stays in the join: a child is
 set up from exactly that, so its setup and the container's slot templates
