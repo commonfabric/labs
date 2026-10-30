@@ -76,15 +76,15 @@ reader's profile; the room's record could take it over.
 
 Against every recorded baseline that declares these fields with no scope, the
 pattern-update proof reports `scope changed` (RUN, `deno task pattern-compat`):
-the room against 121 baselines, at `result.canSend`, `result.canAdd`,
+the room against 123 baselines, at `result.canSend`, `result.canAdd`,
 `result.viewer` and `result.messageRights` and each of them through
 `$VIEWS.room`; the placement against 5, at `result.$VIEWS.chat.canSend`,
 `argument.room.canSend` and `result.room.canSend`; and the adapter against 5,
 at the same three under `placement` and at `result.$VIEWS.chat.canSend`.
 
-Of those 131 pairs, 105 are held by the nine entries that already held them
+Of those 133 pairs, 105 are held by the nine entries that already held them
 for earlier FabriChat breaks, which now also name these paths and cite this
-record. The other 26 have entries of their own: 20 of the room's, 3 of the
+record. The other 28 have entries of their own: 22 of the room's, 3 of the
 placement's and 3 of the adapter's. The three entries the revert added, over
 the baselines #9360 recorded, forgive nothing now, since this change's
 contracts declare the same scopes as those baselines, and are removed. Three
