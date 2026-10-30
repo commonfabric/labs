@@ -52,9 +52,6 @@ export const COMMAND_RUN_ID_HEADER = "X-Loom-Agent-Run-Id";
 
 /** One command a host admits, as `list_commands` shows it. */
 export interface LoomCommandEntry extends HarnessCallableDescriptor {
-  /** Whether the host declares delivery outside its instance. */
-  external?: boolean;
-
   /** What the command acts on: `global`, `loom`, or another host scope. */
   target: string;
 
@@ -216,12 +213,11 @@ export const loomCommandEntryOfRow = (
     ...(title !== undefined ? { title } : {}),
     ...(description !== undefined ? { description } : {}),
     inputSchema,
-    ...(effect === "read"
+    ...(effect === "read" || effect === "external"
       ? { effect }
-      : effect === "write" || effect === "change" || effect === "external"
+      : effect === "write" || effect === "change"
       ? { effect: "change" satisfies HarnessCallableEffect }
       : {}),
-    ...(effect === "external" ? { external: true } : {}),
     target: typeof scope === "string" && scope.length > 0
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)
       : "global",

@@ -253,8 +253,9 @@ What works today:
     `commands` entry with the job's own id as the run id; the commands the host
     offers, run as the actor the host names; the listing shows each command as a
     one-line signature and is the host's command metadata, unmeasured;
-    `run_command` refuses a name the listing does not show, takes one call or a
-    batch of up to sixteen, and measures each answer like a retrieval row)
+    `run_command` sends names to CFS for admission, takes one call or a batch of
+    up to sixteen, derives its effect from host metadata (missing effects are
+    writes), and measures each answer like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,

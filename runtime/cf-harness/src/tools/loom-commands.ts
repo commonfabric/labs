@@ -682,7 +682,7 @@ export const runCommandTool: HarnessToolDefinition<
     title: "Run Command",
     effectClass: "write",
     description:
-      `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; CFS decides whether the caller may attempt each command.`,
+      `Run host commands as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; CFS decides whether the caller may attempt each command.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -716,7 +716,7 @@ export const runCommandTool: HarnessToolDefinition<
       const entry = listed.catalog.entries.find((row) =>
         row.name === call.command
       );
-      if (entry?.external) return "side-effect";
+      if (entry?.effect === "external") return "side-effect";
       if (entry?.effect !== "read") effect = "write";
     }
     return effect;

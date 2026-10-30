@@ -695,11 +695,11 @@ The current package provides:
   command endpoint, whose own rules decide what runs. The listing is read once
   per run and held for it, an explicit `list_commands` reading it again, and
   shows each command as a one-line typed signature; `run_command` takes one call
-  or a batch of up to sixteen, run four at a time, refuses a name the held
-  listing does not show with the nearest listed names, and returns a host
-  `bad-args` refusal with the command's signature. `run_command` carries write
-  authority. Each answer is measured against the run's observation ceiling like
-  a retrieval row, a batch's answers within one output bound. See
+  or a batch of up to sixteen, run four at a time, sends names to the host for
+  admission, and returns a host `bad-args` refusal with a known command's
+  signature. Its effect comes from host metadata; missing effects are writes.
+  Each answer is measured against the run's observation ceiling like a retrieval
+  row, a batch's answers within one output bound. See
   [Host commands](LOOM_COMMANDS.md);
 - durable local jobs with a 1 MiB enqueue body bound, SQLite FULL
   acknowledgment, and inline image bytes snapshotted into their job workspace. A

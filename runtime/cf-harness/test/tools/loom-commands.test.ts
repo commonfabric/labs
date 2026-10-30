@@ -388,6 +388,16 @@ describe("loom-commands tools", () => {
       });
     });
 
+    it("shows external effects in model-facing signatures", async () => {
+      const { context } = contextWith({
+        manifest: JSON.stringify({
+          commands: [{ id: "message.send", effect: "external" }],
+        }),
+      });
+      const output = listed(await listCommandsTool.invoke(context, {}));
+      expect(output.entries[0].signature).toContain("[external, global]");
+    });
+
     it("returns the commands the host listed and the effect notice", async () => {
       const { context } = contextWith();
       const output = listed(await listCommandsTool.invoke(context, {}));
@@ -1317,7 +1327,7 @@ describe("loom-commands tools", () => {
      */
     const composeOnce = (
       engine: CfHarnessEngine,
-      binding: PromptSlotBinding,
+      binding: PromptSlotBinding | undefined,
       input: RunCommandInput = { command: "loom.compose", args: {} },
     ) => {
       const payloads = [
@@ -1381,11 +1391,13 @@ describe("loom-commands tools", () => {
       ) {
         for (
           const binding of [
+            undefined,
             context,
             directPromptSlotBindingFor("loom-commands"),
           ]
         ) {
-          const allowed = binding.role !== "context" || effect === "read";
+          const allowed = binding?.role === "direct-command" ||
+            effect === "read";
           const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
             cfcEnforcementMode: "enforce-explicit",
             manifest: () =>
@@ -1410,6 +1422,33 @@ describe("loom-commands tools", () => {
       }
     });
 
+    it("requires a direct binding for reads under enforce-strict", async () => {
+      for (
+        const binding of [
+          undefined,
+          directPromptSlotBindingFor("loom-commands"),
+        ]
+      ) {
+        const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
+          cfcEnforcementMode: "enforce-strict",
+          manifest: () =>
+            JSON.stringify({
+              commands: [{ id: "loom.compose", effect: "read" }],
+            }),
+        });
+        const result = await composeOnce(engine, binding);
+        expect(
+          result.runState.policyDecisions?.find((entry) =>
+            entry.toolId === "run_command"
+          )?.decision,
+        )
+          .toBe(binding === undefined ? "denied" : "allowed");
+        expect(calls.map((call) => call.path)).toEqual(
+          binding === undefined ? ["/commands"] : ["/commands", "/command"],
+        );
+      }
+    });
+
     it("admits read batches from context tasks and gates mixed batches", async () => {
       const context: PromptSlotBinding = {
         type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
@@ -1429,11 +1468,13 @@ describe("loom-commands tools", () => {
       for (const effect of ["read", "write", "external", undefined]) {
         for (
           const binding of [
+            undefined,
             context,
             directPromptSlotBindingFor("loom-commands"),
           ]
         ) {
-          const allowed = binding.role !== "context" || effect === "read";
+          const allowed = binding?.role === "direct-command" ||
+            effect === "read";
           const { engine, calls } = engineWith(JSON.stringify({ ok: true }), {
             cfcEnforcementMode: "enforce-explicit",
             manifest: () =>

@@ -9,9 +9,9 @@ reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and serves them
 from one endpoint. Two generic tools put that in front of the model:
 `list_commands` shows the commands the host offers, each as a typed signature,
-and `run_command` runs one or a batch of them, as the agent, with write-class
-authority. Which commands those are is the host's decision alone; nothing in
-cf-harness names a command.
+and `run_command` runs one or a batch of them, as the agent, using the
+host-declared effect. Which commands those are is the host's decision alone;
+nothing in cf-harness names a command.
 
 ## Host configuration
 
@@ -136,11 +136,9 @@ or a batch of independent calls, each of the same shape:
 ```
 
 A batch carries one to sixteen calls, and one that names `command` as well as
-`calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
-anything is sent, each call is checked against the run's catalog: a command the
-catalog does not show is refused, so what a run can call is what it can see. The
-host's command layer checks each call's `args` against the command's schema, and
-refuses a command the host has withdrawn since the catalog was read.
+`calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. The
+host decides admission, including for names absent from the catalog, and checks
+each call's arguments against its schema.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -159,10 +157,6 @@ Each call, alone or in a batch, comes back as one of:
   rather than retry it. An answer the command layer refused as `bad-args` — the
   args do not match the command's schema — carries the command's `signature`,
   the line `list_commands` showed, so the model can correct the call.
-- `unknown_command`: the catalog shows no command by that name, and nothing was
-  sent. `suggestions` names up to three listed commands nearest the one called —
-  names containing it first, then by edit distance — and `hint` points the model
-  back to `list_commands`.
 - `failed_to_deliver` with `landed: "no"`: nothing was sent — `not_configured`,
   `invalid_input` (a malformed call), `batch_too_large` (more than sixteen
   calls), `cancelled`, or the catalog could not be read (`command_failed`,
@@ -180,7 +174,7 @@ Each call, alone or in a batch, comes back as one of:
   "status": "batch",
   "results": [
     { "status": "executed", "…": "…" },
-    { "status": "unknown_command" }
+    { "status": "executed", "outcome": { "ok": false, "code": "not_granted" } }
   ],
   "truncated": false
 }
@@ -205,13 +199,11 @@ conservative choice.
 
 ### Authorization
 
-The tool's effect class is `write` for every call, a batch included, even when
-the host declares the command a read. Policy judges a tool call, so a batch is
-authorized or refused whole, as one write. Policy treats it as any other write:
-under `enforce-explicit` and `enforce-strict` a call runs only when the run's
-task is bound as a `direct-command` prompt slot, so a task that arrived as
-`context` — a request a pattern submitted through the `agent` built-in, say —
-can list commands but cannot invoke this tool.
+The host's `read` effect is a read, `external` is a side effect, and a write,
+missing or unknown effect is a write. A batch uses its most consequential
+effect. Under `enforce-explicit`, declared reads may run from context or unbound
+prompt slots; every other effect requires a `direct-command` binding. Under
+`enforce-strict`, every call requires that binding, including reads.
 
 ## The answer is Loom data
 

@@ -79,7 +79,7 @@ export const LOOM_COMMANDS_TOOL_GUIDANCE = [
   "Running the host's commands:",
   "- A listed command with target loom takes a loomId. Pass expectedVersion to refuse a stale write.",
   "- Batch independent calls into one run_command as {calls: [...]}; they run concurrently and answer in order.",
-  "- Under an enforcing mode, run_command runs only for a task bound as a direct command.",
+  "- Under enforce-explicit, CFS-declared reads may run from context or unbound prompt slots. Writes, external effects, unknown effects, and mixed batches need a direct command. Under enforce-strict, every call needs a direct command.",
   "- not_granted means this run may not run the command: do not retry; if the person should, offer it in your result.",
   `- ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
 ].join("\n");
