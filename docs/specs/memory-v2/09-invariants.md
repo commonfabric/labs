@@ -809,8 +809,8 @@ refuses a tombstone under INV-12's validity clause.
 
 ### INV-16 — Instance-naming admission
 
-> A space marked as holding data a naming runtime wrote admits no session, and
-> no commit, from a session that does not declare `instanceNames: true`. The
+> A space marked as holding data a naming runtime wrote admits no open, and no
+> commit, from a session that does not declare `instanceNames: true`. The
 > first commit admitted to a space from a session that declares it, a genesis
 > commit included, marks the space, and the mark is recorded in the same store
 > transaction as that commit. A server admits a declaring session's open of an
@@ -846,7 +846,10 @@ the toolshed hosting it publishes on `/api/meta`. A server whose posture names
 no instances admits no naming session to an unmarked space, so no space is
 marked before the toolshed owning it has turned the posture on, and a
 deployment switched back to off marks no more spaces. It still admits naming
-sessions to marked spaces, and still refuses positional ones there.
+sessions to marked spaces, and still refuses positional ones there. The toolshed
+gives the server its posture as an option, and a server given none has a
+posture that names no instances, so it refuses every naming open of an
+unmarked space.
 
 The clauses are checked in this order, each condition being what an admitted
 open or commit satisfies:
@@ -854,7 +857,7 @@ open or commit satisfies:
 | Clause | Rejection |
 | --- | --- |
 | an open of a marked space declares `instanceNames: true` | `SessionRevokedError` with `clientUpdateRequired: true`: `Space <space> holds data written with instance names, which this runtime does not use` |
-| an open of an unmarked space that declares `instanceNames: true` is made to a server whose posture names instances | `SessionRevokedError` with `clientUpdateRequired: true`: `This deployment does not name instances, and this runtime does` |
+| an open of an unmarked space that declares `instanceNames: true` is made to a server whose posture names instances | `SessionRevokedError` with `clientUpdateRequired: true`: `The server of space <space> does not name instances, and this runtime does` |
 | a commit to a marked space comes from a session that declares `instanceNames: true` | `SessionRevokedError` with `clientUpdateRequired: true`: `Space <space> holds data written with instance names, which this runtime does not use` |
 
 A resume is an open, so a positional session's resume of a marked space is

@@ -126,7 +126,7 @@ A space's database is the store the toolshed owning the space opens, so
 whichever toolshed owns it next reads the mark from there. The server reads
 the mark when it admits an open and when it admits a commit, as it reads the
 space's kind. Nothing reports the mark to a client: a marked space admits only
-naming sessions, which have nothing to do with the answer.
+naming sessions, which need no report of it.
 
 ### D5. A refusal is terminal and says what to do
 
@@ -145,7 +145,7 @@ carries its own message:
 | --- | --- | --- |
 | a positional session's open of a marked space | `Space <space> holds data written with instance names, which this runtime does not use` | load a runtime that names instances: reload the tab, or update the `cf` checkout |
 | a positional session open on a space when a naming commit marks it | `Space <space> now holds data written with instance names, which this runtime does not use` | the same |
-| a naming session's open of an unmarked space on a server whose posture names none (D8) | `This deployment does not name instances, and this runtime does` | adopt the deployment's posture: reload the tab, or run `cf` without `CF_ADOPT_SERVER_FLAGS=false` |
+| a naming session's open of an unmarked space on a server whose posture names none (D8) | `The server of space <space> does not name instances, and this runtime does` | adopt the deployment's posture: reload the tab, or run `cf` without `CF_ADOPT_SERVER_FLAGS=false` |
 
 The second refusal reaches the client as a `session/revoked` with the reason
 `instance-names`, which carries no message, so the client makes the message
@@ -207,23 +207,27 @@ The toolshed knows its posture: it publishes it on `/api/meta` from
 `experimentalPosture()` (`runtime/toolshed/lib/experimental-posture.ts`), and
 the memory server it hosts is given the same value. A toolshed reads its
 posture at startup, so a posture change is a restart, which drops every
-connection, and every session opens again under the new posture.
+connection, and every session opens again under the new posture. A server
+given no posture names no instances. While a deployment's toolsheds restart one
+by one, a naming client that has adopted the new posture is refused an unmarked
+space whose owning toolshed has not restarted yet, and again on each reload
+until it has, so the refusal names the space's server rather than the
+deployment.
 
 ## Stages
 
 ### 1. The boundary, with the posture off
 
 The memory server records the mark, enforces INV-16, and advertises
-`instanceNameMark`. In routed mode, a client sees a capability only where the
-router's public offer carries it too, since the negotiated flags are the
-logical AND of the client's flags and that offer
-([`routed-mode-a.md`](../specs/memory-v2/routed-mode-a.md)), so the router's
-offer adds `instanceNameMark` in the same stage. The memory client declares the
-runtime's mode, fails the connection permanently when it names instances and
-the server does not advertise the capability, and marks the three refusals and
-the `instance-names` revocation `clientUpdateRequired` (D5). The shell's card
-gets the guidance D5 gives it. The flag stays unreachable from the
-environment, so every runtime is positional, and D8 refuses a naming one
+`instanceNameMark`. In routed mode, the router's public offer is the
+intersection of its endpoints' flags, including flags the router does not
+know, so the router needs no change
+([`routed-mode-a.md`](../specs/memory-v2/routed-mode-a.md)). The memory
+client declares the runtime's mode, fails the connection permanently when it
+names instances and the server does not advertise the capability, and marks the
+three refusals and the `instance-names` revocation `clientUpdateRequired` (D5).
+The shell's card gets the guidance D5 gives it. The flag stays unreachable from
+the environment, so every runtime is positional, and D8 refuses a naming one
 anywhere.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
@@ -245,10 +249,13 @@ toolshed deployment chooses the posture. The flag is already
 server-authoritative and a `"deployment"` shell source, so `cf`, the connectors
 and the shell adopt what the server publishes. The same mapping lets a client
 that does not adopt the server's flags set its own value, and D8 is what makes
-that safe: such a client is refused every unmarked space of a deployment whose
-posture differs, and every marked space if it is positional. A deployment turns
-the posture on only once every toolshed it runs carries stage 1: one without it
-admits any runtime and records no mark.
+that safe: a naming client is refused every unmarked space of a deployment
+whose posture is off, and a positional client is refused every marked space. A
+deployment turns the posture on only once every toolshed it runs carries stage
+1, since one without it admits any runtime and records no mark, and once each
+router has restarted after that: a router's public offer is fixed for its
+process's lifetime, so one taken while an endpoint lacked `instanceNameMark`
+omits it, and every routed naming client then fails its connection.
 
 ### 3. Tests that pass with the flag forced on
 
