@@ -180,6 +180,33 @@ operator's memory server, an auditor, or the ASP itself, and they say which
 owner consented and when, where the document's history says only who last
 replaced it.
 
+## Why one document
+
+The access-list document is the one place in a space that every layer already
+treats specially: its write contract (INV-12, and the runner's write path,
+which refuses value-surface writes to it), the service identity's read of it
+(OW31), the capability cache it invalidates and the sessions it sweeps when it
+changes, and the history compaction keeps of it. Consent and revocations are
+access-list data, read by the same checks, so they take that one special case
+rather than adding two more that every layer would have to handle and keep in
+step.
+
+One document also keeps three things together that the checks need together:
+
+- **A change is atomic.** INV-12 holds an access-list change to a single
+  whole-document `set` in a commit of its own, so replacing an owner and the
+  consent that owner issued is one commit, with no window in which the space
+  has its new owners and its old consent.
+- **A read is consistent.** The lease check reads the list, the consent
+  delegations and the revocations at one revision, and the server sweeps on a
+  change to one document rather than three.
+- **Genesis stays one `set`.** A space born with its consent, as a profile is,
+  carries it in the commit that writes its list, without widening what a
+  genesis commit may hold.
+
+What it costs is the format change, once ("Rolling out the new form"), and the
+document's size, which an open question below takes up.
+
 ## Rolling out the new form
 
 A reader that predates the new form finds keys that are not principals, takes
@@ -343,3 +370,13 @@ delegation from the profile serves it under the profile's own grant instead.
 - **Home.** A served `wish` reads the demanding person's Home through the
   binding today. Without consent for Home, a served run cannot read it, so Home
   is the first delegation a person who wants server execution writes.
+- **The size of the access-list document.** The document is read on every
+  capability check and cache refresh, rewritten whole on every change, and
+  kept, revision by revision, by compaction. `delegations` grows with the
+  executors a space consents to, and `revocations` only grows: it cannot be
+  pruned, since it also refuses chains held outside the document, such as an
+  agent's. Revocations should be rare, so the growth is likely small, but it is
+  not bounded. If it matters, the document can hold the CIDs of
+  content-addressed delegation documents in place of their bytes: a change
+  stays atomic and the document stays small, at the cost of a fetch when the
+  lease check verifies a chain. `revocations` is CIDs already.
