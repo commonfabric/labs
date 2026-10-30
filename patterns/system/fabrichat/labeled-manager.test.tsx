@@ -86,6 +86,7 @@ export default pattern((input) => {
   };
   const core = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
       entries: {},
       offers: {},

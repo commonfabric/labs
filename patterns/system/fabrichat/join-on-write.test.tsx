@@ -203,6 +203,7 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
