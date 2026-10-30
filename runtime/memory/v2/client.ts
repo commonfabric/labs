@@ -253,6 +253,14 @@ export type ConnectOptions = {
 
   transport: Transport;
   signal?: AbortSignal;
+
+  /**
+   * Whether a first handshake that fails without failing permanently is
+   * retried as a reconnect is, after the same backoff, rather than failing
+   * the connect. The connect then fails only on a permanent failure, or when
+   * `signal` aborts.
+   */
+  retryFirstHandshake?: boolean;
 };
 
 /**
@@ -836,7 +844,11 @@ export class Client {
     options.signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
       if (options.signal?.aborted) throw abortError();
-      await client.#hello();
+      if (options.retryFirstHandshake === true) {
+        await client.#ensureConnected();
+      } else {
+        await client.#hello();
+      }
       if (options.signal?.aborted) throw abortError();
       return client;
     } catch (error) {
@@ -5201,6 +5213,14 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
 export const receiveFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownReceiveFailed: true });
 
+/**
+ * Returns the error a transport rejects a send with once it is closed for
+ * good. The client gives up on a connection that fails with it, rather than
+ * repeating a handshake that no later attempt can complete.
+ */
+export const transportClosedError = (message: string): Error =>
+  Object.assign(new Error(message), { permanent: true });
+
 const isOwnReceiveFailure = (error: unknown): boolean =>
   (error as { ownReceiveFailed?: unknown } | null)?.ownReceiveFailed === true;
 
@@ -5283,7 +5303,8 @@ export function isClientUpdateRequiredError(error: unknown): error is Error & {
 }
 
 // A reconnect handshake failure the whole client must give up on rather than
-// retry: an incompatible protocol negotiation at hello. An authorization denial
+// retry: an incompatible protocol negotiation at hello, or a transport closed
+// for good (`transportClosedError()`). An authorization denial
 // is deliberately NOT here — it is per-space, handled inside restore() by
 // terminating just that session, so it never escalates to a client-wide failure
 // that would take down sessions for other spaces.

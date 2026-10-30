@@ -46,6 +46,11 @@ exchange, a compression channel, and a toolshed socket, and a client with
 many spaces holds that many sockets against one host. The per-host connection
 costs those once per host.
 
+Either way, a connection lost before its first handshake completes is dialed
+again after the memory client's reconnect backoff, as one lost later is, so
+the session waiting on it is still mounted. The factory's create fails only
+when the handshake fails permanently, the mount fails, or its caller aborts.
+
 ## 2. Goals and non-goals
 
 Goals:

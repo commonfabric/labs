@@ -634,7 +634,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
   }
 
   async #open(): Promise<MemorySocketConnection> {
-    if (this.#disposed) throw new Error("Memory transport closed");
+    if (this.#disposed) {
+      throw MemoryClient.transportClosedError("Memory transport closed");
+    }
     if (this.#connection?.socket.readyState === WebSocket.OPEN) {
       return this.#connection;
     }
@@ -1375,6 +1377,13 @@ export class RemoteSessionFactory implements SessionFactory {
     });
   }
 
+  /**
+   * Mounts a session on `space` as `signer`. A connection lost before its
+   * first handshake completes is dialed again after the memory client's
+   * reconnect backoff, as one lost later is, so a space whose first dial
+   * fails still gets its session: the create fails only when the handshake
+   * fails permanently, the mount fails, or `signal` aborts.
+   */
   create(
     space: MemorySpace,
     signer = this.#defaultSigner,
@@ -1487,11 +1496,14 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#transports.add(transport);
     const dialed: SharedConnection = {
       transport,
-      client: MemoryClient.connect({ transport, client: this.#clientInfo })
-        .then((client) => {
-          this.#relayNotices(client);
-          return client;
-        }),
+      client: MemoryClient.connect({
+        transport,
+        client: this.#clientInfo,
+        retryFirstHandshake: true,
+      }).then((client) => {
+        this.#relayNotices(client);
+        return client;
+      }),
     };
     this.#shared.set(key, dialed);
     // A failed dial takes its entry with it, whoever is waiting on it.
@@ -1589,6 +1601,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        retryFirstHandshake: true,
       });
       this.#relayNotices(client);
       const closeForAbort = (): void => {

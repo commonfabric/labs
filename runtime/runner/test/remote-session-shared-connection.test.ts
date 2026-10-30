@@ -10,6 +10,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
 import {
   createNativeMemorySocket,
+  type MemorySocketConnection,
   type MemorySocketFactory,
 } from "../src/storage/memory-socket.ts";
 import {
@@ -22,6 +23,32 @@ const SPACES = [
   "did:key:z6Mk-shared-connection-two",
   "did:key:z6Mk-shared-connection-three",
 ] as MemorySpace[];
+
+/** A socket that closes before it opens, as a handshake refused in flight does. */
+const closesBeforeOpening = (): MemorySocketConnection => {
+  const events = new EventTarget();
+  let readyState: number = WebSocket.CONNECTING;
+  queueMicrotask(() => {
+    readyState = WebSocket.CLOSED;
+    events.dispatchEvent(new Event("close"));
+  });
+  return {
+    socket: {
+      get readyState() {
+        return readyState;
+      },
+      addEventListener(type, listener, options) {
+        events.addEventListener(
+          type,
+          () => listener({ type, data: undefined }),
+          options,
+        );
+      },
+      close() {},
+    },
+    send: () => {},
+  };
+};
 
 /** A factory onto a server, and the address of every socket it has dialed. */
 type Harness = {
@@ -122,6 +149,32 @@ describe("RemoteSessionFactory connection sharing", () => {
       );
       expect(new Set(all.map((session) => session.client?.instanceId)).size)
         .toBe(2);
+    });
+  }
+
+  for (const shared of [false, true]) {
+    it(`mounts a space whose first socket closes before opening, on the socket dialed after it, with shared connections=${shared}`, async () => {
+      const server = startServer({ connectionAuth: true });
+      const dialed: URL[] = [];
+      const factory = new RemoteSessionFactory(
+        createStorageAddressResolver(server.url),
+        user,
+        (address) => {
+          dialed.push(address);
+          return dialed.length === 1
+            ? closesBeforeOpening()
+            : createNativeMemorySocket(address);
+        },
+      );
+      factory.setSharedConnections(shared);
+      factories.push(factory);
+      const opened = await factory.create(SPACES[0]);
+      try {
+        expect(dialed).toHaveLength(2);
+        expect(principalsIn(server, SPACES[0])).toEqual([user.did()]);
+      } finally {
+        await opened.client.close();
+      }
     });
   }
 
