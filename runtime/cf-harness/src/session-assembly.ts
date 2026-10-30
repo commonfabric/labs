@@ -80,6 +80,7 @@ import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
+  COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
@@ -442,7 +443,7 @@ export interface EstablishHarnessSessionContextOptions {
 
   config: Pick<
     HarnessSessionConfig,
-    "skillsRoot" | "skillsRootSandboxPath" | "skillNames"
+    "skillsRoot" | "skillsRootSandboxPath" | "skillNames" | "allowedToolIds"
   >;
 
   /**
@@ -518,7 +519,11 @@ const establishContextMessages = async (
       messages.push(context.contextText);
     }
   }
-  if (engine.fabricSessionAvailable) {
+  if (
+    engine.fabricSessionAvailable &&
+    (config.allowedToolIds === undefined ||
+      config.allowedToolIds.includes("describe_handle"))
+  ) {
     try {
       const grantMessage = wellKnownGrantsContextMessage(
         await engine.establishWellKnownGrants(),
@@ -548,6 +553,8 @@ const establishContextMessages = async (
     fabricSessionAvailable: engine.fabricSessionAvailable,
     loomCommandsAvailable: engine.config.loomCommands !== undefined,
     loomRetrievalAvailable: engine.config.loomRetrieval !== undefined,
+    allowedToolIds: config.allowedToolIds,
+    cfcEnforcementMode: engine.config.cfcEnforcementMode,
   });
   for (const message of toolGuidance) {
     messages.push(message);
@@ -564,6 +571,7 @@ const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
   [PIECES_TOOL_GUIDANCE, "pieces-tools"],
   [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
   [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
+  [COMMAND_ENFORCEMENT_GUIDANCE, "loom-commands-tools"],
   [LOOM_RETRIEVAL_TOOL_GUIDANCE, "loom-retrieval-tools"],
 ]);
 

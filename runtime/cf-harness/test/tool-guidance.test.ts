@@ -133,7 +133,7 @@ describe("tool-guidance", () => {
     const guidance = guidanceFor("find");
     expect(guidance).toContain(LOOM_COMMANDS_TOOL_GUIDANCE);
     expect(guidance).toContain(LOOM_RETRIEVAL_TOOL_GUIDANCE);
-    expect(guidance).toContain(RESOLVE_PIECE_TOOL_GUIDANCE);
+    expect(guidance).not.toContain(RESOLVE_PIECE_TOOL_GUIDANCE);
     expect(guidance).toContain(RESEARCH_TOOL_GUIDANCE);
     expect(guidance).not.toContain(AUTHOR_TOOL_GUIDANCE);
     expect(guidance).not.toContain(PIECES_TOOL_GUIDANCE);
