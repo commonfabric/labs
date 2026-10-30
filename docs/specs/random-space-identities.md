@@ -182,9 +182,9 @@ leaves it in place.
   no further commit on any write path, the serving plane's included, so deletion
   is not undone. The refusal says that the space is deleted, which a reader can
   tell apart from a refusal of access to a space that goes on, and it comes
-  before every other check the server makes.
-- A space invitation's operations refuse a deleted space with a code of their
-  own, `space-deleted`
+  before the checks of an access-control change's shape.
+- Redeeming an invitation to a deleted space is refused with a code of its own,
+  `space-deleted`
   ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
   so an invitation to a deleted space reads differently from one that has
   expired or been revoked.
@@ -219,16 +219,9 @@ Reaping reclaims a deleted space's storage. It is an operator's act on the
 host that holds the space's store, made against the store itself rather than
 through the Memory protocol, which refuses a deleted space to everyone.
 
-- A reap takes only a space whose access-control document holds a tombstone,
-  and refuses any other.
-- It keeps the store, the access-control document's tombstone at the `seq` its
-  deletion commit gave it, and a server sequence no lower than that `seq`. So
-  the space goes on refusing every principal as deleted, its refusal names the
-  same `aclRevision`, and its DID never again has no history.
-- It may remove everything else the store holds for the space: every other
-  document and its history, the earlier revisions of the access-control
-  document, and the private tables beside them, such as an invitation's
-  admission records and receipts.
+A reap keeps the tombstone in place at a nonzero server sequence. So the space
+goes on refusing every principal as deleted, and its DID never again has no
+history. What else a reap keeps, and what it removes, is not specified yet.
 
 Reaping is not implemented yet.
 

@@ -778,10 +778,10 @@ A command sent to a deleted space is refused with an `AuthorizationError`,
 `Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
 `aclRevision`. Here `aclRevision` is the `seq` at which the ACL document is
 stored, which is the deletion commit's, and not the server's current sequence.
-The refusal comes before every other check the server makes of the command,
-INV-12's clauses and these included. So a second tombstone, a malformed ACL
-write and an ordinary write to a deleted space are all refused as a deleted
-space's, and none of them reports a shape or capability failure.
+The refusal comes before INV-12's shape clauses and these clauses. So a second
+tombstone, a malformed ACL write and an ordinary write to a deleted space are
+all refused as a deleted space's, and none of them reports a shape or
+capability failure.
 
 No write path admits a commit to a deleted space, including those that never
 pass through the server's admission of a session's transact. A serving wave's
@@ -791,8 +791,8 @@ document holds a tombstone, so the check sits where the write is committed and
 not in an earlier authority probe that a deletion could land after. The
 operator `writeDocument` path and a served run's `grantSpaceAccess()` or
 `revokeSpaceAccess()` are refused like any other commit to a deleted space. The
-invitation service refuses every operation on a deleted space with its own code,
-`space-deleted`
+invitation service refuses the redemption of an invitation to a deleted space
+with its own code, `space-deleted`
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 
 What follows the deletion commit revokes every session open on the space with
@@ -804,11 +804,10 @@ left open in `observe` would be one whose every command is refused.
 
 Like INV-12 it holds in `observe` and `enforce`. In `off` the server checks no
 access, so it neither tests a tombstone against these clauses nor refuses a
-session's commands to a deleted space. Two checks refuse a deleted space in
-`off` as well, since neither consults the mode. The serving plane's foreign
-grant (`foreignWriteAuthorityFor()` and `foreignReadAuthorityFor()`) grants
-nothing on a list that is not valid, a tombstone included. And the engine's
-admission of an engine-direct commit refuses one to a deleted space, as above.
+session's commands to a deleted space. The serving plane's foreign grant
+(`foreignWriteAuthorityFor()` and `foreignReadAuthorityFor()`) refuses a
+deleted space in `off` as well, since it consults no mode and grants nothing on
+a list that is not valid, a tombstone included.
 
 Deleting a space reclaims no storage by itself. An operator reclaims it by
 reaping the space, which leaves the tombstone in place at a nonzero server

@@ -1851,21 +1851,21 @@ write holds them to.
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
 carrying `deleted: true` and, as `aclRevision`, the `seq` at which the ACL
-document is stored. That refusal comes before every other check of the command,
-so a commit to a deleted space reports the deletion and never a shape or
-capability failure. The server revokes the sessions open on the space with the
-`session/revoked` reason `deleted`, in `observe` as in `enforce`, and admits no
-further commit to it on any write path, engine-direct writes from the serving
-plane included, so no principal can undo the deletion. A tombstone is not an
-access list, so a server rolled back to a release that does not know tombstones
-finds the ACL malformed, and refuses the space to every principal but a service
-DID.
+document is stored. That refusal comes before the ACL shape and capability
+checks, so a commit to a deleted space reports the deletion and never a shape
+or capability failure. The server revokes the sessions open on the space with
+the `session/revoked` reason `deleted`, in `observe` as in `enforce`, and
+admits no further commit to it on any write path, engine-direct writes from the
+serving plane included, so no principal can undo the deletion. A tombstone is
+not an access list, so a server rolled back to a release that does not know
+tombstones finds the ACL malformed, and refuses the space to every principal but
+a service DID.
 
 The server sends the `deleted` marker and the `deleted` reason to every client,
 whatever the client advertises. A client that predates the marker reads the
 refusal as the permanent `AuthorizationError` it is. One that predates the
 reason discards the `session/revoked` frame, whose reason it does not
-recognize, and learns of the deletion when the server next refuses its session.
+recognize.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
