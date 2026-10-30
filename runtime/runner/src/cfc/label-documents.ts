@@ -263,12 +263,15 @@ const compareInDocumentOrder = (
 export const inStoredLabelMapOrder = <T extends LabelMapEntry>(
   entries: readonly T[],
 ): T[] =>
-  [...entries].sort((left, right) =>
-    compareInDocumentOrder(describedPath(left), describedPath(right)) ||
-    compareInDocumentOrder(left.path, right.path) ||
-    compareStrings(left.origin ?? "", right.origin ?? "") ||
-    compareStrings(left.observes ?? "", right.observes ?? "")
-  );
+  entries
+    .map((entry) => ({ entry, described: describedPath(entry) }))
+    .sort((left, right) =>
+      compareInDocumentOrder(left.described, right.described) ||
+      compareInDocumentOrder(left.entry.path, right.entry.path) ||
+      compareStrings(left.entry.origin ?? "", right.entry.origin ?? "") ||
+      compareStrings(left.entry.observes ?? "", right.entry.observes ?? "")
+    )
+    .map(({ entry }) => entry);
 
 /**
  * The version-2 stored form of resolved entries: each label's canonical
