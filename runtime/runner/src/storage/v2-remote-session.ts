@@ -44,6 +44,7 @@ import {
 } from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/logger";
 import { utf8ByteLength } from "@commonfabric/text/utf8";
+import { AsyncSemaphoreQueue } from "../queue.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
 import type { MemoryConnectionSizes } from "./diagnostics.ts";
@@ -359,9 +360,62 @@ function frameSize(frame: unknown): number {
  */
 export const MEMORY_FIRST_HANDSHAKE_ATTEMPTS = 5;
 
+/**
+ * How many memory sockets to one host may be opening at once. With a
+ * connection per space, a runtime would otherwise hand the platform every
+ * space's dial together, and a web view handed that many can leave some
+ * `CONNECTING` for good. Six is how many connections a browser opens to one
+ * host for its own page loads, so the burst stays within what the platform
+ * handles routinely. A handshake that never answers holds its place until its
+ * transport closes, so a host's later dials wait only once six such handshakes
+ * are in flight.
+ */
+export const MEMORY_DIALS_PER_HOST = 6;
+
+/**
+ * The dials of a set of transports, queued per host so that no more than
+ * a fixed number to one host are opening at once. A dial holds its place until
+ * its socket opens, closes or fails, and each of those admits the next one
+ * waiting for that host.
+ */
+export class MemoryDialLimiter {
+  readonly #perHost: number;
+  readonly #queues = new Map<string, AsyncSemaphoreQueue>();
+
+  /**
+   * Constructs a limiter admitting `perHost` dials to one host at a time.
+   * Throws if `perHost` is not a positive safe integer.
+   */
+  constructor(perHost = MEMORY_DIALS_PER_HOST) {
+    if (!Number.isSafeInteger(perHost) || perHost <= 0) {
+      throw new RangeError(debugStr`Invalid dials per host: ${perHost}`);
+    }
+    this.#perHost = perHost;
+  }
+
+  /**
+   * Runs `dial` once fewer than the limit of dials to `address`'s host are
+   * opening. The dial counts as opening until the promise it returns
+   * settles; `dial` neither throws nor returns a promise that rejects.
+   */
+  enqueue(address: URL, dial: () => Promise<void>): void {
+    let queue = this.#queues.get(address.host);
+    if (queue === undefined) {
+      queue = new AsyncSemaphoreQueue({ maxConcurrency: this.#perHost });
+      this.#queues.set(address.host, queue);
+    }
+    void queue.enqueue(dial);
+  }
+}
+
 export class WebSocketTransport implements MemoryClient.Transport {
   #address: URL;
   #createSocket: MemorySocketFactory;
+  #dials: MemoryDialLimiter;
+
+  /** Ends the dial waiting its turn in `#dials`, while one is. */
+  #abandonDial: ((error: Error) => void) | null = null;
+
   #compressionNegotiated = false;
   #compressionPreference: boolean;
   #compressionRequests = new Map<
@@ -390,15 +444,20 @@ export class WebSocketTransport implements MemoryClient.Transport {
   #messagesReceived = 0;
   #bytesReceived = 0;
 
-  /** Constructs a transport for one memory WebSocket route. */
+  /**
+   * Constructs a transport for one memory WebSocket route, whose dials wait
+   * their turn in `dials` among those of the transports sharing it.
+   */
   constructor(
     address: URL,
     compressionPreference = true,
     onDispose: () => void = () => {},
     createSocket: MemorySocketFactory = createMemorySocket,
+    dials: MemoryDialLimiter = new MemoryDialLimiter(),
   ) {
     this.#address = address;
     this.#createSocket = createSocket;
+    this.#dials = dials;
     this.#compressionPreference = compressionPreference;
     this.#onDispose = onDispose;
   }
@@ -634,9 +693,12 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /** Invalidates this connection before its close event or queued frames run. */
   #detachSocket(error: Error): MemorySocket | null {
     const socket = this.#socket;
+    const abandonDial = this.#abandonDial;
     this.#socket = null;
     this.#connection = null;
     this.#opening = null;
+    this.#abandonDial = null;
+    abandonDial?.(error);
     this.#compressionNegotiated = false;
     this.#receiveCompressionEnabled = false;
     this.#sendCompressionEnabled = false;
@@ -660,7 +722,34 @@ export class WebSocketTransport implements MemoryClient.Transport {
       return await this.#opening;
     }
     const address = toWebSocketAddress(this.#address);
-    const opening = new Promise<MemorySocketConnection>((resolve, reject) => {
+    const dial = Promise.withResolvers<MemorySocketConnection>();
+    const opening = dial.promise;
+    this.#opening = opening;
+    void opening.catch(() => {
+      if (this.#opening === opening) this.#opening = null;
+    });
+    // A detach while the dial waits its turn ends it there, without a socket.
+    this.#abandonDial = (error) =>
+      dial.reject(MemoryClient.connectionError(error.message, error));
+    this.#dials.enqueue(address, () => {
+      if (this.#opening !== opening) return Promise.resolve();
+      this.#abandonDial = null;
+      dial.resolve(this.#dial(address, opening));
+      // The host's next dial waits until this one opens, closes or fails.
+      return opening.then(() => {}, () => {});
+    });
+    return await opening;
+  }
+
+  /**
+   * Helper for `#open()`, which creates the socket of `opening` and returns
+   * the promise that settles as the socket opens, closes or fails.
+   */
+  #dial(
+    address: URL,
+    opening: Promise<MemorySocketConnection>,
+  ): Promise<MemorySocketConnection> {
+    return new Promise<MemorySocketConnection>((resolve, reject) => {
       const connection = this.#createSocket(address);
       const { socket } = connection;
       this.#socket = socket;
@@ -870,11 +959,6 @@ export class WebSocketTransport implements MemoryClient.Transport {
         reject(MemoryClient.connectionError(error.message, error));
       }, { once: true });
     });
-    this.#opening = opening;
-    void opening.catch(() => {
-      if (this.#opening === opening) this.#opening = null;
-    });
-    return await this.#opening;
   }
 
   /** Sends a compression control after every earlier application send. */
@@ -1232,7 +1316,8 @@ type SharedConnection = {
 /**
  * Opens memory sessions over WebSockets: one connection per space, or, with
  * shared connections on, one per host that every session on that host is
- * mounted on.
+ * mounted on. Either way, no more than `MEMORY_DIALS_PER_HOST` of its sockets
+ * to one host are opening at once.
  */
 export class RemoteSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
@@ -1254,6 +1339,9 @@ export class RemoteSessionFactory implements SessionFactory {
 
   /** The shared connection per storage address, while sharing is on. */
   #shared = new Map<string, SharedConnection>();
+
+  /** Where every transport's dial waits its turn among its host's. */
+  readonly #dials = new MemoryDialLimiter();
 
   /** Observers of `session/admissible`, as `subscribeAdmissible()` added. */
   #admissibleObservers = new Set<
@@ -1509,6 +1597,7 @@ export class RemoteSessionFactory implements SessionFactory {
       this.#compressionEnabled,
       () => this.#retire(transport),
       this.#createSocket,
+      this.#dials,
     );
     this.#transports.add(transport);
     const dialed: SharedConnection = {
@@ -1589,6 +1678,7 @@ export class RemoteSessionFactory implements SessionFactory {
       this.#compressionEnabled,
       () => this.#retire(transport),
       this.#createSocket,
+      this.#dials,
     );
     this.#transports.add(transport);
     return transport;
