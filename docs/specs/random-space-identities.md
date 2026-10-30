@@ -179,16 +179,22 @@ leaves it in place.
   kind such as a profile's.
 - From that commit on, wherever the Memory server checks access, the space
   refuses every principal, a deployment's service identities included, and takes
-  no further commit, so deletion is not undone. The refusal says that the space
-  is deleted, which a reader can tell apart from a refusal of access to a space
-  that goes on.
+  no further commit on any write path, the serving plane's included, so deletion
+  is not undone. The refusal says that the space is deleted, which a reader can
+  tell apart from a refusal of access to a space that goes on, and it comes
+  before every other check the server makes.
+- A space invitation's operations refuse a deleted space with a code of their
+  own, `space-deleted`
+  ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
+  so an invitation to a deleted space reads differently from one that has
+  expired or been revoked.
 
 Deleting a space reclaims no storage by itself. A deleted space's contents
-become unreadable at once, and its storage is the operator's to reclaim, which
-leaves the tombstone in place. A store removed outright would leave a DID with
-no history, and that DID would then be a space its key could create again: no
-one holds the key of a space created under this specification, but a legacy
-space's key can be recomputed from its name.
+become unreadable at once, and its storage is the operator's to reclaim by
+reaping the space, below, which leaves the tombstone in place. A store removed
+outright would leave a DID with no history, and that DID would then be a space
+its key could create again: no one holds the key of a space created under this
+specification, but a legacy space's key can be recomputed from its name.
 
 References to a deleted space keep their DID: a Home list entry, a link stored
 in another space, an `inSpace` allocation record. They reach the refusal.
@@ -206,6 +212,25 @@ The admission rule and the refusal are
 Deleting a space is not implemented yet: the Memory server refuses a
 tombstone as it refuses any access-control document that is not an access
 list.
+
+### Reaping a deleted space
+
+Reaping reclaims a deleted space's storage. It is an operator's act on the
+host that holds the space's store, made against the store itself rather than
+through the Memory protocol, which refuses a deleted space to everyone.
+
+- A reap takes only a space whose access-control document holds a tombstone,
+  and refuses any other.
+- It keeps the store, the access-control document's tombstone at the `seq` its
+  deletion commit gave it, and a server sequence no lower than that `seq`. So
+  the space goes on refusing every principal as deleted, its refusal names the
+  same `aclRevision`, and its DID never again has no history.
+- It may remove everything else the store holds for the space: every other
+  document and its history, the earlier revisions of the access-control
+  document, and the private tables beside them, such as an invitation's
+  admission records and receipts.
+
+Reaping is not implemented yet.
 
 ## Routing across provider processes
 

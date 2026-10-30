@@ -29,7 +29,9 @@ rewrite. In particular:
   transaction before ordinary writes
 - deleting a space (section 4.5.1, INV-15) is specified and not yet
   implemented: the server refuses the tombstone it writes under INV-12's
-  validity clause, as it refuses any ACL document that is not an access list
+  validity clause, as it refuses any ACL document that is not an access list.
+  The client's support for the `deleted` marker and `session/revoked` reason
+  lands before the server sends either
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -1842,14 +1844,28 @@ space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
 list replacement through the chain before it is deleted. No one deletes a Home
 space, through a chain or without one: a space whose list grants its own DID
 OWNER and that declares no kind, which is how the server already tells a home
-when it resolves the `actingAs` binding. From the deletion commit on, the server
-refuses every command any principal sends the space, a service DID's included,
-with a permanent `AuthorizationError` carrying `deleted: true`, revokes the
-sessions open on it, as it revokes those any ACL commit deauthorizes but with
-the `session/revoked` reason `deleted`, and admits no further commit to it, so
-no principal can undo the deletion. A tombstone is not an access list, so a
-server rolled back to a release that does not know tombstones finds the ACL
-malformed, and refuses the space to every principal but a service DID.
+when it resolves the `actingAs` binding. "Nothing else" binds the document's
+`value`, the tombstone itself; the fields beside it are held to what any ACL
+write holds them to.
+
+From the deletion commit on, the server refuses every command any principal
+sends the space, a service DID's included, with a permanent `AuthorizationError`
+carrying `deleted: true` and, as `aclRevision`, the `seq` at which the ACL
+document is stored. That refusal comes before every other check of the command,
+so a commit to a deleted space reports the deletion and never a shape or
+capability failure. The server revokes the sessions open on the space with the
+`session/revoked` reason `deleted`, in `observe` as in `enforce`, and admits no
+further commit to it on any write path, engine-direct writes from the serving
+plane included, so no principal can undo the deletion. A tombstone is not an
+access list, so a server rolled back to a release that does not know tombstones
+finds the ACL malformed, and refuses the space to every principal but a service
+DID.
+
+The server sends the `deleted` marker and the `deleted` reason to every client,
+whatever the client advertises. A client that predates the marker reads the
+refusal as the permanent `AuthorizationError` it is. One that predates the
+reason discards the `session/revoked` frame, whose reason it does not
+recognize, and learns of the deletion when the server next refuses its session.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a

@@ -494,7 +494,8 @@ carrying a distinct message (so a message identifies the clause):
 
 The last clause admits a deleted space's tombstone too, once the server
 implements INV-15; until then it refuses one with that clause's message, since
-a tombstone is not an access list.
+a tombstone is not an access list. None of these clauses is reached for a space
+that is already deleted: INV-15 refuses every commit to one first.
 
 It holds in **both** `observe` and `enforce`, and is skipped only when
 `MEMORY_ACL_MODE` is `off`. The code states its own reason for keeping it
@@ -719,8 +720,8 @@ one by `runtime/memory/test/v2-client-holdings.test.ts`.
 > principal or the principal the session's capability resolves to through a
 > proof chain. `by` names the committing principal in both cases. Once one is
 > admitted the space is deleted: every command any principal sends it, a service
-> DID's included, is refused, and no commit to it is admitted again, an ACL
-> commit included.
+> DID's included, is refused, and no commit to it is admitted again on any write
+> path, an ACL commit included.
 
 Deleting a space ends it for everyone. It writes the space's ACL document and
 never removes it: a document `delete` of the ACL stays refused under INV-12. The
@@ -767,25 +768,56 @@ The clauses are checked after INV-12's shape clauses, in this order:
 | the space is not a Home: its stored list does not grant its own DID OWNER, or it declares a kind | `AuthorizationError`: `A Home space cannot be deleted` |
 | the stored ACL's one entry is at OWNER, and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
 
+The first clause constrains the document's `value`, which is the tombstone. The
+fields beside it, such as the persisted label map, are held to nothing more
+than they are on any other ACL write, so a client that writes the whole
+document by carrying the stored one forward, as `writeAcl()` does, deletes the
+space without dropping them.
+
 A command sent to a deleted space is refused with an `AuthorizationError`,
 `Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
-the `aclRevision` of the deletion commit. What follows the deletion commit
-revokes every session open on the space with the `session/revoked` reason
-`deleted`, as what follows any ACL commit revokes the sessions it
-deauthorizes, and sends no `session/admissible`. A served run's
-`grantSpaceAccess()` or `revokeSpaceAccess()` against a deleted space is refused
-like any other commit to it.
+`aclRevision`. Here `aclRevision` is the `seq` at which the ACL document is
+stored, which is the deletion commit's, and not the server's current sequence.
+The refusal comes before every other check the server makes of the command,
+INV-12's clauses and these included. So a second tombstone, a malformed ACL
+write and an ordinary write to a deleted space are all refused as a deleted
+space's, and none of them reports a shape or capability failure.
+
+No write path admits a commit to a deleted space, including those that never
+pass through the server's admission of a session's transact. A serving wave's
+`derived` commit and a delegated append commit to their space engine-direct.
+The engine's own admission of those commits refuses one to a space whose ACL
+document holds a tombstone, so the check sits where the write is committed and
+not in an earlier authority probe that a deletion could land after. The
+operator `writeDocument` path and a served run's `grantSpaceAccess()` or
+`revokeSpaceAccess()` are refused like any other commit to a deleted space. The
+invitation service refuses every operation on a deleted space with its own code,
+`space-deleted`
+([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
+
+What follows the deletion commit revokes every session open on the space with
+the `session/revoked` reason `deleted`, and sends no `session/admissible`. It
+does so in `observe` as well as in `enforce`, unlike what follows an
+access-list change that leaves the space in place, which revokes only in
+`enforce`. A deleted space refuses every principal in both modes, so a session
+left open in `observe` would be one whose every command is refused.
 
 Like INV-12 it holds in `observe` and `enforce`. In `off` the server checks no
 access, so it neither tests a tombstone against these clauses nor refuses a
-deleted space.
+session's commands to a deleted space. Two checks refuse a deleted space in
+`off` as well, since neither consults the mode. The serving plane's foreign
+grant (`foreignWriteAuthorityFor()` and `foreignReadAuthorityFor()`) grants
+nothing on a list that is not valid, a tombstone included. And the engine's
+admission of an engine-direct commit refuses one to a deleted space, as above.
 
-Deleting a space reclaims no storage by itself. An operator may reclaim a
-deleted space's storage only by leaving a store that still holds the tombstone
-at a nonzero server sequence. A store removed outright leaves a DID with no
-history, and INV-13 lets that DID's own key write a new genesis there. A space
-created under [random space identities](../random-space-identities.md) has no
-such key left, but a legacy space's key can be recomputed from its name.
+Deleting a space reclaims no storage by itself. An operator reclaims it by
+reaping the space, which leaves the tombstone in place at a nonzero server
+sequence
+([random space identities](../random-space-identities.md#reaping-a-deleted-space)).
+A store removed outright leaves a DID with no history, and INV-13 lets that
+DID's own key write a new genesis there. A space created under
+[random space identities](../random-space-identities.md) has no such key left,
+but a legacy space's key can be recomputed from its name.
 
 Layer: server admission (`#validateAclCommit` and the capability check in
 `runtime/memory/v2/server.ts`, with the ACL state a tombstone gives in
@@ -793,10 +825,13 @@ Layer: server admission (`#validateAclCommit` and the capability check in
 `resolveSpaceOwnerOf()` and the declared kind `#spaceKindOf()` reads, and the
 session's `capabilityPrincipal`, which
 `verifySessionOpenProofs` in `runtime/memory/v2/session-open-auth.ts` sets to a
-verified chain's root issuer); client emission (`writeAcl()` in
-`runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
-server admits delegations (`acl.delegations`, which toolshed sets from
-`MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
+verified chain's root issuer); engine admission of engine-direct commits
+(`applyCommitTransaction` in `runtime/memory/v2/engine.ts`); the foreign grant
+(`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
+(`executeInvite` in `runtime/memory/v2/invites.ts`); client emission
+(`writeAcl()` in `runtime/runner/src/acl-manager.ts`). The chain clause applies
+only where the server admits delegations (`acl.delegations`, which toolshed sets
+from `MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none
 refuses every chain, and there the clause's other branch is the only one.
 
 Soundness direction: none — exact. Over-acceptance destroys a space a member
