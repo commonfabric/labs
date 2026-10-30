@@ -1060,7 +1060,14 @@ holds the measurements and the conditions for revisiting.
   update alike run the inserted sibling on the carried child's document and the
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones.
+  set up shows fresh children in place of the named ones. The mechanism is
+  specified and not built: a one-way mark on each space, recorded at the first
+  commit from a naming runtime and only where the deployment's posture names
+  instances, after which the memory server admits no runtime with naming off
+  to the space (INV-16 in
+  [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
+  it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
   output by the golden fixtures and `pipeline-regressions.test.ts`, and both
   arms by `transform.test.ts`. That compiled code is never shared between the
