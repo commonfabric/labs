@@ -1200,14 +1200,15 @@ is reached at that address, as from any other machine. Under pasta's network the
 driver also binds a resolver configuration over `/etc/resolv.conf` that names
 the gateway, where pasta answers DNS with the host's resolver, so names resolve
 whatever the rootfs holds; a mount at or over it is refused, as one at or over
-`/etc/hosts` is. The few lines pasta writes to its stderr before the call's
-command starts (root's two about user mappings, and, under `--no-map-gw` on a
-host whose nameservers are all on its loopback, one saying it finds no
-nameserver to hand the container) are dropped from the start of a call's stderr.
-A user id, or a kernel parameter, that cannot be read refuses the default rather
-than being guessed at. Where no `pasta` is on `PATH`, no `setpriv`, or for root
-no `unshare`, the default is refused, saying to install passt
-(`sudo apt install passt`) or util-linux, or to name a network:
+`/etc/hosts` is. Pasta shares its stderr with the call, and writes to it before
+the call's command starts (root's two warnings about user mappings, and, under
+`--no-map-gw` on a host whose nameservers are all on its loopback, one saying it
+finds no nameserver to hand the container). The driver's shell writes a line
+naming the call before it starts runsc, and the call's stderr is what follows
+that line. A user id, or a kernel parameter, that cannot be read refuses the
+default rather than being guessed at. Where no `pasta` is on `PATH`, no
+`setpriv`, or for root no `unshare`, the default is refused, saying to install
+passt (`sudo apt install passt`) or util-linux, or to name a network:
 `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
 `host` the host's own network, interfaces and all. Those two need none of
 `pasta`, `setpriv` or `unshare`; a process that is not root still needs user

@@ -17,7 +17,6 @@ import {
   PASTA_FORWARDING_HOSTS_FILE,
   PASTA_HOSTS_FILE,
   PASTA_ROOT_ARGS,
-  PASTA_STARTUP_NOTICES,
   pastaArgs,
   resolveRunscSandboxConfig,
   RUNSC_MAX_SESSIONS,
@@ -25,7 +24,6 @@ import {
   SETPRIV_ARGS,
   UNSHARE_ARGS,
   verifyPrivateScratchParent,
-  withoutPastaNotices,
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
@@ -1841,35 +1839,57 @@ Deno.test("under pasta, a call starts its container in pasta's namespace, on tha
   assertEquals(await Deno.readTextFile(resolv.source), "nameserver 10.0.2.2\n");
 });
 
-Deno.test("under pasta, a call's stderr is given without the notices pasta writes before the call's command starts", async () => {
-  const notices = PASTA_STARTUP_NOTICES.join("");
-  /** A runner under pasta whose pasta writes every notice it can. */
+Deno.test("under pasta, a call's stderr is given from after the line its shell writes before runsc starts", async () => {
+  const pastaSays = "Couldn't get any nameserver address\n";
+  /**
+   * A runner under pasta whose pasta writes a warning, then whose shell
+   * writes its start mark (its `$0`), then whose command writes `own`.
+   */
   class NoisyPasta extends UnderPasta {
+    constructor(readonly own: string, readonly marks = true) {
+      super();
+    }
     override async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
       const result = await super.run(request);
-      return { ...result, stderr: notices + result.stderr };
+      const shell = this.fake.requests.at(-1)!;
+      const mark = this.marks ? `${shell.args[2]}\n` : "";
+      return { ...result, stderr: pastaSays + mark + this.own };
     }
   }
 
-  const result = await new RunscSandboxRuntime(pastaConfig(), new NoisyPasta())
+  const quiet = new NoisyPasta("");
+  const result = await new RunscSandboxRuntime(pastaConfig(), quiet)
     .runShell({ command: "echo hi" });
-
   assertEquals([result.exitCode, result.stderr], [0, ""]);
-  // Only the run they begin with: the same words from the command stay.
-  assertEquals(
-    withoutPastaNotices(`${notices}own\n${notices}`),
-    `own\n${notices}`,
-  );
-  // Not under pasta, nothing is taken.
-  class Noisy extends FakeRunscRunner {
-    override async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
-      const result = await super.run(request);
-      return { ...result, stderr: notices + result.stderr };
-    }
-  }
-  const plain = await new RunscSandboxRuntime(config({}), new Noisy())
+  const shell = quiet.fake.requests.at(-1)!;
+  assertMatch(shell.args[1], /^printf '%s\\n' "\$0" >&2; exec 3</);
+  assertMatch(shell.args[2], /^cf-harness-call:/);
+
+  // What the command writes stays, pasta's own words included.
+  const own = await new RunscSandboxRuntime(
+    pastaConfig(),
+    new NoisyPasta(pastaSays),
+  ).runShell({ command: "echo hi" });
+  assertEquals(own.stderr, pastaSays);
+
+  // A pasta that stopped before its command wrote no mark: all it said stays.
+  const stopped = await new RunscSandboxRuntime(
+    pastaConfig(),
+    new NoisyPasta("", false),
+  ).runShell({ command: "echo hi" });
+  assertEquals(stopped.stderr, pastaSays);
+
+  // Not under pasta, the shell writes no mark and nothing is taken.
+  const plain = new FakeRunscRunner();
+  plain.runResult = { stderr: pastaSays };
+  const direct = await new RunscSandboxRuntime(config({}), plain)
     .runShell({ command: "echo hi" });
-  assertEquals(plain.stderr, notices);
+  assertEquals(direct.stderr, pastaSays);
+  const directShell = plain.requests.find((r) => r.command === "/bin/sh")!;
+  assertEquals(directShell.args.slice(1, 3), [
+    'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
+    "sh",
+  ]);
 });
 
 Deno.test("under pasta, a call that forwards host ports gives pasta those ports alone, takes the host off the gateway, and names the container's loopback as the host", async () => {

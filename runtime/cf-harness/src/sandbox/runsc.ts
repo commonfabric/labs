@@ -205,8 +205,8 @@ const pastaNetworkArgs = (toHost: string): readonly string[] => [
  * is reached at the gateway alone, on every port its loopback serves. A run
  * that forwards host ports is given {@link pastaArgs} instead. Pasta's own
  * messages go to a log file the runtime names, not into a call's output, but
- * for the few it writes to its stderr before the call's command starts
- * ({@link PASTA_STARTUP_NOTICES}), which the call shares.
+ * for the few it writes to its stderr before the call's command starts, which
+ * the call shares, and which the driver drops ({@link afterPastaStart}).
  */
 export const PASTA_ARGS: readonly string[] = pastaNetworkArgs("none");
 
@@ -249,28 +249,26 @@ export const SETPRIV_ARGS: readonly string[] = ["--pdeathsig", "KILL"];
 export const PASTA_HOST_ADDRESS = "10.0.2.2";
 
 /**
- * What pasta writes to its stderr, which a call's command shares, before it
- * starts that command, whatever its flags say: root's two warnings about user
- * mappings, and, under `--no-map-gw` on a host whose nameservers are all on
- * its loopback, that it finds no nameserver address to hand the container,
- * although the gateway still answers DNS ({@link pastaArgs}). None of it is
- * the call's output, so a call's stderr is given without the run of them it
- * begins with ({@link withoutPastaNotices}).
+ * The line the driver's shell writes to a call's stderr under pasta before it
+ * starts runsc, for the call `callId`. Pasta shares its stderr with the
+ * command it runs, and writes to it before that command starts whatever its
+ * flags say: root's two warnings about user mappings, and, under
+ * `--no-map-gw` on a host whose nameservers are all on its loopback, that it
+ * finds no nameserver address to hand the container, although the gateway
+ * still answers DNS ({@link pastaArgs}). None of that is the call's output,
+ * and what comes before this line is all of it.
  */
-export const PASTA_STARTUP_NOTICES: readonly string[] = [
-  "Couldn't write to /proc/self/uid_map: Operation not permitted\n",
-  "Couldn't configure user mappings\n",
-  "Couldn't get any nameserver address\n",
-];
+export const pastaStartMark = (callId: string): string =>
+  `cf-harness-call:${callId}`;
 
-/** `stderr` less the run of {@link PASTA_STARTUP_NOTICES} it begins with. */
-export const withoutPastaNotices = (stderr: string): string => {
-  let rest = stderr;
-  for (;;) {
-    const notice = PASTA_STARTUP_NOTICES.find((line) => rest.startsWith(line));
-    if (notice === undefined) return rest;
-    rest = rest.slice(notice.length);
-  }
+/**
+ * `stderr` from after the {@link pastaStartMark} line `mark`, and all of it
+ * where there is none: pasta stopped before it started the command, and what
+ * it wrote says why.
+ */
+export const afterPastaStart = (stderr: string, mark: string): string => {
+  const at = stderr.indexOf(`${mark}\n`);
+  return at === -1 ? stderr : stderr.slice(at + mark.length + 1);
 };
 
 /** Where a container under pasta gets its hosts file. */
@@ -321,10 +319,10 @@ export const pastaArgs = (ports?: readonly number[]): readonly string[] =>
   ports === undefined ? PASTA_ARGS : [
     ...pastaNetworkArgs(ports.length > 0 ? ports.join(",") : "none"),
     "--no-map-gw",
-    // No `--dns` beside it: pasta (passt 2024-02, Ubuntu 24.04's) then
-    // forwards queries to the address it names rather than to the host's
-    // resolver, and none is answered. Without it pasta warns that it finds
-    // no nameserver to hand the container (PASTA_STARTUP_NOTICES).
+    // No `--dns` beside it: with one, pasta (passt 2024-02, Ubuntu 24.04's)
+    // forwards queries to the address `--dns` names rather than to the
+    // host's resolver, and none would be answered. Without it pasta warns
+    // that it finds no nameserver to hand the container (pastaStartMark).
     "--dns-forward",
     PASTA_HOST_ADDRESS,
   ];
@@ -1735,11 +1733,15 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     ];
     // `exec 3<ctx 4>result` then exec runsc: the descriptors are inherited
     // at the numbers runsc was told, and nothing else about the environment
-    // changes.
+    // changes. Under pasta the shell's name is the call's start mark, which
+    // it writes to stderr first (pastaStartMark).
+    const startMark = underPasta ? pastaStartMark(callId) : undefined;
     const shellArgs = [
       "-c",
-      'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
-      "sh",
+      `${
+        startMark !== undefined ? `printf '%s\\n' "$0" >&2; ` : ""
+      }exec 3<"$1" 4>"$2"; shift 2; exec "$@"`,
+      startMark ?? "sh",
       withContext ? contextPath : "/dev/null",
       withResult ? resultPath : "/dev/null",
       this.config.runscBinary,
@@ -1786,7 +1788,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
-        stderr: underPasta ? withoutPastaNotices(result.stderr) : result.stderr,
+        stderr: startMark !== undefined
+          ? afterPastaStart(result.stderr, startMark)
+          : result.stderr,
         exitCode: result.exitCode,
       };
       if (!withResult) {

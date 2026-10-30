@@ -196,24 +196,26 @@ namespace of its own, and binds a hosts file over `/etc/hosts` that names the
 gateway, which pasta maps to the host's loopback, `host.docker.internal`, and a
 resolver configuration over `/etc/resolv.conf` that names the gateway, where
 pasta answers DNS with the host's resolver. The container has egress, by address
-and by name, and the host, and sees none of the host's interfaces. What pasta
-writes to its stderr before the call's command starts (root's two warnings about
-user mappings, and the one below) is dropped from the start of the call's
-stderr, which pasta shares with that command. Pasta starts what it runs in a PID
-namespace of its own, so a session's container started under it would record
-pids that `exec` and the control commands, run outside it, cannot find: under
-pasta's network the runtime describes no sessions, the `bash` tool offers no
-`session`, and a session asked of the runtime directly is refused as
-`start-failed`. For the same reason no control command reaches a container under
-pasta from outside. Pasta clears the parent-death signal of what it runs, so
-`setpriv` sets one, SIGKILL: when pasta goes (a call's timeout, a close of the
-runtime, which stops each call in flight through its pasta), the first process
-of its PID namespace dies, and every process of the namespace, the container's
-included, with it. Each such container keeps its state in a runsc root of its
-own call's, which goes when the call ends. A mount at or over `/etc/hosts` or
-`/etc/resolv.conf` is refused under pasta's network. `none` gives the container
-loopback alone, and `host` the host's own network, with no network namespace of
-its own either.
+and by name, and the host, and sees none of the host's interfaces. Pasta shares
+its stderr with that command and writes to it before the command starts (root's
+two warnings about user mappings, and the one below), so under pasta the
+driver's shell is named for the call (`cf-harness-call:<call id>`), writes that
+name to stderr before it starts runsc, and the call's stderr is what follows it;
+where the line is missing, pasta stopped first, and all it wrote is kept. Pasta
+starts what it runs in a PID namespace of its own, so a session's container
+started under it would record pids that `exec` and the control commands, run
+outside it, cannot find: under pasta's network the runtime describes no
+sessions, the `bash` tool offers no `session`, and a session asked of the
+runtime directly is refused as `start-failed`. For the same reason no control
+command reaches a container under pasta from outside. Pasta clears the
+parent-death signal of what it runs, so `setpriv` sets one, SIGKILL: when pasta
+goes (a call's timeout, a close of the runtime, which stops each call in flight
+through its pasta), the first process of its PID namespace dies, and every
+process of the namespace, the container's included, with it. Each such container
+keeps its state in a runsc root of its own call's, which goes when the call
+ends. A mount at or over `/etc/hosts` or `/etc/resolv.conf` is refused under
+pasta's network. `none` gives the container loopback alone, and `host` the
+host's own network, with no network namespace of its own either.
 
 On Linux a run that lists host ports in `CFC_VM_FORWARD_PORTS` reaches those
 ports of the host's loopback and no other port of it, whether its `runsc` is
@@ -233,16 +235,17 @@ does not lead to the host's loopback; with `-T <ports>` in place of `-T none`,
 so pasta listens on each port at the container's loopback and forwards it to the
 host's, and a command in the container cannot listen on a forwarded port itself;
 and with `--dns-forward 10.0.2.2`, so the gateway answers DNS as it does for the
-default. It is given no `--dns`: pasta (passt 2024-02, Ubuntu 24.04's) then
-forwards queries to the address that names rather than to the host's resolver,
-and none is answered. On a host whose nameservers are all on its loopback pasta
-warns, before the call's command starts, that it finds no nameserver to hand the
-container, and the driver drops that line. The hosts file names the container's
-own loopback `host.docker.internal`. Egress is kept, so a service the host binds
-to an address of another interface is reached at that address, as from any other
-machine. Such a run offers no sandbox session, as any run under pasta's network
-does. On macOS the variable is the macOS `runsc`'s, which forwards the listed
-ports into its VM, and the selection does not read it.
+default. It is given no `--dns`, because with one pasta (passt 2024-02, Ubuntu
+24.04's) forwards queries to the address `--dns` names rather than to the host's
+resolver, and none would be answered. Without it, on a host whose nameservers
+are all on its loopback, pasta warns before the call's command starts that it
+finds no nameserver to hand the container, and names resolve all the same. The
+hosts file names the container's own loopback `host.docker.internal`. Egress is
+kept, so a service the host binds to an address of another interface is reached
+at that address, as from any other machine. Such a run offers no sandbox
+session, as any run under pasta's network does. On macOS the variable is the
+macOS `runsc`'s, which forwards the listed ports into its VM, and the selection
+does not read it.
 
 The macOS default is refused for two more things, and the Linux default for the
 last, each checked before the pieces above:
@@ -440,12 +443,13 @@ operator summary, as `runsc (default on macOS: the native store at <store>)`,
 Linux under the platform default it is `pasta`'s network namespace, taken as
 runsc's host network, with egress and the host at `host.docker.internal`.
 Missing `pasta` refuses that default. A named Linux `runsc` under `bridge` gets
-pasta's network forwarding the listed ports, none included. One whose network is
-unnamed and that lists no port, with no `pasta` configured, uses runsc's own
-network stack, loopback alone. `none` and `host` bypass pasta and use their
-respective network modes. `CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name and
-the vocabulary of the Docker driver it was first read by, which maps onto the
-driver's as follows:
+pasta's network forwarding the listed ports, none included. A named Linux
+`runsc` whose network is unnamed and that lists no port, with no `pasta`
+configured, uses runsc's own network stack, loopback alone; the platform default
+does not, and refuses without `pasta`. `none` and `host` bypass pasta and use
+their respective network modes. `CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name
+and the vocabulary of the Docker driver it was first read by, which maps onto
+the driver's as follows:
 
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | Network   |
 | -------------------------------- | --------- |
