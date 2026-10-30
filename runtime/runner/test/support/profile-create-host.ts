@@ -121,7 +121,10 @@ export type ProfileShape = "create" | "root" | "not-root";
 /** What a profile's space grants every principal. */
 export type WildcardGrant = "READ" | "WRITE";
 
-/** The grant to every principal the create pattern writes. */
+/**
+ * The grant to every principal the create pattern writes, exactly as its
+ * source writes it, which `hostProgram()` replaces to grant another level.
+ */
 const CREATE_WILDCARD = 'grants: { "*": "WRITE" }';
 
 /**
@@ -142,6 +145,12 @@ function hostProgram(
     shape === "root" ? ", root: true" : "",
   );
   let create = read("system/profile-create/profile-create.tsx");
+  // The create pattern grants every principal WRITE, which is what a
+  // deployed profile needs. A test of another grant still wants the real
+  // pattern rather than a copy of it, so we compile its source with that one
+  // grant replaced by `wildcard`. Should the source stop writing the grant
+  // in exactly that form, the replacement would miss, and we throw rather
+  // than hand the test a space granting WRITE.
   if (wildcard !== undefined) {
     if (shape !== "create") {
       throw new Error(
