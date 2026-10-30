@@ -151,6 +151,12 @@ describe("fabrichat-manager-profile-wish-multi-runtime", () => {
           "fabrichat-start-direct",
         );
         const disabled = await found.link([...start, "disabled"]);
+        // The session's group draft, which each session stores in its own
+        // scope, and which says what that scope is.
+        const draft = await found.link([
+          ...await propsPath(found, "id", "fabrichat-group-title"),
+          "$value",
+        ]);
         const address = await propsPath(found, "id", "fabrichat-my-address");
         expect(await found.read([...start, "disabled"])).toBe(false);
         expect(await found.read([...address, "style", "display"])).toBe(
@@ -177,13 +183,13 @@ describe("fabrichat-manager-profile-wish-multi-runtime", () => {
         });
         expect(await failed.read([...start, "disabled"])).toBe(true);
 
-        // The session whose wish failed writes its own answer, and none into
-        // the instance every session of the person's reads.
-        const written = writtenScopes(failedRunning, disabled.id);
-        expect(written).not.toHaveLength(0);
-        expect(written).not.toContain(
-          `user:${encodeURIComponent(person.did())}`,
-        );
+        // While the session whose wish failed runs, its answer is written in
+        // its own scope, where its draft is, and in no other: not into an
+        // instance another session of the person's reads, and not by another
+        // session that reads what it wrote and answers again.
+        const ownScopes = writtenScopes(failedRunning, draft.id);
+        expect(ownScopes).toHaveLength(1);
+        expect(writtenScopes(failedRunning, disabled.id)).toEqual(ownScopes);
 
         expect(await stored(found, [...start, "disabled"])).toBe(false);
         expect(await stored(found, [...address, "style", "display"])).toBe(
