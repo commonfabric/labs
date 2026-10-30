@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { getLogger } from "@commonfabric/logger";
+
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -27,6 +29,9 @@ type HandshakeOutcome = "lost" | "closed" | "ok";
 class ScriptedHandshakes implements Transport {
   /** Runs each time the client discards a failed connection. */
   onReset: () => void = () => {};
+
+  /** Runs as each `hello` is sent, given how many have been. */
+  onHello: (hellos: number) => void = () => {};
 
   #receiver: (payload: string) => void = () => {};
   #closeReceiver: (error?: Error) => void = () => {};
@@ -56,6 +61,7 @@ class ScriptedHandshakes implements Transport {
       return Promise.reject(new Error(`Unscripted ${message.type}`));
     }
     const outcome = this.#outcomes[this.#hellos++];
+    this.onHello(this.#hellos);
     switch (outcome) {
       case "lost": {
         // A socket's close arrives as an event, after the send that dialed it.
@@ -95,6 +101,11 @@ class ScriptedHandshakes implements Transport {
   }
 }
 
+/** How many times the client has logged `first-handshake-failed`. */
+const firstHandshakeFailuresLogged = (): number =>
+  getLogger("memory.v2.client").countsByKey["first-handshake-failed"]?.error ??
+    0;
+
 describe("connect()", () => {
   describe("with `firstHandshakeAttempts`", () => {
     // Each attempt after the first waits out the client's reconnect backoff
@@ -113,6 +124,7 @@ describe("connect()", () => {
 
     it("rejects with `firstHandshakeFailedError()` once every attempt fails, naming the address, the attempts and the last failure", async () => {
       const transport = new ScriptedHandshakes(["lost", "lost", "lost", "ok"]);
+      const logged = firstHandshakeFailuresLogged();
       const error = await connect({
         transport,
         address: "wss://memory.test/api/storage/memory",
@@ -126,6 +138,7 @@ describe("connect()", () => {
           '"ConnectionError": "memory transport closed"',
       );
       expect(error?.cause).toMatchObject({ name: "ConnectionError" });
+      expect(firstHandshakeFailuresLogged()).toBe(logged + 1);
     });
 
     it("rejects with the error of a handshake that fails permanently, without another attempt", async () => {
@@ -145,6 +158,22 @@ describe("connect()", () => {
         firstHandshakeAttempts: 5,
       })).rejects.toThrow("route replaced");
       expect(transport.hellos).toBe(1);
+    });
+
+    it("rejects with the abort reason, and logs no failure, when `signal` aborts during the last attempt", async () => {
+      const transport = new ScriptedHandshakes(["lost", "lost", "ok"]);
+      const controller = new AbortController();
+      transport.onHello = (hellos) => {
+        if (hellos === 2) controller.abort(new Error("route replaced"));
+      };
+      const logged = firstHandshakeFailuresLogged();
+      await expect(connect({
+        transport,
+        signal: controller.signal,
+        firstHandshakeAttempts: 2,
+      })).rejects.toThrow("route replaced");
+      expect(transport.hellos).toBe(2);
+      expect(firstHandshakeFailuresLogged()).toBe(logged);
     });
 
     for (const attempts of [0, 1.5]) {

@@ -2583,6 +2583,9 @@ export class Client {
               firstHandshake !== undefined &&
               attempt + 1 >= firstHandshake.attempts
             ) {
+              // A close, as the abort of a connect's signal makes, cancelled
+              // the attempts rather than spending them.
+              if (this.#closed) return;
               const failure = firstHandshakeFailedError(
                 attempt + 1,
                 firstHandshake.address,
