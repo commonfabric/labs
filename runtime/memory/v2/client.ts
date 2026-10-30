@@ -859,13 +859,12 @@ export class Client {
       if (attempts === 1) {
         await client.#hello();
       } else {
+        // The loop ends connected, failed, or closed, and nothing but an
+        // abort of `signal` closes a client `connect()` has not returned.
         await client.#reconnect({ attempts, address: options.address });
         if (client.#fatalError !== null) throw client.#fatalError;
       }
       if (options.signal?.aborted) throw abortError();
-      if (!client.#connected) {
-        throw new Error("memory client closed before its first handshake");
-      }
       return client;
     } catch (error) {
       await client.close().catch(() => {});
