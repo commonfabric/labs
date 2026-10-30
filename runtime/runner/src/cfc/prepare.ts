@@ -5098,6 +5098,12 @@ const deriveFlowJoinImpl = (
       // reference-valued-children rule, spec §4.6.3), which a child is set
       // up from, so it joins like any content read's. The read's integrity
       // meets below like any content read's.
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/85
+      // A child set up from this read carries less than §8.5.4.3 as written
+      // gives it (the whole journal, enumeration included), and the
+      // container's membership stamp is what lands it. Lands ahead of the
+      // ruling by the CFC owner's decision; the marker goes when the ruling
+      // merges and the snapshot is re-pinned.
       if (observation.declaredOnward !== undefined) {
         const node = document.labels.get(`${labelKey}#node`);
         if (node?.confidentiality?.length) {
