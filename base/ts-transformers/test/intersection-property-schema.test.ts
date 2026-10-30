@@ -298,6 +298,23 @@ describe("intersection-property-schema", () => {
     expect(schema?.ifc).toEqual({ confidentiality: ["s"] });
   });
 
+  it("adds no evidence beside a named fallback where the type holds `unknown`", async () => {
+    // Naming `unknown` changes the path the type goes down, and must not change
+    // what the result is trusted for.
+
+    const schemaOf = async (type: string) =>
+      (await schemasOf(`
+        import { toSchema } from "commonfabric";
+        import type { Integrity } from "commonfabric";
+        type Fallback = Record<number, string> & Record<string, string>;
+        export const schema = toSchema<${type}>();
+      `))[0];
+    const labeled = `Integrity<Fallback, readonly ["v"]> & string`;
+
+    expect((await schemaOf(labeled))?.ifc).toBeUndefined();
+    expect((await schemaOf(`${labeled} & unknown`))?.ifc).toBeUndefined();
+  });
+
   it("keeps a label a union arm writes beside a named fallback in a type holding `unknown`", async () => {
     // A type argument naming `any` or `unknown` goes down the node path.
 

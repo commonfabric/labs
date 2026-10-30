@@ -1442,6 +1442,27 @@ describe("SchemaGenerator", () => {
         { ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS },
       ],
       [
+        "keeps no evidence written beside a reference to an intersection that fell back",
+        `
+          type Fallback = Record<number, string> & Record<string, string>;
+          type M1 = Cfc<Fallback, { integrity: readonly ["v"] }>;
+          type M2 = string;
+        `,
+        UNSUPPORTED_NON_OBJECT,
+      ],
+      [
+        "keeps the restriction and not the evidence written beside a reference to a fallback",
+        `
+          type Fallback = Record<number, string> & Record<string, string>;
+          type M1 = Cfc<Fallback, {
+            confidentiality: readonly ["s"];
+            integrity: readonly ["v"];
+          }>;
+          type M2 = string;
+        `,
+        { ...UNSUPPORTED_NON_OBJECT as object, ifc: labelS },
+      ],
+      [
         "keeps a default written beside a reference to an intersection that fell back",
         `
           type Fallback = Record<number, string> & Record<string, string>;

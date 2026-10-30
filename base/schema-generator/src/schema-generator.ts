@@ -919,11 +919,13 @@ function wholeValueKeywordsOf(
 /**
  * `read`, the schema `reference` reads as. Where it is an intersection that
  * fell back, its constituents state what `reference` states of its whole value
- * beside the reference: its scope, its default, and its labels, which join
- * those a constituent states. A value of `PerUser<A & B>` is a value of
+ * beside the reference: its scope, its default, and its restrictions, which
+ * join those a constituent states. A value of `PerUser<A & B>` is a value of
  * `PerUser<A>` and of `PerUser<B>`, so reopening the fallback would otherwise
- * lose them. A fallback's own labels are not stated of them, being those it
- * kept of its constituents.
+ * lose them. Its evidence is not stated of them, as evidence goes only where
+ * the labeled payload's data must be, and a constituent is not that payload. A
+ * fallback's own labels are not stated of them either, being those it kept of
+ * its constituents.
  */
 function withConstituentsStatingBeside(
   read: MutableJSONSchema,
@@ -933,10 +935,13 @@ function withConstituentsStatingBeside(
   const origin = isObjectOrArray(read)
     ? context.schemaOrigins?.get(read)
     : undefined;
-  const { scope, default: value, ifc } = reference;
+  const { scope, default: value } = reference;
+  const { restrictions } = isObjectOrArray(reference.ifc)
+    ? restrictionsAndEvidence(reference.ifc)
+    : {};
   if (
     origin?.kind !== "intersection" ||
-    (scope === undefined && value === undefined && !isObjectOrArray(ifc))
+    (scope === undefined && value === undefined && restrictions === undefined)
   ) {
     return read;
   }
@@ -949,15 +954,11 @@ function withConstituentsStatingBeside(
           ...(scope !== undefined ? { scope } : {}),
           ...(value !== undefined ? { default: value } : {}),
         };
-        return isObjectOrArray(part)
-          ? withOriginOf(
-            isObjectOrArray(ifc)
-              ? withIfcLabels(stated, ifc as Record<string, unknown>)
-              : stated,
-            part,
-            context,
-          )
-          : part;
+        return part === false ? part : withOriginOf(
+          restrictions ? withIfcLabels(stated, restrictions) : stated,
+          part,
+          context,
+        );
       }),
   });
   return read;
