@@ -157,13 +157,18 @@
             "description": "The comment's text.",
             "type": "string"
           },
-          "quote": {
-            "description": "Text the body holds exactly once, compared code unit for code unit.",
-            "type": "string"
+          "from": {
+            "description": "Start of the range, in UTF-16 code units as string indexes count.",
+            "type": "number"
+          },
+          "to": {
+            "description": "End of the range, exclusive and greater than `from`.",
+            "type": "number"
           }
         },
         "required": [
-          "quote",
+          "from",
+          "to",
           "body"
         ],
         "type": "object"
@@ -340,7 +345,7 @@
         "asCell": [
           "stream"
         ],
-        "description": "Adds a comment under the caller's profile, anchored on the one occurrence\nof `quote`, and refuses when `quote` is empty, occurs nowhere, or occurs\nmore than once, when `body` is blank, or when the caller has no profile."
+        "description": "Adds a comment under the caller's profile on the range `from..to` of the\nbody, and refuses a range that is not within the body with `from` before\n`to`, a blank `body`, or a caller with no profile."
       },
       "appendLine": {
         "$ref": "#/$defs/LineEvent",

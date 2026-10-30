@@ -87,12 +87,16 @@ describe("highlights", () => {
       expect(marksOf(state).map((mark) => mark.id)).toEqual(["a", "b"]);
     });
 
-    it("clamps a range reaching past the document, and drops one left empty", () => {
+    it("clamps a range reaching past the document, and keeps one left empty as a point without a mark", () => {
       const state = stateWith("hello", [
         { id: "a", from: 3, to: 9 },
         { id: "b", from: 5, to: 9 },
       ]);
-      expect(highlightsOf(state)).toEqual([{ id: "a", from: 3, to: 5 }]);
+      expect(highlightsOf(state)).toEqual([
+        { id: "a", from: 3, to: 5 },
+        { id: "b", from: 5, to: 5 },
+      ]);
+      expect(marksOf(state).map((mark) => mark.id)).toEqual(["a"]);
     });
 
     it("moves a range when text is inserted before it", () => {
@@ -130,18 +134,29 @@ describe("highlights", () => {
       expect(state.sliceDoc(4, 7)).toBe("rld");
     });
 
-    it("drops a range whose text is deleted, and keeps the others", () => {
+    it("empties a range whose text is deleted, at the deletion's start, and keeps the others", () => {
       const state = stateWith("hello world", [
         { id: "a", from: 0, to: 5 },
         { id: "b", from: 6, to: 11 },
       ]).update({ changes: { from: 5, to: 11 } }).state;
-      expect(highlightsOf(state)).toEqual([{ id: "a", from: 0, to: 5 }]);
+      expect(highlightsOf(state)).toEqual([
+        { id: "a", from: 0, to: 5 },
+        { id: "b", from: 5, to: 5 },
+      ]);
+      expect(marksOf(state).map((mark) => mark.id)).toEqual(["a"]);
     });
 
-    it("drops every range when the whole document is replaced", () => {
+    it("keeps an empty range a point, before text inserted at it", () => {
+      const state = stateWith("hello world", [{ id: "b", from: 6, to: 11 }])
+        .update({ changes: { from: 5, to: 11 } }).state
+        .update({ changes: { from: 5, insert: "!" } }).state;
+      expect(highlightsOf(state)).toEqual([{ id: "b", from: 5, to: 5 }]);
+    });
+
+    it("empties every range when the whole document is replaced", () => {
       const state = stateWith("hello world", [{ id: "a", from: 0, to: 5 }])
         .update({ changes: { from: 0, to: 11, insert: "hello world" } }).state;
-      expect(highlightsOf(state)).toEqual([]);
+      expect(highlightsOf(state)).toEqual([{ id: "a", from: 0, to: 0 }]);
     });
 
     it("reads a set effect against the document its transaction produces", () => {

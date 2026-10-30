@@ -451,7 +451,9 @@ export default pattern(() => {
   const assert_resolved_comment_shown = assert(() =>
     displayOf(rowOf(note[UI], "Needs a date")) === "flex"
   );
-  const assert_absent_quote_refused = assert(() => note.comments.length === 1);
+  const assert_range_outside_the_body_refused = assert(() =>
+    note.comments.length === 1
+  );
   const AGENT_QUOTE = "Preserve this";
   const agentQuoteFrom = INTRO.length + MARKDOWN.indexOf(AGENT_QUOTE);
   const assert_agent_comment_lands = assert(() =>
@@ -594,7 +596,7 @@ export default pattern(() => {
     // runner reports as a runtime error; it is expected.
     // The one refused post throws inside its handler the same way.
     expectRuntimeErrors: [
-      "addComment found no occurrence of `quote`",
+      "addComment needs a range within the body's",
       "Select the text to comment on first.",
     ],
     [TESTS]: [
@@ -646,15 +648,19 @@ export default pattern(() => {
       { assertion: assert_resolved_comment_hidden },
       { action: action_show_resolved },
       { assertion: assert_resolved_comment_shown },
-      // A quote the body holds nowhere is refused, and a unique one lands.
+      // A range past the end of the body is refused, and one within it lands.
       {
         action: note.addComment,
-        event: { quote: "nowhere in the note", body: "Lost" },
+        event: { from: 10, to: 100000, body: "Lost" },
       },
-      { assertion: assert_absent_quote_refused },
+      { assertion: assert_range_outside_the_body_refused },
       {
         action: note.addComment,
-        event: { quote: AGENT_QUOTE, body: "Agent note" },
+        event: {
+          from: agentQuoteFrom,
+          to: agentQuoteFrom + AGENT_QUOTE.length,
+          body: "Agent note",
+        },
       },
       { assertion: assert_agent_comment_lands },
       { action: action_select_row },

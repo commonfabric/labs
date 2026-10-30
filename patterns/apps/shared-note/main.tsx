@@ -99,10 +99,13 @@ export interface NoteComment {
   replies: CommentReply[];
 }
 
-/** A comment anchored on text the body holds once. */
+/** A comment on a range of the body, in the coordinates of the text the caller read. */
 export interface AddCommentEvent {
-  /** Text the body holds exactly once, compared code unit for code unit. */
-  quote: string;
+  /** Start of the range, in UTF-16 code units as string indexes count. */
+  from: number;
+
+  /** End of the range, exclusive and greater than `from`. */
+  to: number;
 
   /** The comment's text. */
   body: string;
@@ -149,9 +152,9 @@ export interface SharedNoteOutput {
   replaceText: Stream<ReplaceTextEvent>;
 
   /**
-   * Adds a comment under the caller's profile, anchored on the one occurrence
-   * of `quote`, and refuses when `quote` is empty, occurs nowhere, or occurs
-   * more than once, when `body` is blank, or when the caller has no profile.
+   * Adds a comment under the caller's profile on the range `from..to` of the
+   * body, and refuses a range that is not within the body with `from` before
+   * `to`, a blank `body`, or a caller with no profile.
    */
   addComment: Stream<AddCommentEvent>;
 
@@ -442,25 +445,21 @@ const addComment = handler<AddCommentEvent, {
   if (profile === undefined) throw new Error(NO_PROFILE);
   const body = event.body.trim();
   if (body === "") throw new Error("addComment needs a `body` with text");
-  const from = locateQuote(content.get(), event.quote);
-  if (from === "empty") {
-    throw new Error("addComment needs a non-empty `quote` to anchor on");
-  }
-  if (from === "absent") {
+  const { from, to } = event;
+  const length = content.get().length;
+  if (
+    !Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 ||
+    to <= from || to > length
+  ) {
     throw new Error(
-      "addComment found no occurrence of `quote`; read the note again and " +
-        "anchor on text it holds",
-    );
-  }
-  if (from === "repeated") {
-    throw new Error(
-      "addComment found `quote` more than once; anchor on a longer passage " +
-        "that occurs once",
+      `addComment needs a range within the body's ${length} code units ` +
+        "with `from` before `to`; read the note again and anchor on text it " +
+        "holds",
     );
   }
   comments.push({
     id: mintCommentId(),
-    anchor: { from, to: from + event.quote.length },
+    anchor: { from, to },
     authorProfile: profile,
     body,
     createdAt: Date.now(),

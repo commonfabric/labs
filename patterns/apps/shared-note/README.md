@@ -49,13 +49,13 @@ verbs below rather than replacing it with an ordinary whole-value write.
 Three verbs edit the body while people are typing in it, so an agent or another
 pattern can add to a note without the editor, and two more work on its comments:
 
-| Verb             | Event             | Effect                                                                                                                                                                                   |
-| ---------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `appendLine`     | `{ text }`        | Adds `text` at the end, on a line of its own.                                                                                                                                            |
-| `prependLine`    | `{ text }`        | Adds `text` at the start, on a line of its own.                                                                                                                                          |
-| `replaceText`    | `{ old, new }`    | Replaces the one occurrence of `old` with `new`; refuses when `old` is empty, occurs nowhere, or occurs more than once.                                                                  |
-| `addComment`     | `{ quote, body }` | Adds a comment under the caller's profile on the one occurrence of `quote`; refuses when `quote` is empty, occurs nowhere, or occurs more than once, and when the caller has no profile. |
-| `resolveComment` | `{ id }`          | Marks the comment named by `id` resolved; refuses an `id` that names none.                                                                                                               |
+| Verb             | Event                | Effect                                                                                                                                                                        |
+| ---------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `appendLine`     | `{ text }`           | Adds `text` at the end, on a line of its own.                                                                                                                                 |
+| `prependLine`    | `{ text }`           | Adds `text` at the start, on a line of its own.                                                                                                                               |
+| `replaceText`    | `{ old, new }`       | Replaces the one occurrence of `old` with `new`; refuses when `old` is empty, occurs nowhere, or occurs more than once.                                                       |
+| `addComment`     | `{ from, to, body }` | Adds a comment under the caller's profile on the range `from..to` of the body; refuses a range outside the body or with `from` not before `to`, and a caller with no profile. |
+| `resolveComment` | `{ id }`             | Marks the comment named by `id` resolved; refuses an `id` that names none.                                                                                                    |
 
 ```sh
 cf piece call --cell <piece> appendLine '{"text": "- [ ] Send the summary"}'
@@ -119,14 +119,15 @@ comment is not re-placed by searching the body for the text it covered: the
 range and the version say where it is, and a search can land on a different
 occurrence.
 
-`addComment` lets an agent comment through `cf piece call`, anchored the way
-`replaceText` anchors: on text the body holds exactly once, as a way to name a
-range without offsets. The comment stores the range it found and not the text.
-The caller's profile is the author, so a caller with no profile is refused.
+`addComment` lets an agent comment through `cf piece call` on a range of the
+body, in UTF-16 code units of the text the caller read from the piece's
+`content`. The caller's profile is the author, so a caller with no profile is
+refused. The range is placed in the body as it is when the verb runs; a caller
+that read the body a while ago anchors on whatever the range covers now.
 
 ```sh
 cf piece call --cell <piece> addComment \
-  '{"quote": "Discuss next steps", "body": "Who owns this?"}'
+  '{"from": 12, "to": 30, "body": "Who owns this?"}'
 cf piece call --cell <piece> resolveComment '{"id": "<comment id>"}'
 ```
 
