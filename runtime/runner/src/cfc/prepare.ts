@@ -77,7 +77,10 @@ import {
   lookupSchemaDocument,
   registerSchemaDocument,
 } from "../schema-registry.ts";
-import { storedLabelMapEntries } from "./label-documents.ts";
+import {
+  inStoredLabelMapOrder,
+  storedLabelMapEntries,
+} from "./label-documents.ts";
 import {
   readStoredCfcMetadata,
   StoredCfcMetadataError,
@@ -14215,11 +14218,12 @@ export const writeStoredCfcEnvelope = (
   // enforces); the staging dedupes per transaction and elides documents the
   // space's server already holds.
   // The stored label map holds the payload entries and the document-rooted
-  // ones in one list; readers decode them apart again.
-  const storedEntries = [
+  // ones in one list, in document order (`inStoredLabelMapOrder`); readers
+  // decode them apart again.
+  const storedEntries = inStoredLabelMapOrder([
     ...metadata.labelMap.entries,
     ...(metadata.labelMap.documentEntries ?? []),
-  ];
+  ]);
   const stampPlacement = metadata.stampPlacement === undefined
     ? {}
     : { stampPlacement: metadata.stampPlacement };
