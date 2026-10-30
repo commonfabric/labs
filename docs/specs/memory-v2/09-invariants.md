@@ -788,24 +788,37 @@ facts a genesis commit declares. So a second tombstone, a malformed ACL write
 and an ordinary write to a deleted space are all refused as a deleted space's,
 and none of them reports a shape, capability or genesis failure.
 
-No write path admits a commit to a deleted space, including those that never
-pass through the server's admission of a session's transact. A serving wave's
-`derived` commit commits to its space engine-direct, and so does every commit
-that carries delegated carriage: a delegated append, and a served run's
-access-list change. The engine's own admission of those commits refuses one to
-a space whose ACL document holds a tombstone, so the check sits where the write
-is committed and not in an earlier authority probe that a deletion could land
-after. It refuses with a `ProtocolError` naming the deletion, the deterministic
-refusal a wave's commit step and the outbox already handle
-([`serving-loop.md`](../server-side-execution/serving-loop.md#a-deleted-space)).
-A session's authored commit is checked at the server's transact admission
-instead. The operator `writeDocument` path is refused like any other commit to
-a deleted space. The invitation service's system commit is checked in
-`invite()`, the server's invitation entry point: after it finds the space's
-store and before it runs the operation (`executeInvite`), it refuses every one
-of the five invitation operations on a deleted space with its own code,
-`space-deleted`. The router reaches `invite()` only once the request has passed
-rate limiting, its proof has verified, and its body has validated
+No write path admits a commit to a deleted space. The server's checks above
+run before the commit's write transaction starts, and another connection to the
+same store can commit a deletion in between, so they are an early refusal and
+not the guarantee. The guarantee is the engine's own: inside the SQLite write
+transaction that applies a fresh commit, before it applies anything, the engine
+reads the space's ACL document and refuses the commit when that document holds
+a tombstone. That holds for every fresh commit whatever its class or path: a
+session's authored commit, a served run's access-list change and every other
+commit carrying delegated carriage, a serving wave's `derived` commit, the
+invitation service's system commit, and the operator `writeDocument` path. An
+exact replay of a commit accepted before the deletion still answers from the
+store, since replay detection precedes admission. A commit that writes a
+tombstone is held to these clauses inside that transaction too, against the ACL
+document as stored there, so a member added through another connection after
+the server's check is never deleted along with the space.
+
+When the engine's check refuses a commit that the server's earlier check
+admitted, the refusal reaches the committer as the server's own would have: a
+session's transact gets the `AuthorizationError` above, with the `aclRevision`
+the engine read; a `derived` commit and a delegated commit get a
+`ProtocolError` naming the deletion, the deterministic refusal a wave's commit
+step and the outbox already handle
+([`serving-loop.md`](../server-side-execution/serving-loop.md#a-deleted-space));
+and an invitation operation gets `space-deleted`.
+
+The invitation service decides `space-deleted` in `invite()`, the server's
+invitation entry point, inside the write transaction it runs every one of the
+five operations in (`executeInvite`), so a deletion committed through another
+connection is seen there as it is by the engine. The router reaches `invite()`
+only once the request has passed rate limiting, its proof has verified, and its
+body has validated
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 
 What follows the deletion commit revokes every session open on the space with
@@ -823,7 +836,7 @@ its tombstone and so undo it, while a mode that admitted a tombstone unchecked
 would let any writer delete a space for good. So in `off` too the server tests
 a tombstone against INV-12's shape clauses and these clauses, and refuses every
 command to a deleted space, before the checks that `off` skips. The engine's
-refusal of engine-direct commits and the serving plane's foreign grant
+check inside the write transaction and the serving plane's foreign grant
 (`foreignWriteAuthorityFor()` and `foreignReadAuthorityFor()`) consult no mode
 in any case. The foreign grant's refusal of a deleted space carries
 `deleted: true`, so a serving runtime's `spaceDeleted(target)` for a foreign
@@ -845,10 +858,12 @@ Layer: server admission (`#validateAclCommit` and the capability check in
 `resolveSpaceOwnerOf()` and the declared kind `#spaceKindOf()` reads, and the
 session's `capabilityPrincipal`, which
 `verifySessionOpenProofs` in `runtime/memory/v2/session-open-auth.ts` sets to a
-verified chain's root issuer); engine admission of engine-direct commits
-(`applyCommitTransaction` in `runtime/memory/v2/engine.ts`); the foreign grant
+verified chain's root issuer); engine admission of every fresh commit, inside
+its write transaction (`applyCommitTransaction` in
+`runtime/memory/v2/engine.ts`); the foreign grant
 (`#foreignGrantOn` in `runtime/memory/v2/server.ts`); invitation admission
-(`invite()` in `runtime/memory/v2/server.ts`); client emission (`writeAcl()` in
+(`invite()` and `executeInvite` in `runtime/memory/v2/server.ts` and
+`runtime/memory/v2/invites.ts`); client emission (`writeAcl()` in
 `runtime/runner/src/acl-manager.ts`). The chain clause applies only where the
 server admits delegations (`acl.delegations`, which toolshed sets from
 `MEMORY_ACL_DELEGATIONS`, on unless set false): a server that admits none

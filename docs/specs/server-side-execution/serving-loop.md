@@ -495,14 +495,15 @@ successor tenure could have it admitted.
 - An outbox row whose target space is deleted is refused at delivery like any
   other deterministic admission refusal (§5), and is deleted with the
   source-side notice written first.
-- An outbox drain reads its own space's ACL document first, and delivers
-  nothing when it holds a tombstone. So a row that a deleted space's own waves
-  wrote is never delivered once its drain has read the deletion, and a reap
-  removes it with the rest of the store. The window that remains is a single
-  drain: a row whose delivery the drain had begun before the deletion
-  committed may still be admitted at its target. A drain's own commits after
-  the deletion, such as a failure notice, are refused like any other commit to
-  the space.
+- An outbox drain reads its own space's ACL document before it starts each
+  row, and stops at the first row it finds the space deleted before, leaving
+  that row and every later one in place for a reap to remove with the rest of
+  the store. So once a drain has read the deletion it starts no further row.
+  The window that remains is one row: a row whose read found the space live
+  may still be admitted at its target, even when the deletion commits while
+  that row's delivery is under way. A drain's own commits after the deletion,
+  such as a failure notice or a row's retirement, are refused like any other
+  commit to the space, and the drain stops there too.
 
 Deletion is not implemented yet.
 

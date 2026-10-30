@@ -1873,7 +1873,12 @@ space with the `session/revoked` reason `deleted`. The session that committed
 the deletion receives its transact response first and its revocation after, as
 a member's session does when it removes its own entry. The server admits
 no further commit to the space on any write path, engine-direct writes from the
-serving plane included, so no principal can undo the deletion. All of this
+serving plane included, so no principal can undo the deletion. These checks
+run before a commit's write transaction starts, so the engine repeats the
+tombstone check inside that transaction for every fresh commit, and checks a
+tombstone commit's own clauses there too, against the ACL as stored: a deletion
+committed through another connection in between still refuses the commit, with
+the same refusal (INV-15). All of this
 holds in every ACL mode, `off` included, as do the admission rules above for a
 commit that writes a tombstone: a deleted space is refused whatever the policy,
 since a mode that admitted commits to one could undo it. A tombstone is not an
