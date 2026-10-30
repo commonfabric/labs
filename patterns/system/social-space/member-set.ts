@@ -6,8 +6,6 @@
  */
 
 import {
-  debugStr,
-  type DID,
   profileOwnerOf,
   type SpaceGrantLevel,
   type SpaceMemberList,
@@ -16,8 +14,8 @@ import type { ParticipantProfile } from "../loom/participants.tsx";
 
 /** One member of a social space. */
 export interface SpaceMember {
-  /** The principal, as the space's access list names it. */
-  principal: DID;
+  /** The principal's DID, as the space's access list names it. */
+  principal: string;
 
   /** The level the access list's entry for `principal` grants. */
   level: SpaceGrantLevel;
@@ -43,34 +41,24 @@ export interface SpaceMember {
  * toward a member exactly when it counts as theirs anywhere else. Call it
  * where `profileOwnerOf()` can be called, in a reactive computation or a
  * handler; a profile still loading counts toward no one until it arrives.
- *
- * @throws If `list` names a principal that is not a DID, which the runtime's
- *   `spaceMembers()` never does.
  */
 export const memberSet = (
   roster: readonly ParticipantProfile[],
   list: SpaceMemberList | undefined,
 ): SpaceMember[] | undefined => {
   if (list === undefined) return undefined;
-  const members = new Map<string, SpaceMember>();
-  for (const principal of Object.keys(list.principals).sort()) {
-    if (!isDID(principal)) {
-      throw new Error(
-        debugStr`Not a DID in an access list: $quote${principal}`,
-      );
-    }
-    members.set(principal, {
+  const members = new Map<string, SpaceMember>(
+    Object.entries(list.principals).map(([principal, level]) => [
       principal,
-      level: list.principals[principal],
-      profiles: [],
-    });
-  }
+      { principal, level, profiles: [] },
+    ]),
+  );
   for (const profile of roster) {
     const owner = profileOwnerOf(profile);
     if (owner !== undefined) members.get(owner)?.profiles.push(profile);
   }
-  return [...members.values()];
+  // The keys are distinct, so no two members compare equal.
+  return [...members.values()].sort((a, b) =>
+    a.principal < b.principal ? -1 : 1
+  );
 };
-
-/** Helper for `memberSet()`, which narrows an access list's key to a `DID`. */
-const isDID = (key: string): key is DID => key.startsWith("did:");
