@@ -301,9 +301,10 @@ sees the proof, which is a list again. So the division is:
   removing a key is not renewing it. A delegation issued without an expiry, as
   the profile's root delegation is and as `cf delegation issue` writes unless
   given `--expires-in`, does not end that way. For one of those, and for what
-  cannot wait, a per-space revocation document of refused CIDs, written under
-  the access list's whole-document rule, that the server consults beside the
-  proofs and sweeps open sessions against as it sweeps on an access-list change.
+  cannot wait, a per-space list of refused CIDs, the `revocations` field of the
+  space's access-list document, written as every access-list change is, that
+  the server consults beside the proofs and sweeps open sessions against as it
+  sweeps on every access-list change.
   Replacing the list itself remains the emergency exit that refuses every chain
   rooted at a grant at once.
 
@@ -555,7 +556,7 @@ deferred until unlinkability from readers of the space becomes a requirement.
 Issuing and revoking a delegation are not symmetric in what they disclose.
 Issuing discloses nothing to readers of the space: the delegation goes to its
 holder and to the issuer's Home, and the server sees it on opens, and no
-document in the space changes. Revoking one through the revocation document
+document in the space changes. Revoking one through the revocation list
 ("Rotation and revocation") discloses a CID, which tells a reader holding no
 delegation bytes only that some delegation was refused, since the random nonce
 and the issuer's signature in the bytes keep a CID from being rebuilt and tested
@@ -567,7 +568,7 @@ its CIDs testable by them. Revoking the root is the exception: the emergency
 exit replaces the access list with one that names an identity the user holds,
 which is the one act that publishes the link between the profile and that
 identity in a document every reader holds. A user who needs the link kept
-private revokes by expiry and by the revocation document, and keeps the exit for
+private revokes by expiry and by the revocation list, and keeps the exit for
 the emergency it is named for.
 
 ## Rotation and revocation
@@ -581,26 +582,28 @@ the emergency it is named for.
   again, and removing a key is not renewing it; the server holds a session to
   its chain's expiry after admission. A delegation issued without an expiry, the
   command's default, never ends that way. For one of those, and for a revocation
-  that cannot wait, the space holds a revocation document beside its access
-  list, `of:<space>/revocations`, listing the CIDs of refused delegations and
-  nothing else: no audience, no issuer, and no revoker. A CID is opaque to a
+  that cannot wait, the space holds a revocation list in its access-list
+  document, the `revocations` field beside the list itself
+  ([`server-execution-consent.md`](server-execution-consent.md), "The
+  access-list document"), listing the CIDs of refused delegations and nothing
+  else: no audience, no issuer, and no revoker. A CID is opaque to a
   reader who does not hold the delegation's bytes, and the bytes cannot be
   rebuilt from the parties: the payload carries a nonce the issuer draws at
   random, and the envelope carries the issuer's signature, so a reader who knows
   every public field still cannot test a CID against an identity. Naming a party
   in the document would publish, in a document every reader holds, what the
-  chain keeps out of them. Writing it needs OWNER, by the same whole-document
-  rule as the access list (INV-12). The server refuses an open whose chain
-  contains a listed CID, and a commit that touches the document sweeps the
-  space's open sessions the way an access-list commit does
+  chain keeps out of them. Writing it is an access-list change, so it needs
+  OWNER and a whole-document `set` (INV-12). The server refuses an open whose
+  chain contains a listed CID, and the commit that lists one sweeps the space's
+  open sessions as every access-list commit does
   (`#revokeDeauthorizedSessions`), ending every session whose chain contains a
-  CID the document now lists; the server already records each session's chain
+  CID the list now holds; the server already records each session's chain
   with its authorization, so it knows which. A listed CID refuses every chain
   through that delegation, so revoking a link cuts off everything delegated
   onward from it. The issuer knows what it issued from its Home:
   `cf delegation issue` records each delegation's CID, audience, space, and
   expiry there, under `{ issued: <space> }`, which `cf delegation issued` lists
-  and `cf delegation revoke <cid>` writes to the space's revocation document
+  and `cf delegation revoke <cid>` writes to the space's revocation list
   from.
 - **Rotating the core identity**: the old core, holding OWNER through the root
   delegation, issues a delegation to the new core over the space, and the new
@@ -697,7 +700,7 @@ of this design.
    than the whole space ("Policy and command restriction"); the identity codec
    admits the policy subset and holds the one evaluator; `cf delegation issue`
    takes a policy and records what it issued in Home; and a space's revocation
-   document lets an owner refuse a delegation by CID before it expires
+   list lets an owner refuse a delegation by CID before it expires
    ("Rotation and revocation"). How an operation carries its arguments and
    proofs to the server is that phase's design. A grant-side rule confining a
    wildcard WRITE to the documents a sender created is left open.
@@ -800,6 +803,6 @@ of this design.
 | Record the delegation beside the profile link | the Home default pattern's `profiles` entries |
 | Evaluate a chain's policy and command path over the operations that name documents | `runtime/memory/v2/session-open-auth.ts` and `runtime/memory/v2/server.ts`, once those operations carry their arguments and proofs |
 | Admit the policy subset in a delegation; the one policy evaluator | `checkPayload` in `base/identity/src/delegation.ts`, and a policy module beside it |
-| The revocation document; refuse a listed CID; sweep sessions on a change to it | `runtime/memory/acl.ts` beside `aclDocId`, and `runtime/memory/v2/server.ts` beside the access-list sweep |
+| The revocation list, a field of the access-list document; refuse a listed CID; sweep sessions on a change to it | `runtime/memory/acl.ts` beside `isACL`, and `runtime/memory/v2/server.ts` in the access-list sweep |
 | Issue with a policy; record what was issued in Home; list and revoke | `cf delegation` over `runtime/cli/lib/delegation.ts` |
 | Protocol description | `memory-v2/04-protocol.md` §4.5 |

@@ -113,20 +113,24 @@ map from a principal to its capability:
 ```
 
 Under this design the access list moves down a level, beside the space's
-consent delegations:
+consent delegations and its revocation list:
 
 ```json
 {
   "acl": { "did:key:z6MkOwner": "OWNER", "*": "READ" },
-  "delegations": [["<envelope>", "..."]]
+  "delegations": [["<envelope>", "..."]],
+  "revocations": ["<cid>"]
 }
 ```
 
 `delegations` is a list of chains, each a list of delegation envelopes exactly
 as their issuers encoded them, root first. A space with no consent delegations
-holds an empty list or no `delegations` key.
+holds an empty list or no `delegations` key. `revocations` holds the CIDs of
+delegations the space refuses, and nothing else
+([`profile-delegation.md`](profile-delegation.md), "Rotation and revocation");
+a space that refuses none holds an empty list or no `revocations` key.
 
-The delegations live in the value rather than in a sibling metadata field of
+Both live in the value rather than in a sibling metadata field of
 the document, beside `cfc` or `result`. Metadata fields are delivered and
 followed by rules of their own
 ([`memory-v2/01-data-model.md`](memory-v2/01-data-model.md),
@@ -135,22 +139,24 @@ access-list data: it takes the access list's validation and write rules, and
 leaves the metadata rules as they are.
 
 **The two forms are told apart by their keys.** Every key of a legacy list is
-`"*"` or a DID (`isACLUser` in `runtime/memory/acl.ts`), and neither `acl` nor
-`delegations` is either. A value with an `acl` key is the new form; a value
-whose keys are all principals is the legacy form, read as the `acl` of a space
-with no consent delegations. A value holding a principal key beside `acl` or
-`delegations` is malformed, and fails closed as a malformed list does today. A
-reader of the new form reads `acl` exactly as it reads a legacy list and
-ignores keys it does not know, so a field added later reaches readers that
-predate it without making them fail closed. The server's validator for genesis
-and access-list commits knows every field and refuses any other.
+`"*"` or a DID (`isACLUser` in `runtime/memory/acl.ts`), and none of `acl`,
+`delegations` and `revocations` is either. A value with an `acl` key is the new
+form; a value whose keys are all principals is the legacy form, read as the
+`acl` of a space with no consent delegations and no revocations. A value
+holding a principal key beside any of those three is malformed, and fails
+closed as a malformed list does today. A reader of the new form reads `acl`
+exactly as it reads a legacy list and ignores keys it does not know, so a field
+added later reaches readers that predate it without making them fail closed.
+The server's validator for genesis and access-list commits knows every field
+and refuses any other.
 
 **Writing it is unchanged.** A change is an access-list commit: a single
 whole-document `set`, by an OWNER, in a commit of its own (INV-12 in
 [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md)). The validator
 additionally verifies every chain in `delegations`: each is over this space,
-its links meet, and its signatures hold. A writer that changes membership
-replaces `acl` and keeps `delegations` as it stands, as the writers already
+its links meet, and its signatures hold, and that every entry of `revocations`
+is a CID. A writer that changes membership replaces `acl` and keeps
+`delegations` and `revocations` as they stand, as the writers already
 keep the document's sibling fields (`writeAcl` in
 `runtime/runner/src/acl-manager.ts`, and the served access-list change in
 `runtime/memory/v2/server.ts`). A genesis commit may carry `delegations`, so a
@@ -211,15 +217,14 @@ So the memory server grants a space's lease, by the conditional write
 serving-loop.md §2 describes, only to a holder whose service identity is the
 final audience of a chain in the space's `delegations` that verifies now: its
 signatures and links hold, its root issuer holds OWNER in the space's `acl`,
-and no link is listed in the space's revocation document. The server reads the
+and no link's CID is in the space's `revocations`. The server reads the
 document itself, as it reads the access list, so a chain an executor kept from
 an earlier read counts for nothing once the owner has removed it. The
 derived-commit admission check, which already compares the commit's holder with
-the live lease, then needs nothing further. Withdrawing consent is an
-access-list commit, which already sweeps the sessions it deauthorizes
-(`#revokeDeauthorizedSessions`); the same commit ends a lease whose holder it
-leaves without a standing chain, and so does a commit to the revocation
-document.
+the live lease, then needs nothing further. Withdrawing consent and revoking a
+link are both access-list commits, which already sweep the sessions they
+deauthorize (`#revokeDeauthorizedSessions`); the same commit ends a lease whose
+holder it leaves without a standing chain.
 
 The executor's sessions present the chain they read from the document in place
 of `actingAs: "space-owner"`. Capability then resolves for the chain's root
@@ -301,8 +306,8 @@ delegation from the profile serves it under the profile's own grant instead.
   owners, as a FabriChat room's are, is the case this reaches most.
 - **Withdrawing consent is an edit to the space.** An owner takes a space away
   from an ASP by removing its chain from `delegations`, and the lease ends with
-  the commit. The revocation document keeps its role for chains presented
-  without being in the document, such as the delegations
+  the commit. The revocation list keeps its role for chains presented without
+  being in the document, such as the delegations
   [`profile-delegation.md`](profile-delegation.md) describes.
 
 ## What stays as it is
@@ -338,6 +343,3 @@ delegation from the profile serves it under the profile's own grant instead.
 - **Home.** A served `wish` reads the demanding person's Home through the
   binding today. Without consent for Home, a served run cannot read it, so Home
   is the first delegation a person who wants server execution writes.
-- **The revocation document.** `of:<space>/revocations` is a document of its
-  own today. With consent in the access-list document, it could move there too,
-  as another field beside `acl` and `delegations`.
