@@ -58,14 +58,18 @@ difference, and nothing is dispatched.
 
 The update listener reports in the other direction. After any transaction that
 set the selection or changed the document, it emits `cf-selection-change` when
-the main range differs, in position or text, from the one last reported. The
-view maps the selection through a collaborator's edit as it does through the
-user's, so a host holding a selection while others type hears where it moved,
-and a selection that an edit shifts onto other text is reported as what it now
-covers. After a local edit it compares the field's ranges with the `highlights`
-property and emits `cf-highlights-mapped` where they differ; after a
-whole-document replacement from outside, it pushes the property in again
-instead. A remote collaborator's edit is mapped but not reported: only the
+the main range differs, in position or text, from the one last reported, with
+one exception: a caret with nothing selected is reported once, when a selection
+collapses to it, and not again as it moves. The view maps the selection through
+a collaborator's edit as it does through the user's, so a host holding a
+selection while others type hears where it moved, and a selection that an edit
+shifts onto other text is reported as what it now covers.
+
+The highlight ranges are reported more narrowly. After a local edit the listener
+compares the field's ranges with the `highlights` property and emits
+`cf-highlights-mapped` where they differ; after a whole-document replacement
+from outside, it pushes the property in again instead. A remote collaborator's
+edit maps the ranges but is not reported as `cf-highlights-mapped`: only the
 editor that made an edit speaks for it, so two editors never hand a host two
 positions for one range.
 
@@ -100,7 +104,9 @@ user edits ────► transaction.changes ──► mapped ranges
   collaboration snapshot installing is handled the same way, whether it arrives
   into an empty editor or over text the cell mirrored first: any whole-document
   replacement that is not the user's own typing sets the host's ranges again.
-- **A collaborator's edit is mapped silently.** The field keeps a range on its
-  text through a remote edit, and the editor reports nothing. The collaborator's
-  own editor reports the same edit to the host, and the host's next `highlights`
-  value arrives equal to what the field already holds.
+- **A collaborator's edit maps the highlights silently.** The field keeps a
+  range on its text through a remote edit, and the editor emits no
+  `cf-highlights-mapped` for it. The collaborator's own editor reports the same
+  edit to the host, and the host's next `highlights` value arrives equal to what
+  the field already holds. The selection is the exception: the editor whose
+  selection a remote edit moved is the only one that can report it, and does.
