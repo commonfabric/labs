@@ -4597,8 +4597,6 @@ Deno.test({
       assertEquals(stdout[0].includes("Done."), true);
       expect(runPromptOptions?.contextMessages).toEqual([
         expect.stringContaining('<skill_context name="pattern-dev"'),
-        expect.stringContaining("No input cells are attached for this run"),
-        expect.stringContaining("resolve_piece resolves a piece slug"),
         REVISION_VERIFICATION_GUIDANCE,
       ]);
       assertEquals(
