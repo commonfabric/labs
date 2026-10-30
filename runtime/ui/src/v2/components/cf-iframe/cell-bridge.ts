@@ -16,6 +16,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import {
   CellHandle,
   CellReadRefusedError,
+  cellRefToIdentityKey,
   type ClientCellValue,
   isCellHandle,
 } from "@commonfabric/runtime-client";
@@ -459,23 +460,31 @@ function cellContextResources(
 
 /**
  * The names of the fields `cell` holds: the keys of its value while the
- * worker admits the read, or, while it refuses it, the fields the worker
- * lists, each of which answers for its own reads. None when the worker
- * refuses even the list, or answers that the cell holds no record.
+ * worker admits the read, and the fields the worker lists. The list names
+ * what the read leaves out, which is every field of a cell whose read is
+ * refused, each of which answers for its own reads, and the cell fields of a
+ * record a view binds inline (`$context={{ state, output }}`), whose read
+ * stops at the record. None when the worker refuses both, or answers that
+ * the cell holds no record.
  */
 async function fieldNames<T>(cell: CellHandle<T>): Promise<string[]> {
+  const names = new Set<string>();
   try {
     const current = await cell.pull();
-    return current && typeof current === "object" ? Object.keys(current) : [];
+    if (current && typeof current === "object") {
+      for (const name of Object.keys(current)) names.add(name);
+    }
   } catch (error) {
     if (!(error instanceof CellReadRefusedError)) throw error;
   }
   try {
-    return Object.keys((await cell.fields()) ?? {});
+    for (const name of Object.keys((await cell.fields()) ?? {})) {
+      names.add(name);
+    }
   } catch (error) {
-    if (error instanceof CellReadRefusedError) return [];
-    throw error;
+    if (!(error instanceof CellReadRefusedError)) throw error;
   }
+  return [...names];
 }
 
 /** Builds the convenience bridge used by `cf-iframe`'s `context` property. */
@@ -496,7 +505,15 @@ export function createCellContextBridge(context: object): FabricBridge {
   return createFabricBridge(resources);
 }
 
-/** Resolves every named child of a bound context into one concrete resource. */
+/**
+ * Resolves every named child of a bound context into one concrete resource.
+ * A child is named by the context's schema, by the fields the context holds,
+ * or by `resourceKinds`. The last is what names a stream: the worker lists a
+ * record's fields as cells, and a stream is not one, so a record bound inline
+ * with no schema of its own names its streams only through the kinds given.
+ * A name `resourceKinds` alone gives is a resource only where the context
+ * holds a link under it, so a name the context does not hold grants nothing.
+ */
 export async function resolveCellContextBridge(
   context: CellHandle<Record<string, unknown>>,
   resourceKinds: Readonly<Record<string, CellContextResourceKind>> = {},
@@ -506,11 +523,12 @@ export async function resolveCellContextBridge(
   const contextNames = await fieldNames(context);
   const root = await context.resolveAsCell();
   const properties = schemaProperties(root.ref().schema);
-  const names = new Set([
+  const listed = new Set([
     ...Object.keys(properties),
     ...contextNames,
     ...await fieldNames(root),
   ]);
+  const names = new Set([...listed, ...Object.keys(resourceKinds)]);
   const entries = await Promise.all([...names].map(async (name) => {
     const source = context.key(name);
     const kindHint = Object.hasOwn(resourceKinds, name)
@@ -521,6 +539,16 @@ export async function resolveCellContextBridge(
       await source.pull();
     }
     const cell = await source.resolveAsCell();
+    // An absent name resolves to the context's own path for it, which for a
+    // context that is itself a link is a path of the record it links to.
+    const reached = cellRefToIdentityKey(cell.ref());
+    if (
+      !listed.has(name) &&
+      (reached === cellRefToIdentityKey(source.ref()) ||
+        reached === cellRefToIdentityKey(root.key(name).ref()))
+    ) {
+      return undefined;
+    }
     const resolvedSchema = cell.ref().schema;
     const runSqliteOperation: SqliteOperationRunner | undefined =
       declaredKind === "sqlite"
@@ -543,5 +571,7 @@ export async function resolveCellContextBridge(
       ),
     ] as const;
   }));
-  return createFabricBridge(Object.fromEntries(entries));
+  return createFabricBridge(
+    Object.fromEntries(entries.filter((entry) => entry !== undefined)),
+  );
 }

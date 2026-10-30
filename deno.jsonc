@@ -146,7 +146,11 @@
     "**/.cache/",
     "**/coverage/",
     "./docs/history/",
-    "**/.doccheck*"
+    "**/.doccheck*",
+    // An iframe pattern's guest bundle, which `deno bundle` writes from the
+    // `guest.ts` or `guest.tsx` beside it and the pattern reads as a data
+    // file. The source is what gets formatted, linted and type-checked.
+    "patterns/*/iframe-*/**/guest.js"
   ],
   "lint": {
     "exclude": [

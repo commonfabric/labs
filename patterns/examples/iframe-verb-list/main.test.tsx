@@ -1,6 +1,6 @@
 /**
  * Drives the verb list's `addItem` verb, the one the guest sends to, and reads
- * the list back through `items`.
+ * the list back through `state.items`.
  */
 
 import { action, assert, pattern, TESTS } from "commonfabric";
@@ -21,17 +21,17 @@ export default pattern(() => {
     list.addItem.send({ id: "eggs", text: "  Eggs  " });
   });
 
-  const assert_starts_empty = assert(() => list.items.length === 0);
+  const assert_starts_empty = assert(() => list.state.items.length === 0);
   const assert_holds_milk = assert(() =>
-    list.items.length === 1 && list.items[0].id === "milk" &&
-    list.items[0].text === "Milk"
+    list.state.items.length === 1 && list.state.items[0].id === "milk" &&
+    list.state.items[0].text === "Milk"
   );
   const assert_milk_is_unchanged = assert(() =>
-    list.items.length === 1 && list.items[0].text === "Milk"
+    list.state.items.length === 1 && list.state.items[0].text === "Milk"
   );
   const assert_eggs_follow_milk_trimmed = assert(() =>
-    list.items.length === 2 && list.items[1].id === "eggs" &&
-    list.items[1].text === "Eggs"
+    list.state.items.length === 2 && list.state.items[1].id === "eggs" &&
+    list.state.items[1].text === "Eggs"
   );
   const assert_nothing_is_checked_or_hidden = assert(() =>
     Object.keys(list.state.checked).length === 0 &&

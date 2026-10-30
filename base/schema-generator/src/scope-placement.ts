@@ -16,8 +16,17 @@
  * questions.
  */
 
+import {
+  forEachSubschema,
+  type SubschemaKeyword,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import type { MutableJSONSchema } from "@commonfabric/api";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
+
+import type { AnyValueBesideUnwritten } from "./ifc-labels.ts";
 
 /**
  * Keywords whose values are schemas for a DIFFERENT slot than the one being
@@ -195,4 +204,188 @@ export const assertScopeDeclarationsAreReachable = (
   schema: MutableJSONSchema,
 ): void => {
   walkSlot(schema);
+};
+
+/** The prefix of a reference to a definition in the schema's own `$defs`. */
+const LOCAL_DEFINITION_PREFIX = "#/$defs/";
+
+/**
+ * A scope declared inside a value, and where: on a member, at that member's
+ * path from the value (property names, after a dot or, where a name is no
+ * identifier, quoted in brackets (`[""]`), `[number]` for an element and
+ * `[string]` for the value under any other key), or, where `member` is
+ * `undefined`, inside a cell the value itself is (`scopeInsideCellAt()`).
+ */
+export type MemberScope = {
+  readonly scope: string;
+  readonly member: string | undefined;
+};
+
+/** A property name a path can write after a dot, as `a.b`. */
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+/**
+ * The path of the child schema `keyword` holds at `key`, from the path of its
+ * parent, `member`, which is `undefined` at the value itself: a child of the
+ * same position, as a union's arm is, stays at its parent's.
+ */
+const memberAt = (
+  member: string | undefined,
+  keyword: SubschemaKeyword,
+  key: string | undefined,
+): string | undefined => {
+  if (keyword === "properties") {
+    if (IDENTIFIER.test(key!)) return member ? `${member}.${key}` : key;
+    return `${member ?? ""}[${JSON.stringify(key)}]`;
+  }
+  if (keyword === "items" || keyword === "prefixItems") {
+    return `${member ?? ""}[number]`;
+  }
+  if (keyword === "additionalProperties" || keyword === "patternProperties") {
+    return `${member ?? ""}[string]`;
+  }
+  return member;
+};
+
+/**
+ * The first scope `schema` declares at its own position, on any handle of
+ * its cell stack (`asCell`) or beside it (`scope`), or `undefined` where it
+ * declares none.
+ */
+const scopeDeclaredAt = (schema: MutableJSONSchemaObj): string | undefined => {
+  for (const entry of Array.isArray(schema.asCell) ? schema.asCell : []) {
+    if (isObjectOrArray(entry) && typeof entry.scope === "string") {
+      return entry.scope;
+    }
+  }
+  return typeof schema.scope === "string" ? schema.scope : undefined;
+};
+
+/**
+ * The first scope `schema` declares past the one its own slot is read in
+ * (`topLevelScope()`), or `undefined` where it declares none: on a handle
+ * inside the outermost one of its cell stack (`asCell`), or beside a stack
+ * whose outermost handle declares its own, where it is the scope of what the
+ * cell holds.
+ */
+const scopeInsideCellAt = (
+  schema: MutableJSONSchemaObj,
+): string | undefined => {
+  const [outermost, ...inner] = Array.isArray(schema.asCell)
+    ? schema.asCell
+    : [];
+  for (const entry of inner) {
+    if (isObjectOrArray(entry) && typeof entry.scope === "string") {
+      return entry.scope;
+    }
+  }
+  return isObjectOrArray(outermost) && typeof outermost.scope === "string" &&
+      typeof schema.scope === "string"
+    ? schema.scope
+    : undefined;
+};
+
+/**
+ * The first scope declared inside `schemas`, on a member anywhere in their
+ * values (`scopeDeclaredAt()`) or inside a cell one of them is
+ * (`scopeInsideCellAt()`), through the definitions in `definitions` their
+ * local references reach, or `undefined` where none is. The scope a schema's
+ * own slot is read in, at its top level or on an arm of it, is the whole
+ * value's. A definition `definitions` does not hold yet is passed over.
+ */
+export const memberScopeWithin = (
+  schemas: readonly MutableJSONSchema[],
+  definitions: Readonly<Record<string, MutableJSONSchema>>,
+): MemberScope | undefined => {
+  // A schema met at the value itself is read again where it is a member.
+  const visitedAtValue = new Set<MutableJSONSchema>();
+  const visitedAsMember = new Set<MutableJSONSchema>();
+  const visit = (
+    node: MutableJSONSchema,
+    member: string | undefined,
+  ): MemberScope | undefined => {
+    const visited = member === undefined ? visitedAtValue : visitedAsMember;
+    if (!isObjectOrArray(node) || visited.has(node)) return undefined;
+    visited.add(node);
+    const scope = member === undefined
+      ? scopeInsideCellAt(node)
+      : scopeDeclaredAt(node);
+    if (scope !== undefined) return { scope, member };
+    let found: MemberScope | undefined;
+    if (
+      typeof node.$ref === "string" &&
+      node.$ref.startsWith(LOCAL_DEFINITION_PREFIX)
+    ) {
+      const definition =
+        definitions[node.$ref.slice(LOCAL_DEFINITION_PREFIX.length)];
+      if (definition !== undefined) found = visit(definition, member);
+    }
+    forEachSubschema(node, (child, keyword, key) => {
+      found ??= visit(
+        child as MutableJSONSchema,
+        memberAt(member, keyword, key),
+      );
+      return found !== undefined;
+    }, { includeUnused: true });
+    return found;
+  };
+  for (const schema of schemas) {
+    const found = visit(schema, undefined);
+    if (found) return found;
+  }
+  return undefined;
+};
+
+/**
+ * The error raised for a scope declared inside a value that may hold its
+ * constituents' data anywhere and describes nothing inside them: one an
+ * intersection whose constituents cannot be merged falls back to
+ * (`"unsupported"`), or one intersected with `any` (`"any"`). The write path
+ * never sees that scope there, and would store its data with the whole
+ * value's. A whole value's own scope is the alternative only to a member's.
+ */
+export const memberScopeDroppedError = (
+  { scope, member }: MemberScope,
+  from: AnyValueBesideUnwritten["from"],
+): Error =>
+  new Error(
+    (from === "any"
+      ? `A value intersected with \`any\` accepts any value and describes ` +
+        `nothing inside what it is intersected with`
+      : `An intersection whose constituents cannot be merged falls back to ` +
+        `a schema that accepts any object and describes nothing inside ` +
+        `them`) +
+      `, so it cannot keep the scope \`${scope}\` declared ` +
+      (member === undefined ? `inside a cell there` : `on \`${member}\``) +
+      `. That data would be stored in the scope of the whole value ` +
+      `instead, which without a scope of its own is one copy shared by ` +
+      `everyone in the space. ` +
+      (from === "any"
+        ? `Declare that value without \`any\`` +
+          (member === undefined ? "" : `, or scope the whole value ` +
+            `(\`PerUser<{ x: string }>\` rather than ` +
+            `\`{ x: PerUser<string> }\`)`)
+        : `Declare the intersection with constituents that merge, as ` +
+          `\`{ x: PerUser<string> } & { items: string[] }\` does` +
+          (member === undefined ? "" : `, or scope the whole value ` +
+            `(\`PerUser<{ x: string } & string[]>\`)`)) +
+      ".",
+  );
+
+/**
+ * Refuses a value in `values` that met definitions before they were written
+ * where one declares a scope on a member now that it is, as such a value is
+ * refused where its constituents' members declare one it can read
+ * (`memberScopeDroppedError()`).
+ */
+export const assertAnyValuesKeptNoMemberScope = (
+  values: readonly AnyValueBesideUnwritten[],
+): void => {
+  for (const { from, definitions, unwritten } of values) {
+    const found = memberScopeWithin(
+      unwritten.map((name) => ({ $ref: `${LOCAL_DEFINITION_PREFIX}${name}` })),
+      definitions,
+    );
+    if (found) throw memberScopeDroppedError(found, from);
+  }
 };

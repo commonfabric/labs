@@ -1422,6 +1422,11 @@ let setOf: (
 let labelViewOf: (cell: CellImpl<FabricValue>) => CfcLabelView | undefined;
 let markSynced: (cell: CellImpl<FabricValue>) => void;
 let isStreamCell: (cell: CellImpl<FabricValue>) => boolean;
+let pullProjectedOf: <R>(
+  cell: CellImpl<FabricValue>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean },
+) => Promise<R>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -2019,6 +2024,15 @@ export class CellImpl<T extends FabricValue>
    * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
+    return this.#pullProjected((value) => value, options, true);
+  }
+
+  /** Runs the shared readiness barrier for a projected or recursive pull. */
+  #pullProjected<R>(
+    project: (value: Readonly<T>) => R,
+    options: { awaitDurability?: boolean },
+    traverse: boolean,
+  ): Promise<R> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -2039,12 +2053,11 @@ export class CellImpl<T extends FabricValue>
       );
     }
 
-    // Check if we need to traverse the result to register all dependencies.
-    // This is needed when there's no schema or when the schema is TrueSchema ("any"),
-    // because without schema constraints we need to read all nested values.
+    // Ordinary pull recursively demands schemaless values. A projected pull
+    // demands the schema view and the projection's reads without that traversal.
     const schema = this.#_link.schema;
-    const needsTraversal = schema === undefined ||
-      ContextualFlowControl.isTrueSchema(schema);
+    const needsTraversal = traverse && (schema === undefined ||
+      ContextualFlowControl.isTrueSchema(schema));
 
     const idle = () =>
       options.awaitDurability === true
@@ -2058,11 +2071,11 @@ export class CellImpl<T extends FabricValue>
           // Read the value inside the effect - this ensures dependencies are pulled
           const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
 
-          // If no schema or TrueSchema, traverse the result to register all
-          // nested values as read dependencies.
+          // Ordinary schemaless pull also registers nested read dependencies.
           if (needsTraversal && value !== undefined && value !== null) {
             deepTraverse(value);
           }
+          project(value);
         } finally {
           // Schemaless traversal can add reads in other spaces. Each effect
           // run replaces the set so obsolete dependencies do not fail the pull.
@@ -2138,7 +2151,9 @@ export class CellImpl<T extends FabricValue>
             sessionError.name !== "AuthorizationError"
           ) throw sessionError;
         }
-        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+        return project(
+          validateAndTransform(this.#runtime, undefined, this.#viewRef),
+        );
       };
       ready().then(resolve, reject);
     });
@@ -5075,6 +5090,8 @@ export class CellImpl<T extends FabricValue>
       cell.#synced = true;
     };
     isStreamCell = (cell) => cell.isStream();
+    pullProjectedOf = (cell, project, options) =>
+      cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
   }
@@ -5859,6 +5876,24 @@ export function readProjected<R>(
   const tx = cellRuntime(cell).readTx();
   const value = project(cell.withTx(tx).get());
   return { value, consumed: collectConsumedLabel(tx) };
+}
+
+/**
+ * Pulls the dependencies of the cell's schema view and `project`, returning
+ * the projection's result from a fresh read. The projection runs inside the
+ * temporary effect, then again after readiness, so it must be synchronous and
+ * free of side effects. Early demand runs can supply `undefined` or partially
+ * loaded values, which the projection must tolerate. Schemaless values are
+ * traversed only as far as the projection reads.
+ * Readiness and terminal connection errors follow `pull()`; `awaitDurability`
+ * also waits for producers installed by pending commits.
+ */
+export function pullProjected<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean } = {},
+): Promise<R> {
+  return pullProjectedOf(requireCellImpl(cell), project, options);
 }
 
 /**

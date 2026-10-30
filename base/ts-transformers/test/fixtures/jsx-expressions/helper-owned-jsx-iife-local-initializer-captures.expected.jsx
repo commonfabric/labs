@@ -167,34 +167,17 @@ const __cfLift_3 = __cfHelpers.lift<{
         unsorted: {
             type: "array",
             items: {
-                $ref: "#/$defs/Entry"
+                type: "object",
+                properties: {
+                    name: {
+                        type: "string"
+                    }
+                },
+                required: ["name"]
             }
         }
     },
-    required: ["unsorted"],
-    $defs: {
-        Entry: {
-            type: "object",
-            properties: {
-                id: {
-                    type: "string"
-                },
-                name: {
-                    type: "string"
-                },
-                type: {
-                    "enum": ["file", "folder"]
-                },
-                children: {
-                    type: "array",
-                    items: {
-                        $ref: "#/$defs/Entry"
-                    }
-                }
-            },
-            required: ["id", "name", "type"]
-        }
-    }
+    required: ["unsorted"]
 } as const satisfies __cfHelpers.JSONSchema, {
     $ref: "#/$defs/AnonymousType_1",
     $defs: {

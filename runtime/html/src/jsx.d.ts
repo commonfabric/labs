@@ -3601,6 +3601,7 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "src": string;
+  "script"?: string;
   "bridge"?: {
     readonly resources: Readonly<Record<string, object>>;
   };

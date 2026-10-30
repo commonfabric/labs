@@ -2316,6 +2316,33 @@ adjustments:
   stays unverified for what is done through it where the alias is not followed
   (`test/policy/capability-analysis.test.ts`; fixture
   `ast-transform/handler-nullable-cell-const`)
+- capability analysis resolves a value to every tracked ref it may be, and
+  what is done through the value is charged to each of them. A fallback
+  (`a ?? b`, `a || b`) or a conditional (`c ? a : b`) whose operands resolve to
+  refs that differ resolves to all of them; an operand that resolves to nothing
+  tracked adds none, so `a ?? []` and `c ? a : []` resolve to `a`. An element
+  of an array literal is each value written in it, or each element of a spread
+  in it, and an element of a local array or map is each value put in it; the
+  element a lookup (`find`, `findLast`, `at`) or a `for…of` variable takes is
+  one of those, and the literal itself is read as written. A member access, a `.get()` or a cell step on such a value, a local bound to
+  it, an argument passed as it to a callee whose summary or declared cell
+  parameter charges it, and an identity call's argument all act through each
+  ref. So `(c ? a : b).set(v)` and `const t = c ? a : b; t.key("x").push(v)`
+  write both cells, and a computed that writes that way lists both among its
+  `materializerWriteInputPaths`, without which the runtime does not run it for
+  its writes. The cell methods resolution steps through are one table,
+  `CELL_REF_STEPS`: `.key(...)` names a member below its receiver as a property
+  access does (`x.key("a")` resolves as `x.a`, and a key that can name any
+  member as `x[k]` does, at the static prefix the key is read below);
+  `.elementById(...)` names an element no static path names; `.for(cause)`
+  returns its receiver with the cause set; and `.resolveAsCell()` is the alias
+  above. A step whose result no static path names marks that prefix a wildcard
+  wherever the result goes; a step on a ref that is already dynamic is charged
+  as any other use of that ref is. A method call no step names yields a value
+  derived from its receiver's refs (`table.filter(f)`), which is charged to
+  them conservatively and never taken for one of them (`resolveValueRefs` and
+  `CELL_REF_STEPS` in `policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-value-refs.test.ts`)
 - capability analysis resolves member access through `.get()` when the member
   access itself is observed (`notes.get().length` records `["length"]` rather
   than a blanket root read) and suppresses the redundant blanket `.get()` read.
@@ -2362,8 +2389,10 @@ adjustments:
   (`items[selected.get()]`) is a read of its own wherever the access sits, and
   where the analysis resolves a fallback's operand or a `for..of` iterable to
   a ref in place of walking it, it still visits what that operand evaluates:
-each operand of a fallback, wherever on the member spine it sits, a call on
-  the spine with its arguments and callbacks, and the keys on the spine. A
+  each operand of a fallback and each branch of a conditional, wherever on the
+  member spine it sits, the conditional's condition, a call on the spine with
+  its arguments and callbacks, and the keys on the spine; a cell step on the
+  spine still charges what it does beyond naming its ref. A
   write through such a key (`counts.key(i).set(v)`) stays a wildcard and is
   also recorded as a write of the prefix, so the prefix's capability says it
   is written. A `.key()` call with such a key, an argument passed to a callee
@@ -2412,7 +2441,22 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   `table[].topic` and, through the capture, `self`. That binding survives
   `slice()`, both in a receiver chain and through a local holding the sliced
   array, so a later callback retains the fields it reads without retaining
-  unread item fields. The left operand of a `??`
+  unread item fields. Each method binds the parameters it hands elements to:
+  the first for `map`, `filter`, `find`, `some`, `every`, `forEach`, `flatMap`
+  and the index lookups, the second for `reduce` and `reduceRight`, whose
+  first is the accumulator, and the first as well when either is given no
+  initial value, which starts the accumulator at an element, and the first
+  two for `sort` and `toSorted`. A receiver that is a fallback or a
+  conditional holds the elements of each operand it may yield, and an array
+  literal of objects among them leaves the others' refs bound. The parameter
+  the method hands the array itself to binds the receiver's own ref where
+  that ref accounts for every element the callback is handed.
+  Where the callback runs over the elements unseen — a function passed by
+  name, a rest parameter, a function expression reading `arguments`, or an
+  array parameter whose receiver resolves to no ref — each element is read
+  whole (`ARRAY_CALLBACK_PARAMETERS`;
+  `patterns/dev/regression/array-callback-reads.test.tsx`). The left
+  operand of a `??`
   / `||` fallback resolves to a single source ref, which reaches a root through
   a member/call spine and consumes nothing else; an operand whose spine passes
   through a call is therefore walked as well, covering that call's callback and
@@ -2430,7 +2474,16 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   assigned to anything but a local its own function declares, or handed to a
   callee with no summary, it is read wherever it lands by members the analysis
   never sees, so a member the body did read on the way must not narrow it to
-  that member. The left operand of `??` and `||` is the expression's value
+  that member. The elements a spread puts in an array literal leave whole with
+  it the same way, unless the array, or the copy a `filter`, `sort`,
+  `toSorted` or `slice` makes of it, is handed on by reference: a builder's
+  result, an argument the callee takes as written (a cell write among them),
+  or a local the body only measures, writes into and hands on so. A lift
+  returning `[...rows].sort(by)` narrows `rows` to what `by` reads, while
+  `const sorted = [...rows].sort(by); sorted.map(...)` keeps it whole
+  (`test/policy/capability-analysis-value-refs.test.ts`;
+  `patterns/dev/regression/spread-copy-read.test.tsx`). The left operand
+  of `??` and `||` is the expression's value
   whenever it is there, so it leaves when the expression does. A helper's
   summary carries what the helper let leave whole, and the caller charges it to
   the argument it passed. What a helper returns counts: a function declaration,
@@ -2443,7 +2496,9 @@ each operand of a fallback, wherever on the member spine it sits, a call on
   whole (`test/policy/capability-analysis-whole-value-escapes.test.ts`). A
   primitive has nothing below it to keep and is left alone. A
   value bound to a local or written into a local collection stays tracked and
-  narrows as its reads say. So does a value handed on by reference, which the
+  narrows as its reads say; a map's `set` whose own value is read hands the
+  map on, and the value in it with it, so only one whose value is dropped
+  writes into a local collection. So does a value handed on by reference, which the
   runtime stores as a link so that whatever reads through it does so under a
   schema of its own: an argument to a runtime call (a builder, an applied lift,
   `ifElse`, a cell factory), the payload of a write through a cell (`set`,
@@ -2726,6 +2781,18 @@ computation's input schema:
   `applyIdentityArrayItemSchemaHints`; fixtures
   `handler-schema/identity-only-handler-payload` and
   `handler-schema/identity-element-field-handler`).
+- The elements a spread puts in an array the body fills and hands to `.set()`
+  are written back by identity, each as a link to the slot it was read from,
+  unless some element may be a primitive or a nullish value, by the spread
+  source's own type or by the type its parameter declares (`Array.isArray`
+  narrows the former to `any[]`, which says nothing). Such a value has no
+  identity, so once the copy moves it (`[...history.get(), next].slice(-3)`, a
+  prepend) its link would name the value now in its old slot; the elements of
+  such an array, `(number | null)[]` and `(number | { label: string })[]`
+  among them, are read as values (`mayHoldElementsWithoutIdentity` in
+  `policy/capability-analysis.ts`;
+  `test/policy/capability-analysis-value-refs.test.ts`;
+  `patterns/dev/regression/primitive-array-copy-write.test.tsx`).
 - Scheduler completeness is separate from path retention: identity-only roots
   are passthrough, and `hasCompleteSchedulerScopeSummary` rejects passthrough or
   wildcard summaries. Thus identity/comparable tracking can preserve a

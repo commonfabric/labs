@@ -102,6 +102,7 @@ import {
   isPrincipalDID,
   type ManagerProfileCell,
   nsecOf,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 /**
@@ -325,9 +326,11 @@ export interface ManagerActState {
   /**
    * The profile of the session acting, which holds no value until it
    * resolves: a start needs one, and the user joins a room they create or
-   * accept as it.
+   * accept as it. An act reads no more of it than a room does: the profile's
+   * inbox pointer can carry its inbox's label, which a start's writes into a
+   * new room's space would then be held to.
    */
-  myProfile: ManagerProfileCell | undefined;
+  myProfile: ProfileCell | undefined;
 
   /** The user's shared-space catalog, which supplies room discovery. */
   catalog: CatalogCell;
@@ -806,13 +809,16 @@ interface RoomOptions {
 }
 
 /**
- * Creates a room in a space of its own, as the space's root, and its notices,
- * and records its entry, all in one transaction: the space's grants and its
- * declared kind are part of creating it, so nothing has to commit apart. A
- * notice for each other member not in `offerTo` is queued for a client to
- * deliver, and registering the room's space in the user's catalog, adding this
- * user to the room's participants, and offering the room to each member in
- * `offerTo`, are queued to follow.
+ * Creates a room in a space of its own, as the space's root, and records its
+ * entry, all in one transaction: the space's grants and its declared kind are
+ * part of creating it, so nothing has to commit apart. Registering the room's
+ * space in the user's catalog, adding this user to the room's participants,
+ * and telling each other member of the room, by an offer to each member in
+ * `offerTo` and a notice for a client to deliver to every other, are queued to
+ * follow, so that the transaction writing the room reads neither the user's
+ * catalog nor the manager's own records: either can carry their owner's label,
+ * which the room's space doesn't admit, and a transaction's writes are held to
+ * the labels of everything it reads.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is sent until the name resolves,
@@ -848,14 +854,16 @@ const createRoom = (
       },
     }),
   );
-  // A member offered the room has a notice only if the offer can't be sent,
-  // which `offerRooms` decides, since that reads their profile.
+  // A member named by principal alone has no profile to offer the room
+  // through, so `offerRooms` queues a notice for them, as it does for a member
+  // whose profiles point at no inbox.
   const offered = offerTo.map(({ recipient }) => recipient);
-  members.filter((member) => !offered.includes(member)).forEach(
-    (recipient) => {
-      state.outgoingNotices.push(noticeFor(recipient, requestId, room));
-    },
-  );
+  const told: OfferedMember[] = [
+    ...offerTo,
+    ...members.filter((member) => !offered.includes(member)).map((
+      recipient,
+    ) => ({ recipient, profiles: [] })),
+  ];
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
     state.listRooms.send({
@@ -866,12 +874,12 @@ const createRoom = (
     if (state.myProfile !== undefined) {
       state.joinRooms.send({ room, profile: state.myProfile });
     }
-    if (offerTo.length > 0) {
+    if (told.length > 0) {
       state.offerRooms.send({
         room,
         id: requestId,
         title: title ?? "",
-        members: [...offerTo],
+        members: told,
       });
     }
   }

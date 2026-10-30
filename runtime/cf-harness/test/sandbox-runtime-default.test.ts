@@ -30,6 +30,7 @@ import {
   formatCfHarnessCliResult,
   parseCfHarnessCliArgs,
   runCfHarnessCli,
+  type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "../src/cli.ts";
 import { HarnessControlError } from "../src/control-errors.ts";
@@ -1298,6 +1299,206 @@ describe("sandbox-runtime-default", () => {
             sandboxRunscNetworkMode: mode,
           });
         }
+      });
+    });
+
+    describe("with host ports forwarded", () => {
+      /**
+       * Selects as root on `processPlatform` (Linux unless given), with
+       * `runsc` named for Loom unless `named` is false, in which case the
+       * default of that platform applies, and the environment `env` adds.
+       */
+      const select = (
+        env: Record<string, string | undefined>,
+        options: {
+          named?: boolean;
+          processPlatform?: "linux" | "darwin";
+          which?: (name: string) => string | undefined;
+        } = {},
+      ) => {
+        const named = options.named ?? true;
+        return resolveSandboxRuntimeSelection(
+          {
+            HOME: home,
+            ...(named
+              ? {
+                CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+                CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
+              }
+              : {}),
+            ...env,
+          },
+          {},
+          {
+            ...(named
+              ? {
+                namedBy: "Loom",
+                processPlatform: options.processPlatform ?? "linux",
+              }
+              : { platform: options.processPlatform ?? "linux" }),
+            flags: false,
+            uid: () => 0,
+            which: options.which ?? withPasta,
+            readSysctl: () =>
+              Promise.reject(new Error("no parameter is read for root")),
+          },
+        );
+      };
+
+      /** A lookup that fails the case where anything is looked for. */
+      const looksForNothing = (name: string): string | undefined => {
+        throw new Error(`looked for \`${name}\``);
+      };
+
+      it("gives a named `runsc` pasta's network, forwarding the ports listed, under the network left unnamed or named `bridge`", async () => {
+        for (const network of [undefined, "bridge"]) {
+          expect(
+            await select({
+              // Read as the macOS `runsc` reads it: empty entries skipped.
+              CFC_VM_FORWARD_PORTS: " 8000, ,09000, ",
+              ...(network !== undefined
+                ? { CF_HARNESS_DOCKER_NETWORK_MODE: network }
+                : {}),
+            }),
+          ).toMatchObject({
+            sandboxRunscBinary: "/opt/runsc",
+            sandboxRunscNetworkHelper: PASTA,
+            sandboxRunscUnshare: UNSHARE,
+            sandboxRunscSetpriv: SETPRIV,
+            sandboxRunscForwardedHostPorts: [8000, 9000],
+            sandboxRuntimeChoice: { runtime: "runsc", source: "environment" },
+          });
+        }
+      });
+
+      it("gives a named `runsc` no pasta, and looks for none, where no port is listed", async () => {
+        for (const listed of [undefined, "", " "]) {
+          const selection = await select(
+            listed !== undefined ? { CFC_VM_FORWARD_PORTS: listed } : {},
+            { which: looksForNothing },
+          );
+
+          expect(selection.sandboxRunscNetworkHelper).toBeUndefined();
+          expect(selection.sandboxRunscForwardedHostPorts).toBeUndefined();
+        }
+      });
+
+      it("gives the Linux default the ports listed beside its own pasta network", async () => {
+        const store = await installLinuxStore(home);
+
+        expect(
+          await select({ CFC_VM_FORWARD_PORTS: "8000" }, { named: false }),
+        ).toEqual({
+          ...fromLinuxStore(store),
+          sandboxRunscForwardedHostPorts: [8000],
+        });
+      });
+
+      it("reads no ports on macOS, where the macOS `runsc` forwards them into its VM", async () => {
+        const selection = await select(
+          { CFC_VM_FORWARD_PORTS: "8000" },
+          { processPlatform: "darwin", which: looksForNothing },
+        );
+
+        expect(selection.sandboxRunscNetworkHelper).toBeUndefined();
+        expect(selection.sandboxRunscForwardedHostPorts).toBeUndefined();
+      });
+
+      it("throws for ports listed beside a network that forwards none", async () => {
+        for (const network of ["none", "host"]) {
+          const refusal = await rejection(
+            select({
+              CFC_VM_FORWARD_PORTS: "8000",
+              CF_HARNESS_DOCKER_NETWORK_MODE: network,
+            }, { which: looksForNothing }),
+          );
+
+          expect(refusal).toBeInstanceOf(HarnessControlError);
+          expect(messageOf(refusal)).toBe(
+            "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to " +
+              "reach, which only its `bridge` network forwards, and " +
+              `\`CF_HARNESS_DOCKER_NETWORK_MODE\` names \`${network}\`. ` +
+              "Name `bridge`, or forward no ports.",
+          );
+        }
+      });
+
+      it("throws for a list holding an entry that is not a port number, naming the entry", async () => {
+        for (const entry of ["80a", "0", "65536", "-1", "1e3", "8000-8010"]) {
+          expect(messageOf(
+            await rejection(
+              select({ CFC_VM_FORWARD_PORTS: `8000, ${entry}` }),
+            ),
+          )).toBe(
+            `\`CFC_VM_FORWARD_PORTS\` lists \`${entry}\`, which is not a ` +
+              "port number from 1 to 65535",
+          );
+        }
+      });
+
+      it("throws, naming the forwarded ports and offering to forward none, where no `pasta` is on `PATH`", async () => {
+        const refusal = await rejection(
+          select({ CFC_VM_FORWARD_PORTS: "8000" }, { which: () => undefined }),
+        );
+
+        expect(refusal).toBeInstanceOf(HarnessControlError);
+        expect(messageOf(refusal)).toBe(
+          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
+            "which only `pasta`'s network forwards, and pasta cannot run " +
+            "here: no `pasta`, from passt, is on `PATH`. Install passt " +
+            "(`sudo apt install passt`), or forward no host ports.",
+        );
+      });
+
+      it("throws for the Linux default as the default's refusal, offering a network that needs no pasta only with no ports forwarded", async () => {
+        await installLinuxStore(home);
+
+        const refusal = await rejection(
+          select({ CFC_VM_FORWARD_PORTS: "8000" }, {
+            named: false,
+            which: () => undefined,
+          }),
+        );
+
+        expect(messageOf(refusal)).toBe(
+          "No sandbox runtime is named, so the default applies, which on " +
+            "Linux is the native `runsc` runtime, and its network, which " +
+            "gives a container egress and the host at " +
+            "`host.docker.internal`, is `pasta`'s, from passt, and no " +
+            "`pasta` is on `PATH`. Install passt (`sudo apt install " +
+            "passt`), or name a network with " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE=none` or " +
+            "`CF_HARNESS_DOCKER_NETWORK_MODE=host` and forward no host ports.",
+        );
+      });
+
+      it("throws for a named `runsc` whose user cannot be read, as the forwarded ports' refusal", async () => {
+        const refusal = await rejection(
+          resolveSandboxRuntimeSelection(
+            {
+              HOME: home,
+              CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+              CFC_VM_FORWARD_PORTS: "8000",
+            },
+            {},
+            {
+              namedBy: "Loom",
+              processPlatform: "linux",
+              flags: false,
+              uid: () => null,
+              which: withPasta,
+            },
+          ),
+        );
+
+        expect(messageOf(refusal)).toBe(
+          "`CFC_VM_FORWARD_PORTS` names host ports for the sandbox to reach, " +
+            "which only `pasta`'s network forwards, and pasta cannot run " +
+            "here: which user this process runs as is not known (the " +
+            "platform reports none), so whether `pasta` runs as root, in a " +
+            "mount namespace of its own, or in a user namespace of its own " +
+            "is not known.",
+        );
       });
     });
 
@@ -2730,6 +2931,7 @@ describe("sandbox-runtime-default", () => {
         RUNSC_CFC_POLICY_ENV: "CF_HARNESS_RUNSC_CFC_POLICY",
         RUNSC_BINARY_ENV: "CF_HARNESS_RUNSC_BINARY",
         SANDBOX_NETWORK_MODE_ENV: "CF_HARNESS_DOCKER_NETWORK_MODE",
+        FORWARD_PORTS_ENV: "CFC_VM_FORWARD_PORTS",
       });
       expect(SANDBOX_RUNTIME_ENV).toBe("CF_HARNESS_SANDBOX_RUNTIME");
     });
@@ -2747,6 +2949,7 @@ describe("sandbox-runtime-default", () => {
         "CF_HARNESS_RUNSC_CFC_POLICY",
         "CF_HARNESS_RUNSC_BINARY",
         "CF_HARNESS_DOCKER_NETWORK_MODE",
+        "CFC_VM_FORWARD_PORTS",
       ];
       const before = names.map((name) => [name, Deno.env.get(name)] as const);
       const put = (name: string, value: string | undefined) =>
@@ -3154,9 +3357,16 @@ describe("sandbox-runtime-default", () => {
 
     /**
      * A host over `env`, whose batch lane builds a loop that runs nothing and
-     * whose interactive lane starts a host that serves nothing.
+     * whose interactive lane starts a host that serves nothing, with the
+     * process its batch lane selects for as `selecting` says.
      */
-    const host = async (env: Record<string, string>) => {
+    const host = async (
+      env: Record<string, string>,
+      selecting: Pick<
+        RunCfHarnessCliDependencies,
+        "processPlatform" | "uid" | "which"
+      > = {},
+    ) => {
       const harnessHome = join(root, "harness-home");
       await Deno.mkdir(harnessHome, { recursive: true });
       const { io, stdout, stderr } = ioBuffers();
@@ -3189,6 +3399,7 @@ describe("sandbox-runtime-default", () => {
           cwd: root,
           io,
           registerSignalHandler: () => () => {},
+          ...selecting,
           createPromptLoop: (options) => {
             built.push(options);
             return {
@@ -3320,6 +3531,22 @@ describe("sandbox-runtime-default", () => {
       expect([await loomHost.runBatch(await batch()), stderr]).toEqual([0, []]);
       expect(built.map(sandboxOf)).toEqual([namedRunsc(store)]);
       expect(built[0].engine!.sandbox.describe().kind).toBe("runsc-cfc");
+    });
+
+    it("runs a batch whose environment forwards host ports under pasta, forwarding those alone, on Linux", async () => {
+      const store = defaultStore(home);
+      await installStore(store);
+      const { loomHost, built, stderr } = await host(
+        { HOME: home, ...namesRunsc(store), CFC_VM_FORWARD_PORTS: "8000" },
+        // Any executable stands in for the three, which nothing here runs.
+        { processPlatform: "linux", uid: () => 0, which: () => "/bin/sh" },
+      );
+
+      expect([await loomHost.runBatch(await batch()), stderr]).toEqual([0, []]);
+      const runsc = built[0].engine!.ownedRunscSandboxConfig;
+      expect(runsc?.forwardedHostPorts).toEqual([8000]);
+      expect(runsc?.networkMode).toBe("sandbox");
+      expect(runsc?.networkHelper).toBeDefined();
     });
 
     it("starts its interactive lane on `runsc` where its environment names it", async () => {
@@ -3738,7 +3965,9 @@ describe("sandbox-runtime-default", () => {
       plan: Awaited<ReturnType<typeof prepareConsoleLaunch>>["plan"],
     ) =>
       plan.resolved.filter(({ name }) =>
-        ["sandbox", "runsc", "rootfs", "cfc policy"].includes(name)
+        ["sandbox", "runsc", "rootfs", "cfc policy", "host ports"].includes(
+          name,
+        )
       );
 
     it("reports the native runtime as the default, each setting beside the store it came from, on macOS", async () => {
@@ -3805,6 +4034,27 @@ describe("sandbox-runtime-default", () => {
         source: fromStoreSource,
       }]);
       expect(plan.environment.CF_HARNESS_RUNSC_CFC_RESULT_DIR).toBeUndefined();
+    });
+
+    it("reports the host ports a Linux launch forwards, and reports none where it forwards none", async () => {
+      await installLinuxStore(home);
+      const launchIo = io();
+      const hostPorts = async (env: Record<string, string>) =>
+        sandboxRows(
+          (await prepareConsoleLaunch(
+            ARGS,
+            { HOME: home, ...env },
+            launchIo,
+            { platform: "linux", uid: () => 0, which: withPasta },
+          )).plan,
+        ).filter(({ name }) => name === "host ports");
+
+      expect(await hostPorts({ CFC_VM_FORWARD_PORTS: "8000,9000" })).toEqual([{
+        name: "host ports",
+        value: "8000, 9000, and no other port of the host's loopback",
+        source: "`CFC_VM_FORWARD_PORTS`, inherited",
+      }]);
+      expect(await hostPorts({})).toEqual([]);
     });
 
     it("refuses to launch with no runtime named on Linux for a process that is not root on a host that allows it no user namespace", async () => {

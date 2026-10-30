@@ -641,6 +641,11 @@ describe("SchemaGenerator", () => {
         propertyA({ ...UNSUPPORTED_INDEX_SIGNATURE as object, ifc: labelS }),
       ],
       [
+        "keeps a scoped constituent's scope on the fallback beside an array",
+        `type M1 = PerUser<{ x: string }>; type M2 = string[];`,
+        { ...UNSUPPORTED_INDEX_SIGNATURE as object, scope: "user" },
+      ],
+      [
         "keeps the scope of a declaration beside one typed as `any`",
         `type M1 = { a: any }; type M2 = { a: PerUser<string> };`,
         propertyA({ scope: "user" }),
@@ -1178,6 +1183,16 @@ describe("SchemaGenerator", () => {
         propertyA({ scope: "user" }),
       ],
       [
+        "keeps the cap of a cell whose inner handle declares none beside `any` as the value's scope",
+        `type M1 = { a: PerUser<Cell<Cell<string>>> }; type M2 = { a: any };`,
+        propertyA({ scope: "user" }),
+      ],
+      [
+        "keeps the scope beside a cell stack no handle of which declares one beside `any` as the value's scope",
+        `type M1 = { a: Cell<Cell<PerUser<string>>> }; type M2 = { a: any };`,
+        propertyA({ scope: "user" }),
+      ],
+      [
         "returns the labeled `never` a declaration states beside a primitive",
         `
           type M1 = { a: string };
@@ -1637,6 +1652,207 @@ describe("SchemaGenerator", () => {
       expect(byType).toThrow(message);
       expect(byNode).toThrow(message);
     });
+
+    for (
+      const [declared, declarations, member, scope] of [
+        [
+          "a member beside others",
+          `
+            type M1 = { y: { a: string } | { b: number }; x: PerUser<string> };
+            type M2 = string[];
+          `,
+          "x",
+          "user",
+        ],
+        [
+          "a member of a named definition a member holds",
+          `
+            interface Inner { x: PerSession<string> }
+            type M1 = { inner: Inner };
+            type M2 = string[];
+          `,
+          "inner.x",
+          "session",
+        ],
+        [
+          "an array's elements",
+          `type M1 = { y: string }; type M2 = PerUser<string>[];`,
+          "[number]",
+          "user",
+        ],
+        [
+          "a record's values",
+          `type M1 = { r: Record<string, PerUser<string>> }; type M2 = string[];`,
+          "r[string]",
+          "user",
+        ],
+        [
+          "a cell member's handle",
+          `type M1 = { c: PerUser<Cell<string>> }; type M2 = string[];`,
+          "c",
+          "user",
+        ],
+        [
+          "an inner handle of a cell member",
+          `type M1 = { c: Cell<PerUser<Cell<string>>> }; type M2 = string[];`,
+          "c",
+          "user",
+        ],
+        [
+          "a member with an empty name",
+          `type M1 = { "": PerUser<string> }; type M2 = string[];`,
+          `[""]`,
+          "user",
+        ],
+        [
+          "a member of a property several constituents declare",
+          `type M1 = { a: { x: PerUser<string> } }; type M2 = { a: string[] };`,
+          "x",
+          "user",
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope declared on ${declared}, inside constituents that cannot be merged`, async () => {
+        // The fallback describes none of its members, so the write path
+        // would never see the scope.
+
+        const { byType, byNode } = await schemasOfBothPaths(declarations);
+        const message =
+          `cannot keep the scope \`${scope}\` declared on \`${member}\``;
+
+        expect(byType).toThrow(message);
+        expect(byNode).toThrow(message);
+      });
+    }
+
+    it("throws for a scope wrapper on an arm of a union beside constituents that cannot be merged", async () => {
+      // The arm's scope is in an `anyOf` branch of the value itself, which
+      // the union rule refuses before the fallback could drop it.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = PerUser<{ x: string }> | { y: number };
+        type M2 = string[];
+      `);
+      const message = "A scope wrapper cannot be a member of a union.";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("throws where constituents that cannot be merged meet a definition whose member declares a scope, once it is written", async () => {
+      // `Node` is still being generated where its own member falls back, so
+      // the scope its member declares is read once generation is done.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            x: PerUser<string>;
+            child?: Node & string[];
+          }
+        `,
+        "Node",
+      );
+      const message = "cannot keep the scope `user` declared on `x`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("throws for a scope declared on a member of a declaration beside one typed as `any`", async () => {
+      // The property accepts any value, so the write path would never see
+      // the member's scope.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { a: { x: PerUser<string> } };
+        type M2 = { a: any };
+      `);
+      const message = "A value intersected with `any` accepts any value and " +
+        "describes nothing inside what it is intersected with, so " +
+        "it cannot keep the scope `user` declared on `x`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    it("throws for a scope declared on a member of a whole intersection with `any` by the node path alone", async () => {
+      // The checker gives the type path `any` itself, which holds nothing of
+      // the constituent beside it; the node path reads both.
+
+      const { byType, byNode } = await schemasOfBothPaths(`
+        type M1 = { x: PerUser<string> };
+        type M2 = any;
+      `);
+
+      expect(byType()).toEqual(true);
+      expect(byNode).toThrow("cannot keep the scope `user` declared on `x`");
+    });
+
+    it("throws where `any` meets a definition whose member declares a scope, once it is written", async () => {
+      // `Node` is still being generated where its own member meets `any`, so
+      // the scope its member declares is read once generation is done.
+
+      const { byType, byNode } = await schemasOfBothPaths(
+        `
+          interface Node {
+            x: PerUser<string>;
+            child?: { c: Node } & { c: any };
+          }
+        `,
+        "Node",
+      );
+      const message = "A value intersected with `any` accepts any value and " +
+        "describes nothing inside what it is intersected with, so " +
+        "it cannot keep the scope `user` declared on `x`";
+
+      expect(byType).toThrow(message);
+      expect(byNode).toThrow(message);
+    });
+
+    for (
+      const [declared, declarations, scope] of [
+        [
+          "an inner handle of the value",
+          `type M1 = { a: Cell<PerUser<Cell<string>>> }; type M2 = { a: any };`,
+          "user",
+        ],
+        [
+          "an inner handle of an arm of the value",
+          `
+            type M1 = { a: Cell<PerUser<Cell<string>>> | null };
+            type M2 = { a: any };
+          `,
+          "user",
+        ],
+        [
+          "an inner handle of the value beside the scope it is read in",
+          `
+            type M1 = { a: Cell<PerUser<Cell<PerSession<string>>>> };
+            type M2 = { a: any };
+          `,
+          "user",
+        ],
+        [
+          "what a cell whose handle declares its own holds",
+          `
+            type M1 = { a: PerUser<Cell<PerSession<string>>> };
+            type M2 = { a: any };
+          `,
+          "session",
+        ],
+      ] as const
+    ) {
+      it(`throws for a scope declared on ${declared} beside a declaration typed as \`any\``, async () => {
+        // The value keeps the scope its own slot is read in and describes no
+        // cell, so the write path would never see a scope inside one.
+
+        const { byType, byNode } = await schemasOfBothPaths(declarations);
+        const message = `cannot keep the scope \`${scope}\` declared inside ` +
+          "a cell there";
+
+        expect(byType).toThrow(message);
+        expect(byNode).toThrow(message);
+      });
+    }
 
     it("labels every arm of a labeled union beside another declaration", async () => {
       // The union's label is on whatever data its payload may hold, so it

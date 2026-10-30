@@ -16,6 +16,10 @@ import {
 } from "../ifc-labels.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
 import { withIndexKeys, withOriginOf } from "../schema-origins.ts";
+import {
+  memberScopeDroppedError,
+  memberScopeWithin,
+} from "../scope-placement.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import {
   cloneSchemaDefinition,
@@ -167,8 +171,13 @@ export function sharedPropertySchema(
  * (`labelsBesideAnyValue()`), and the scope they are declared in and the
  * default they agree on (`stated`). `any` keeps nothing of a constituent
  * beside it, so a restriction or a scope stated there would otherwise fail
- * open. A definition met before it is written is checked once generation is
- * done (`anyValuesBesideUnwritten`).
+ * open. A scope declared inside a constituent, on a member or inside a cell
+ * it is, cannot be kept by a value that describes nothing inside it, so one
+ * is refused (`memberScopeDroppedError()`), as a fallback refuses one
+ * (`unsupportedIntersectionSchema()`). It is looked for in `declared`, the
+ * constituents as they are declared, where `constituents` may have set aside
+ * the scope each states of its whole value. A definition met before it is
+ * written is checked once generation is done (`anyValuesBesideUnwritten`).
  */
 export function anyValueSchema(
   constituents: readonly MutableJSONSchema[],
@@ -177,7 +186,10 @@ export function anyValueSchema(
     readonly default?: MutableJSONSchemaObj["default"] | undefined;
   },
   context: GenerationContext,
+  declared: readonly MutableJSONSchema[] = constituents,
 ): MutableJSONSchema {
+  const scoped = memberScopeWithin(declared, context.definitions);
+  if (scoped) throw memberScopeDroppedError(scoped, "any");
   const { labels } = labelsKeptBesideAnyValue(constituents, "any", context);
   const schema: MutableJSONSchemaObj = {
     ...(labels !== undefined ? { ifc: labels } : {}),
@@ -193,13 +205,18 @@ export function anyValueSchema(
  * the constituents as for an intersection the checker gives `any`
  * (`labelsBesideAnyValue()`). The object may hold a constituent's data
  * anywhere, so a restriction written anywhere in one, as on a member, would
- * otherwise fail open there.
+ * otherwise fail open there. A scope declared inside a constituent cannot be
+ * kept by an object that describes nothing inside it, so one is refused
+ * (`memberScopeDroppedError()`), here or, where it is in a definition not yet
+ * written, once generation is done (`assertAnyValuesKeptNoMemberScope()`).
  */
 export function unsupportedIntersectionSchema(
   reason: string,
   constituents: readonly MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchemaObj {
+  const scoped = memberScopeWithin(constituents, context.definitions);
+  if (scoped) throw memberScopeDroppedError(scoped, "unsupported");
   const { labels, value } = labelsKeptBesideAnyValue(
     constituents,
     "unsupported",

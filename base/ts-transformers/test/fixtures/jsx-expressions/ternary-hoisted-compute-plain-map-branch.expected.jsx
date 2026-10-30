@@ -17,7 +17,9 @@ interface Item {
 }
 const __cfLift_1 = __cfHelpers.lift<{
     state: {
-        items: Item[];
+        items: {
+            value: number;
+        }[];
     };
 }, Item[]>(({ state }) => [...state.items].sort((a, b) => a.value - b.value), {
     type: "object",
@@ -28,28 +30,20 @@ const __cfLift_1 = __cfHelpers.lift<{
                 items: {
                     type: "array",
                     items: {
-                        $ref: "#/$defs/Item"
+                        type: "object",
+                        properties: {
+                            value: {
+                                type: "number"
+                            }
+                        },
+                        required: ["value"]
                     }
                 }
             },
             required: ["items"]
         }
     },
-    required: ["state"],
-    $defs: {
-        Item: {
-            type: "object",
-            properties: {
-                name: {
-                    type: "string"
-                },
-                value: {
-                    type: "number"
-                }
-            },
-            required: ["name", "value"]
-        }
-    }
+    required: ["state"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "array",
     items: {

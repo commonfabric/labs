@@ -34,12 +34,20 @@ export const iframePresentationContext = createContext<
  * @element cf-iframe
  *
  * @attr {string} src - String representation of HTML content to load within an iframe
+ * @prop {string} script - Module source the guest runs once its document is
+ *   parsed, which the sandbox inlines into the document and escapes there,
+ *   so a bundled guest need not be escaped into its document by hand
  * @prop {object} bridge - Explicit capability bridge
- * @prop {object} context - Convenience cell context
+ * @prop {object} context - Convenience context. A cell, or a record of cells
+ *   bound as `$context={{ state, output }}`, grants each of its fields as a
+ *   live resource, resolved to its concrete cell before the guest loads; a
+ *   plain object is served as the static values it holds.
  * @prop {object} resourceKinds - Explicit kinds for opaque context resources.
  *   A name marked `presence` grants the guest the presence room of that
  *   context cell's field, where it publishes and hears ephemeral status such
- *   as pointers, and grants none of the cell's data.
+ *   as pointers, and grants none of the cell's data. A name given a kind is a
+ *   resource even where the context lists no such field, which is how a
+ *   record bound inline names its streams.
  *
  * @event {CustomEvent} load - The iframe was successfully loaded
  * @event {CustomEvent} fix - Dispatched when user clicks "Fix" on an error modal
@@ -50,6 +58,7 @@ export const iframePresentationContext = createContext<
 export class CFIframe extends BaseElement {
   static override properties = {
     src: { type: String },
+    script: { attribute: false },
     context: { type: Object },
     bridge: { type: Object },
     resourceKinds: { attribute: false },
@@ -58,6 +67,7 @@ export class CFIframe extends BaseElement {
   };
 
   declare src: string;
+  declare script: string;
   declare context: object | null;
   declare bridge: FabricBridge | null;
   declare resourceKinds:
@@ -95,6 +105,7 @@ export class CFIframe extends BaseElement {
   constructor() {
     super();
     this.src = "";
+    this.script = "";
     this.context = null;
     this.bridge = null;
     this.resourceKinds = null;
@@ -320,6 +331,7 @@ export class CFIframe extends BaseElement {
         .presentation="${this.presentation === undefined
           ? this.#presentationConsumer.value ?? null
           : this.presentation}"
+        .script="${this.script}"
         height="100%"
         width="100%"
         style="border: none;"
