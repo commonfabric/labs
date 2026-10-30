@@ -147,5 +147,12 @@ describe("differential", () => {
         { value: { a: 2 }, cfc: labelMap([1, 2]) },
       )).toEqual([["value", "a"]]);
     });
+
+    it("records a `cfc` key inside the value per leaf, like any other", () => {
+      expect(changedDocumentPaths(
+        { value: { cfc: { a: 1, b: 1 } } },
+        { value: { cfc: { a: 2, b: 1 } } },
+      )).toEqual([["value", "cfc", "a"]]);
+    });
   });
 });
