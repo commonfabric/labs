@@ -30,6 +30,9 @@ rewrite. In particular:
 - deleting a space (section 4.5.1, INV-15) is specified and not yet
   implemented: the server refuses the tombstone it writes under INV-12's
   validity clause, as it refuses any ACL document that is not an access list
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is specified
+  and not yet implemented: no server advertises `instanceNameMark`, no client
+  declares `instanceNames`, and no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -382,6 +385,19 @@ defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
 
+`instanceNameMark` (specified, not yet built) advertises that the server
+records the instance-naming mark of a space and enforces INV-16: a marked
+space admits only sessions that declare `instanceNames: true`, and the first
+commit from such a session marks the space. It is build-inherent, defaults to
+`false` when absent, and only the server advertises it. A client whose runtime
+names instances REQUIRES it: an older server would admit its commits and mark
+nothing, leaving runtimes with naming off free to bind the parents it wrote to
+other documents, so the client refuses to open a session against a server that
+does not advertise it, before signing a `session.open`. A client whose runtime
+names none declares nothing and is unaffected on any server. A client of a
+build that knows the capability treats the `session/revoked` reason
+`instance-names` as the refusal `clientUpdateRequired` marks.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -424,6 +440,10 @@ interface SessionOpenRequest {
     // The kind the space declares in its genesis commit (see the rules).
     // Inside the signed descriptor, like everything the session declares.
     spaceKind?: string;
+    // Present when the session's runtime names instances (specified, not yet
+    // built; see the rules and INV-16). Absent means positional. Inside the
+    // signed descriptor.
+    instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -507,6 +527,9 @@ interface SessionOpenResult {
   // The kind the space's genesis commit declares; absent when it declares
   // none, or the space has no history yet.
   spaceKind?: string;
+  // Present when a naming commit has marked the space (specified, not yet
+  // built; INV-16).
+  instanceNamesMarked?: true;
   sessionOpen: {
     challenge: {
       value: string;
@@ -564,6 +587,16 @@ Rules:
   with no history admits the declaration, and its genesis commit must then
   carry the same kind. Every open of a space with history is told the kind its
   genesis declares, in `spaceKind`, whether the session declared one or not
+- a session whose runtime names instances declares `instanceNames: true`, and
+  one that declares nothing is positional (specified, not yet built). A server
+  that advertises `instanceNameMark` refuses an open or resume of a marked
+  space by a positional session with a `SessionRevokedError` carrying
+  `clientUpdateRequired: true`, after authorization and before session
+  restoration, so a principal the space would refuse learns nothing of its
+  mark; marks the space at the first commit it admits from a naming
+  session; and in the same engine turn revokes the space's positional sessions
+  with the reason `instance-names`. Every open of a marked space is told so, in
+  `instanceNamesMarked`. INV-16 states the rule
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -677,6 +710,8 @@ interface HelloMessage {
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
     spaceKind?: boolean;
+    // Specified, not yet built (INV-16).
+    instanceNameMark?: boolean;
   };
 }
 
@@ -785,7 +820,9 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection, when
-  an access-list change deauthorizes it, or when its space is deleted
+  an access-list change deauthorizes it, when its space is deleted, or, once
+  specified behavior is built, when a naming commit marks its space and it
+  declares no naming (INV-16)
 - `session/admissible` when an access-list change admits a principal this
   connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
@@ -839,7 +876,10 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  reason: "taken-over" | "unauthorized" | "deleted";
+  // `instance-names` (specified, not yet built): a naming commit marked the
+  // space and the session declares no naming (INV-16); a client of a build
+  // that knows `instanceNameMark` treats it as `clientUpdateRequired`.
+  reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 
 interface SessionAdmissible {

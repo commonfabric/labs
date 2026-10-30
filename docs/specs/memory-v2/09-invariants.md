@@ -807,6 +807,74 @@ the space's owner no way to delete it.
 Checked by: nothing yet. The server does not implement deleting a space, and
 refuses a tombstone under INV-12's validity clause.
 
+### INV-16 — Instance-naming admission
+
+> A space marked as holding data a naming runtime wrote admits no session that
+> does not declare `instanceNames: true`. The first commit admitted to a space
+> from a session that declares it, a genesis commit included, marks the space,
+> and the mark is recorded in the same store transaction as that commit. In the
+> same engine turn, every session open on the space that does not declare it is
+> revoked, so no commit from such a session is admitted after the marking one.
+> Nothing removes a mark.
+
+A runtime with the `instanceNames` experimental flag off binds a parent's
+children by position, and a naming runtime binds a parent's named instances by
+name ([`computed-cell-identity.md`](../computed-cell-identity.md), "Sub-pattern
+instance identity"). Once a naming runtime has written a parent, a runtime with
+naming off that runs it binds its children to other documents, and nothing in
+the runtime refuses it. This invariant keeps the two from both writing one
+space. Before the mark, every session a space admits writes what a runtime with
+naming off would read the same way, since a naming session that never commits
+leaves the stored data as it was. After it, only naming sessions are admitted.
+
+A session declares its mode in its signed `session.open` descriptor, and one
+that declares nothing is positional, which is what every runtime older than the
+declaration sends ([`04-protocol.md`](04-protocol.md) §4.1.2). The declaration
+is self-reported, which is enough for what it guards: a runtime of the other
+mode that does what its code does. A writer that misdeclares its mode already
+holds WRITE on the space.
+
+The server records the mark in a row of the space's database, beside the commit
+that set it, rather than in a document or a commit field. Every memory worker
+that owns the space opens that database, so a change of owner keeps the mark.
+Every open the server admits is told whether the space is marked, in
+`instanceNamesMarked`.
+
+| Clause | Refusal |
+| --- | --- |
+| an open of a marked space declares `instanceNames: true` | `SessionRevokedError` with `clientUpdateRequired: true`: `Space <space> holds data written with instance names, which this runtime does not use` |
+| a session open on a space when a naming commit marks it declares `instanceNames: true` | `session/revoked` with reason `instance-names` |
+
+A resume is an open, so a positional session's resume of a marked space is
+refused like a fresh open. The refusal comes after authorization, so a
+principal the space would refuse is refused for that and learns nothing of the
+mark. It uses the marker the expression-result identity check uses (§4.1.1): a
+client keeps it across mounts and never retries it.
+
+The mark is not access control, so it holds in every ACL mode, `off` included:
+a server that checks no access still keeps a runtime with naming off from a
+space a naming runtime wrote. A server that does not advertise
+`instanceNameMark` neither records nor enforces the mark, so a naming runtime
+opens no session on it.
+
+Layer: server admission and commit recording (`runtime/memory/v2/server.ts`, in
+`session.open` admission after authorization and before session restoration,
+since the mark is read from the space's store, and in the engine turn that
+admits a commit);
+client declaration (`runtime/memory/v2/client.ts` and
+`runtime/runner/src/storage/v2-remote-session.ts`, from the runtime's
+`instanceNames` experimental flag).
+
+Soundness direction: over-rejection is safe. Refusing a positional session to
+an unmarked space costs availability and loses no state. Over-acceptance, a
+positional session admitted to a marked space or a commit from one admitted
+after the marking commit, lets a runtime with naming off bind a named
+instance's children to other documents.
+
+Checked by: nothing yet. The server does not record or enforce the mark, the
+client declares no mode, and the `instanceNames` flag stays off until both do
+([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
+
 ## Change discipline
 
 When a change narrows dependency recording, overlap matching, staleness
