@@ -315,14 +315,16 @@ nowhere else fails the build with `Cell not found in pattern aliases`.
 
 `cf test --cfc-denials` prints a setup refusal like this one with its reason.
 
-Before dispatching an action step, both test runners pull its `event` payload.
-This demands fields whose links another pattern or a computation produces;
-an earlier assertion or render is unnecessary.
+Before dispatching an action step, both test runners demand the reads needed
+to construct its event. A trusted UI wrapper copies the payload's top-level
+fields, so links supplied there by another pattern or a computation are ready
+without an earlier assertion or render. Nested objects and arrays keep their
+references for event serialization and the handler's reads.
 
-The pull recursively reads accessible linked data. For example, an event naming
-a record can also load related records linked from it before the handler runs.
-An action step therefore does not test how a handler behaves when those linked
-documents arrive cold. The work grows with the reachable data.
+Copying a field can read the immediate linked record's shape or value. The
+runner does not recursively read the records reachable from that field; those
+reads belong to the handler. An action step can therefore exercise cold linked
+descendants, but does not guarantee that every immediate target is unread.
 
 ## Writing Assertions
 

@@ -101,7 +101,10 @@ import {
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
-import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import {
+  assertAnyValuesKeptNoMemberScope,
+  assertScopeDeclarationsAreReachable,
+} from "./scope-placement.ts";
 import {
   acceptsAnyValue,
   acceptsNoValue,
@@ -1417,10 +1420,15 @@ function intersectionOf(
     );
     if (scopes.size > 1) throw nestedScopeError();
     const agreed = wholeValueKeywordsOf(distinct, context).default;
-    return anyValueSchema(values, {
-      scope: [...scopes][0],
-      ...(agreed !== undefined ? { default: agreed.value } : {}),
-    }, context);
+    return anyValueSchema(
+      values,
+      {
+        scope: [...scopes][0],
+        ...(agreed !== undefined ? { default: agreed.value } : {}),
+      },
+      context,
+      distinct,
+    );
   }
   const keywords = wholeValueKeywordsOf(distinct, context);
   const combinations = arms.reduce<LabeledArm[][]>(
@@ -2154,6 +2162,7 @@ export class SchemaGenerator {
       result,
       context.anyValuesBySchema,
     );
+    assertAnyValuesKeptNoMemberScope(context.anyValuesBesideUnwritten);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

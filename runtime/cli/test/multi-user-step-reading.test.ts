@@ -28,7 +28,7 @@ describe(
           { root },
         );
         expect(failed).toBe(0);
-        expect(passed).toBe(2);
+        expect(passed).toBe(3);
       });
 
       it("reaches the handler as authored, nested object included", async () => {

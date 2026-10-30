@@ -126,7 +126,7 @@ import {
 } from "./runtime-error-expectation.ts";
 import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
 import { servedConsequences, settleServed } from "./served-settle.ts";
-import { buildActionEvent } from "./trusted-action-event.ts";
+import { pullActionEvent } from "./test-action-event.ts";
 
 /**
  * How many idle-then-sync rounds a step's settle performs before it gives up
@@ -1979,15 +1979,11 @@ export async function runTestPattern(
           await withPhase(
             ["runTestPattern", "step", actionName, "send"],
             async () => {
-              // Pull the payload before snapshotting links supplied by
-              // patterns or computations. The true schema also recursively
-              // reads accessible linked data, so this step can preload the
-              // handler's inputs; see docs/common/workflows/pattern-testing.md
-              // for that limitation.
-              const event = await stepCell.key("event").asSchema(true).pull();
-              actionStream.send(
-                buildActionEvent(event, stepValue.trustedUi),
+              const event = await pullActionEvent(
+                stepCell.key("event"),
+                stepValue.trustedUi,
               );
+              actionStream.send(event);
             },
           );
 

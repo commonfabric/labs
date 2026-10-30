@@ -102,6 +102,7 @@ import {
   isPrincipalDID,
   type ManagerProfileCell,
   nsecOf,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 /**
@@ -322,8 +323,13 @@ export interface ManagerActState {
   /** The act this binding performs. */
   act: ManagerAct;
 
-  /** The user's profile, which holds no value until it resolves. */
-  myProfile: ManagerProfileCell | undefined;
+  /**
+   * The user's profile, which holds no value until it resolves. An act reads
+   * no more of it than a room does: the profile's inbox pointer can carry its
+   * inbox's label, which a start's writes into a new room's space would then
+   * be held to.
+   */
+  myProfile: ProfileCell | undefined;
 
   /** The user's shared-space catalog, which supplies room discovery. */
   catalog: CatalogCell;
