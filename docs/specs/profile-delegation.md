@@ -519,9 +519,12 @@ The runtime's storage manager opens a session to a space with a
 - A client holding a chain refuses a server that does not advertise
   `sessionOpenProofs` before opening, rather than open under the key's own grant
   and be refused there.
-- The store is fed programmatically until profile creation records delegations
-  in the Home space; later, whatever hands a runtime a delegation it did not
-  create (an agent given one by a user, for instance) feeds it the same way.
+- Profile creation feeds the store the delegation the new space's key signs,
+  before any session opens on the space, so the creating runtime's commits
+  there are made under the space's own grant from the first. A runtime starting
+  up feeds it what Home records (`Runtime.loadProfileDelegations`), and
+  whatever hands a runtime a delegation it did not create (an agent given one
+  by a user, for instance) feeds it the same way.
 
 ## Attribution and unlinkability
 
@@ -661,9 +664,12 @@ of this design.
    creator after its genesis commit and before it is dropped; the calling space
    records the delegation beside the allocation, in the list under
    `{ delegations: <space DID> }`, in the transaction that appends the profile
-   link; and `Runtime.loadProfileDelegations` holds every recorded delegation at
-   startup. The server reads a self-owned space's declared kind before taking it
-   for a home, and `sessionOpenProofs` is on by default.
+   link; the creating runtime holds the delegation from then on, so the commit
+   placing the profile and the copy of its pattern into the space rest on it
+   and not on the wildcard grant; and `Runtime.loadProfileDelegations` holds
+   every recorded delegation at startup. The server reads a self-owned space's
+   declared kind before taking it for a home, and `sessionOpenProofs` is on by
+   default.
 4. **Chains beyond the profile.** Implemented for the command line.
    `cf delegation issue` issues a delegation over a space from the identity to
    another key and writes the chain that key presents: the delegation alone

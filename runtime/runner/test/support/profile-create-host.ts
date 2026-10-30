@@ -3,7 +3,8 @@
  * for tests that need a profile in a space of its own, on a memory server that
  * enforces access-control lists. A test can instead create a profile of a
  * shape it names, its space's root or not, without depending on what the
- * create pattern currently does about roots.
+ * create pattern currently does about roots, and can name what the profile's
+ * space grants every principal in place of what the create pattern grants.
  */
 
 import { fromFileUrl } from "@std/path";
@@ -15,19 +16,32 @@ import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import type { Runtime } from "../../src/runtime.ts";
+import { DelegationStore } from "../../src/storage/delegation-store.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
+import { loopbackSessionOpenAuth } from "../../src/storage/v2-emulate.ts";
 import type { SessionFactory } from "../../src/storage/v2.ts";
 
-/** Opens each session as the principal its signer is, over one server. */
+/**
+ * Opens each session as the principal its signer is, over one server. Each
+ * open presents the delegation chain held for the space and that principal,
+ * so a space that owns itself opens under its own grant once its chain is
+ * held, as it does for the storage manager that created it.
+ */
 export class PrincipalSessionFactory implements SessionFactory {
   /** Always `true`: the loopback server takes a genesis access list. */
   readonly supportsAclBootstrap = true;
 
   readonly #server: MemoryV2Server.Server;
+  readonly #delegations = new DelegationStore();
 
   /** Constructs an instance which opens its sessions on `server`. */
   constructor(server: MemoryV2Server.Server) {
     this.#server = server;
+  }
+
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    await this.#delegations.add(chain);
   }
 
   /** @inheritDoc */
@@ -43,13 +57,7 @@ export class PrincipalSessionFactory implements SessionFactory {
       const session = await client.mount(
         space,
         requested,
-        (_space, _session, context) => ({
-          invocation: {
-            aud: context.audience,
-            challenge: context.challenge.value,
-          },
-          authorization: { principal: signer?.did() },
-        }),
+        loopbackSessionOpenAuth(this.#delegations, space, signer),
       );
       return { client, session };
     } catch (error) {
@@ -82,9 +90,9 @@ const CREATE_HOST = [
 
 /**
  * A host with the same list and stream that creates each profile with an
- * anonymous `inSpace()` granting every principal `WRITE`, passing `ROOT_OPTION`
- * in its place: nothing, for a profile that is not its space's root, or
- * `root: true` for one that is.
+ * anonymous `inSpace()` granting every principal `WILDCARD`, passing
+ * `ROOT_OPTION` in its place: nothing, for a profile that is not its space's
+ * root, or `root: true` for one that is.
  */
 const SHAPED_HOST = [
   "import { handler, pattern, Writable } from 'commonfabric';",
@@ -95,7 +103,7 @@ const SHAPED_HOST = [
   "  { profiles: Writable<ProfileHomeOutput[]> }",
   ">((event, { profiles }) => {",
   "  profiles.push(",
-  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WRITE' }ROOT_OPTION })({",
+  "    ProfileHome.inSpace(undefined, { grants: { '*': 'WILDCARD' }ROOT_OPTION })({",
   "      initialName: event.name,",
   "    }) as ProfileHomeOutput,",
   "  );",
@@ -110,19 +118,45 @@ const SHAPED_HOST = [
 /** How a profile is created: by the real create pattern, or in a shape named. */
 export type ProfileShape = "create" | "root" | "not-root";
 
-/** The host program that creates a profile of `shape`. */
-function hostProgram(shape: ProfileShape): RuntimeProgram {
-  const main = shape === "create" ? CREATE_HOST : SHAPED_HOST.replace(
-    "ROOT_OPTION",
-    shape === "root" ? ", root: true" : "",
-  );
+/** What a profile's space grants every principal. */
+export type WildcardGrant = "READ" | "WRITE";
+
+/** The grant to every principal the create pattern writes. */
+const CREATE_WILDCARD = 'grants: { "*": "WRITE" }';
+
+/**
+ * The host program that creates a profile of `shape`, in a space granting
+ * every principal `wildcard`, or for `create` what the create pattern grants
+ * when `wildcard` is omitted.
+ *
+ * @throws Error when `wildcard` is given and the create pattern does not
+ *   write its grant to every principal exactly once, as `CREATE_WILDCARD`.
+ */
+function hostProgram(
+  shape: ProfileShape,
+  wildcard: WildcardGrant | undefined,
+): RuntimeProgram {
+  const main = shape === "create"
+    ? CREATE_HOST
+    : SHAPED_HOST.replace("ROOT_OPTION", shape === "root" ? ", root: true" : "")
+      .replace("WILDCARD", wildcard ?? "WRITE");
+  let create = read("system/profile-create/profile-create.tsx");
+  if (shape === "create" && wildcard !== undefined) {
+    if (create.split(CREATE_WILDCARD).length !== 2) {
+      throw new Error(
+        `\`profile-create.tsx\` does not write \`${CREATE_WILDCARD}\` ` +
+          "exactly once",
+      );
+    }
+    create = create.replace(CREATE_WILDCARD, `grants: { "*": "${wildcard}" }`);
+  }
   return {
     main: "/main.tsx",
     files: [
       { name: "/main.tsx", contents: main },
       {
         name: "/system/profile-create/profile-create.tsx",
-        contents: read("system/profile-create/profile-create.tsx"),
+        contents: create,
       },
       {
         name: "/system/profile-home/profile-home.tsx",
@@ -165,10 +199,13 @@ function createEvent(name: string): { name: string } {
  * reserves no root.
  * The host's root lives at `hostCause` in the home space, and with
  * `hostIsRoot` the home space cell links it as the space's root, as a real
- * Home is.
+ * Home is. With `wildcard`, the profile's space grants every principal that
+ * and nothing more, in place of what the shape grants.
  *
  * @throws Error when a commit fails or the list does not end up holding
- *   exactly one profile in a space other than the home space.
+ *   exactly one profile in a space other than the home space, or when
+ *   `wildcard` is given and the create pattern does not write its grant to
+ *   every principal in the one form this replaces.
  */
 export async function createProfileThroughHome(
   runtime: Runtime,
@@ -177,12 +214,13 @@ export async function createProfileThroughHome(
     shape?: ProfileShape;
     hostCause?: string;
     hostIsRoot?: boolean;
+    wildcard?: WildcardGrant;
   } = {},
 ): Promise<NormalizedFullLink> {
   const space = runtime.userIdentityDID as MemorySpace;
   const setupTx = runtime.edit();
   const host = await runtime.patternManager.compilePattern(
-    hostProgram(options.shape ?? "create"),
+    hostProgram(options.shape ?? "create", options.wildcard),
     { space, tx: setupTx },
   );
   const result = runtime.run(
