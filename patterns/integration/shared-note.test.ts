@@ -384,13 +384,13 @@ describe("shared-note", () => {
       ),
     );
     await waitForCellValue<
-      { comments: { anchor: { from: number; quote: string } }[] }
+      { comments: { anchor: { from: number; to: number } }[] }
     >(
       controller.runtime,
       result,
       (value) =>
         value?.comments?.[0]?.anchor.from === moved.indexOf("Café") &&
-        value.comments[0].anchor.quote === "Café",
+        value.comments[0].anchor.to === moved.indexOf("Café") + 4,
       { stuckLabel: "the comment's anchor follows Grace's edit" },
     );
 
@@ -415,14 +415,42 @@ describe("shared-note", () => {
       ),
     );
     await waitForCellValue<
-      { comments: { anchor: { from: number; quote: string } }[] }
+      { comments: { anchor: { from: number; to: number } }[] }
     >(
       controller.runtime,
       result,
       (value) =>
         value?.comments?.[0]?.anchor.from === merged.indexOf("Café") &&
-        value.comments[0].anchor.quote === "Café",
+        value.comments[0].anchor.to === merged.indexOf("Café") + 4,
       { stuckLabel: "the comment's anchor follows both editors' edits" },
+    );
+
+    // A verb edits the body from a runtime with no editor open, ahead of
+    // the comment. The verb maps the anchor through its own edit, and each
+    // editor maps the same edit, so the highlight stays on its text in both
+    // and the stored anchor agrees with them.
+    result.key("prependLine").send({ text: "Agenda" });
+    await controller.runtime.idle();
+    const prepended = "Agenda\n" + merged;
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, editorEquals, { args: [prepended] })
+      ),
+    );
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, highlightOver, { args: ["Café"] })
+      ),
+    );
+    await waitForCellValue<
+      { comments: { anchor: { from: number; to: number } }[] }
+    >(
+      controller.runtime,
+      result,
+      (value) =>
+        value?.comments?.[0]?.anchor.from === prepended.indexOf("Café") &&
+        value.comments[0].anchor.to === prepended.indexOf("Café") + 4,
+      { stuckLabel: "the comment's anchor follows the verb's edit" },
     );
 
     // The highlight is there again for Ada once her editor reloads: the
@@ -431,7 +459,7 @@ describe("shared-note", () => {
     await adaPage.applyConsoleFormatter();
     await adaShell.login(ada);
     await waitForCondition(adaPage, editorReady);
-    await waitForCondition(adaPage, editorEquals, { args: [merged] });
+    await waitForCondition(adaPage, editorEquals, { args: [prepended] });
     await waitForCondition(adaPage, highlightOver, { args: ["Café"] });
   });
 });

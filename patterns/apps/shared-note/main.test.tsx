@@ -1,7 +1,8 @@
 /**
  * Tests imported text, editor bindings, recovery, the live-cursor notice, the
- * profile-name sanitizer's co-presence bounds, the verbs that edit the body,
- * and the comments anchored to it, without a notebook.
+ * profile-name sanitizer's co-presence bounds, the verbs that edit the body
+ * and map the comments' anchors through their edits, and the comments
+ * anchored to it, without a notebook.
  */
 
 import {
@@ -238,8 +239,12 @@ export default pattern(() => {
   const QUOTE = "- [ ] task";
   const quoteFrom = MARKDOWN.indexOf(QUOTE);
   const quoteTo = quoteFrom + QUOTE.length;
-  const HEADING = "# Team";
-  const INTRO = "Intro\n";
+  // What the body verbs do to the body before the anchor is read against
+  // it: a line before everything, and a longer word before the quote.
+  const INTRO = "# Intro\n";
+  const GROWTH = "Everyone".length - "Team".length;
+  const movedFrom = quoteFrom + INTRO.length + GROWTH;
+  const movedTo = quoteTo + INTRO.length + GROWTH;
 
   const assert_comment_needs_a_selection = assert(() =>
     commentDisabled(note[UI]) === true &&
@@ -273,9 +278,9 @@ export default pattern(() => {
   const assert_comment_posted = assert(() =>
     note.comments.length === 1 &&
     note.comments[0].body === "Needs a date" &&
-    note.comments[0].anchor.quote === QUOTE &&
     note.comments[0].anchor.from === quoteFrom &&
     note.comments[0].anchor.to === quoteTo &&
+    note.comments[0].anchor.version === undefined &&
     note.comments[0].resolved === false &&
     equals(note.comments[0].authorProfile, adaProfile) &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "none"
@@ -300,6 +305,27 @@ export default pattern(() => {
       highlights[0].kind === "selected" &&
       hasText(rowOf(note[UI], "Needs a date"), QUOTE);
   });
+  // The body verbs map the anchor through their own edit, so the comment
+  // stays on its text with no editor open to report.
+  const action_verb_prepends_a_line = action(() =>
+    note.prependLine.send({ text: INTRO })
+  );
+  const action_verb_replaces_text_before_the_quote = action(() =>
+    note.replaceText.send({ old: "Team", new: "Everyone" })
+  );
+  const action_verb_appends_a_line = action(() =>
+    note.appendLine.send({ text: "- [ ] follow up" })
+  );
+  const assert_verbs_moved_the_anchor_with_the_text = assert(() => {
+    const highlights = highlightsOf(note[UI]);
+    return content.get().slice(movedFrom, movedTo) === QUOTE &&
+      note.comments[0].anchor.from === movedFrom &&
+      note.comments[0].anchor.to === movedTo &&
+      highlights?.length === 1 &&
+      highlights[0].from === movedFrom &&
+      highlights[0].to === movedTo &&
+      hasText(rowOf(note[UI], "Needs a date"), QUOTE);
+  });
   const action_editor_reports_mapped_range = action(() =>
     fireEvent(
       findElement(note[UI], "cf-code-editor"),
@@ -309,17 +335,16 @@ export default pattern(() => {
         detail: {
           highlights: [{
             id: note.comments[0].id,
-            from: quoteFrom + 8,
-            to: quoteTo + 8,
+            from: movedFrom + 8,
+            to: movedTo + 8,
           }],
         },
       },
     )
   );
   const assert_anchor_follows_the_editor = assert(() =>
-    note.comments[0].anchor.from === quoteFrom + 8 &&
-    note.comments[0].anchor.to === quoteTo + 8 &&
-    note.comments[0].anchor.quote === QUOTE
+    note.comments[0].anchor.from === movedFrom + 8 &&
+    note.comments[0].anchor.to === movedTo + 8
   );
   // A report that reached the pattern late, from before the one it holds,
   // leaves the anchor where the later report put it.
@@ -332,8 +357,8 @@ export default pattern(() => {
         detail: {
           highlights: [{
             id: note.comments[0].id,
-            from: quoteFrom + 8,
-            to: quoteTo + 8,
+            from: movedFrom + 8,
+            to: movedTo + 8,
           }],
           version: { epoch: 1, version: 5 },
         },
@@ -351,8 +376,8 @@ export default pattern(() => {
         detail: {
           highlights: [{
             id: note.comments[0].id,
-            from: quoteFrom + 6,
-            to: quoteTo + 6,
+            from: movedFrom + 6,
+            to: movedTo + 6,
           }],
           version: { epoch: 1, version: 5 },
         },
@@ -368,8 +393,8 @@ export default pattern(() => {
         detail: {
           highlights: [{
             id: note.comments[0].id,
-            from: quoteFrom + 4,
-            to: quoteTo + 4,
+            from: movedFrom + 4,
+            to: movedTo + 4,
           }],
           version: { epoch: 1, version: 4 },
         },
@@ -377,27 +402,33 @@ export default pattern(() => {
     )
   );
   const assert_older_report_leaves_the_anchor = assert(() =>
-    note.comments[0].anchor.from === quoteFrom + 8 &&
-    note.comments[0].anchor.to === quoteTo + 8 &&
+    note.comments[0].anchor.from === movedFrom + 8 &&
+    note.comments[0].anchor.to === movedTo + 8 &&
     note.comments[0].anchor.version?.epoch === 1 &&
     note.comments[0].anchor.version?.version === 5
   );
-  // The body moves on with no editor open, so the stored range no longer
-  // holds the quote; the quote re-finds the comment.
-  const action_body_grows_before_the_quote = action(() =>
-    content.set("# Intro\n\n" + MARKDOWN)
-  );
-  const assert_quote_refinds_the_comment = assert(() => {
-    const highlights = highlightsOf(note[UI]);
-    return highlights?.length === 1 &&
-      highlights[0].from === quoteFrom + "# Intro\n\n".length &&
-      highlights[0].to === quoteTo + "# Intro\n\n".length &&
-      !hasText(rowOf(note[UI], "Needs a date"), "text no longer in note");
-  });
-  const action_body_loses_the_quote = action(() =>
-    content.set(MARKDOWN.replace(QUOTE, "- [x] done"))
+  // An editor reports the range emptied: someone deleted the text. The
+  // comment stays in the panel, marks nothing, and says so.
+  const action_editor_reports_the_range_emptied = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-highlights-mapped",
+      {
+        type: "cf-highlights-mapped",
+        detail: {
+          highlights: [{
+            id: note.comments[0].id,
+            from: movedFrom + 8,
+            to: movedFrom + 8,
+          }],
+          version: { epoch: 1, version: 6 },
+        },
+      },
+    )
   );
   const assert_comment_orphaned = assert(() =>
+    note.comments[0].anchor.from === movedFrom + 8 &&
+    note.comments[0].anchor.to === movedFrom + 8 &&
     highlightsOf(note[UI])?.length === 0 &&
     hasText(rowOf(note[UI], "Needs a date"), "text no longer in note")
   );
@@ -421,12 +452,15 @@ export default pattern(() => {
     displayOf(rowOf(note[UI], "Needs a date")) === "flex"
   );
   const assert_absent_quote_refused = assert(() => note.comments.length === 1);
+  const AGENT_QUOTE = "Preserve this";
+  const agentQuoteFrom = INTRO.length + MARKDOWN.indexOf(AGENT_QUOTE);
   const assert_agent_comment_lands = assert(() =>
     note.comments.length === 2 &&
     note.comments[1].body === "Agent note" &&
-    note.comments[1].anchor.quote === "Preserve this" &&
-    note.comments[1].anchor.from === MARKDOWN.indexOf("Preserve this") &&
+    note.comments[1].anchor.from === agentQuoteFrom &&
+    note.comments[1].anchor.to === agentQuoteFrom + AGENT_QUOTE.length &&
     equals(note.comments[1].authorProfile, adaProfile) &&
+    hasText(rowOf(note[UI], "Agent note"), AGENT_QUOTE) &&
     highlightsOf(note[UI])?.length === 1 &&
     highlightsOf(note[UI])?.[0].id === note.comments[1].id
   );
@@ -451,21 +485,41 @@ export default pattern(() => {
     equals(note.comments[1].replies[0].authorProfile, adaProfile) &&
     hasText(rowOf(note[UI], "Agent note"), "Dated it")
   );
+  // A verb deletes the commented text: the anchor it maps is empty, and
+  // the comment is orphaned the way an editor's report orphans one.
+  const action_verb_deletes_the_commented_text = action(() =>
+    note.replaceText.send({ old: "title: Preserve this\n", new: "" })
+  );
+  const assert_verb_orphaned_the_comment = assert(() =>
+    note.comments[1].anchor.from === INTRO.length + "---\n".length &&
+    note.comments[1].anchor.to === note.comments[1].anchor.from &&
+    highlightsOf(note[UI])?.length === 0 &&
+    hasText(rowOf(note[UI], "Agent note"), "text no longer in note")
+  );
   const action_resolve_by_verb = action(() =>
     note.resolveComment.send({ id: note.comments[1].id })
   );
   const assert_resolved_by_verb = assert(() =>
     note.comments[1].resolved === true && highlightsOf(note[UI])?.length === 0
   );
-  // A selection made before others typed: the composer is open on the
-  // heading when the body grows ahead of it, and the post lands where the
-  // heading is now.
-  const action_reset_body = action(() => content.set(MARKDOWN));
+  // A selection made before others typed: the editor reports where their
+  // edit moved it, and the post lands there, stamped with the version the
+  // editor read it at.
+  const HEADING = "# Everyone";
+  const headingFrom = INTRO.length + MARKDOWN.indexOf("# Team");
   const action_select_heading = action(() =>
     fireEvent(
       findElement(note[UI], "cf-code-editor"),
       "oncf-selection-change",
-      selectionOf(HEADING),
+      {
+        type: "cf-selection-change",
+        detail: {
+          from: headingFrom,
+          to: headingFrom + HEADING.length,
+          text: HEADING,
+          version: { epoch: 1, version: 7 },
+        },
+      },
     )
   );
   const action_open_composer_on_heading = action(() =>
@@ -474,25 +528,43 @@ export default pattern(() => {
   const action_type_heading_comment = action(() =>
     typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Title?")
   );
-  const action_body_grows_before_the_heading = action(() =>
-    content.set(INTRO + MARKDOWN)
+  const action_editor_reports_the_selection_moved = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-selection-change",
+      {
+        type: "cf-selection-change",
+        detail: {
+          from: headingFrom + 3,
+          to: headingFrom + 3 + HEADING.length,
+          text: HEADING,
+          version: { epoch: 1, version: 8 },
+        },
+      },
+    )
   );
   const action_post_heading_comment = action(() =>
     clickButton(note[UI], "Post")
   );
-  const assert_post_lands_where_the_quote_moved = assert(() =>
+  const assert_post_lands_where_the_selection_moved = assert(() =>
     note.comments.length === 3 &&
     note.comments[2].body === "Title?" &&
-    note.comments[2].anchor.quote === HEADING &&
-    note.comments[2].anchor.from === INTRO.length + MARKDOWN.indexOf(HEADING)
+    note.comments[2].anchor.from === headingFrom + 3 &&
+    note.comments[2].anchor.to === headingFrom + 3 + HEADING.length &&
+    note.comments[2].anchor.version?.epoch === 1 &&
+    note.comments[2].anchor.version?.version === 8
   );
-  // The same, with the selected text gone before the post: refused, with the
+  // The same, with the selected text deleted before the post: the editor
+  // reports the selection collapsed, and the post is refused with the
   // composer left open.
   const action_select_task = action(() =>
     fireEvent(
       findElement(note[UI], "cf-code-editor"),
       "oncf-selection-change",
-      selectionOf(QUOTE),
+      {
+        type: "cf-selection-change",
+        detail: { from: movedFrom, to: movedTo, text: QUOTE },
+      },
     )
   );
   const action_open_composer_on_task = action(() =>
@@ -501,11 +573,18 @@ export default pattern(() => {
   const action_type_task_comment = action(() =>
     typeInto(findNodeById(note[UI], "shared-note-comment-draft"), "Gone")
   );
-  const action_body_loses_the_task = action(() =>
-    content.set(MARKDOWN.replace(QUOTE, ""))
+  const action_editor_reports_the_selection_collapsed = action(() =>
+    fireEvent(
+      findElement(note[UI], "cf-code-editor"),
+      "oncf-selection-change",
+      {
+        type: "cf-selection-change",
+        detail: { from: movedFrom, to: movedFrom, text: "" },
+      },
+    )
   );
   const action_post_task_comment = action(() => clickButton(note[UI], "Post"));
-  const assert_post_without_its_text_refused = assert(() =>
+  const assert_post_without_a_selection_refused = assert(() =>
     note.comments.length === 3 &&
     displayOf(findNodeById(note[UI], "shared-note-composer")) === "block"
   );
@@ -516,7 +595,7 @@ export default pattern(() => {
     // The one refused post throws inside its handler the same way.
     expectRuntimeErrors: [
       "addComment found no occurrence of `quote`",
-      "The text you selected is no longer in the note.",
+      "Select the text to comment on first.",
     ],
     [TESTS]: [
       { assertion: assert_imported_content },
@@ -551,15 +630,17 @@ export default pattern(() => {
       { assertion: assert_comment_posted },
       { assertion: assert_reply_needs_a_profile },
       { assertion: assert_editor_marks_the_comment },
+      { action: action_verb_prepends_a_line },
+      { action: action_verb_replaces_text_before_the_quote },
+      { action: action_verb_appends_a_line },
+      { assertion: assert_verbs_moved_the_anchor_with_the_text },
       { action: action_editor_reports_mapped_range },
       { assertion: assert_anchor_follows_the_editor },
       { action: action_editor_reports_with_a_version },
       { action: action_other_editor_reports_the_same_version },
       { action: action_editor_replays_an_older_report },
       { assertion: assert_older_report_leaves_the_anchor },
-      { action: action_body_grows_before_the_quote },
-      { assertion: assert_quote_refinds_the_comment },
-      { action: action_body_loses_the_quote },
+      { action: action_editor_reports_the_range_emptied },
       { assertion: assert_comment_orphaned },
       { action: action_resolve_comment },
       { assertion: assert_resolved_comment_hidden },
@@ -573,7 +654,7 @@ export default pattern(() => {
       { assertion: assert_absent_quote_refused },
       {
         action: note.addComment,
-        event: { quote: "Preserve this", body: "Agent note" },
+        event: { quote: AGENT_QUOTE, body: "Agent note" },
       },
       { assertion: assert_agent_comment_lands },
       { action: action_select_row },
@@ -581,21 +662,22 @@ export default pattern(() => {
       { action: action_type_reply },
       { action: action_post_reply },
       { assertion: assert_reply_carries_author },
+      { action: action_verb_deletes_the_commented_text },
+      { assertion: assert_verb_orphaned_the_comment },
       { action: action_resolve_by_verb },
       { assertion: assert_resolved_by_verb },
-      { action: action_reset_body },
       { action: action_select_heading },
       { action: action_open_composer_on_heading },
       { action: action_type_heading_comment },
-      { action: action_body_grows_before_the_heading },
+      { action: action_editor_reports_the_selection_moved },
       { action: action_post_heading_comment },
-      { assertion: assert_post_lands_where_the_quote_moved },
+      { assertion: assert_post_lands_where_the_selection_moved },
       { action: action_select_task },
       { action: action_open_composer_on_task },
       { action: action_type_task_comment },
-      { action: action_body_loses_the_task },
+      { action: action_editor_reports_the_selection_collapsed },
       { action: action_post_task_comment },
-      { assertion: assert_post_without_its_text_refused },
+      { assertion: assert_post_without_a_selection_refused },
     ],
     subject,
     note,

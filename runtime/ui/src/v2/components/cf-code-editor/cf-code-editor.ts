@@ -360,8 +360,11 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   configured.
  * @attr {HighlightRange[]} highlights - Ranges the host marks, each
  *   `{ id, from, to, kind? }` in the coordinates of the document the host
- *   read. Setting it replaces the set. The editor keeps each range on its
- *   text through edits, draws it as a `cm-highlight` mark carrying the id as
+ *   read. Setting it replaces the set: the host decides which ids are marked
+ *   and with what kind, and the editor decides where a range it already
+ *   holds sits, having mapped it through every edit since. A range the
+ *   editor does not hold is added where the host put it. The editor draws
+ *   each range as a `cm-highlight` mark carrying the id as
  *   `data-highlight-id`, and reports where edits moved the set.
  *   `docs/highlights.md` has the whole of it.
  *
@@ -375,23 +378,24 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
  * @fires cf-selection-change - Fired when the main selection changes, with
- *   detail: { from, to, text }, including when an edit of anyone's moves it.
- *   A caret move with nothing selected is not a change; clearing a selection
- *   is, and fires once.
+ *   detail: { from, to, text, version }, including when an edit of anyone's
+ *   moves it; `version` is, under collaboration, the `{ epoch, version }` of
+ *   the document the range is read against. A caret move with nothing
+ *   selected is not a change; clearing a selection is, and fires once.
  * @fires cf-highlight-click - Fired on a mousedown over a highlight, with
  *   detail: { id }. The editor still places the caret. A mention or backlink
  *   pill takes the click first: one inside a highlight navigates and emits
  *   nothing for the highlight.
  * @fires cf-highlights-mapped - Fired after an edit leaves the editor's
  *   highlights different from what the host holds, with detail:
- *   { highlights, version }: the whole set after the edit, and, under
+ *   { highlights, version }: the whole set after the edit, a range whose
+ *   text the edit deleted among them as an empty range, and, under
  *   collaboration, the `{ epoch, version }` of the document the positions
  *   are read against, so a host can tell a report that reaches it late from
- *   a newer one. A local edit is reported against the `highlights` property,
- *   or against the last report while the host has yet to catch up to it. A
- *   collaborator's edit is reported only while a report of this editor's is
- *   outstanding, since the host is about to store positions that edit has
- *   moved; otherwise the collaborator's own editor speaks for it.
+ *   a newer one. An edit is reported against the `highlights` property, or
+ *   against the last report while the host has yet to catch up to it,
+ *   whether the user, a collaborator, or the host made it; the version is
+ *   what lets a host set aside the same edit reported by every editor.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -2084,8 +2088,8 @@ export class CFCodeEditor extends BaseElement {
         CFCodeEditor._cellSyncAnnotation.of("mirror"),
         Transaction.addToHistory.of(false),
       ],
-      // A whole-document replace maps every highlight to nothing, so the
-      // host's ranges are set again, read against the new text.
+      // A whole-document replace maps every highlight to an empty range,
+      // so the host's ranges are set again, read against the new text.
       effects: setHighlightsEffect.of(this.highlights ?? []),
     });
 
@@ -2139,42 +2143,37 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
-   * Hands the `highlights` property to the view, unless the view holds the
-   * same ranges already. The host hands back what `cf-highlights-mapped`
-   * reported a round trip at a time, and typing can run ahead of it, so a
-   * value that arrives while the host has yet to catch up to the last report
-   * may carry positions read against a document the view has left. Such a
-   * value is taken for its ids and kinds, with the positions of ranges the
-   * view already holds kept as the view mapped them. The host has caught up
-   * once its positions agree with the last report for every id both name,
-   * and from then on its values are set as given. The host decides what is
-   * marked: a range a deletion dropped from the view is not in the report,
-   * so a value still naming it is set as given and the range reappears until
-   * the host's next value omits it.
+   * Hands the `highlights` property to the view. The host decides what is
+   * marked: the value's ids, their order, and their kinds are taken as
+   * given, and a range the view does not hold is added where the host put
+   * it. The view decides where a range it holds sits: it has mapped the range
+   * through every edit it received, and the host's position for it is at
+   * best the same and otherwise read against a document the view has left.
+   * The host hands back what `cf-highlights-mapped` reported a round trip at
+   * a time while typing runs ahead, and a host that moved a range itself,
+   * through an edit of the document, hands the result to a view that maps
+   * that same edit when it reaches it. A value that places every id the
+   * last report also names where the report placed it is the host caught up
+   * to that report, and clears it.
    */
   private _pushHighlights(): void {
     const view = this._editorView;
     if (!view) return;
     const ranges = this.highlights ?? [];
     const current = highlightsOf(view.state);
-    if (sameHighlights(ranges, current)) {
-      this._unmatchedHighlightReport = undefined;
-      return;
-    }
     const report = this._unmatchedHighlightReport;
-    if (report !== undefined && !agreesWithReport(ranges, report)) {
-      const merged = withPositionsOf(ranges, current);
-      if (sameHighlights(merged, current)) return;
-      view.dispatch({ effects: setHighlightsEffect.of(merged) });
-      return;
+    if (report !== undefined && agreesWithReport(ranges, report)) {
+      this._unmatchedHighlightReport = undefined;
     }
-    this._unmatchedHighlightReport = undefined;
-    view.dispatch({ effects: setHighlightsEffect.of(ranges) });
+    const merged = withPositionsOf(ranges, current);
+    if (sameHighlights(merged, current)) return;
+    view.dispatch({ effects: setHighlightsEffect.of(merged) });
   }
 
   /**
    * Emits `cf-selection-change` for `state`'s main range when it differs
-   * from the one last reported, in position or in text. The view maps the
+   * from the one last reported, in position or in text, with the version of
+   * the document it is read against under collaboration. The view maps the
    * selection through every edit, a collaborator's included, so a host that
    * holds a selection while others type hears where it moved. A caret with
    * nothing selected is reported once, when a selection collapses to it, and
@@ -2190,35 +2189,40 @@ export class CFCodeEditor extends BaseElement {
     ) return;
     this._lastSelection = { from, to, text };
     if (from === to && (last === undefined || last.from === last.to)) return;
-    this.emit("cf-selection-change", { from, to, text });
+    const version = this._documentVersion(state);
+    this.emit("cf-selection-change", {
+      from,
+      to,
+      text,
+      ...(version === undefined ? {} : { version }),
+    });
   }
 
   /**
    * Keeps the host and the field in step after a document change. A change
    * from outside the user's typing that replaces the whole document — a
    * collaboration snapshot installing, or the bound cell mirroring its value
-   * — maps every range to nothing, so the host's ranges are set again, read
-   * against the text they were made for. Any other change of the user's or
-   * the host's is reported where it left the ranges when that differs from
-   * what the host holds: the `highlights` property, or the last report while
-   * the host has yet to catch up to it, so an edit undone before the host
-   * answers reports the restored positions. A collaborator's edit is the
-   * collaborator's editor's to report, except while a report of this editor's
-   * is outstanding: the host is about to store positions that edit has moved,
-   * and both editors map the same edits, so both report the same merged
-   * positions.
+   * — maps every range to an empty one, so the host's ranges are set again as
+   * given, read against the text they were made for. Any other change, the
+   * user's, a collaborator's, or the host's, is reported where it left the
+   * ranges when that differs from what the host holds: the `highlights`
+   * property, or the last report while the host has yet to catch up to it, so
+   * an edit undone before the host answers reports the restored positions. A
+   * collaborator's edit is reported by every editor it reaches, since each
+   * maps it against its own document and only the one holding both of two
+   * concurrent edits can report where they leave the ranges together; the
+   * version each report carries is what lets the host set the duplicates
+   * aside.
    */
   private _trackHighlights(update: ViewUpdate, fromOutside: boolean): void {
     if (fromOutside && replacesWholeDocument(update)) {
       this._unmatchedHighlightReport = undefined;
-      this._pushHighlights();
+      this._editorView?.dispatch({
+        effects: setHighlightsEffect.of(this.highlights ?? []),
+      });
       return;
     }
-    const remote = update.transactions.some((transaction) =>
-      transaction.annotation(Transaction.remote)
-    );
     const report = this._unmatchedHighlightReport;
-    if (remote && report === undefined) return;
     const mapped = highlightsOf(update.state);
     if (sameHighlights(mapped, report ?? this.highlights ?? [])) return;
     this._unmatchedHighlightReport = mapped;

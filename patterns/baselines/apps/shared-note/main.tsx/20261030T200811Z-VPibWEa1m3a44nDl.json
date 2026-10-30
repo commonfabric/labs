@@ -19,15 +19,11 @@
       "CommentAnchor": {
         "properties": {
           "from": {
-            "description": "Start of the range, as an open editor last mapped it.",
+            "description": "Start of the range, as the last edit mapped it.",
             "type": "number"
           },
-          "quote": {
-            "description": "The text the range held when the comment was made. It re-finds the\ncomment once the range no longer holds it.",
-            "type": "string"
-          },
           "to": {
-            "description": "End of the range, exclusive.",
+            "description": "End of the range, exclusive. Equal to `from` once an edit has deleted\nthe text the range covered: the comment then marks nothing.",
             "type": "number"
           },
           "version": {
@@ -37,8 +33,7 @@
         },
         "required": [
           "from",
-          "to",
-          "quote"
+          "to"
         ],
         "type": "object"
       },
@@ -191,15 +186,11 @@
       "CommentAnchor": {
         "properties": {
           "from": {
-            "description": "Start of the range, as an open editor last mapped it.",
+            "description": "Start of the range, as the last edit mapped it.",
             "type": "number"
           },
-          "quote": {
-            "description": "The text the range held when the comment was made. It re-finds the\ncomment once the range no longer holds it.",
-            "type": "string"
-          },
           "to": {
-            "description": "End of the range, exclusive.",
+            "description": "End of the range, exclusive. Equal to `from` once an edit has deleted\nthe text the range covered: the comment then marks nothing.",
             "type": "number"
           },
           "version": {
@@ -209,8 +200,7 @@
         },
         "required": [
           "from",
-          "to",
-          "quote"
+          "to"
         ],
         "type": "object"
       },

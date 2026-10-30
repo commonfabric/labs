@@ -15,6 +15,7 @@ import {
   type PerSpace,
   type PerUser,
   type Stream,
+  type TextChange,
   TILE_UI,
   UI,
   type VNode,
@@ -25,8 +26,8 @@ import {
   type AnchorVersion,
   excerptOf,
   locateQuote,
+  mapAnchor,
   precedes,
-  resolveAnchor,
 } from "./anchors.ts";
 import { normalizePresenceParticipantName } from "./participant-name.ts";
 
@@ -39,19 +40,19 @@ export interface NoteProfile {
 /** A live link to a person's profile. */
 export type ProfileCell = Cell<NoteProfile>;
 
-/** Where a comment sits in the body: a range, and the text it was placed over. */
+/**
+ * Where a comment sits in the body: a range of the text, which every edit of
+ * the body maps along with the text.
+ */
 export interface CommentAnchor {
-  /** Start of the range, as an open editor last mapped it. */
+  /** Start of the range, as the last edit mapped it. */
   from: number;
 
-  /** End of the range, exclusive. */
-  to: number;
-
   /**
-   * The text the range held when the comment was made. It re-finds the
-   * comment once the range no longer holds it.
+   * End of the range, exclusive. Equal to `from` once an edit has deleted
+   * the text the range covered: the comment then marks nothing.
    */
-  quote: string;
+  to: number;
 
   /**
    * The body version the range was last read at, as the editor that
@@ -173,30 +174,67 @@ export interface ReplaceTextEvent {
   new: string;
 }
 
-// The verbs edit the body through `applyChanges()` rather than `set()`: once an
-// editor has opened the body it accepts only edits, which the open editors
-// merge with their own typing. Each edit's positions refer to the text the verb
-// read, and land only while the body still holds it; a body that moved on
-// refuses the commit, and the verb runs again against the new text.
+type CommentsCell = Writable<NoteComment[]>;
 
-const appendLine = handler<LineEvent, { content: Writable<string> }>(
-  ({ text }, { content }) => {
+/**
+ * Edits the body through `applyChanges()` and maps every comment's anchor
+ * through the same change, in one commit. Once an editor has opened the body
+ * it accepts only edits, which the open editors merge with their own typing.
+ * The change's positions refer to the text the verb read, and land only
+ * while the body still holds it; a body that moved on refuses the commit,
+ * and the verb runs again against the new text, mapping again. An open
+ * editor maps the same edit to the same positions, so what it holds and what
+ * is stored agree without a report; with no editor open, this is what keeps
+ * the anchors on their text.
+ */
+const editBody = (
+  content: Writable<string>,
+  comments: CommentsCell,
+  change: TextChange,
+): void => {
+  content.applyChanges(change);
+  comments.get().forEach((comment, index) => {
+    const mapped = mapAnchor(comment.anchor, [change]);
+    if (
+      mapped.from === comment.anchor.from && mapped.to === comment.anchor.to
+    ) {
+      return;
+    }
+    comments.key(index).key("anchor").set({
+      ...comment.anchor,
+      from: mapped.from,
+      to: mapped.to,
+    });
+  });
+};
+
+/** What the verbs that edit the body work on. */
+interface BodyVerbState {
+  content: Writable<string>;
+  comments: CommentsCell;
+}
+
+const appendLine = handler<LineEvent, BodyVerbState>(
+  ({ text }, { content, comments }) => {
     const current = content.get();
     const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-    content.applyChanges({ from: current.length, insert: separator + text });
+    editBody(content, comments, {
+      from: current.length,
+      insert: separator + text,
+    });
   },
 );
 
-const prependLine = handler<LineEvent, { content: Writable<string> }>(
-  ({ text }, { content }) => {
+const prependLine = handler<LineEvent, BodyVerbState>(
+  ({ text }, { content, comments }) => {
     const current = content.get();
     const separator = current === "" || text.endsWith("\n") ? "" : "\n";
-    content.applyChanges({ from: 0, insert: text + separator });
+    editBody(content, comments, { from: 0, insert: text + separator });
   },
 );
 
-const replaceText = handler<ReplaceTextEvent, { content: Writable<string> }>(
-  (event, { content }) => {
+const replaceText = handler<ReplaceTextEvent, BodyVerbState>(
+  (event, { content, comments }) => {
     const current = content.get();
     const from = locateQuote(current, event.old);
     if (from === "empty") {
@@ -217,7 +255,7 @@ const replaceText = handler<ReplaceTextEvent, { content: Writable<string> }>(
           "that occurs once",
       );
     }
-    content.applyChanges({
+    editBody(content, comments, {
       from,
       to: from + event.old.length,
       insert: event.new,
@@ -267,11 +305,16 @@ const clearPresenceNotice = handler<
 // Comments
 //
 
-/** The selected text of the viewer's editor, or `null` with nothing selected. */
+/**
+ * The selected text of the viewer's editor, empty with `from === to` when
+ * nothing is selected, with the body version the editor read it at where it
+ * has one.
+ */
 interface Selection {
   from: number;
   to: number;
   text: string;
+  version?: AnchorVersion;
 }
 
 /** A range the editor marks, as `cf-code-editor` takes and reports it. */
@@ -284,8 +327,6 @@ interface HighlightRange {
 
 /** The `display` an element shown or hidden through a prop takes. */
 type NoteDisplay = "block" | "flex" | "none";
-
-type CommentsCell = Writable<NoteComment[]>;
 
 /** Why an act from a viewer whose profile hasn't resolved is refused. */
 const NO_PROFILE = "Choose a Fabric profile to comment.";
@@ -323,11 +364,18 @@ const indexOfComment = (
 };
 
 const trackSelection = handler<
-  { detail: { from: number; to: number; text: string } },
-  { selection: Writable<Selection | null> }
+  {
+    detail: { from: number; to: number; text: string; version?: AnchorVersion };
+  },
+  { selection: Writable<Selection> }
 >((event, { selection }) => {
-  const { from, to, text } = event.detail;
-  selection.set(from === to ? null : { from, to, text });
+  const { from, to, text, version } = event.detail;
+  selection.set({
+    from,
+    to,
+    text,
+    ...(version === undefined ? {} : { version }),
+  });
 });
 
 const openComposer = handler<
@@ -348,9 +396,8 @@ const closeComposer = handler<
 
 const submitComment = handler<unknown, {
   comments: CommentsCell;
-  content: Writable<string>;
   myProfile: ProfileCell | undefined;
-  selection: Writable<Selection | null>;
+  selection: Writable<Selection>;
   draft: Writable<string>;
   composerOpen: Writable<boolean>;
   selectedCommentId: Writable<string>;
@@ -358,28 +405,23 @@ const submitComment = handler<unknown, {
   const profile = resolvedProfile(state.myProfile);
   if (profile === undefined) throw new Error(NO_PROFILE);
   const selection = state.selection.get();
-  if (selection === null) {
+  if (selection.from === selection.to) {
     throw new Error("Select the text to comment on first.");
   }
   const body = state.draft.get().trim();
   if (body === "") throw new Error("This comment has no text.");
-  // The editor reports where edits move a selection, and the body may still
-  // have changed since the last report: anchor on the selected text where
-  // the body holds it now, as a stored comment is placed.
-  const range = resolveAnchor(state.content.get(), {
-    from: selection.from,
-    to: selection.to,
-    quote: selection.text,
-  });
-  if (range === null) {
-    throw new Error(
-      "The text you selected is no longer in the note. Select it again.",
-    );
-  }
+  // The editor reports where every edit moves the selection, so the range
+  // is read against the body as the editor last showed it, and the anchor
+  // carries that version where the editor named one.
   const id = mintCommentId();
+  const { version } = selection;
   state.comments.push({
     id,
-    anchor: { from: range.from, to: range.to, quote: selection.text },
+    anchor: {
+      from: selection.from,
+      to: selection.to,
+      ...(version === undefined ? {} : { version }),
+    },
     authorProfile: profile,
     body,
     createdAt: Date.now(),
@@ -418,7 +460,7 @@ const addComment = handler<AddCommentEvent, {
   }
   comments.push({
     id: mintCommentId(),
-    anchor: { from, to: from + event.quote.length, quote: event.quote },
+    anchor: { from, to: from + event.quote.length },
     authorProfile: profile,
     body,
     createdAt: Date.now(),
@@ -481,18 +523,18 @@ const selectHighlight = handler<
   selectedCommentId.set(event.detail.id);
 });
 
-// An editor reports its own edits, and a collaborator's edit that lands while
-// a report of its own is still on its way here; every editor maps the same
-// edits, so concurrent edits end with each reporting the same merged
-// positions. Reports can still reach this handler out of order: two sessions
+// Every editor reports every edit that moves a range, its own or a
+// collaborator's; every editor maps the same edits, so concurrent edits end
+// with each reporting the same merged positions, and the version sets the
+// duplicates aside. Reports can still reach this handler out of order: two sessions
 // writing one comment at once have the loser run again against the winner's
 // write, replaying a report the winner has moved past. The version each
 // report carries is what tells such a replay from news, and a report has to
 // be later than the version the anchor holds: two editors with different
 // unconfirmed edits name one version for different text, and the first of
-// their reports to arrive stands until the next report from either. The quote
-// stays as it was: the range follows the text, and the quote is what re-finds
-// it when the range does not.
+// their reports to arrive stands until the next report from either. A range
+// the edit emptied is reported empty and stored so: its text is gone, and the
+// comment marks nothing from then on.
 const rebaseHighlights = handler<
   { detail: { highlights: HighlightRange[]; version?: AnchorVersion } },
   { comments: CommentsCell }
@@ -514,7 +556,6 @@ const rebaseHighlights = handler<
     anchor.set({
       from: range.from,
       to: range.to,
-      quote: current.quote,
       ...(stamped === undefined ? {} : { version: stamped }),
     });
   }
@@ -535,10 +576,13 @@ export interface SharedNoteCoreInput {
   participantName: string;
 }
 
-/** The body's editor with its comments panel, and the comment verbs. */
+/** The body's editor with its comments panel, and the verbs. */
 export interface SharedNoteCoreOutput {
   [UI]: VNode;
   comments: NoteComment[];
+  appendLine: Stream<LineEvent>;
+  prependLine: Stream<LineEvent>;
+  replaceText: Stream<ReplaceTextEvent>;
   addComment: Stream<AddCommentEvent>;
   resolveComment: Stream<CommentIdEvent>;
 }
@@ -560,39 +604,29 @@ export const SharedNoteCore = pattern<
   const hasRecovery = computed(() => recovery.get() !== null);
   const recoveryText = computed(() => recovery.get() ?? "");
 
-  const selection = new Writable.perSession<Selection | null>(null);
+  const selection = new Writable.perSession<Selection>({
+    from: 0,
+    to: 0,
+    text: "",
+  });
   const composerOpen = new Writable.perSession(false);
   const draft = new Writable.perSession("");
   const replyDraft = new Writable.perSession("");
   const selectedCommentId = new Writable.perSession("");
   const showResolved = new Writable.perSession(false);
 
-  // Where each comment's anchor sits in the body now, keyed by id. Computed
-  // once over the list rather than in each row, since each resolution scans
-  // the body.
-  const placements = computed(
-    (): Record<string, { from: number; to: number } | null> => {
-      const text = content.get();
-      const placed: Record<string, { from: number; to: number } | null> = {};
-      for (const comment of comments.get()) {
-        placed[comment.id] = resolveAnchor(text, comment.anchor);
-      }
-      return placed;
-    },
-  );
-  // What the editor marks: every open comment the body still places, with
-  // the selected one told apart.
+  // What the editor marks: every open comment whose text the body still
+  // holds, with the selected one told apart.
   const highlights = computed((): PerSession<HighlightRange[]> => {
     const selected = selectedCommentId.get();
     const ranges: HighlightRange[] = [];
     for (const comment of comments.get()) {
-      if (comment.resolved) continue;
-      const range = placements[comment.id];
-      if (range === null || range === undefined) continue;
+      const { from, to } = comment.anchor;
+      if (comment.resolved || from === to) continue;
       ranges.push(
         comment.id === selected
-          ? { id: comment.id, from: range.from, to: range.to, kind: "selected" }
-          : { id: comment.id, from: range.from, to: range.to },
+          ? { id: comment.id, from, to, kind: "selected" }
+          : { id: comment.id, from, to },
       );
     }
     return ranges;
@@ -600,15 +634,16 @@ export const SharedNoteCore = pattern<
   const openCount = computed(() =>
     comments.get().filter((comment) => !comment.resolved).length
   );
-  const commentDisabled = computed((): PerSession<boolean> =>
-    selection.get() === null || myProfile?.get() === undefined
-  );
+  const commentDisabled = computed((): PerSession<boolean> => {
+    const selected = selection.get();
+    return selected.from === selected.to || myProfile?.get() === undefined;
+  });
   const replyDisabled = computed((): PerSession<boolean> =>
     myProfile?.get() === undefined
   );
   const selectionExcerpt = computed((): PerSession<string> => {
     const selected = selection.get();
-    return selected === null ? "" : excerptOf(selected.text);
+    return selected.from === selected.to ? "" : excerptOf(selected.text);
   });
   // What differs by session is shown or hidden through a prop, never by
   // building a different tree: a branch chosen per session is stored once for
@@ -698,7 +733,6 @@ export const SharedNoteCore = pattern<
               size="sm"
               onClick={submitComment({
                 comments,
-                content,
                 myProfile,
                 selection,
                 draft,
@@ -727,8 +761,16 @@ export const SharedNoteCore = pattern<
           const replyDisplay = computed((): PerSession<NoteDisplay> =>
             selectedCommentId.get() === comment.id ? "flex" : "none"
           );
-          const orphaned = computed(() => placements[comment.id] === null);
-          const excerpt = computed(() => excerptOf(comment.anchor.quote));
+          // The row quotes what the range covers now, so it reads as the
+          // highlight does.
+          const orphaned = computed(() =>
+            comment.anchor.from === comment.anchor.to
+          );
+          const excerpt = computed(() =>
+            excerptOf(
+              content.get().slice(comment.anchor.from, comment.anchor.to),
+            )
+          );
           return (
             <cf-vstack
               gap="1"
@@ -826,6 +868,9 @@ export const SharedNoteCore = pattern<
   return {
     [UI]: view,
     comments,
+    appendLine: appendLine({ content, comments }),
+    prependLine: prependLine({ content, comments }),
+    replaceText: replaceText({ content, comments }),
     addComment: addComment({ comments, content, myProfile }),
     resolveComment: resolveComment({ comments }),
   };
@@ -890,9 +935,9 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       content,
       comments,
       participantName,
-      appendLine: appendLine({ content }),
-      prependLine: prependLine({ content }),
-      replaceText: replaceText({ content }),
+      appendLine: note.appendLine,
+      prependLine: note.prependLine,
+      replaceText: note.replaceText,
       addComment: note.addComment,
       resolveComment: note.resolveComment,
     };

@@ -3,10 +3,11 @@
  * over while the text changes. The host names each range by an `id` of its
  * own and replaces the whole set at once. Between replacements the field maps
  * every range through each transaction, so an edit before or inside a range
- * moves or resizes it and an edit that empties it drops it. Nothing here
- * knows what a range means: a comment, a search hit, a suggestion are all the
- * host's business, and the host reads the mapped set back through
- * `highlightsOf()`.
+ * moves or resizes it, and one that deletes its text leaves it empty: a
+ * point the field keeps and draws nothing for, so the host hears that the
+ * text is gone. Nothing here knows what a range means: a comment, a search
+ * hit, a suggestion are all the host's business, and the host reads the
+ * mapped set back through `highlightsOf()`.
  */
 
 import {
@@ -28,7 +29,10 @@ export interface HighlightRange {
   /** Start of the range. */
   from: number;
 
-  /** End of the range, exclusive and greater than `from`. */
+  /**
+   * End of the range, exclusive. Equal to `from` for a range whose text an
+   * edit deleted; such a range draws nothing.
+   */
   to: number;
 
   /**
@@ -41,7 +45,7 @@ export interface HighlightRange {
 /**
  * Replaces the set with the ranges given, read in the coordinates of the
  * document the transaction produces. A range reaching past the document is
- * clamped to it, and one left empty by that is dropped.
+ * clamped to it.
  */
 export const setHighlightsEffect = StateEffect.define<
   readonly HighlightRange[]
@@ -56,59 +60,60 @@ interface HighlightState {
   readonly decorations: DecorationSet;
 }
 
-/** The range after `changes`, or `undefined` once the edits leave it empty. */
-function mapRange(
-  range: HighlightRange,
-  changes: ChangeDesc,
-): HighlightRange | undefined {
+/**
+ * The range after `changes`: moved or resized by edits around and inside it,
+ * and left empty by one that deleted its text. An empty range stays a point,
+ * before text inserted at it.
+ */
+function mapRange(range: HighlightRange, changes: ChangeDesc): HighlightRange {
+  if (range.from === range.to) {
+    const at = changes.mapPos(range.from, -1);
+    return at === range.from ? range : { ...range, from: at, to: at };
+  }
   // Text inserted at either end stays outside the range: the start is
   // associated with the character after it and the end with the character
   // before it, which is how a mark decoration maps as well.
   const from = changes.mapPos(range.from, 1);
   const to = changes.mapPos(range.to, -1);
-  if (to <= from) return undefined;
+  if (to <= from) {
+    const at = changes.mapPos(range.from, -1);
+    return { ...range, from: at, to: at };
+  }
   return from === range.from && to === range.to
     ? range
     : { ...range, from, to };
 }
 
-/** `ranges` after `changes`, without those the edits leave empty. */
+/** `ranges` after `changes`. */
 function mapHighlights(
   ranges: readonly HighlightRange[],
   changes: ChangeDesc,
 ): readonly HighlightRange[] {
   if (changes.empty || ranges.length === 0) return ranges;
-  const mapped: HighlightRange[] = [];
-  for (const range of ranges) {
-    const next = mapRange(range, changes);
-    if (next !== undefined) mapped.push(next);
-  }
-  return mapped;
+  return ranges.map((range) => mapRange(range, changes));
 }
 
-/** `ranges` clamped to a document of `length`, without the empty ones. */
+/** `ranges` clamped to a document of `length`. */
 function clampRanges(
   ranges: readonly HighlightRange[],
   length: number,
 ): readonly HighlightRange[] {
-  const clamped: HighlightRange[] = [];
-  for (const range of ranges) {
+  return ranges.map((range) => {
     const from = Math.max(0, Math.min(range.from, length));
-    const to = Math.max(0, Math.min(range.to, length));
-    if (to <= from) continue;
-    clamped.push(
-      from === range.from && to === range.to
-        ? { ...range }
-        : { ...range, from, to },
-    );
-  }
-  return clamped;
+    const to = Math.max(from, Math.min(range.to, length));
+    return from === range.from && to === range.to
+      ? { ...range }
+      : { ...range, from, to };
+  });
 }
 
-/** The marks drawing `ranges`, sorted as `Decoration.set` requires. */
+/**
+ * The marks drawing the non-empty ranges among `ranges`, sorted as
+ * `Decoration.set` requires. An empty range has no text to mark.
+ */
 function decorationsOf(ranges: readonly HighlightRange[]): DecorationSet {
   return Decoration.set(
-    ranges.map((range) =>
+    ranges.filter((range) => range.from < range.to).map((range) =>
       Decoration.mark({
         class: range.kind === undefined
           ? "cm-highlight"

@@ -179,22 +179,35 @@ describe("CFCodeEditor", () => {
         ]);
       });
 
-      it("reports a collaborator's edit only while a report of its own is outstanding", () => {
+      it("reports a collaborator's edit that moved the ranges, and not one that left them", () => {
         const { emitted, edit, held } = standIn("hello world", [ONE]);
+        edit({ changes: { from: 11, insert: "!" } }, { remote: true });
+        expect(reports(emitted)).toEqual([]);
         edit({ changes: { from: 0, insert: "b" } }, { remote: true });
         expect(held()).toEqual([{ id: "one", from: 7, to: 12 }]);
-        expect(reports(emitted)).toEqual([]);
         edit({ changes: { from: 0, insert: "a" } });
         edit({ changes: { from: 0, insert: "c" } }, { remote: true });
         expect(reports(emitted)).toEqual([
+          { highlights: [{ id: "one", from: 7, to: 12 }] },
           { highlights: [{ id: "one", from: 8, to: 13 }] },
           { highlights: [{ id: "one", from: 9, to: 14 }] },
         ]);
       });
 
-      it("sets the host's ranges again after a replacement of the whole document from outside", () => {
+      it("reports a range whose text a deletion covered as an empty one, and keeps it as a point", () => {
+        const { emitted, edit, held } = standIn("hello world", [ONE]);
+        edit({ changes: { from: 5, to: 11 } });
+        expect(held()).toEqual([{ id: "one", from: 5, to: 5 }]);
+        expect(reports(emitted)).toEqual([
+          { highlights: [{ id: "one", from: 5, to: 5 }] },
+        ]);
+        edit({ changes: { from: 5, insert: "!" } });
+        expect(held()).toEqual([{ id: "one", from: 5, to: 5 }]);
+      });
+
+      it("sets the host's ranges again, as given, after a replacement of the whole document from outside", () => {
         const { self, emitted, edit, held } = standIn("", [ONE]);
-        expect(held()).toEqual([]);
+        expect(held()).toEqual([{ id: "one", from: 0, to: 0 }]);
         self._unmatchedHighlightReport = [{ id: "one", from: 0, to: 0 }];
         edit({ changes: { from: 0, insert: "hello world" } }, { remote: true });
         expect(held()).toEqual([ONE]);
@@ -241,7 +254,7 @@ describe("CFCodeEditor", () => {
         expect(held()).toBe(before);
       });
 
-      it("sets a value that agrees with the outstanding report as given, and from then on every value", () => {
+      it("clears the outstanding report for a value that agrees with it", () => {
         const { self, held, edit } = standIn("hello world", [ONE]);
         edit({ changes: { from: 0, insert: "a" } });
         self.highlights = [{ id: "one", from: 7, to: 12, kind: "selected" }];
@@ -250,9 +263,30 @@ describe("CFCodeEditor", () => {
         expect(held()).toEqual([
           { id: "one", from: 7, to: 12, kind: "selected" },
         ]);
-        self.highlights = [{ id: "one", from: 0, to: 5 }];
+      });
+
+      it("keeps the view's position for a range it holds whatever the value says, and places one it does not hold as given", () => {
+        const { self, held } = standIn("hello world", [ONE]);
+        self.highlights = [
+          { id: "one", from: 0, to: 5 },
+          { id: "two", from: 0, to: 5 },
+        ];
         self._pushHighlights();
-        expect(held()).toEqual([{ id: "one", from: 0, to: 5 }]);
+        expect(held()).toEqual([
+          { id: "one", from: 6, to: 11 },
+          { id: "two", from: 0, to: 5 },
+        ]);
+      });
+
+      it("keeps a range the view emptied empty while the host still names it, and removes it once the host omits it", () => {
+        const { self, held, edit } = standIn("hello world", [ONE]);
+        edit({ changes: { from: 5, to: 11 } });
+        self.highlights = [{ id: "one", from: 6, to: 11 }];
+        self._pushHighlights();
+        expect(held()).toEqual([{ id: "one", from: 5, to: 5 }]);
+        self.highlights = [];
+        self._pushHighlights();
+        expect(held()).toEqual([]);
       });
     });
 
@@ -273,6 +307,26 @@ describe("CFCodeEditor", () => {
             detail: { from: 6, to: 11, text: "world" },
           },
           { name: "cf-selection-change", detail: { from: 3, to: 3, text: "" } },
+        ]);
+      });
+
+      it("names the document version the selection is read against under collaboration", () => {
+        const { self, emitted } = standIn("hello world", [], {
+          collaboration: true,
+        });
+        const view = self._editorView;
+        view.dispatch({ selection: { anchor: 6, head: 11 } });
+        self._reportSelection(view.state);
+        expect(emitted).toEqual([
+          {
+            name: "cf-selection-change",
+            detail: {
+              from: 6,
+              to: 11,
+              text: "world",
+              version: { epoch: 2, version: 7 },
+            },
+          },
         ]);
       });
     });

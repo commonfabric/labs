@@ -224,14 +224,53 @@ Deno.test("a host handing back an older report after a later one leaves the edit
       ]),
       [["b", false], ["world", true]],
     );
-    // The host catches up to the second report and takes back its addition;
-    // from here its positions are set as given.
+    // The host catches up to the second report and takes back its addition.
+    // A range the view holds stays where the view mapped it whatever the
+    // host says; a range it does not hold is placed as given.
     element.highlights = reports[1];
     await element.updateComplete;
     assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
-    element.highlights = [{ id: "one", from: 2, to: 7 }];
+    element.highlights = [
+      { id: "one", from: 2, to: 7 },
+      { id: "three", from: 2, to: 7 },
+    ];
     await element.updateComplete;
-    assertEquals(marks(element).map((mark) => mark.textContent), ["hello"]);
+    assertEquals(
+      marks(element).map((
+        mark,
+      ) => [mark.dataset.highlightId, mark.textContent]),
+      [["three", "hello"], ["one", "world"]],
+    );
+  } finally {
+    done();
+  }
+});
+
+Deno.test("a deletion covering a highlight reports it empty, and the host's value naming it still leaves it unmarked", async () => {
+  const { element, done } = await mount("hello world");
+  try {
+    element.highlights = [{ id: "one", from: 6, to: 11 }];
+    await element.updateComplete;
+    const mapped = nextEvent<{ highlights: unknown[] }>(
+      element,
+      "cf-highlights-mapped",
+    );
+    element.editorView!.dispatch({ changes: { from: 5, to: 11 } });
+    assertEquals(await mapped, {
+      highlights: [{ id: "one", from: 5, to: 5 }],
+    });
+    assertEquals(marks(element), []);
+    // A host value from before the deletion names the range as it was:
+    // the view holds it empty and keeps it so.
+    element.highlights = [{ id: "one", from: 6, to: 11, kind: "selected" }];
+    await element.updateComplete;
+    assertEquals(marks(element), []);
+    // The host omits it, and it is gone.
+    element.highlights = [];
+    await element.updateComplete;
+    assertEquals(marks(element), []);
+    element.editorView!.dispatch({ changes: { from: 5, insert: " again" } });
+    assertEquals(marks(element), []);
   } finally {
     done();
   }
@@ -261,19 +300,28 @@ Deno.test("an edit undone before the host answers reports the restored ranges, a
     element.highlights = reports[0];
     await element.updateComplete;
     assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
-    // The host catches up to the restored positions; from here its
-    // positions are set as given.
+    // The host catches up to the restored positions, and the view stays
+    // where it is for its own range and takes the host's placement of a
+    // new one.
     element.highlights = reports[1];
     await element.updateComplete;
-    element.highlights = [{ id: "one", from: 0, to: 5 }];
+    element.highlights = [
+      { id: "one", from: 0, to: 5 },
+      { id: "two", from: 0, to: 5 },
+    ];
     await element.updateComplete;
-    assertEquals(marks(element).map((mark) => mark.textContent), ["hello"]);
+    assertEquals(
+      marks(element).map((
+        mark,
+      ) => [mark.dataset.highlightId, mark.textContent]),
+      [["two", "hello"], ["one", "world"]],
+    );
   } finally {
     done();
   }
 });
 
-Deno.test("a collaborator's edit arriving before the host answers reports where it moved the ranges", async () => {
+Deno.test("a collaborator's edit reports where it moved the ranges, before and after the host answers", async () => {
   const { element, done } = await mount("hello world world");
   try {
     element.highlights = [{ id: "one", from: 6, to: 11 }];
@@ -284,7 +332,7 @@ Deno.test("a collaborator's edit arriving before the host answers reports where 
       (event) => reports.push((event as CustomEvent).detail.highlights),
     );
     const view = element.editorView!;
-    // A collaborator's edit with nothing outstanding is theirs to report.
+    // A collaborator's edit that moves nothing is not reported.
     view.dispatch({
       changes: { from: 17, insert: "!" },
       annotations: Transaction.remote.of(true),
@@ -303,7 +351,7 @@ Deno.test("a collaborator's edit arriving before the host answers reports where 
       [{ id: "one", from: 8, to: 13 }],
     ]);
     // The first report comes back before the merged one: the view stays
-    // put, then takes the host's positions once it has caught up.
+    // put, and it stays put once the host has caught up as well.
     element.highlights = reports[0];
     await element.updateComplete;
     assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
@@ -311,7 +359,7 @@ Deno.test("a collaborator's edit arriving before the host answers reports where 
     await element.updateComplete;
     element.highlights = [{ id: "one", from: 2, to: 7 }];
     await element.updateComplete;
-    assertEquals(marks(element).map((mark) => mark.textContent), ["hello"]);
+    assertEquals(marks(element).map((mark) => mark.textContent), ["world"]);
   } finally {
     done();
   }

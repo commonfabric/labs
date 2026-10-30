@@ -4,8 +4,9 @@ import {
   EXCERPT_CODE_POINTS,
   excerptOf,
   locateQuote,
+  mapAnchor,
+  mapPosition,
   precedes,
-  resolveAnchor,
 } from "./anchors.ts";
 
 describe("anchors", () => {
@@ -33,32 +34,92 @@ describe("anchors", () => {
     });
   });
 
-  describe("resolveAnchor()", () => {
-    it("returns the stored range while the text holds the quote there", () => {
-      expect(resolveAnchor("two one two", { from: 8, to: 11, quote: "two" }))
-        .toEqual({ from: 8, to: 11 });
+  describe("mapPosition()", () => {
+    it("leaves a position before the change alone, and shifts one after it by the change in length", () => {
+      const changes = [{ from: 2, to: 4, insert: "xyz" }];
+      expect(mapPosition(1, 1, changes)).toBe(1);
+      expect(mapPosition(6, 1, changes)).toBe(7);
+      expect(mapPosition(6, -1, changes)).toBe(7);
     });
 
-    it("returns the one place the quote occurs once the stored range no longer holds it", () => {
-      expect(resolveAnchor("oh one two", { from: 4, to: 7, quote: "two" }))
-        .toEqual({ from: 7, to: 10 });
+    it("keeps a position after text inserted at it with side 1, and before it with side -1", () => {
+      const changes = [{ from: 3, insert: "ab" }];
+      expect(mapPosition(3, 1, changes)).toBe(5);
+      expect(mapPosition(3, -1, changes)).toBe(3);
     });
 
-    it("returns `null` for a quote the text has lost", () => {
-      expect(resolveAnchor("one three", { from: 4, to: 7, quote: "two" }))
-        .toBeNull();
+    it("moves a position inside replaced text to the replacement's start with side -1, and its end with side 1", () => {
+      const changes = [{ from: 2, to: 6, insert: "xy" }];
+      expect(mapPosition(4, -1, changes)).toBe(2);
+      expect(mapPosition(4, 1, changes)).toBe(4);
     });
 
-    it("returns `null` for a quote the text holds more than once and not at the stored range", () => {
-      expect(resolveAnchor("two one two", { from: 0, to: 3, quote: "one" }))
+    it("moves the start of replaced text to the replacement's start and its end to the replacement's end, whatever the side", () => {
+      const changes = [{ from: 2, to: 6, insert: "xy" }];
+      expect(mapPosition(2, 1, changes)).toBe(2);
+      expect(mapPosition(2, -1, changes)).toBe(2);
+      expect(mapPosition(6, 1, changes)).toBe(4);
+      expect(mapPosition(6, -1, changes)).toBe(4);
+    });
+
+    it("applies several changes in order, each against the text before any of them", () => {
+      const changes = [{ from: 0, insert: "a" }, { from: 2, to: 3 }, {
+        from: 5,
+        insert: "bb",
+      }];
+      expect(mapPosition(4, 1, changes)).toBe(4);
+      expect(mapPosition(5, 1, changes)).toBe(7);
+      expect(mapPosition(5, -1, changes)).toBe(5);
+    });
+
+    it("lands two insertions at one position in list order, both after a position with side 1", () => {
+      const changes = [{ from: 3, insert: "a" }, { from: 3, insert: "b" }];
+      expect(mapPosition(3, 1, changes)).toBe(5);
+      expect(mapPosition(3, -1, changes)).toBe(3);
+    });
+  });
+
+  describe("mapAnchor()", () => {
+    it("returns the range itself when nothing moved it", () => {
+      const range = { from: 4, to: 7 };
+      expect(mapAnchor(range, [{ from: 8, insert: "x" }])).toBe(range);
+    });
+
+    it("moves a range after an insertion before it", () => {
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 0, insert: "ab" }]))
+        .toEqual({ from: 6, to: 9 });
+    });
+
+    it("keeps text inserted at either end outside the range", () => {
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 4, insert: "ab" }]))
+        .toEqual({ from: 6, to: 9 });
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 7, insert: "ab" }]))
         .toEqual({ from: 4, to: 7 });
-      expect(resolveAnchor("two one two", { from: 4, to: 7, quote: "two" }))
-        .toBeNull();
     });
 
-    it("returns `null` for an empty quote, even at a stored range it trivially matches", () => {
-      expect(resolveAnchor("one two", { from: 3, to: 3, quote: "" }))
-        .toBeNull();
+    it("grows a range by text inserted inside it, and shrinks it by a deletion overlapping it", () => {
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 5, insert: "ab" }]))
+        .toEqual({ from: 4, to: 9 });
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 6, to: 9 }]))
+        .toEqual({ from: 4, to: 6 });
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 2, to: 5 }]))
+        .toEqual({ from: 2, to: 4 });
+    });
+
+    it("empties a range a deletion covers, at the deletion's start", () => {
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 3, to: 8 }]))
+        .toEqual({ from: 3, to: 3 });
+      expect(mapAnchor({ from: 4, to: 7 }, [{ from: 4, to: 7 }]))
+        .toEqual({ from: 4, to: 4 });
+    });
+
+    it("keeps an empty range a point, before text inserted at it", () => {
+      expect(mapAnchor({ from: 4, to: 4 }, [{ from: 4, insert: "ab" }]))
+        .toEqual({ from: 4, to: 4 });
+      expect(mapAnchor({ from: 4, to: 4 }, [{ from: 0, insert: "ab" }]))
+        .toEqual({ from: 6, to: 6 });
+      expect(mapAnchor({ from: 4, to: 4 }, [{ from: 2, to: 6 }]))
+        .toEqual({ from: 2, to: 2 });
     });
   });
 
