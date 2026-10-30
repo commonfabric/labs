@@ -20,11 +20,6 @@ const findableGuidance = (patternIndex: boolean): string =>
   [
     "Findable: not given does not mean absent.",
     ...(patternIndex
-      ? [
-        "Search the pattern index for an applicable space-search pattern and use it over held references when the tools and release rules permit.",
-      ]
-      : []),
-    ...(patternIndex
       ? ["The parent can run an indexed pattern with run_pattern."]
       : []),
   ].join(" ");

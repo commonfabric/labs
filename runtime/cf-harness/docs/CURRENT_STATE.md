@@ -880,17 +880,12 @@ The current package provides:
   strings as `revealed`, their sites as `sites`, and the other tokens as
   `hidden`, and its run state carries no return referents. Children report
   blockers to the parent. Missing-input discovery distinguishes released
-  evidence, absence within an enumerated granted scope, and unknown reads; it
-  stops for input rather than repeating author delegation. Shared
-  target-selection guidance asks for an unnamed, unattached piece without a
-  registry read and preserves established conversation targets. The parent
-  resolves a user-supplied slug with `resolve_piece` before author delegation,
-  using the input-cell path's exact-address resolver and space restriction. Only
-  an opaque handle returns; source remains child-only. An unheld slug or a
-  readable target that is not a usable piece returns recoverable `not-found`. A
-  failed read returns `unavailable` and does not establish absence. A display
-  name without a slug permits at most one registry lookup; only a unique
-  released match allows work to proceed;
+  evidence, absence within an enumerated granted scope, and unknown reads. The
+  parent can resolve a slug with `resolve_piece`, using the input-cell path's
+  exact-address resolver and space restriction. Only an opaque handle returns;
+  source remains child-only. An unheld slug or a readable target that is not a
+  usable piece returns recoverable `not-found`. A failed read returns
+  `unavailable` and does not establish absence;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
   run for cell addresses, recorded in `run-state.json`, carried across resume,
   and committed with an interactive session's checkpoint so each turn's run
