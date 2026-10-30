@@ -296,4 +296,96 @@ describe("runsc-linux-live", () => {
       }
     },
   });
+
+  it({
+    name:
+      "gives a named `runsc` under `bridge` egress and no port of the host's loopback, where the run forwards none",
+    ignore: home === undefined || Deno.build.os !== "linux",
+    fn: async () => {
+      const host = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+        () => new Response("host"),
+      );
+      const hostPort = (host.addr as Deno.NetAddr).port;
+      const workspace = await Deno.makeTempDir({ prefix: "runsc-live-" });
+      try {
+        // The store's pieces, as the default finds them, named as Loom names
+        // them, with `bridge`.
+        const store = await resolveSandboxRuntimeSelection(
+          { HOME: home },
+          {},
+          { platform: "linux", flags: false, homeDir: home },
+        );
+        const selection = await resolveSandboxRuntimeSelection(
+          {
+            HOME: home,
+            CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+            CF_HARNESS_RUNSC_BINARY: store.sandboxRunscBinary,
+            CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+          },
+          {},
+          {
+            namedBy: "Loom",
+            processPlatform: "linux",
+            flags: false,
+            homeDir: home,
+          },
+        );
+        expect(selection.sandboxRunscForwardedHostPorts).toEqual([]);
+        const runtime = new RunscSandboxRuntime(resolveRunscSandboxConfig({
+          workspaceHostPath: workspace,
+          rootfs: store.sandboxRootfs,
+          runscBinary: selection.sandboxRunscBinary,
+          cfcPolicyPath: store.sandboxCfcPolicy,
+          // A named runsc runs as it is named; Loom names a wrapper that
+          // adds `--rootless` for a user that is not root, as this does.
+          rootless: Deno.uid() !== 0,
+          networkMode: selection.sandboxRunscNetworkMode,
+          networkHelper: selection.sandboxRunscNetworkHelper,
+          unshare: selection.sandboxRunscUnshare,
+          setpriv: selection.sandboxRunscSetpriv,
+          forwardedHostPorts: selection.sandboxRunscForwardedHostPorts,
+          platform: "linux",
+          homeDir: home,
+        }));
+        try {
+          const fetched = (target: string, connectLimit = "") =>
+            runtime.runShell({
+              command: `curl -s ${connectLimit}--max-time 20 http://${target}/`,
+            });
+
+          // The name leads to the container's own loopback, where pasta
+          // listens on no port, so the connection is refused at once.
+          const byName = await fetched(`host.docker.internal:${hostPort}`);
+          expect([byName.exitCode, byName.stdout]).toEqual([7, ""]);
+
+          // Nor does the gateway lead to the host's loopback; the limit
+          // bounds the wait for nothing, as above.
+          const atGateway = await fetched(
+            `10.0.2.2:${hostPort}`,
+            "--connect-timeout 2 ",
+          );
+          expect([atGateway.exitCode !== 0, atGateway.stdout]).toEqual([
+            true,
+            "",
+          ]);
+
+          const egress = await runtime.runShell({
+            command:
+              "curl -s -o /dev/null -w '%{http_code}' --max-time 20 http://1.1.1.1/",
+          });
+          expect([egress.exitCode, withoutRootPasta(egress.stderr)]).toEqual([
+            0,
+            "",
+          ]);
+          expect(egress.stdout).toMatch(/^[23]\d\d$/);
+        } finally {
+          await runtime.close();
+        }
+      } finally {
+        await host.shutdown();
+        await Deno.remove(workspace, { recursive: true });
+      }
+    },
+  });
 });

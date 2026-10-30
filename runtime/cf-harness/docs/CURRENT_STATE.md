@@ -219,13 +219,17 @@ the entry. The run's network is pasta's, as above, where the network mode is
 unnamed or `bridge`; a named `runsc` takes pasta's network for such a run, with
 the same lookups and the same refusals, which then offer to forward no ports. A
 run that lists ports under `none` or `host`, which forward nothing, is refused.
-Pasta runs with `--no-map-gw`, so the gateway does not lead to the host's
-loopback; with `-T <ports>` in place of `-T none`, so pasta listens on each port
-at the container's loopback and forwards it to the host's, and a command in the
-container cannot listen on a forwarded port itself; and with
-`--dns-forward 10.0.2.2 --dns 10.0.2.2`, so the gateway answers DNS as it does
-for the default and pasta does not warn into the call's output that it finds no
-nameserver. The hosts file names the container's own loopback
+A named `runsc` under `bridge` takes the same network where the run lists no
+port, with `-T none`: egress, and no port of the host's loopback. runsc's own
+`sandbox` network is loopback alone there, and a rootless `runsc` refuses it, so
+`bridge` would otherwise give no egress. Its refusals name `bridge` as what
+needs pasta, and offer `none`. Pasta runs with `--no-map-gw`, so the gateway
+does not lead to the host's loopback; with `-T <ports>` in place of `-T none`,
+so pasta listens on each port at the container's loopback and forwards it to the
+host's, and a command in the container cannot listen on a forwarded port itself;
+and with `--dns-forward 10.0.2.2 --dns 10.0.2.2`, so the gateway answers DNS as
+it does for the default and pasta does not warn into the call's output that it
+finds no nameserver. The hosts file names the container's own loopback
 `host.docker.internal`. Egress is kept, so a service the host binds to an
 address of another interface is reached at that address, as from any other
 machine. Such a run offers no sandbox session, as any run under pasta's network
@@ -363,7 +367,7 @@ unnamed one falls to differs:
 | CFC policy           | `--sandbox-cfc-policy` | `CF_HARNESS_RUNSC_CFC_POLICY`    | `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, otherwise none.                                                                                                                                    | That file where it exists, otherwise `policy.json` in the store where that exists, otherwise the default is refused. | `cfc-policy.json` in the store, which is that file, where it exists; otherwise the default is refused.                 |
 | `runsc` binary       | none                   | `CF_HARNESS_RUNSC_BINARY`        | `runsc`, looked for on `PATH` when the configuration is resolved; the run is refused when no entry holds it.                                                                                                              | `bin/runsc` in the store.                                                                                            | `bin/runsc` in the store, with `--rootless` for a process that is not root, where the host allows it a user namespace. |
 | Network mode         | none                   | `CF_HARNESS_DOCKER_NETWORK_MODE` | `sandbox`.                                                                                                                                                                                                                | `sandbox`.                                                                                                           | `sandbox`, which pasta gives: egress and `host.docker.internal`.                                                       |
-| Forwarded host ports | none                   | `CFC_VM_FORWARD_PORTS`           | None. On Linux, listed ones give it pasta's network, which reaches those ports of the host's loopback alone.                                                                                                              | None; the macOS `runsc` reads the variable itself.                                                                   | None, so the gateway reaches every port of the host's loopback; listed ones are the only ports of it reached.          |
+| Forwarded host ports | none                   | `CFC_VM_FORWARD_PORTS`           | None. On Linux, listed ones give it pasta's network, which reaches those ports of the host's loopback alone, and `bridge` gives it that network with none.                                                                | None; the macOS `runsc` reads the variable itself.                                                                   | None, so the gateway reaches every port of the host's loopback; listed ones are the only ports of it reached.          |
 
 The macOS default requires a policy because a run enforces CFC unless told
 otherwise, and an enforcing run with none is refused as it starts. The selection
@@ -427,11 +431,13 @@ operator summary, as `runsc (default on macOS: the native store at <store>)`,
 `sandbox` is the driver's default network. On macOS it is the VM's network. On
 Linux under the platform default it is `pasta`'s network namespace, taken as
 runsc's host network, with egress and the host at `host.docker.internal`.
-Missing `pasta` refuses that default. A named Linux `runsc` using `sandbox`,
-with no `pasta` configured, uses runsc's own network stack, loopback alone.
-`none` and `host` bypass pasta and use their respective network modes.
-`CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name and the vocabulary of the Docker
-driver it was first read by, which maps onto the driver's as follows:
+Missing `pasta` refuses that default. A named Linux `runsc` under `bridge` gets
+pasta's network forwarding the listed ports, none included. One whose network is
+unnamed and that lists no port, with no `pasta` configured, uses runsc's own
+network stack, loopback alone. `none` and `host` bypass pasta and use their
+respective network modes. `CF_HARNESS_DOCKER_NETWORK_MODE` keeps the name and
+the vocabulary of the Docker driver it was first read by, which maps onto the
+driver's as follows:
 
 | `CF_HARNESS_DOCKER_NETWORK_MODE` | Network   |
 | -------------------------------- | --------- |

@@ -126,14 +126,14 @@ What works today:
   see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions: a long-lived container that later calls execute in,
   offered to the model only where the run's CFC enforcement mode allows them,
-  and not under `pasta`'s network: the Linux default's, and that of any Linux
-  run that forwards host ports
+  and not under `pasta`'s network: the Linux default's, that of any Linux run
+  that forwards host ports, and that of a named Linux `runsc` under `bridge`
 - a sandbox network that defaults to `sandbox`, the driver's own: on Linux
   `pasta` gives it egress and the host at `host.docker.internal`, every port of
-  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists.
-  `CF_HARNESS_DOCKER_NETWORK_MODE` names one: `bridge` is that default, and
-  `none` and `host` are the others; the name is kept from the Docker driver, as
-  is its vocabulary
+  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists, which for
+  a named `runsc` under `bridge` may be none. `CF_HARNESS_DOCKER_NETWORK_MODE`
+  names one: `bridge` is that default, and `none` and `host` are the others; the
+  name is kept from the Docker driver, as is its vocabulary
 - a kitchen-sink rootfs from the native store, as the sibling `gvisor` repo's
   installers write it; name another with `--sandbox-rootfs` or
   `CF_HARNESS_SANDBOX_ROOTFS`
@@ -339,9 +339,11 @@ execution. The refusal states that rule and names no host to try instead, since
 what answers on those names is the platform's. On Linux, under `pasta`'s
 network, `host.docker.internal` reaches any port of the host's loopback for the
 default, or only the ports a run lists in `CFC_VM_FORWARD_PORTS`; a named
-`runsc` that lists none has no `pasta`, and its loopback is its own. On macOS it
-reaches only the ports the launch forwards into the VM. This is an integration
-unblock, not a complete network confinement model.
+`runsc` under `bridge` that lists none reaches no port of the host's loopback,
+and one whose network is unnamed and that lists none has no `pasta`, and its
+loopback is its own. On macOS it reaches only the ports the launch forwards into
+the VM. This is an integration unblock, not a complete network confinement
+model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -1187,9 +1189,12 @@ loopback and no other port of it. Pasta runs with `--no-map-gw`, so the gateway
 does not lead to the host, and listens on each listed port at the container's
 loopback, which the hosts file then names `host.docker.internal`, forwarding it
 to the host's. A named `runsc` gets pasta's network for such a run too, and the
-run is refused under the `none` or `host` network, which forward nothing. Egress
-is kept, so a service the host binds to an address of another interface is
-reached at that address, as from any other machine. A user id, or a kernel
+run is refused under the `none` or `host` network, which forward nothing. A
+named `runsc` under `bridge` gets the same network where the run lists no port,
+with none forwarded: egress, and no port of the host's loopback, since runsc's
+own `sandbox` network is loopback alone, and a rootless `runsc` refuses it.
+Egress is kept, so a service the host binds to an address of another interface
+is reached at that address, as from any other machine. A user id, or a kernel
 parameter, that cannot be read refuses the default rather than being guessed at.
 Where no `pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the
 default is refused, saying to install passt (`sudo apt install passt`) or
@@ -1289,7 +1294,8 @@ rest of this section says of that driver, and these differences of platform:
   the VM.
 - **On Linux** there is no VM; the default network is pasta's, above, and the
   host is reached at `host.docker.internal` on every port its loopback serves,
-  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone.
+  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone, which for a named
+  `runsc` under `bridge` may be none.
 
 The driver keeps its `runsc` state under the run's own scratch directory and
 registers nothing anywhere. The `runsc` it invokes is gVisor's own on Linux, and

@@ -61,6 +61,7 @@ import {
   resolveSandboxRuntimeSelection,
   RUNSC_BINARY_ENV,
   RUNSC_CFC_POLICY_ENV,
+  SANDBOX_NETWORK_MODE_ENV,
   SANDBOX_ROOTFS_ENV,
   SANDBOX_RUNTIME_ENV,
   type SandboxPlatform,
@@ -719,10 +720,16 @@ const runscResolvedValues = (
     ...(selection.sandboxRunscForwardedHostPorts !== undefined
       ? [{
         name: "host ports",
-        value: `${
-          selection.sandboxRunscForwardedHostPorts.join(", ")
-        }, and no other port of the host's loopback`,
-        source: inherited(FORWARD_PORTS_ENV),
+        value: selection.sandboxRunscForwardedHostPorts.length > 0
+          ? `${
+            selection.sandboxRunscForwardedHostPorts.join(", ")
+          }, and no other port of the host's loopback`
+          : "none of the host's loopback",
+        source: inherited(
+          selection.sandboxRunscForwardedHostPorts.length > 0
+            ? FORWARD_PORTS_ENV
+            : SANDBOX_NETWORK_MODE_ENV,
+        ),
       }]
       : []),
   ];
