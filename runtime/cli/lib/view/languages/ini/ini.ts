@@ -15,20 +15,13 @@
  * without a carriage return before it.
  */
 
-import type {
-  Definition,
-  Document,
-  Line,
-  StructureNode,
-  TokenClass,
-} from "../../model.ts";
+import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
-import { computeLineStarts } from "../../lines.ts";
 import { linesFromClasses } from "../classes.ts";
 import {
   type LocatedEntry,
   structureNode,
-  type StructureSource,
+  structureSource,
 } from "../structure.ts";
 
 const HOST_LINE = /^[^\s=]*[^\s=:]\s+(?:[^\s=]+=|#)/;
@@ -195,11 +188,7 @@ export function iniLines(text: string): Line[] {
 /** Color `text` and list its sections and the keys each one sets. */
 export function iniDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source: StructureSource = {
-    text,
-    lineStarts: computeLineStarts(text),
-    definitions: new Map<string, Definition[]>(),
-  };
+  const source = structureSource(text);
   const node = (entry: Entry, depth: number): StructureNode =>
     structureNode(
       source,

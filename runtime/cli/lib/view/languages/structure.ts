@@ -6,14 +6,28 @@
  */
 
 import type { Definition, StructureKind, StructureNode } from "../model.ts";
-import { cpLen } from "../ansi.ts";
-import { lineIndexOf } from "../lines.ts";
+import {
+  codePointColumns,
+  type ColumnOf,
+  computeLineStarts,
+  lineIndexOf,
+} from "../lines.ts";
 
 /** A source, and the index its entries' declared names go into. */
 export interface StructureSource {
-  readonly text: string;
   readonly lineStarts: number[];
+  readonly columnOf: ColumnOf;
   readonly definitions: Map<string, Definition[]>;
+}
+
+/** The {@link StructureSource} for `text`, with nothing yet indexed. */
+export function structureSource(text: string): StructureSource {
+  const lineStarts = computeLineStarts(text);
+  return {
+    lineStarts,
+    columnOf: codePointColumns(text, lineStarts),
+    definitions: new Map(),
+  };
 }
 
 /** One structure entry, located by offsets into its source. */
@@ -47,7 +61,7 @@ export function structureNode(
   depth: number,
   children: (depth: number) => StructureNode[],
 ): StructureNode {
-  const { text, lineStarts, definitions } = source;
+  const { lineStarts, columnOf, definitions } = source;
   const { startOffset, endOffset } = entry;
   const startLine = lineIndexOf(lineStarts, startOffset);
   const endLine = lineIndexOf(
@@ -73,8 +87,8 @@ export function structureNode(
     ...(entry.nameOffset === undefined ? {} : { nameOffset: entry.nameOffset }),
     startLine,
     endLine,
-    startCol: cpLen(text.slice(lineStarts[startLine], startOffset)),
-    endCol: cpLen(text.slice(lineStarts[endLine], endOffset)),
+    startCol: columnOf(startLine, startOffset),
+    endCol: columnOf(endLine, endOffset),
     startOffset,
     endOffset,
     depth,
