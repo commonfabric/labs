@@ -83,6 +83,7 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
+import { markServedDerivationTx } from "../storage/reactivity-log.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -326,6 +327,7 @@ export function stampWaveRunContext(
   context: WaveRunContext,
 ): void {
   waveRunContexts.set(tx, context);
+  if (context.kind === "derivation") markServedDerivationTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one

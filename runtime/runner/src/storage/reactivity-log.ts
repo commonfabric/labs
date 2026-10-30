@@ -275,6 +275,25 @@ export function isDurableReadTx(tx: object): boolean {
   return false;
 }
 
+const servedDerivationTxs = new WeakSet<object>();
+
+/**
+ * Marks a transaction a serving loop runs a derivation in. Its write to a
+ * scoped instance the replica has never seen depends on that instance's
+ * arrival (`V2StorageTransaction.#dependOnUnseenWriteTarget()`).
+ */
+export function markServedDerivationTx(tx: object): void {
+  for (const layer of transactionLayers(tx)) servedDerivationTxs.add(layer);
+}
+
+/** Whether `tx` is one a serving loop runs a derivation in. */
+export function isServedDerivationTx(tx: object): boolean {
+  for (const layer of transactionLayers(tx)) {
+    if (servedDerivationTxs.has(layer)) return true;
+  }
+  return false;
+}
+
 const lazyMaterializationTxs = new WeakSet<object>();
 
 /**

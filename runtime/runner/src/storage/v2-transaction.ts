@@ -117,6 +117,7 @@ import {
   isMutableTransactionReadAllowed,
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
+  isServedDerivationTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -2497,6 +2498,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const isDelete = options?.delete === true;
 
     const { doc: readDoc } = this.#document(branch, address);
+    this.#dependOnUnseenWriteTarget(space, address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     const current = doc.current;
@@ -2586,6 +2588,44 @@ export class V2StorageTransaction implements IStorageTransaction {
     return { ok: collapsedNext };
   }
 
+  /**
+   * Makes a served derivation's write to a scoped instance its replica has
+   * never seen depend on that instance's arrival, as a read of it would.
+   *
+   * The replica holds an instance a served run asks for only once the run
+   * names it (`#loadRoot()` starts the load), so a run that writes such an
+   * instance without reading it writes over an absent view, and its commit
+   * is a whole-document `set`. Where the store already holds the instance,
+   * the wave drops that write (serving-loop.md §3d), and with no read of the
+   * instance nothing re-runs the derivation when the instance lands. The
+   * read here is that dependency: it is at the document root and not
+   * recursive, so the instance's arrival wakes the run and the run's own
+   * later writes to the instance, a child path, do not.
+   */
+  #dependOnUnseenWriteTarget(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    doc: DocumentEntry,
+  ): void {
+    if (
+      doc.initial.value !== undefined ||
+      this.#scopeKeyIdentity === undefined ||
+      normalizeCellScope(address.scope) === "space" ||
+      usesLocalReads(this) ||
+      !isServedDerivationTx(this)
+    ) {
+      return;
+    }
+    const read = this.read({
+      space,
+      id: address.id,
+      ...(address.type === undefined ? {} : { type: address.type }),
+      ...(address.scope === undefined ? {} : { scope: address.scope }),
+      path: [],
+    }, { trackReadWithoutLoad: true, nonRecursive: true });
+    if (read.error) throw read.error;
+  }
+
   /** Elision over a pending document retains its commit basis. */
   #retainPendingWriteElision(
     branch: SpaceBranch,
@@ -2644,6 +2684,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const { doc: readDoc } = this.#document(branch, writes[0]!.address);
+    this.#dependOnUnseenWriteTarget(space, writes[0]!.address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     let nextRoot = doc.current.value;
