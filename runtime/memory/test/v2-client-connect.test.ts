@@ -141,6 +141,16 @@ describe("connect()", () => {
       expect(firstHandshakeFailuresLogged()).toBe(logged + 1);
     });
 
+    it("rejects with a `firstHandshakeFailedError()` naming no address when given none", async () => {
+      const transport = new ScriptedHandshakes(["lost", "lost", "ok"]);
+      await expect(connect({ transport, firstHandshakeAttempts: 2 }))
+        .rejects.toThrow(
+          "Memory connection failed its first handshake 2 times; the last " +
+            'failure was "ConnectionError": "memory transport closed"',
+        );
+      expect(transport.hellos).toBe(2);
+    });
+
     it("rejects with the error of a handshake that fails permanently, without another attempt", async () => {
       const transport = new ScriptedHandshakes(["lost", "closed", "ok"]);
       await expect(connect({ transport, firstHandshakeAttempts: 5 }))
