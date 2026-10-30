@@ -16,6 +16,7 @@ import {
   createStorageAddressResolver,
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
+import { scriptedSockets } from "./storage/scripted-memory-socket.ts";
 
 const SPACES = [
   "did:key:z6Mk-shared-connection-one",
@@ -142,6 +143,31 @@ describe("RemoteSessionFactory connection sharing", () => {
       } finally {
         await Promise.all(opened.map(({ client }) => client.close()));
       }
+    });
+
+    it("dials a host's next space once the socket before it closes", async () => {
+      const sockets = scriptedSockets();
+      const factory = new RemoteSessionFactory(
+        createStorageAddressResolver(new URL("http://memory.test")),
+        user,
+        sockets.createSocket,
+      );
+      factories.push(factory);
+      // A create reaches its dial before it first waits.
+      const creates = SPACES.slice(0, 2).map((space) =>
+        factory.create(space).then(() => "opened", (error) => error)
+      );
+      const dialedSpaces = () =>
+        sockets.dials.map((dial) => dial.address.searchParams.get("space"));
+      expect(dialedSpaces()).toEqual([SPACES[0]]);
+      sockets.dials[0].close();
+      await sockets.dialed(2);
+      expect(dialedSpaces().slice(0, 2)).toEqual([SPACES[0], SPACES[1]]);
+      sockets.dials[1].close();
+      expect(await Promise.all(creates)).toMatchObject([
+        { name: "ConnectionError" },
+        { name: "ConnectionError" },
+      ]);
     });
   });
 
