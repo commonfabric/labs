@@ -2,14 +2,9 @@ import { internSchema } from "@commonfabric/data-model-schema";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
 
-import { type JSONSchema, type Pattern } from "../builder/types.ts";
+import { type Pattern } from "../builder/types.ts";
 import { type AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
-import { readStoredCfcMetadata } from "../cfc/metadata.ts";
-import {
-  type CfcObservedConfidentiality,
-  joinCfcObservedConfidentiality,
-} from "../cfc/observation.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { setResultCell } from "../result-utils.ts";
@@ -26,8 +21,10 @@ import {
 } from "./list-element-keys.ts";
 import {
   listContainerStoreWrites,
+  listContainerWriteSchema,
   listCoordinatorPlan,
   listElementResultCell,
+  listSlotResolutions,
 } from "./list-coordinator-plan.ts";
 import {
   type ElementRun,
@@ -66,53 +63,6 @@ const RESULT_PRESENCE_SCHEMA = internSchema({
   type: "array",
   items: { asCell: ["cell"], type: "unknown" },
 });
-
-/**
- * The membership confidentiality `container` already declares at its root:
- * the declaration is grow-only, so every write of the container carries it
- * forward, whatever the list's membership carries now.
- */
-function declaredMembership(
-  tx: IExtendedStorageTransaction,
-  container: Cell<any[]>,
-): CfcObservedConfidentiality {
-  const link = container.getAsNormalizedFullLink();
-  const entries = readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [];
-  return joinCfcObservedConfidentiality(
-    entries
-      .filter((entry) =>
-        entry.origin === "declared" && entry.observes === "enumerate" &&
-        entry.path.length === link.path.length &&
-        link.path.every((segment, i) => segment === entry.path[i])
-      )
-      .map((entry) => entry.label.confidentiality),
-  );
-}
-
-/**
- * The schema a write of the container goes through: the presence schema,
- * declaring on the container's membership what the list's membership
- * carries, joined with what the container declares already. Which children
- * the container holds, and how many, is what the coordinator computes from
- * the list's membership, and its read of that membership is machinery (see
- * `listCoordinatorPlan`), so the label reaches the container here and
- * nowhere else. A list whose membership carries nothing leaves the schema
- * as it is.
- */
-function membershipWriteSchema(
-  tx: IExtendedStorageTransaction,
-  container: Cell<any[]>,
-  membership: CfcObservedConfidentiality,
-): JSONSchema {
-  const confidentiality = joinCfcObservedConfidentiality([
-    declaredMembership(tx, container),
-    membership,
-  ]);
-  return confidentiality.length === 0 ? RESULT_PRESENCE_SCHEMA : {
-    ...RESULT_PRESENCE_SCHEMA,
-    ifc: { confidentiality, observes: "enumerate" },
-  };
-}
 
 const logger = getLogger("runner.map", { enabled: true, level: "warn" });
 
@@ -284,14 +234,26 @@ function createMapInstance(
               kind: resumeSettleRunKind(runtime),
               scopeKeyIdentity: identity,
             });
-            const raw = inputsCell.key("list").withTx(settleTx).resolveAsCell()
-              .withTx(settleTx).getRaw();
+            // The list is read as the reconcile reads it, its membership
+            // declared onward onto the container.
+            const { rawList: raw, membership } = listSlotResolutions(
+              runtime,
+              settleTx,
+              inputsCell,
+              "list",
+              "declared",
+            );
             if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
+              const container = result;
               settleTx.runWithAmbientReadMeta(
                 { ...linkResolutionProbe, ...machineryRead },
                 () =>
-                  result!.asSchema(membershipWriteSchema(settleTx, result!, []))
-                    .withTx(settleTx).set([]),
+                  container.asSchema(listContainerWriteSchema(
+                    settleTx,
+                    container,
+                    RESULT_PRESENCE_SCHEMA,
+                    membership,
+                  )).withTx(settleTx).set([]),
               );
             }
           }).then(({ error }) => {
@@ -372,10 +334,13 @@ function createMapInstance(
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
     // The same view for writes, declaring on the container's membership what
-    // the list's membership carries (`membershipWriteSchema`).
-    const resultForWrite = result.asSchema(
-      membershipWriteSchema(tx, result, plan.membershipConfidentiality),
-    ).withTx(tx);
+    // the list's membership carries (`listContainerWriteSchema`).
+    const resultForWrite = result.asSchema(listContainerWriteSchema(
+      tx,
+      result,
+      RESULT_PRESENCE_SCHEMA,
+      plan.membership,
+    )).withTx(tx);
 
     const droppedArgumentFields = unusedListOpArgumentFields(argumentUsage);
     const createRunInput = (element: Cell<any>, index: number) => ({

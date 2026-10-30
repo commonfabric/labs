@@ -1,22 +1,14 @@
-import type { JSONSchema, Pattern } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
 import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
-import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
-import { readStoredCfcMetadata } from "../cfc/metadata.ts";
-import {
-  cfcConfidentialityForObservationNode,
-  type CfcObservedConfidentiality,
-} from "../cfc/observation.ts";
-import type {
-  IExtendedStorageTransaction,
-  Metadata,
-} from "../storage/interface.ts";
-import {
-  linkResolutionProbe,
-  machineryRead,
-} from "../storage/reactivity-log.ts";
+import type { CfcConfClause } from "../cfc/clause.ts";
+import { cfcDeclaredLabelAt, readStoredCfcMetadata } from "../cfc/metadata.ts";
+import { joinCfcObservedConfidentiality } from "../cfc/observation.ts";
+import { deriveFlowJoin } from "../cfc/prepare.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { declaredOnwardRead } from "../storage/reactivity-log.ts";
 import { listElementKeys } from "./list-element-keys.ts";
 import { listElementLink, listSlotPlace } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
@@ -70,11 +62,12 @@ export type ListCoordinatorPlan = {
   /** Element identity keys by position (empty when `list` is not an array). */
   elementKeys: Map<number, string>;
   /**
-   * The confidentiality the list's membership carries, for a `map` to
-   * declare on its container's membership; empty for the other ops, whose
-   * membership reads stay ordinary. See `listCoordinatorPlan`.
+   * The confidentiality the list's membership carries, for `map` to declare
+   * on its container through `listContainerWriteSchema`; undefined for the
+   * other ops, whose membership reads join their transaction. See
+   * `listSlotResolutions`.
    */
-  membershipConfidentiality: CfcObservedConfidentiality;
+  membership: readonly CfcConfClause[] | undefined;
 };
 
 /**
@@ -93,19 +86,9 @@ export type ListCoordinatorPlan = {
  * resolutions are link-resolution probes, which flow derivation treats
  * as resolution machinery rather than observations.
  *
- * For `map`, the list-doc read is machinery as well, and what the
- * membership carries is returned for the coordinator to declare on its
- * container's membership instead. The per-transaction join stamps
- * everything the reconcile writes, the setup of each new child included,
- * and a child's existence is a fact about its own slot alone: a list whose
- * membership carries every element's label (a query result, CFC spec
- * §8.17.6) would otherwise hand each child the join of all of them. The
- * coordinator still consumes the membership — which children exist, and
- * how many, is what it computes from it — so the label it carries moves to
- * the container's membership by declaration, read off the list's stored
- * labels the way an enumerating read of it would consume them. The label
- * metadata read is a verifier read, which reactivity sees, so a membership
- * label that grows re-runs the reconcile.
+ * `map` reads the list-doc with its membership declared onward: the label
+ * goes on its container's membership, and a child it sets up carries its
+ * own slot's label and the selection's (`listSlotResolutions`).
  *
  * The result container is keyed on the node's reserved output spot — a
  * stable, position-derived, program-independent identity (CT-1623) —
@@ -137,22 +120,13 @@ export function listCoordinatorPlan(
     : undefined;
   // `array` callback arguments should observe the actual list entity, not
   // the alias/boxed reference used to pass that list into the builtin.
-  const { listCell, rawList, slots } = listSlotResolutions(
+  const { listCell, rawList, slots, membership } = listSlotResolutions(
     runtime,
     tx,
     inputsCell,
     "list",
-    op === "map" ? { ...linkResolutionProbe, ...machineryRead } : undefined,
+    op === "map" ? "declared" : undefined,
   );
-  const listBase = listCell.getAsNormalizedFullLink();
-  const membershipConfidentiality: CfcObservedConfidentiality = op === "map"
-    ? cfcConfidentialityForObservationNode({
-      labelView: cfcLabelViewFromMetadata(
-        readStoredCfcMetadata(tx, listBase),
-        listBase.path,
-      ),
-    })
-    : [];
   const list: Cell<any>[] | undefined = rawList === undefined
     ? undefined
     : !Array.isArray(rawList)
@@ -202,8 +176,37 @@ export function listCoordinatorPlan(
     scope,
     container,
     elementKeys,
-    membershipConfidentiality,
+    membership,
   };
+}
+
+/**
+ * The schema a list coordinator writes its container through: `schema`,
+ * declaring `membership` on the container's membership, joined with what
+ * the container declares there already. A declaration only grows, so every
+ * write carries the prior one forward, whatever the list carries now; a
+ * container that declares nothing and a list that carries nothing leave
+ * `schema` as it is.
+ */
+export function listContainerWriteSchema(
+  tx: IExtendedStorageTransaction,
+  container: Cell<any[]>,
+  schema: JSONSchemaObj,
+  membership: readonly CfcConfClause[] | undefined,
+): JSONSchema {
+  const link = container.getAsNormalizedFullLink();
+  const confidentiality = joinCfcObservedConfidentiality([
+    cfcDeclaredLabelAt(
+      readStoredCfcMetadata(tx, link),
+      link.path,
+      "enumerate",
+      "node",
+    ).confidentiality,
+    membership,
+  ]);
+  return confidentiality.length === 0
+    ? schema
+    : { ...schema, ifc: { confidentiality, observes: "enumerate" } };
 }
 
 /**
@@ -219,28 +222,38 @@ export function listCoordinatorPlan(
  * plan. A slot whose links run in a cycle names no value and resolves to its
  * own place in the list. `slots` is empty when the list is not an array.
  *
- * `rawListReadMeta`, when given, marks the list-doc read: a caller that
- * declares what the membership carries itself passes the machinery markers,
- * so the read does not join it into the transaction (see
- * `listCoordinatorPlan`). Left out, the read is an ordinary observation of
- * the membership.
+ * The list-doc read observes the membership, and the transaction's join
+ * charges it to everything the transaction writes. With `declare` set, the
+ * read is declared onward instead (`declaredOnwardRead`): the
+ * confidentiality the join resolves for it, slot probes included, comes
+ * back as `membership`, for the caller to declare on the container it
+ * writes from it (`listContainerWriteSchema`), and a child the caller sets
+ * up in the same transaction carries its own slot's label and the
+ * selection's, not every element's. A list whose membership carries every
+ * element's label, a query result (CFC spec §8.17.6), is the case that
+ * tells the two apart. The join reads the list's labels through verifier
+ * reads reactivity sees, so a label that grows runs the caller again.
  */
 export function listSlotResolutions(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
-  rawListReadMeta?: Metadata,
+  declare?: "declared",
 ): {
   listCell: Cell<any>;
   rawList: unknown;
   slots: NormalizedFullLink[];
+  membership: readonly CfcConfClause[] | undefined;
 } {
   const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
   const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
-  const rawList = rawListReadMeta === undefined
+  const rawList = declare === undefined
     ? readRawList()
-    : tx.runWithAmbientReadMeta(rawListReadMeta, readRawList);
+    : tx.runWithAmbientReadMeta(declaredOnwardRead, readRawList);
+  const membership = declare === undefined
+    ? undefined
+    : deriveFlowJoin(tx, { declaredOnwardOnly: true }).declaredOnward;
   const listBase = listCell.getAsNormalizedFullLink();
   // An element whose links run in a cycle, back to a place they passed or
   // into their own subpath, names no value, so its slot is its place in the
@@ -252,7 +265,7 @@ export function listSlotResolutions(
       ) ?? listSlotPlace(listBase, i)
     )
     : [];
-  return { listCell, rawList, slots };
+  return { listCell, rawList, slots, membership };
 }
 
 /**

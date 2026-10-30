@@ -152,6 +152,26 @@ export const writeDestinationRead: Metadata = {
   [writeDestinationReadMarker]: true,
 };
 
+const declaredOnwardReadMarker = Symbol("declaredOnwardRead");
+
+/**
+ * Marks a read whose confidentiality the reader declares on the document it
+ * writes from it, so the flow join charges that confidentiality there and
+ * not on everything else the transaction writes. A list coordinator reads
+ * its input's membership to decide which children exist and sets those
+ * children up in the same transaction; the membership's label belongs on
+ * the container's membership, which the coordinator declares, and not on a
+ * child, whose existence is a fact about its own slot. The read's integrity
+ * still joins the transaction's meet: evidence withheld can only weaken a
+ * claim, and a declaration carries no integrity. Scheduling, conflict
+ * detection and the read ceiling are unaffected. What the reader declares
+ * is what the join resolved for the read, which `deriveFlowJoin` answers as
+ * `declaredOnward`.
+ */
+export const declaredOnwardRead: Metadata = {
+  [declaredOnwardReadMarker]: true,
+};
+
 export function isReadIgnoredForScheduling(meta?: Metadata): boolean {
   return meta?.[ignoreReadForSchedulingMarker] === true;
 }
@@ -421,6 +441,10 @@ export function isMergeableOpRead(meta?: Metadata): boolean {
 
 export function isWriteDestinationRead(meta?: Metadata): boolean {
   return meta?.[writeDestinationReadMarker] === true;
+}
+
+export function isDeclaredOnwardRead(meta?: Metadata): boolean {
+  return meta?.[declaredOnwardReadMarker] === true;
 }
 
 export function isMutableTransactionReadAllowed(meta?: Metadata): boolean {

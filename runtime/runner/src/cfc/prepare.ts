@@ -111,6 +111,7 @@ import type {
 } from "../storage/interface.ts";
 import {
   internalVerifierRead,
+  isDeclaredOnwardRead,
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
@@ -4196,6 +4197,11 @@ const forEachFlowObservation = (
       // them, which is what leaves `flowLabelWorkExists` — and with it
       // whether the flow stage runs at all — exactly as it was.
       writeDestination: boolean;
+      // True when the read carries `declaredOnwardRead`: its confidentiality
+      // is declared by the reader on what it writes, so `deriveFlowJoin`
+      // leaves it out of the join's confidentiality and keeps its integrity
+      // in the meet. Every other consumer of this walk keeps the read.
+      declaredOnward: boolean;
       // True for the probe of a slot this transaction went on to follow: a
       // `followRef` observation made by a dereference rather than standing
       // alone.
@@ -4372,6 +4378,7 @@ const forEachFlowObservation = (
           },
           machinery: isMachineryRead(read.meta),
           writeDestination: isWriteDestinationRead(read.meta),
+          declaredOnward: isDeclaredOnwardRead(read.meta),
           followedSlot: followsSlot,
         },
       )
@@ -4402,6 +4409,7 @@ const forEachFlowObservation = (
           },
           machinery: false,
           writeDestination: isWriteDestinationRead(read.meta),
+          declaredOnward: isDeclaredOnwardRead(read.meta),
           followedSlot: false,
         },
       )
@@ -4448,6 +4456,7 @@ const forEachFlowObservation = (
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
+          declaredOnward: false,
           followedSlot: false,
         },
       )
@@ -4473,6 +4482,7 @@ const forEachFlowObservation = (
           coveredByTrace: false,
           machinery: false,
           writeDestination: false,
+          declaredOnward: false,
           followedSlot: false,
         },
       )
@@ -4633,6 +4643,13 @@ const deriveFlowJoinImpl = (
   tx: IExtendedStorageTransaction,
   options?: {
     /**
+     * Resolve only the reads declared onward (`declaredOnwardRead`), for
+     * the reader that declares what they consumed: every other read is
+     * passed over unresolved, and only `declaredOnward` is answered.
+     */
+    declaredOnwardOnly?: boolean;
+
+    /**
      * Collect the spaces of observations that contributed label content to
      * the join (inv-12 Stage 1). The per-target predicates in
      * `prepareBoundaryCommit` test whether any labeled contribution
@@ -4649,6 +4666,11 @@ const deriveFlowJoinImpl = (
 ): {
   confidentiality: CfcConfClause[];
   integrity: CfcAtom[];
+  /**
+   * The confidentiality the reads declared onward consumed, which the join
+   * leaves out of `confidentiality`: what their reader declares.
+   */
+  declaredOnward: CfcConfClause[];
   labeledSpaces?: ReadonlySet<MemorySpace>;
 
   /**
@@ -4659,6 +4681,8 @@ const deriveFlowJoinImpl = (
   labelSources?: readonly StoredCfcTarget[];
 } => {
   const atoms: unknown[] = [];
+  const declaredAtoms: unknown[] = [];
+  const declaredOnwardOnly = options?.declaredOnwardOnly === true;
   // Class-aware integrity meet (§8.9.3 / §3.1.6.2): hereditary atoms
   // survive only when EVERY contributing observation carries them. An
   // observation with no resolved label has empty integrity and empties the
@@ -4787,6 +4811,9 @@ const deriveFlowJoinImpl = (
       // elsewhere, the diff reads the slot again without the marker, so
       // that read arrives here and joins.
       if (observation.writeDestination) {
+        return false;
+      }
+      if (declaredOnwardOnly && !observation.declaredOnward) {
         return false;
       }
       const key = targetKey({ space, id, scope });
@@ -5026,7 +5053,13 @@ const deriveFlowJoinImpl = (
       ) {
         labeledSpaces.add(space);
       }
-      if (label?.confidentiality?.length) {
+      // A read declared onward charges its confidentiality where its reader
+      // declares it (`declaredOnwardRead`), which is answered as
+      // `declaredOnward` and kept out of the join; its integrity meets
+      // below like any content read's.
+      if (label?.confidentiality?.length && observation.declaredOnward) {
+        for (const atom of label.confidentiality) declaredAtoms.push(atom);
+      } else if (label?.confidentiality?.length) {
         for (const atom of label.confidentiality) atoms.push(atom);
         let reads = confidentialReads.get(key);
         if (reads === undefined) {
@@ -5071,6 +5104,7 @@ const deriveFlowJoinImpl = (
   // stamped entry representation-eligible, same posture as a foreign labeled
   // read.
   for (const observation of tx.getCfcState().labelMetadataObservations) {
+    if (declaredOnwardOnly) break;
     noteLabelSource(observation.target, "application/json");
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
@@ -5084,6 +5118,7 @@ const deriveFlowJoinImpl = (
   for (
     const observation of tx.getCfcState().externalContentObservations ?? []
   ) {
+    if (declaredOnwardOnly) break;
     labelWithoutDocument = true;
     if (
       labeledSpaces !== undefined &&
@@ -5264,6 +5299,7 @@ const deriveFlowJoinImpl = (
   }
   if (labelWithoutDocument) labelSources = undefined;
   return {
+    declaredOnward: uniqueCfcAtoms(declaredAtoms),
     confidentiality,
     integrity: uniqueCfcAtoms(integrity),
     ...(labeledSpaces !== undefined ? { labeledSpaces } : {}),
@@ -11854,7 +11890,7 @@ export function* prepareBoundaryCommitSteps(
   const valueTargets = valueWriteTargets(tx);
   const flowTargets = flowMode === "off" ? undefined : valueTargets;
   const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
-    ? { confidentiality: [], integrity: [] }
+    ? { confidentiality: [], integrity: [], declaredOnward: [] }
     : deriveFlowJoin(tx, {
       collectLabeledSpaces: true,
       collectLabelSources: flowPersist,

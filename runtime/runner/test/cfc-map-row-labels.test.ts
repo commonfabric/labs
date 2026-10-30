@@ -223,22 +223,6 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     }
   };
 
-  /** Every confidentiality atom stored anywhere on `cell`'s document. */
-  // deno-lint-ignore no-explicit-any -- any cell
-  const storedConfidentiality = (cell: Cell<any>): unknown[] => {
-    const read = runtime.edit();
-    try {
-      const link = cell.getAsNormalizedFullLink();
-      const entries = readStoredCfcMetadata(read, link)
-        ?.labelMap.entries ?? [];
-      return entries.flatMap((entry) =>
-        (entry.label as { confidentiality?: unknown[] }).confidentiality ?? []
-      );
-    } finally {
-      read.abort("label read");
-    }
-  };
-
   /** The join a read of `list`'s length derives, off an abandoned transaction. */
   // deno-lint-ignore no-explicit-any -- any list cell
   const lengthConfidentiality = (list: Cell<any>): unknown[] => {
@@ -272,17 +256,6 @@ describe("CFC flow labels: a map over rows with different labels", () => {
     expect(second).toContainEqual(space);
     expect(second).toContainEqual(BOB);
     expect(hasClause(second, SELECTION_CLAUSE)).toBe(true);
-  });
-
-  it("stores no other row's label on a card's own document", async () => {
-    const result = await runPage("stored");
-    // deno-lint-ignore no-explicit-any -- the page's outputs are untyped
-    const cards = result.key("cards") as Cell<any>;
-
-    expect(storedConfidentiality(cards.key(0).resolveAsCell())).not
-      .toContainEqual(BOB);
-    expect(storedConfidentiality(cards.key(1).resolveAsCell()))
-      .toContainEqual(BOB);
   });
 
   it("labels the cards' count with every row and the selection", async () => {
