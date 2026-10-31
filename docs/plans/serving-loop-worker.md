@@ -244,8 +244,9 @@ between the two.
 3. [x] **Toolshed wiring under `SERVER_EXECUTION_WORKER`.** The bootstrap
    (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
-   is `true`, the in-process host otherwise, and hands the routes a
-   `ServingLoop` either way; the pattern-lifecycle verbs cross as the
+   is `true`, or is unset or empty over a file memory store, and the
+   in-process host otherwise. It hands the routes a `ServingLoop` either
+   way; the pattern-lifecycle verbs cross as the
    descriptors `@commonfabric/piece`'s `served-lifecycle-verbs.ts` names on
    both paths; the health route reads the relayed stats through the
    provider the bridge registers. The flag is registered in

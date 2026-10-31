@@ -1984,8 +1984,8 @@ the per-epic implementation notes).
   `ExecutorHost` sets the policy field directly, and a test's serving memory
   server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
   the same variable for a policy that leaves the field unset. In the toolshed
-  only the literal `false` turns it off; `true` and unset leave it on, and
-  anything else leaves it on with a warning. The test server keeps the
+  only the literal `false` turns it off; `true`, unset and empty leave it on,
+  and anything else leaves it on with a warning. The test server keeps the
   opposite default, turning it on for the literal `true` alone, which is how a
   lane runs its tests under the posture. Meaningful only with the serving loop
   running ([`serverExecution`](#serverexecution) on).

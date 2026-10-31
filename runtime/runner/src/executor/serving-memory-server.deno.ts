@@ -19,9 +19,10 @@
  *   verified signatures, as toolshed's are.
  *
  * Either runs its loop on this thread over a non-persistent store, or, as a
- * toolshed does under `SERVER_EXECUTION_WORKER`, in a Worker of this process
- * over a store in a temporary directory ({@link ServingMemoryServerOptions}'
- * `worker`).
+ * toolshed does over its file store, in a Worker of this process over a store
+ * in a temporary directory ({@link ServingMemoryServerOptions}' `worker`).
+ * Unlike a toolshed, it keeps the worker and the store read-through off
+ * unless the environment turns them on, so a lane chooses its arm.
  *
  * The loop's work runs in the serving context, so a test hosting its clients
  * in the same realm tells their output apart with {@link inServingContext}.
@@ -139,10 +140,11 @@ export type ServingMemoryServerOptions =
      * that needs one says `false` here.
      *
      * The environment fills three more of the policy's fields when they are
-     * left unset, from the variables a toolshed's bootstrap reads:
-     * `storeReadThrough` takes `true` when `SERVER_EXECUTION_STORE_READ_THROUGH`
-     * is the literal `true`, where a toolshed takes it unless the variable is
-     * the literal `false`; `overlapWaveCommit` takes `true` when
+     * left unset, from the variables a toolshed's bootstrap reads, as
+     * `policyFromEnvironment()` says: `storeReadThrough` takes `true` when
+     * `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal `true`, where a
+     * toolshed takes it unless the variable is the literal `false`, so the
+     * read-through is opt-in here; `overlapWaveCommit` takes `true` when
      * `SERVER_EXECUTION_OVERLAP_COMMIT` is, and `flushDeadlineMs` and
      * `flushDeadlineMaxMs` take `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
      * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` when those are positive
@@ -183,11 +185,12 @@ export function runsInWorker(
 const TIMER_DELAY_MAX_MS = 2_147_483_647;
 
 /**
- * The loop's policy, with what `policy` leaves unset taken from the
- * environment as the toolshed bootstrap takes it: the store read-through
- * from `SERVER_EXECUTION_STORE_READ_THROUGH` and the overlapped wave commit
- * from `SERVER_EXECUTION_OVERLAP_COMMIT`, each on for the literal `true`,
- * and the flush deadline and the cap it grows to from
+ * The loop's policy, with what `policy` leaves unset taken from the variables
+ * the toolshed bootstrap reads. The store read-through
+ * (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped wave commit
+ * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
+ * alone, where a toolshed keeps the read-through on unless the variable is
+ * `false`. The flush deadline and the cap it grows to come from
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them

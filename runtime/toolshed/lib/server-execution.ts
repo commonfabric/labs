@@ -271,8 +271,9 @@ export function serverExecutionWorkerFromEnv(
 
 /**
  * Start the serving loop when the flag is on: in a Worker of this process
- * under `SERVER_EXECUTION_WORKER`, on this thread otherwise. Called once from
- * toolshed startup, after the memory server exists. Returns the loop (or
+ * when {@link serverExecutionWorkerFromEnv} says so, which by default it does
+ * over a file store, and on this thread otherwise. Called once from toolshed
+ * startup, after the memory server exists. Returns the loop (or
  * undefined off the flag) so shutdown can close it.
  */
 export function startServerExecutionHost(options: {
@@ -353,6 +354,13 @@ export function startServerExecutionHost(options: {
   }
   const fileStore = options.store?.protocol === "file:";
   if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
+    console.log(
+      "Server-execution v2: serving loop in a Worker " +
+        (envGet("SERVER_EXECUTION_WORKER") === "true"
+          ? "by SERVER_EXECUTION_WORKER=true"
+          : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
+            "keeps it on the main thread)"),
+    );
     // The worker's entry adds the lifecycle verbs, the self-directed fetch
     // and the module cache itself (lib/serving-worker.ts).
     const worker = new ServingWorker({
