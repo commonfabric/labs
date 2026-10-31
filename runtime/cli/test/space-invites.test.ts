@@ -13,9 +13,8 @@ import {
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
 /** Opens no memory session, so every operation goes over the stubbed HTTP. */
-const httpOnly: InviteStorageOpener = () => ({
-  close: () => Promise.resolve(),
-});
+const httpOnly: InviteStorageOpener = () =>
+  Promise.resolve({ close: () => Promise.resolve() });
 
 /**
  * Runs `cf space invite` subcommands against a stubbed fabric service that
@@ -951,28 +950,29 @@ describe("space invite", () => {
     await using cli = await inviteCli("invite CLI session");
     const sent: unknown[] = [];
     let closed = 0;
-    const onSession: InviteStorageOpener = ({ space }) => ({
-      session: (invite) => {
-        sent.push({ space, ...invite });
-        return Promise.resolve(
-          invite.operation === "list" ? [] : {
-            revoked: true,
-          },
-        );
-      },
-      redeemer: (invite) => {
-        sent.push({ space, operation: "redeem", body: invite });
-        return Promise.resolve({
-          outcome: "redeemed",
-          redemption: { inviteId: invite.inviteId, did: cli.signer.did() },
-          currentAccess: "READ",
-        });
-      },
-      close: () => {
-        closed++;
-        return Promise.resolve();
-      },
-    });
+    const onSession: InviteStorageOpener = ({ space }) =>
+      Promise.resolve({
+        session: (invite) => {
+          sent.push({ space, ...invite });
+          return Promise.resolve(
+            invite.operation === "list" ? [] : {
+              revoked: true,
+            },
+          );
+        },
+        redeemer: (invite) => {
+          sent.push({ space, operation: "redeem", body: invite });
+          return Promise.resolve({
+            outcome: "redeemed",
+            redemption: { inviteId: invite.inviteId, did: cli.signer.did() },
+            currentAccess: "READ",
+          });
+        },
+        close: () => {
+          closed++;
+          return Promise.resolve();
+        },
+      });
     const run = async (...args: string[]) => {
       await buildSpaceInviteCommand(onSession).reset().throwErrors().parse([
         args[0],

@@ -15,6 +15,7 @@ import {
   type SpaceInviteRedeemer,
   type SpaceInviteSession,
 } from "@commonfabric/runner/space-invites";
+import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { loadIdentity } from "../lib/identity.ts";
 import { parseSpaceOptions } from "./piece.ts";
@@ -203,20 +204,29 @@ function requiredInviteId(
 
 /**
  * Opens what the commands send on: memory sessions on `space`, signing as
- * `as` against the memory server at `memoryHost`, and what closes them. A
- * `session` left out sends administration over HTTP alone, and a `redeemer`
- * left out sends redemption over HTTP alone.
+ * `as`, at the memory server the deployment behind `apiUrl` publishes, and
+ * what closes them. A `session` left out sends administration over HTTP
+ * alone, and a `redeemer` left out sends redemption over HTTP alone.
  */
 export type InviteStorageOpener = (
-  options: { as: Identity; memoryHost: URL; space: DIDKey },
-) => {
+  options: { as: Identity; apiUrl: URL; space: DIDKey },
+) => Promise<{
   session?: SpaceInviteSession;
   redeemer?: SpaceInviteRedeemer;
   close(): Promise<void>;
-};
+}>;
 
-/** The default `InviteStorageOpener`, over a storage manager of its own. */
-const openInviteStorage: InviteStorageOpener = ({ as, memoryHost, space }) => {
+/**
+ * The default `InviteStorageOpener`, over a storage manager of its own at the
+ * memory host the deployment's metadata names, as `loadPieces()` opens one.
+ */
+const openInviteStorage: InviteStorageOpener = async (
+  { as, apiUrl, space },
+) => {
+  const { memoryHost } = await settingsForDeployedClient({
+    apiUrl,
+    env: Deno.env.get,
+  });
   const manager = StorageManager.open({ as, memoryHost });
   const administer = manager.administerInvites?.bind(manager);
   const redeem = manager.redeemInvite?.bind(manager);
@@ -250,9 +260,9 @@ export function buildSpaceInviteCommand(
     }
     const space = config.space;
     const signer = await loadIdentity(config.identity);
-    const storage = openStorage({
+    const storage = await openStorage({
       as: signer,
-      memoryHost: new URL(config.apiUrl),
+      apiUrl: new URL(config.apiUrl),
       space,
     });
     return {
