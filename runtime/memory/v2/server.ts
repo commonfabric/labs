@@ -9,7 +9,6 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
-import { ROUTED_QUEUE_LIMIT } from "./routed-limits.ts";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
 import { StagedMap } from "@commonfabric/collections/staged-map";
@@ -67,6 +66,7 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  PATTERN_LIFECYCLE_MAX_BYTES,
   type PatternLifecycleRequest,
   type PatternLifecycleVerb,
   type PresenceJoinRequest,
@@ -903,13 +903,6 @@ const sessionKey = (space: string, sessionId: string): string =>
  */
 const MAX_STAGED_WATCH_SET_PARTS = 64;
 const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
-
-/**
- * Most UTF-8 bytes a `pattern.lifecycle` message may take: the most a routed
- * request may take, so a request is refused the same way whether or not a
- * router carries it.
- */
-export const PATTERN_LIFECYCLE_MAX_BYTES = ROUTED_QUEUE_LIMIT;
 
 /** Whether an invitation service result is a redemption's receipt. */
 const isRedeemReceipt = (

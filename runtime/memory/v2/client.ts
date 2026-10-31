@@ -35,6 +35,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  PATTERN_LIFECYCLE_MAX_BYTES,
   type PatternLifecycleVerb,
   type PresenceJoinResult,
   type PresencePublication,
@@ -921,6 +922,17 @@ export class Client {
    *  optional-capability consumers fail closed by reading this. */
   get serverFlags(): MemoryProtocolFlags | null {
     return this.#serverFlags;
+  }
+
+  /**
+   * Most UTF-8 bytes one request sent whole may take on the current
+   * connection: the routed bound on a routed connection, and the transport's
+   * own where it declares one; `undefined` before the first handshake.
+   */
+  get requestBytesLimit(): number | undefined {
+    return this.#requestLimits === undefined
+      ? undefined
+      : wholeLimits(this.#requestLimits).bytes;
   }
 
   /**
@@ -3303,9 +3315,10 @@ export class SpaceSession {
    *   `.code`, when the server refuses the verb. Two codes are raised here,
    *   before anything is sent: `lifecycle-unsupported` when the server does
    *   not advertise `patternLifecycle`, and `payload-too-large` when the
-   *   request takes more than `ROUTED_QUEUE_LIMIT` bytes. A connection lost
-   *   before the answer throws a `ConnectionError`, and the verb's outcome
-   *   is then unknown.
+   *   request takes more than `PATTERN_LIFECYCLE_MAX_BYTES`, or more than
+   *   the connection takes in one request (`ROUTED_QUEUE_LIMIT` when
+   *   routed). A connection lost before the answer throws a
+   *   `ConnectionError`, and the verb's outcome is then unknown.
    */
   async runPatternLifecycle(
     verb: PatternLifecycleVerb,
@@ -3326,13 +3339,17 @@ export class SpaceSession {
       verb,
       body,
     };
+    const limit = Math.min(
+      PATTERN_LIFECYCLE_MAX_BYTES,
+      this.#client.requestBytesLimit ?? PATTERN_LIFECYCLE_MAX_BYTES,
+    );
     const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
       .length;
-    if (bytes > ROUTED_QUEUE_LIMIT) {
+    if (bytes > limit) {
       throw lifecycleRefusal(
         "payload-too-large",
-        `A \`pattern.lifecycle\` request takes at most ${ROUTED_QUEUE_LIMIT} ` +
-          `bytes, and this one takes ${bytes}`,
+        `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
+          `this connection, and this one takes ${bytes}`,
       );
     }
     return await this.#client.request<FabricPlainObject>(message);

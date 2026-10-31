@@ -47,9 +47,11 @@ transport adds refusals of its own: the status codes of
 [The route](#the-route), and the codes listed under
 [On the memory session](#on-the-memory-session). `cf` sends on the
 memory session, and posts to the route only when the memory server does not
-advertise `patternLifecycle`. A program whose request takes more than 4 MiB is
-refused before anything is sent, although the route takes bodies up to 8 MiB:
-`cf` holds every request to the bound a routed session imposes.
+advertise `patternLifecycle`. A request takes at most 8 MiB on either
+transport (`PATTERN_LIFECYCLE_MAX_BYTES`, the route's body limit). On a
+connection through the memory router a request takes at most 4 MiB, the
+router's request bound, and the client refuses a larger one before sending
+it.
 
 The session request reaches the process that serves the space, and the route
 may not. A deployment that runs several toolshed processes spreads ordinary API
@@ -88,7 +90,7 @@ one of the route's codes in the table below. Three codes differ on the session:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `invalid-request`       | `body` does not match the verb's schema; the route answers this case with 422 and the validator's body                         |
 | `lifecycle-unsupported` | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                   |
-| `payload-too-large`     | the message takes more than 4 MiB in UTF-8; the client also refuses before sending when the encoded request exceeds 4 MiB      |
+| `payload-too-large`     | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection |
 
 `server-execution-off` is the refusal of a server with no handler installed, and
 `internal` that of a handler that threw. `unauthorized` and `rate-limited` do

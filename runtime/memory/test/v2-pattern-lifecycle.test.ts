@@ -6,7 +6,6 @@ import { aclDocId } from "../acl.ts";
 import * as Engine from "../v2/engine.ts";
 import { connect, loopback } from "../v2/client.ts";
 import {
-  PATTERN_LIFECYCLE_MAX_BYTES,
   type PatternLifecycleCall,
   type PatternLifecycleHandler,
   Server,
@@ -16,10 +15,11 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
+  PATTERN_LIFECYCLE_MAX_BYTES,
   type ResponseMessage,
   type ServerMessage,
 } from "../v2.ts";
-import { ROUTED_QUEUE_LIMIT } from "../v2/routed-limits.ts";
+import { ROUTED_PART_BYTES, ROUTED_QUEUE_LIMIT } from "../v2/routed-limits.ts";
 import {
   TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenAuthFactory,
@@ -546,25 +546,63 @@ describe("pattern.lifecycle", () => {
       }
     });
 
-    it("throws `payload-too-large` without sending, for a request past the routed byte bound", async () => {
+    /** The code a lifecycle call fails with, or `undefined` if it returned. */
+    const codeOf = (call: Promise<unknown>) =>
+      call.then(
+        () => undefined,
+        (error: unknown) => (error as Error & { code?: string }).code,
+      );
+
+    it("throws `payload-too-large` without sending, for a request past the byte bound", async () => {
       const server = testServer();
       const { calls, handler } = recording();
       server.setPatternLifecycleHandler(handler);
       const { client, session } = await mounted(server);
 
       try {
-        const error = await session.runPatternLifecycle("upload", {
-          // Two bytes a character, so the request passes the byte bound
-          // with fewer characters than the bound counts.
-          source: "é".repeat(ROUTED_QUEUE_LIMIT / 2 + 1),
-        }).then(
-          () => undefined,
-          (error: unknown) => error as Error & { code?: string },
-        );
-        expect(error?.code).toBe("payload-too-large");
+        // Two bytes a character, so the request passes the byte bound
+        // with fewer characters than the bound counts.
+        expect(
+          await codeOf(session.runPatternLifecycle("upload", {
+            source: "é".repeat(PATTERN_LIFECYCLE_MAX_BYTES / 2 + 1),
+          })),
+        ).toBe("payload-too-large");
         expect(calls).toEqual([]);
       } finally {
         await client.close();
+      }
+    });
+
+    it("sends a request past the routed bound on a direct connection, and refuses it without sending on a connection bounded as a routed one is", async () => {
+      const server = testServer();
+      const { calls, handler } = recording();
+      server.setPatternLifecycleHandler(handler);
+      const body = { source: "x".repeat(ROUTED_QUEUE_LIMIT + 1) };
+      const direct = await mounted(server);
+      const bounded = await connect({
+        transport: loopback(server, {
+          messageLimits: {
+            bytes: ROUTED_PART_BYTES,
+            values: null,
+            whole: ROUTED_QUEUE_LIMIT,
+          },
+        }),
+      });
+
+      try {
+        const session = await bounded.mount(
+          SPACE,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        expect(await direct.session.runPatternLifecycle("upload", body))
+          .toEqual({ pattern: "receipt" });
+        expect(await codeOf(session.runPatternLifecycle("upload", body)))
+          .toBe("payload-too-large");
+        expect(calls).toHaveLength(1);
+      } finally {
+        await direct.client.close();
+        await bounded.close();
       }
     });
   });

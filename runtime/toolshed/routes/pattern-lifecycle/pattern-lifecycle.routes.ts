@@ -6,6 +6,7 @@
 // established.
 
 import { createRoute } from "@hono/zod-openapi";
+import { PATTERN_LIFECYCLE_MAX_BYTES } from "@commonfabric/memory/v2";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 
@@ -13,8 +14,11 @@ const tags = ["Pattern Lifecycle"];
 
 export const BASE = "/api/pattern-lifecycle";
 
-/** The largest request body a verb accepts; a program's files ride inline. */
-export const MAX_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * The largest request body a verb accepts; a program's files ride inline. The
+ * bound a `pattern.lifecycle` request on a memory session is held to as well.
+ */
+export const MAX_BODY_BYTES = PATTERN_LIFECYCLE_MAX_BYTES;
 
 const spaceField = z.string().describe(
   "The did:key of the space to act in. You must hold a WRITE or OWNER grant " +

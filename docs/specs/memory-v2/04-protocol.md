@@ -1734,11 +1734,12 @@ Semantics:
 
 - a request naming a session the connection does not hold gets a
   `SessionError`
-- the server refuses a message of more than 4 MiB in UTF-8
-  (`PATTERN_LIFECYCLE_MAX_BYTES`, the most bytes a routed request may take)
-  with `payload-too-large`, so a request is refused the same way whether
-  or not a router carries it; a client refuses before sending when the encoded
-  request takes more than 4 MiB
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`PATTERN_LIFECYCLE_MAX_BYTES`, the HTTP route's body limit) with
+  `payload-too-large`. A client refuses before sending a request whose
+  encoding takes more than that, or more than its connection takes in one
+  request: 4 MiB on a routed connection (`ROUTED_QUEUE_LIMIT`), which the
+  router would otherwise refuse by closing the connection
 - the DID the session was opened as must itself hold WRITE on the space; a
   grant reached only through a proof chain's root issuer (section 4.5.1) does
   not count, since the verb commits with the requester's own trust. An

@@ -1444,33 +1444,33 @@ command connects as. That session reaches the toolshed process serving the
 space, which a plain HTTP request to a multi-process deployment may not. Against
 a memory server that does not take the request, the command posts it to the
 deployment's pattern-lifecycle route instead, signed with the same identity. A
-program whose request takes more than 4 MiB is refused before it is sent. The
-space's serving runtime compiles the program, creates the piece, and answers
-with the receipt the command prints. Where the deployment enforces ACLs, the
-identity must hold WRITE or OWNER on the space; a deployment with enforcement
-off admits any signed caller, as its memory server does. Setup, slug, and
-creation receipt commit together, so a taken name refuses before anything is
-created. Registration then invokes the default pattern's `addPiece` handler and
-waits for its durable consequence and registry readback. A failure names the
-created piece and a retry key; repeat `cf piece new` with `--request-key <key>`
-to resume that creation. The space root is the serving loop's to ensure rather
-than this command's. What stays in this process after the receipt is what
-opening a piece does anyway: the start, which `--no-start` skips; `--no-start`
-also asks the serving loop not to derive the piece until something demands it.
-The receipt returns once the piece is durable and registered, including with
-`--no-start`; the serving loop derives it on demand, so a reader that needs the
-derived value pulls it. Against any other deployment, and under `cf test`, the
-command performs every step itself. `cf piece setsrc` requests the same way
-against a serving deployment: it resolves and pins the program, sends it with
-the piece's id, and prints the receipt of the setup transaction the serving
-runtime committed — directly to the store, since a source update publishes
-module update authority that requires a transaction committing to storage
-itself. What stays in this process is the refresh a client-side update runs
-after its commit: the command starts the piece it holds and reports that outcome
-beside the receipt, exiting non-zero when the refresh fails over a durable
-commit. A piece addressed at a scope keeps the client-side path.
-`cf piece setsrc --check` performs every step in this process on every
-deployment. The contract, including the refusals and their codes, is
+request takes at most 8 MiB, or 4 MiB on a connection through the memory router,
+and a larger one is refused before it is sent. The space's serving runtime
+compiles the program, creates the piece, and answers with the receipt the
+command prints. Where the deployment enforces ACLs, the identity must hold WRITE
+or OWNER on the space; a deployment with enforcement off admits any signed
+caller, as its memory server does. Setup, slug, and creation receipt commit
+together, so a taken name refuses before anything is created. Registration then
+invokes the default pattern's `addPiece` handler and waits for its durable
+consequence and registry readback. A failure names the created piece and a retry
+key; repeat `cf piece new` with `--request-key <key>` to resume that creation.
+The space root is the serving loop's to ensure rather than this command's. What
+stays in this process after the receipt is what opening a piece does anyway: the
+start, which `--no-start` skips; `--no-start` also asks the serving loop not to
+derive the piece until something demands it. The receipt returns once the piece
+is durable and registered, including with `--no-start`; the serving loop derives
+it on demand, so a reader that needs the derived value pulls it. Against any
+other deployment, and under `cf test`, the command performs every step itself.
+`cf piece setsrc` requests the same way against a serving deployment: it
+resolves and pins the program, sends it with the piece's id, and prints the
+receipt of the setup transaction the serving runtime committed — directly to the
+store, since a source update publishes module update authority that requires a
+transaction committing to storage itself. What stays in this process is the
+refresh a client-side update runs after its commit: the command starts the piece
+it holds and reports that outcome beside the receipt, exiting non-zero when the
+refresh fails over a durable commit. A piece addressed at a scope keeps the
+client-side path. `cf piece setsrc --check` performs every step in this process
+on every deployment. The contract, including the refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
