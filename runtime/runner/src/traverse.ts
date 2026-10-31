@@ -6091,10 +6091,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
           return this.traverseWithSchema(propDoc, propSchema);
         };
         const missesBefore = this.context.missingLinkTargets;
+        // A walk that traverses cells returns the target's data, not a
+        // handle, so the scalars it reads there are the reader's.
         const { ok: val, error } = SchemaObjectTraverser.hasAsCell(propSchema)
-          ? this.#whileMintingHandle(() =>
-            this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
-          )
+          ? this.traverseCells
+            ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+            : this.#whileMintingHandle(() =>
+              this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+            )
           : descend();
         if (error === undefined) {
           filteredObj[propKey] = val;
