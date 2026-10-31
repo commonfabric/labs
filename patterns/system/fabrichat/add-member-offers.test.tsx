@@ -17,7 +17,7 @@
  * which point at two inboxes, is offered once to each, and lists her once;
  * one named by two of her profiles pointing at one inbox is offered there
  * once; and one naming profiles of Alice and Carol that point at the same
- * inbox is refused whole. Each person writes their own profiles here, so their labels
+ * inbox is refused whole, whether or not it also names Bob's own. Each person writes their own profiles here, so their labels
  * name them, as a Fabric profile's do.
  */
 import {
@@ -596,11 +596,26 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
+      // Naming Bob's own profile too, which is left out, refuses it all the
+      // same.
+      {
+        action: manager.createGroup,
+        event: {
+          requestId: "g-shared-own",
+          title: "Shared inbox and own",
+          members: [],
+          profiles: [profile, aliceProfile, carolShared],
+        },
+        trustedUi: startGesture,
+      },
       {
         assertion: assert(() => {
           const refused = requests.get()["g-shared"];
+          const refusedOwn = requests.get()["g-shared-own"];
           return refused?.status === "refused" &&
             refused.code === "shared-inbox" &&
+            refusedOwn?.status === "refused" &&
+            refusedOwn.code === "shared-inbox" &&
             manager.rooms.length === 3;
         }),
       },
