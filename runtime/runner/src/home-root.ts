@@ -1,3 +1,4 @@
+import { loadDocument } from "./document-readiness.ts";
 import { ensureSpaceRootPattern } from "./ensure-space-root.ts";
 import type { Runtime } from "./runtime.ts";
 import { SpaceRootMissingError } from "./space-root-slot.ts";
@@ -40,12 +41,14 @@ function createHomeRoot(runtime: Runtime, home: MemorySpace): Promise<void> {
 
 /**
  * Helper for {@link bringUpHomeRootForRefusedWrite}, which resolves once the
- * space cell of `home` links a root, whoever links it, and rejects when that
- * cell does not load. It waits on the storage manager's notifications, so a
- * root linked later is noticed when its commit arrives.
+ * space cell of `home` links a root, whoever links it, and rejects with the
+ * `DocumentLoadError` when that cell does not load. It waits on the storage
+ * manager's notifications, so a root linked later is noticed when its commit
+ * arrives.
  */
 function homeRootLinked(runtime: Runtime, home: MemorySpace): Promise<void> {
-  const slot = runtime.getSpaceCell(home).key("defaultPattern");
+  const spaceCell = runtime.getSpaceCell(home);
+  const slot = spaceCell.key("defaultPattern");
   const { promise, resolve, reject } = Promise.withResolvers<void>();
   let waiting = true;
   const subscription: IStorageNotification = {
@@ -64,7 +67,7 @@ function homeRootLinked(runtime: Runtime, home: MemorySpace): Promise<void> {
     settle();
   };
   runtime.storageManager.subscribe(subscription);
-  slot.sync().then(
+  loadDocument(runtime, spaceCell).then(
     () => {
       if (slot.getRaw() !== undefined) stop(resolve);
     },

@@ -143,6 +143,22 @@ describe("home-root", () => {
     expect(fetched).toEqual([]);
   });
 
+  it("rejects on a serving runtime with the load's failure when the Home's space cell does not load", async () => {
+    const rt = makeRuntime(service, true);
+    storageManager!.loadsSettled = () =>
+      Promise.reject(new Error("the space cell did not load"));
+    const run = handlerRun(rt, home);
+
+    const waiting = bringUpHomeRootForRefusedWrite(
+      rt,
+      new SpaceRootMissingError(home),
+      run,
+    );
+    run.abort();
+
+    await expect(waiting!).rejects.toThrow("Could not load document");
+  });
+
   it("returns `undefined` on a serving runtime for a write refused beneath a space other than the run's actor's Home", () => {
     const rt = makeRuntime(service, true);
     const run = handlerRun(rt, home);

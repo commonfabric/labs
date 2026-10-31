@@ -421,7 +421,7 @@ resolves to nothing too, and any other resolves through the empty slot. A write
 through that cell is refused with a `SpaceRootMissingError`. When the write is a
 handler's and the refusal escapes the handler, the handler runs again once the
 home pattern exists: a client runtime creates it, and a serving runtime waits
-for the home space's own server to.
+for the home space's own server to create it and link it.
 [Built-in Targets](wish.md#built-in-targets) describes both.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
