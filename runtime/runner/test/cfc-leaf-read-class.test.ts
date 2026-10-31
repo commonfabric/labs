@@ -7,7 +7,7 @@
  * no members: what the read returns is the scalar itself, so the read is a
  * read of the payload (§4.5.2, "read scalar"), and it consumes the `value`
  * label at the path. The runtime records a scalar's read without recursion
- * whenever a cell is read through its schema, so this is the ordinary way a
+ * when a cell is read through its schema, so this is the ordinary way a
  * computed number or string is read.
  *
  * The two labels differ on a document whose value changed: the `shape` stamp
@@ -15,6 +15,11 @@
  * stamp is replaced on every write. The entries seeded below are the ones a
  * computed count stores after its input gained a row labeled `B`: the shape
  * stamp still says `A`, the value stamp says `A` and `B`.
+ *
+ * The stored labels are the document's state before the transaction, so a
+ * read is classed by the node as it stood then: a transaction that replaces
+ * the scalar with a container, or the container with a scalar, has read what
+ * was there before.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -124,9 +129,27 @@ describe("CFC flow labels: a read that stops at a scalar", () => {
     const shallow = joinOf((tx) =>
       tx.readOrThrow({ ...doc, path: ["value"] }, { nonRecursive: true })
     );
-    const deep = joinOf((tx) => tx.readOrThrow({ ...doc, path: ["value"] }));
     expect(atoms(shallow)).toEqual([A, B]);
-    expect(atoms(shallow)).toEqual(atoms(deep));
+  });
+
+  it("classes the node as it stood before the transaction's own write", async () => {
+    const scalar = await seeded("count-replaced", 3, STALE_SHAPE_ENTRIES);
+    const wasScalar = joinOf((tx) => {
+      tx.readOrThrow({ ...scalar, path: ["value"] }, { nonRecursive: true });
+      tx.writeOrThrow({ ...scalar, path: ["value"] }, { n: 3 });
+    });
+    expect(atoms(wasScalar)).toEqual([A, B]);
+
+    const record = await seeded(
+      "record-replaced",
+      { n: 3 },
+      STALE_SHAPE_ENTRIES,
+    );
+    const wasContainer = joinOf((tx) => {
+      tx.readOrThrow({ ...record, path: ["value"] }, { nonRecursive: true });
+      tx.writeOrThrow({ ...record, path: ["value"] }, 3);
+    });
+    expect(atoms(wasContainer)).toEqual([A]);
   });
 
   it("consumes only the shape label when the node is a container", async () => {

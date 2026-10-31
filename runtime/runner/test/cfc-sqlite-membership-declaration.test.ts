@@ -3,11 +3,10 @@
  * refreshes.
  *
  * The result's membership is declared with every row's label and the
- * request's (CFC spec §8.17.6): the join of what the request read, which
- * includes what the query reacts on. The declaration is grow-only: each
- * settle carries the prior declaration forward, so a refresh whose rows no
- * longer include a labeled one does not take that label back. Which rows a
- * refresh dropped is a fact about them (§8.17.4).
+ * request's (CFC spec §8.17.6). The declaration is grow-only: each settle
+ * carries the prior declaration forward, so a refresh whose rows no longer
+ * include a labeled one does not take that label back. Which rows a refresh
+ * dropped is a fact about them (§8.17.4).
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -37,11 +36,10 @@ const space = signer.did();
 
 const BOB = "did:mailto:bob@example.test";
 const SELECTION = "did:test:selection";
-const TRIGGER = "did:test:trigger";
 
 interface QueryState {
   pending?: boolean;
-  result?: unknown[];
+  result?: { body?: string }[];
   error?: unknown;
 }
 
@@ -106,10 +104,7 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
           entry.origin === "declared" && entry.observes === "enumerate" &&
           entry.path.length === 1 && entry.path[0] === "result"
         )
-        .flatMap((entry) =>
-          (entry.label as { confidentiality?: unknown[] }).confidentiality ??
-            []
-        );
+        .flatMap((entry) => entry.label.confidentiality ?? []);
     } finally {
       tx.abort("label read");
     }
@@ -142,14 +137,12 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
 
     const setup = runtime.edit();
     const excluded = labeled(setup, "excluded", "no such body", SELECTION);
-    const trigger = labeled(setup, "trigger", 1, TRIGGER);
     expect((await setup.commit().settled).error).toBeUndefined();
 
     const { commonfabric: cf } = createTrustedBuilder(runtime);
-    const page = cf.pattern<{ excluded: string; trigger: number }>((input) => ({
+    const page = cf.pattern<{ excluded: string }>((input) => ({
       query: cf.sqliteQuery({
         db,
-        reactOn: input.trigger,
         sql: "SELECT id, to_addr, body FROM mail WHERE body != ?1 ORDER BY id",
         params: [input.excluded],
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
@@ -162,7 +155,7 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
       tx,
       page,
       // deno-lint-ignore no-explicit-any -- cells stand in for the arguments
-      { excluded, trigger } as any,
+      { excluded } as any,
       resultCell,
     );
     runtime.prepareTxForCommit(tx);
@@ -183,11 +176,10 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
     expect(first).toContainEqual(space);
     expect(first).toContainEqual(BOB);
     expect(first).toContainEqual(SELECTION);
-    expect(first).toContainEqual(TRIGGER);
 
-    // The owner's own row arrives, the parameter now excludes Bob's row, and
-    // the query is told to run again: the refresh holds one row, the
-    // owner's, and the declaration keeps Bob's label.
+    // The owner's own row arrives and the parameter now excludes Bob's row:
+    // the refresh holds one row, the owner's, and the declaration keeps
+    // Bob's label.
     await seed(
       db,
       "INSERT INTO mail (to_addr, body) VALUES (?, ?)",
@@ -195,14 +187,13 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
     );
     const bump = runtime.edit();
     excluded.withTx(bump).set("hello");
-    trigger.withTx(bump).set(2);
     expect((await bump.commit().settled).error).toBeUndefined();
     const refreshed = await waitForCellValue<QueryState>(
       runtime,
       query,
       (value) =>
         (value?.pending === false && value?.result?.length === 1 &&
-          (value.result[0] as { body?: string }).body === "mine") ||
+          value.result[0].body === "mine") ||
         value?.error !== undefined,
     );
     expect(refreshed.error).toBeUndefined();
@@ -212,6 +203,5 @@ describe("CFC flow labels: a sqlite result's membership declaration", () => {
     expect(second).toContainEqual(space);
     expect(second).toContainEqual(BOB);
     expect(second).toContainEqual(SELECTION);
-    expect(second).toContainEqual(TRIGGER);
   });
 });

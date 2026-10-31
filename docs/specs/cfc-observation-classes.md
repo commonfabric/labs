@@ -118,12 +118,13 @@ value cannot hide confidential ancestor existence. Wildcard membership
 entries also retain their independent resolution. Declared and legacy covering
 entries keep their existing component resolution.
 
-Returning a primitive through a query-result proxy consumes its value, even
-when constructing that view first probes its shape. This applies to JavaScript
-primitives as well as Fabric primitives. A shape-only storage observation
-continues to consume only its shape classes.
+A `nonRecursive` read of a container consumes only its shape classes. Returning
+a primitive through a query-result proxy consumes its value, even when
+constructing that view first probes its shape, and so does a `nonRecursive`
+read that lands on a primitive, JavaScript or Fabric: both follow from the
+scalar row.
 
-The load-bearing change is the third row: the `followRef` observation, today
+The load-bearing change is the `followRef` row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
 label — closing SC-8.
 
