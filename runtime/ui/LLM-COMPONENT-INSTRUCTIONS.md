@@ -963,8 +963,9 @@ no act; the host binds its events. **Tag**: `<cf-suggestions>`
 **Events**:
 
 - `cf-suggestion-take` - detail: `{ id, card_revision, card }`; a trusted click
-  on the **Take** button of a card shown unobscured for at least half a second.
-  Carries no gesture provenance; treat a repeated take as a no-op.
+  on the **Take** button of a card at least half on screen and, where the
+  browser tracks occlusion, unobscured, for at least half a second. Carries no
+  gesture provenance; treat a repeated take as a no-op.
 - `cf-suggestion-seen` - detail: `{ id, card_revision, card }`; once per card
   per element, when it is first shown
 

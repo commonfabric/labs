@@ -1,11 +1,18 @@
 import { internSchema } from "@commonfabric/data-model-schema";
-import { type CellHandle, isCellHandle } from "@commonfabric/runtime-client";
+import {
+  type CellHandle,
+  type CellRef,
+  isCellHandle,
+} from "@commonfabric/runtime-client";
 import { css, html, nothing, PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 
 import { BaseElement } from "../../core/base-element.ts";
-import { createArrayCellController } from "../../core/cell-controller.ts";
+import {
+  createArrayCellController,
+  sameCellDoc,
+} from "../../core/cell-controller.ts";
 
 /**
  * One ranked suggestion, as a row of the list bound to `items` holds it. A row
@@ -228,7 +235,10 @@ export class CFSuggestions extends BaseElement {
   #observer: IntersectionObserver | undefined = undefined;
 
   /** The card each observed element draws, and how it drew it, by element. */
-  #observed = new Map<Element, { id: string; look: string }>();
+  #observed = new Map<
+    Element,
+    { id: string; look: string; since: DOMHighResTimeStamp }
+  >();
 
   /** The cards the browser last reported shown. */
   #shown = new Set<string>();
@@ -328,6 +338,7 @@ export class CFSuggestions extends BaseElement {
                   class="take"
                   type="button"
                   data-card-id=${card.id}
+                  aria-label=${card.title ? `Take: ${card.title}` : "Take"}
                   @click=${this.#take}
                 >
                   Take
@@ -405,6 +416,7 @@ export class CFSuggestions extends BaseElement {
     if (!observer) return;
     const drawn = this.#drawn();
     const cards = new Map<Element, { id: string; look: string }>();
+    const now = performance.now();
     for (
       const element of this.shadowRoot?.querySelectorAll<HTMLElement>(
         ".card",
@@ -424,7 +436,7 @@ export class CFSuggestions extends BaseElement {
     }
     for (const [element, card] of cards) {
       if (this.#observed.has(element)) continue;
-      this.#observed.set(element, card);
+      this.#observed.set(element, { ...card, since: now });
       observer.observe(element);
     }
   }
@@ -449,8 +461,11 @@ export class CFSuggestions extends BaseElement {
   /** Records which cards are shown and takeable, and announces each first showing. */
   #onVisibility(entries: readonly IntersectionObserverEntry[]): void {
     for (const entry of entries) {
-      const id = this.#observed.get(entry.target)?.id;
-      if (id === undefined) continue;
+      const observed = this.#observed.get(entry.target);
+      // A report the browser queued before this element was last observed
+      // describes the card as it was drawn then.
+      if (observed === undefined || entry.time < observed.since) continue;
+      const { id } = observed;
       if (!isShownEntry(entry)) {
         this.#shown.delete(id);
         this.#takeable.delete(id);
@@ -493,7 +508,10 @@ function isAnchoredAt(
   if (first) {
     const { id, space = listSpace, scope, path = [] } = first;
     return id !== undefined && space !== undefined &&
-      sameCell({ id, space, scope, path }, about);
+      sameCell(
+        { id, space, scope, path } as Parameters<typeof sameCell>[0],
+        about,
+      );
   }
   return isCellHandle(card.act_target) &&
     sameCell(card.act_target.ref(), about);
@@ -553,14 +571,15 @@ function lookOf(card: SuggestionCard, position: number): string {
 
 /** Whether `x` names the cell `b` does: space, entity, scope, and path. */
 function sameCell(
-  x: { id: string; space: string; scope?: string; path: readonly string[] },
+  x: Pick<CellRef, "id" | "space" | "path"> & { scope?: string },
   b: CellHandle,
 ): boolean {
   const y = b.ref();
-  return x.id === y.id && x.space === y.space &&
-    (x.scope ?? "space") === (y.scope ?? "space") &&
-    x.path.length === y.path.length &&
-    x.path.every((key, index) => key === y.path[index]);
+  // A link that names no scope is in the space scope.
+  return sameCellDoc(
+    { ...x, scope: x.scope ?? "space" } as CellRef,
+    { ...y, scope: y.scope ?? "space" },
+  );
 }
 
 /** Whether the browser reports enough of the entry's card on screen. */

@@ -1280,8 +1280,9 @@ which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
 card, the element takes no room.
 
 The component performs no act. It emits two events for the host to bind, both
-with detail `{ id, card_revision, card }`, where `card` is the link to the
-card's row that the bound list holds:
+with detail `{ id, card_revision, card }`. When `$items` is bound to a list,
+`card` is the link to the card's row that the list holds; when it is a plain
+array, `card` is the row itself:
 
 - `cf-suggestion-take` fires when the person takes a card with its **Take**
   button. Only a trusted click counts, on a card the browser reports shown (at
