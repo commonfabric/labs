@@ -1,10 +1,6 @@
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
-import {
-  type CellHandle,
-  type CellRef,
-  isCellHandle,
-} from "@commonfabric/runtime-client";
+import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import {
@@ -22,7 +18,11 @@ function piece(id: string): CellHandle {
 
 const here = piece("here");
 const elsewhere = piece("elsewhere");
-const suggester = piece("suggester");
+
+/** A row's `about`: the JSON of links to `handles`, as intake stores it. */
+function aboutOf(...handles: CellHandle[]): string {
+  return JSON.stringify(handles.map((handle) => handle.toSigilLink()));
+}
 
 /** The ids of the cards the element draws, in order. */
 function drawnIds(element: CFSuggestions): (string | undefined)[] {
@@ -94,57 +94,58 @@ async function pressTake(element: CFSuggestions, index = 0): Promise<void> {
 
 Deno.test("cf-suggestions draws only the cards anchored at about, in rank order", async () => {
   using page = await mount([
-    { id: "first-about", about: [here, elsewhere] },
-    { id: "other-about", about: [elsewhere, here] },
-    { id: "act-target", act: { target: here } },
-    { id: "act-elsewhere", act: { target: elsewhere }, source: here },
-    { id: "source", source: here },
-    { id: "source-elsewhere", source: suggester },
-    { id: "outside-source", source: "did:key:outside" },
-    { id: "no-anchor" },
-    { title: "no id", about: [here] } as unknown as SuggestionCard,
+    { id: "anchored", anchor: here },
+    { id: "anchored-elsewhere", anchor: elsewhere },
+    { id: "shelf-only", anchor: null, about: aboutOf(here), act_target: here },
+    { id: "first-about", about: aboutOf(here, elsewhere) },
+    { id: "other-about", about: aboutOf(elsewhere, here) },
+    { id: "act-target", act_target: here },
+    { id: "about-ahead-of-act", about: aboutOf(elsewhere), act_target: here },
+    { id: "no-anchor", source: "did:key:outside" },
+    { title: "no id", anchor: here } as unknown as SuggestionCard,
   ]);
   expect(page.element).toBeInstanceOf(CFSuggestions);
   expect(drawnIds(page.element)).toEqual([
+    "anchored",
     "first-about",
     "act-target",
-    "source",
   ]);
 });
 
 Deno.test("cf-suggestions draws by a card's own anchor ahead of what it is about", async () => {
   using page = await mount([
-    { id: "anchored-here", anchor: here, about: [elsewhere] },
-    { id: "anchored-elsewhere", anchor: elsewhere, about: [here] },
+    { id: "anchored-here", anchor: here, about: aboutOf(elsewhere) },
+    { id: "anchored-elsewhere", anchor: elsewhere, about: aboutOf(here) },
   ]);
   expect(drawnIds(page.element)).toEqual(["anchored-here"]);
 });
 
 Deno.test("cf-suggestions draws a handle on the same cell as about", async () => {
-  using page = await mount([{ id: "same-cell", about: [piece("here")] }]);
+  using page = await mount([{ id: "same-cell", anchor: piece("here") }]);
   expect(drawnIds(page.element)).toEqual(["same-cell"]);
 });
 
 Deno.test("cf-suggestions draws only cards carrying one of its tags, when it has tags", async () => {
   using page = await mount([
-    { id: "tagged", about: [here], tags: ["food", "travel"] },
-    { id: "other-tag", about: [here], tags: ["work"] },
-    { id: "untagged", about: [here] },
+    { id: "tagged", anchor: here, tags: JSON.stringify(["food", "travel"]) },
+    { id: "other-tag", anchor: here, tags: JSON.stringify(["work"]) },
+    { id: "unreadable-tags", anchor: here, tags: "travel" },
+    { id: "untagged", anchor: here },
   ], { tags: ["travel"] });
   expect(drawnIds(page.element)).toEqual(["tagged"]);
 });
 
 Deno.test("cf-suggestions hides itself while it draws no card", async () => {
-  using page = await mount([{ id: "elsewhere", about: [elsewhere] }]);
+  using page = await mount([{ id: "elsewhere", anchor: elsewhere }]);
   expect(page.element.hasAttribute("empty")).toBe(true);
   expect(getComputedStyle(page.element).display).toBe("none");
 });
 
 Deno.test("cf-suggestions announces a card seen once it is shown, and only once", async () => {
   const items: SuggestionCard[] = [
-    { id: "one", revision: "r1", about: [here] },
-    { id: "two", about: [here] },
-    { id: "elsewhere", about: [elsewhere] },
+    { id: "one", card_revision: "r1", anchor: here },
+    { id: "two", anchor: here },
+    { id: "elsewhere", anchor: elsewhere },
   ];
   const element = document.createElement("cf-suggestions") as CFSuggestions;
   const shown = seenCount(element, 2);
@@ -167,14 +168,14 @@ Deno.test("cf-suggestions announces a card seen once it is shown, and only once"
   try {
     await shown;
     expect(seen).toEqual([
-      { id: "one", revision: "r1", card: items[0] },
+      { id: "one", card_revision: "r1", card: items[0] },
       { id: "two", card: items[1] },
     ]);
     // A card that comes back into view has already been seen.
     element.remove();
     const again = seenCount(element, 1);
     container.append(element);
-    element.items = [...items, { id: "three", about: [here] }];
+    element.items = [...items, { id: "three", anchor: here }];
     await again;
     expect(seen.map(({ id }) => id)).toEqual(["one", "two", "three"]);
   } finally {
@@ -183,7 +184,7 @@ Deno.test("cf-suggestions announces a card seen once it is shown, and only once"
 });
 
 Deno.test("cf-suggestions announces no card seen while it is off screen", async () => {
-  using page = await mount([{ id: "hidden", about: [here] }], {
+  using page = await mount([{ id: "hidden", anchor: here }], {
     hidden: true,
   });
   await page.element.accessForTestingOnly.nextReport();
@@ -193,34 +194,22 @@ Deno.test("cf-suggestions announces no card seen while it is off screen", async 
 
 Deno.test("cf-suggestions announces a take on a trusted click of a shown card", async () => {
   const items: SuggestionCard[] = [
-    { id: "one", about: [here] },
-    { id: "two", revision: "r2", about: [here] },
+    { id: "one", anchor: here },
+    { id: "two", card_revision: "r2", anchor: here },
   ];
   using page = await mount(items);
   page.element.accessForTestingOnly.minimumShownMs = 0;
   await page.element.accessForTestingOnly.nextReport();
   await pressTake(page.element, 1);
-  expect(page.taken).toEqual([{ id: "two", revision: "r2", card: items[1] }]);
-});
-
-Deno.test("cf-suggestions links a take to the card's entry in a bound list", async () => {
-  const items = createMockCellHandle<SuggestionCard[]>([
-    { id: "elsewhere", about: [elsewhere] },
-    { id: "here", about: [here] },
-  ]);
-  using page = await mount(items);
-  page.element.accessForTestingOnly.minimumShownMs = 0;
-  await page.element.updateComplete;
-  await page.element.accessForTestingOnly.nextReport();
-  await pressTake(page.element);
-  expect(page.taken.map(({ id }) => id)).toEqual(["here"]);
-  const card = page.taken[0].card;
-  expect(isCellHandle(card)).toBe(true);
-  expect((card as CellHandle).ref().path).toEqual(["1"]);
+  expect(page.taken).toEqual([{
+    id: "two",
+    card_revision: "r2",
+    card: items[1],
+  }]);
 });
 
 Deno.test("cf-suggestions announces no take for a scripted click", async () => {
-  using page = await mount([{ id: "one", about: [here] }]);
+  using page = await mount([{ id: "one", anchor: here }]);
   page.element.accessForTestingOnly.minimumShownMs = 0;
   await page.element.accessForTestingOnly.nextReport();
   const button = page.element.shadowRoot!.querySelector<HTMLButtonElement>(
@@ -235,7 +224,7 @@ Deno.test("cf-suggestions announces no take for a scripted click", async () => {
 });
 
 Deno.test("cf-suggestions announces no take for a trusted click on a card off screen", async () => {
-  using page = await mount([{ id: "hidden", about: [here] }], {
+  using page = await mount([{ id: "hidden", anchor: here }], {
     hidden: true,
   });
   page.element.accessForTestingOnly.minimumShownMs = 0;
@@ -245,7 +234,7 @@ Deno.test("cf-suggestions announces no take for a trusted click on a card off sc
 });
 
 Deno.test("cf-suggestions announces a faded card seen but takes nothing from it", async () => {
-  using page = await mount([{ id: "faded", about: [here] }], { faded: true });
+  using page = await mount([{ id: "faded", anchor: here }], { faded: true });
   page.element.accessForTestingOnly.minimumShownMs = 0;
   await page.element.accessForTestingOnly.nextReport();
   await pressTake(page.element);
@@ -254,7 +243,7 @@ Deno.test("cf-suggestions announces a faded card seen but takes nothing from it"
 });
 
 Deno.test("cf-suggestions takes nothing from a card shown for less than half a second", async () => {
-  using page = await mount([{ id: "one", about: [here] }]);
+  using page = await mount([{ id: "one", anchor: here }]);
   await page.element.accessForTestingOnly.nextReport();
   expect(page.element.accessForTestingOnly.isTakeable("one")).toBe(true);
   await pressTake(page.element);
@@ -262,11 +251,11 @@ Deno.test("cf-suggestions takes nothing from a card shown for less than half a s
 });
 
 Deno.test("cf-suggestions makes a rewritten card wait for a fresh report before it can be taken", async () => {
-  using page = await mount([{ id: "one", title: "Plant", about: [here] }]);
+  using page = await mount([{ id: "one", title: "Plant", anchor: here }]);
   await page.element.accessForTestingOnly.nextReport();
   const access = page.element.accessForTestingOnly;
   expect(access.isTakeable("one")).toBe(true);
-  page.element.items = [{ id: "one", title: "Delete", about: [here] }];
+  page.element.items = [{ id: "one", title: "Delete", anchor: here }];
   await page.element.updateComplete;
   expect(access.isTakeable("one")).toBe(false);
   await page.element.accessForTestingOnly.nextReport();
@@ -274,8 +263,8 @@ Deno.test("cf-suggestions makes a rewritten card wait for a fresh report before 
 });
 
 Deno.test("cf-suggestions makes a moved card wait for a fresh report before it can be taken", async () => {
-  const one: SuggestionCard = { id: "one", about: [here] };
-  const two: SuggestionCard = { id: "two", about: [here] };
+  const one: SuggestionCard = { id: "one", anchor: here };
+  const two: SuggestionCard = { id: "two", anchor: here };
   using page = await mount([one, two]);
   await page.element.accessForTestingOnly.nextReport();
   const access = page.element.accessForTestingOnly;

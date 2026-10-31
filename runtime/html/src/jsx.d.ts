@@ -4000,13 +4000,13 @@ interface CFSuggestionsAttributes<T> extends CFHTMLAttributes<T> {
   "$about": CellLike<unknown>;
   /** Draws only cards carrying at least one of these tags. */
   tags?: string[];
-  /** Fires when the person takes a card; `card` links to its list entry. */
+  /** Fires when the person takes a card; `card` links to its row. */
   "oncf-suggestion-take"?: EventHandler<
-    { id: string; revision?: string; card: unknown }
+    { id: string; card_revision?: string; card: unknown }
   >;
   /** Fires once per card, when the card is first shown. */
   "oncf-suggestion-seen"?: EventHandler<
-    { id: string; revision?: string; card: unknown }
+    { id: string; card_revision?: string; card: unknown }
   >;
 }
 

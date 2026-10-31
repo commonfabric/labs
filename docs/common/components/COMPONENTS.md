@@ -1258,29 +1258,30 @@ anchored at one thing. Bind `$items` to the list, best card first, and `$about`
 to the thing whose cards to draw. Set `tags` to draw only cards carrying at
 least one of those tags.
 
-Each card is an object with a string `id` and these optional fields:
+Each card is a flat row with a string `id` and these optional fields:
 
-- `revision` — a string the host can re-check before acting on a take;
+- `card_revision` — a string the host can re-check before acting on a take;
 - `title` and `body` — the text drawn;
-- `about` — references to what the card is about, most important first;
-- `act` — what taking the card does, an object whose `target` is a reference;
-- `source` — who suggested it: a reference to a piece, or a string id for an
-  outside suggester;
-- `anchor` — a reference to where the card is drawn inline;
-- `tags` — strings.
+- `source` — a string naming who suggested it;
+- `anchor` — a link to where the card is drawn inline, or null for a card drawn
+  on no thing;
+- `act_target` — a link to what taking the card acts on, or null;
+- `about` — a JSON string of links to what the card is about, most important
+  first;
+- `tags` — a JSON string of the card's tags.
 
-A card's anchor is its `anchor` when it has one; otherwise it is the first
-entry of its `about`, else its act's `target`, else its `source` when that is a
-piece. A card with no anchor is never drawn inline, and a card without a string
-`id` is never drawn. Anchors compare by the cell each names (space, entity, and
-path), without following a cell that holds a link. Cards draw at a fixed size,
+A card is drawn where its `anchor` names the same cell as `$about`: same space,
+entity, and path, without following a cell that holds a link. A card with no
+`anchor` field, which has not been through intake, is anchored at the first
+link of its `about`, else at its `act_target`. A card with a null `anchor`, and
+a card without a string `id`, is never drawn inline. Cards draw at a fixed size,
 which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
 (at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no
 card, the element takes no room.
 
 The component performs no act. It emits two events for the host to bind, both
-with detail `{ id, revision, card }`, where `card` is a link to the card's
-entry in the bound list:
+with detail `{ id, card_revision, card }`, where `card` is the link to the
+card's row that the bound list holds:
 
 - `cf-suggestion-take` fires when the person takes a card with its **Take**
   button. Only a trusted click counts, on a card the browser reports shown (at

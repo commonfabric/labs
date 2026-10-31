@@ -944,14 +944,16 @@ label):
 ### cf-suggestions
 
 **Purpose**: Draws the ranked suggestion cards anchored at one thing, at a fixed
-size. A card's anchor is its `anchor`, else its first `about`, else its
-`act.target`, else its `source` when that is a piece. The component performs no
-act; the host binds its events. **Tag**: `<cf-suggestions>`
+size. A card is drawn where its `anchor` link names `$about`; a card with no
+`anchor` field falls back to the first link in its `about`, then its
+`act_target`, and a null `anchor` is drawn on no thing. The component performs
+no act; the host binds its events. **Tag**: `<cf-suggestions>`
 
 **Bindings**:
 
-- `$items` - the ranked cards, best first. Each is
-  `{ id, revision?, title?, body?, about?, act?, source?, anchor?, tags? }`
+- `$items` - the ranked cards, best first. Each is a flat row
+  `{ id, card_revision?, title?, body?, source?, anchor?, act_target?, about?, tags? }`,
+  where `about` and `tags` are JSON strings
 - `$about` - the thing whose cards to draw
 
 **Properties**:
@@ -960,11 +962,11 @@ act; the host binds its events. **Tag**: `<cf-suggestions>`
 
 **Events**:
 
-- `cf-suggestion-take` - detail: `{ id, revision, card }`; a trusted click on
-  the **Take** button of a card shown unobscured for at least half a second.
+- `cf-suggestion-take` - detail: `{ id, card_revision, card }`; a trusted click
+  on the **Take** button of a card shown unobscured for at least half a second.
   Carries no gesture provenance; treat a repeated take as a no-op.
-- `cf-suggestion-seen` - detail: `{ id, revision, card }`; once per card per
-  element, when it is first shown
+- `cf-suggestion-seen` - detail: `{ id, card_revision, card }`; once per card
+  per element, when it is first shown
 
 ### cf-custody-seal
 
