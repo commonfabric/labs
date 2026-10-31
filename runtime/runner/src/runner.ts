@@ -9318,6 +9318,12 @@ export class Runner {
    * that attach failure compensation must only compensate work they own: a
    * duplicate event can reuse a winner's deterministic result cell, and must
    * never stop that shared winner when its create-only receipt loses.
+   *
+   * With `retain` false the run stops the piece as soon as it has started
+   * it. Starting instantiates the piece's graph in the transaction, which
+   * stores what the patterns nested in it set up, and stopping leaves nothing
+   * of the piece running here. Such a run leaves a piece whose setup is
+   * stored already as it is.
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -9325,6 +9331,7 @@ export class Runner {
     argument: T,
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
+    retain = true,
   ): RunResult<R> {
     // Before anything this run stages: retiring a registration cancels any
     // start pending for the result, and one staged here would take this
@@ -9378,6 +9385,13 @@ export class Runner {
       tx,
       resultCell,
     );
+    if (toName !== undefined && !retain) {
+      if (!providedTx) {
+        this.#runtime.prepareTxForCommit(tx);
+        tx.commit();
+      }
+      return { resultCell };
+    }
     if (toName !== undefined) {
       const cancelDeferredStart = this.#runAfterNamedFamilyLands(
         tx,
@@ -9440,6 +9454,18 @@ export class Runner {
           options,
         );
       }
+    }
+
+    if (!retain) {
+      // A stop rather than a release: a scoped program's start hands back no
+      // registration of its own to release, and a start gated on the commit
+      // has installed none yet.
+      if (needsStart) this.stop(resultCell);
+      if (!providedTx) {
+        this.#runtime.prepareTxForCommit(tx);
+        tx.commit();
+      }
+      return { resultCell };
     }
 
     // The setup writes are staged in this transaction; the registration is
@@ -16257,6 +16283,15 @@ export class Runner {
       `sendToBindings=${sendToBindings}`,
     ]);
 
+    // A serving runtime derives only the space it serves (protocol.md §2b).
+    // It instantiates a new child placed in another space in the transaction
+    // that provisions it, so that the child's streams, nested ones included,
+    // are there to send to once that commits, and stops it there; the loop of
+    // the child's space runs it.
+    const servedSpace = this.#runtime.storageManager.servingHomeSpace;
+    const derivedElsewhere = servedSpace !== undefined &&
+      childResultCell.space !== servedSpace;
+
     const initialize = (instanceTx: IExtendedStorageTransaction) => {
       const storedChild = childResultCell.withTx(instanceTx);
       const crossSpace = childResultCell.space !== parentResultCell.space;
@@ -16267,7 +16302,12 @@ export class Runner {
         storedChild,
         parentResultCell,
       );
-      if (crossSpace && !resumeExisting) {
+      // A child placed elsewhere whose setup is stored already belongs to its
+      // own space's loop, so a serving runtime neither sets it up again nor
+      // resumes it.
+      const leftAlone = derivedElsewhere &&
+        (resumeExisting || getPatternIdentityRef(storedChild) !== undefined);
+      if (crossSpace && !resumeExisting && !leftAlone) {
         // Cross-space child pattern: run it inline in a multi-space transaction
         // (child space committed first) rather than re-instantiating it in a
         // deferred second transaction, which would lose its verified-function
@@ -16298,7 +16338,7 @@ export class Runner {
         }
       }
       if (
-        !resumeExisting && plan.instanceName !== undefined &&
+        !resumeExisting && !leftAlone && plan.instanceName !== undefined &&
         getInstanceNameStamp(storedChild) !== plan.instanceName
       ) {
         storedChild.setMetaRaw(
@@ -16314,7 +16354,7 @@ export class Runner {
       // what a release has to reach.
       const outlivesParent = crossSpace ||
         this.#handlerResultPatterns.has(pattern);
-      const sourceOrigin = outlivesParent && !resumeExisting
+      const sourceOrigin = outlivesParent && !resumeExisting && !leftAlone
         ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
         : undefined;
       const options = {
@@ -16323,19 +16363,13 @@ export class Runner {
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
       };
-      const childRun: RunResult<unknown> = resumeExisting
-        ? this.#usesScopedPrograms(childResultCell)
-          ? {
-            resultCell: childResultCell,
-            installedCancel: this.#startWithTx(
-              instanceTx,
-              storedChild,
-              undefined,
-              options,
-            ),
-          }
-          : this.#resumeChildAfterCommit(instanceTx, childResultCell, options)
-        : this.#runWithStartOwnership(
+      if (leftAlone && this.isRunning(childResultCell)) {
+        this.stop(childResultCell);
+      }
+      const childRun: RunResult<unknown> = leftAlone
+        ? { resultCell: childResultCell }
+        : !resumeExisting
+        ? this.#runWithStartOwnership(
           instanceTx,
           patternImpl,
           inputs,
@@ -16344,7 +16378,21 @@ export class Runner {
             ...options,
             ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
           },
-        );
+          !derivedElsewhere,
+        )
+        // Reached for a child in the space this runtime serves whose parent
+        // lives in another, or on a serving runtime that serves no space.
+        : this.#usesScopedPrograms(childResultCell)
+        ? {
+          resultCell: childResultCell,
+          installedCancel: this.#startWithTx(
+            instanceTx,
+            storedChild,
+            undefined,
+            options,
+          ),
+        }
+        : this.#resumeChildAfterCommit(instanceTx, childResultCell, options);
       if (childRun.cancelDeferredStart !== undefined) {
         // Each actor initializer may own a separate pending start. Register
         // its exact token so parent teardown cannot stop a replacement run.
@@ -16380,6 +16428,7 @@ export class Runner {
       addCancel(() => initializers.delete(initialize));
     }
 
+    if (derivedElsewhere) return;
     addCancel(
       this.#usesScopedPrograms(childResultCell)
         ? this.retainChild(childResultCell)
