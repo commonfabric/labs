@@ -969,7 +969,7 @@ export class MultiRuntimeHarness {
         // holds for this realm, shared by every serving runtime: a space that
         // reactivates, or another space serving the same program, skips the
         // transform-and-emit step on this thread. A loop the environment puts
-        // in a worker takes no closure, so its runtimes compile without it.
+        // in a worker takes no closure; the worker builds a cache of its own.
         ...(runsInWorker() ? {} : { moduleByteCache }),
         policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
       })

@@ -13504,21 +13504,24 @@ export class Runner {
   }
 
   /**
-   * Brings up the user's Home root for a handler whose write beneath the
-   * Home's empty slot was refused with `error`, then throws
-   * {@link RetryImmediately} so the scheduler runs the handler again, and its
-   * write lands under the root. As with an `inSpace()` name, an unserved event
-   * sent with `retries: false` is not run again, so its write drops once the
-   * root exists. A creation that fails is reported as `error` itself, with the
-   * failure as its cause and the handler's `frame` attached, as a handler's
-   * other failures carry theirs. `undefined` when this runtime brings up no
-   * root for `error` (see `bringUpHomeRootForRefusedWrite()`).
+   * Brings up the Home root of the user the handler run on `tx` acts for, when
+   * its write beneath that Home's empty slot was refused with `error`, then
+   * throws {@link RetryImmediately} so the scheduler runs the handler again,
+   * and its write lands under the root. A serving runtime waits for the root
+   * the Home's own space links rather than creating one. As with an
+   * `inSpace()` name, an unserved event sent with `retries: false` is not run
+   * again, so its write drops once the root exists. A creation that fails is
+   * reported as `error` itself, with the failure as its cause and the
+   * handler's `frame` attached, as a handler's other failures carry theirs.
+   * `undefined` when this runtime brings up no root for `error` (see
+   * `bringUpHomeRootForRefusedWrite()`).
    */
   #bringUpHomeRootAndRetry(
     error: unknown,
     frame: Frame,
+    tx: IExtendedStorageTransaction,
   ): Promise<never> | undefined {
-    const creation = bringUpHomeRootForRefusedWrite(this.#runtime, error);
+    const creation = bringUpHomeRootForRefusedWrite(this.#runtime, error, tx);
     if (creation === undefined) return undefined;
     return creation.then(
       () => {
@@ -13964,7 +13967,7 @@ export class Runner {
           ? result.then(
             postRun,
             (error) =>
-              this.#bringUpHomeRootAndRetry(error, frame) ??
+              this.#bringUpHomeRootAndRetry(error, frame, tx) ??
                 Promise.reject(error),
           )
           : postRun(result);
@@ -13990,7 +13993,7 @@ export class Runner {
         }
         // A write beneath the user's Home before Home has a root is refused;
         // the root is brought up, and the handler runs again.
-        const retrying = this.#bringUpHomeRootAndRetry(error, frame);
+        const retrying = this.#bringUpHomeRootAndRetry(error, frame, tx);
         if (retrying !== undefined) {
           popFrameAfterReturn = false;
           return retrying.finally(() => popFrame(frame));

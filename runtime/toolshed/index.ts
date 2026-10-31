@@ -21,7 +21,11 @@ import {
   verifyInternalApiOrigin,
 } from "@/lib/internal-api-origin.ts";
 import { createToolshedRuntime } from "@/runtime-options.ts";
-import { memory, memoryServer } from "@/routes/storage/memory.ts";
+import {
+  memory,
+  memoryEngineStoreUrl,
+  memoryServer,
+} from "@/routes/storage/memory.ts";
 import {
   startServerExecutionHost,
   stopServerExecutionHost,
@@ -75,6 +79,7 @@ function startRuntimes() {
     server: memoryServer,
     identity,
     apiUrl: new URL(env.API_URL),
+    store: memoryEngineStoreUrl,
     ...(fetch !== undefined ? { fetch } : {}),
   });
   // The verbs run on the loop, so a memory session takes them while it runs.
