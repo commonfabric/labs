@@ -314,7 +314,7 @@ The marker count is not a complete inventory of semantic gaps. The persistence
 change for enrolled stores and authenticated piece setup, pending
 [specs#78](https://github.com/commonfabric/specs/pull/78), changes what is
 stored at the strict default without a default-off dial or a separate marker; the
-three marker slots are occupied. This is a nonconforming semantic gap and does
+marker budget, three at the time (forty since 2026-10-30), was taken. This is a nonconforming semantic gap and does
 not satisfy step 4 above. @danfuzz has authorized proceeding ahead of unresolved
 specs dependencies; that authorization does not supply a ruling or amend this
 procedure. Its record is the "Runtime-owned-store derived admission" entry in

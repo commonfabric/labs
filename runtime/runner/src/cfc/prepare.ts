@@ -11998,10 +11998,12 @@ export function* prepareBoundaryCommitSteps(
   // function that computed what it labels.
   const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
-  // What the reads declared onward consumed counts as taint to land: it is
-  // stamped on the target below even when the join itself is empty.
-  const flowHasLabels = flowConfidentiality.length > 0 ||
-    flowIntegrity.length > 0 || flowJoin.declaredOnward.length > 0;
+  const flowHasJoin = flowConfidentiality.length > 0 ||
+    flowIntegrity.length > 0;
+  // What the reads declared onward consumed counts as taint to land: the
+  // persist loop runs and lands it on the target even when the join itself
+  // is empty. The value stamps below mint from the join alone (`flowHasJoin`).
+  const flowHasLabels = flowHasJoin || flowJoin.declaredOnward.length > 0;
   // H4 (SC-18b): the writer-fit misfit REJECTS only at `enforce-strict`;
   // every mode below persists-and-flags, so `enforce-explicit` keeps the
   // shipped behavior where the derived component is a measurement, not a
@@ -13679,7 +13681,7 @@ export function* prepareBoundaryCommitSteps(
         // over-claim (integrity meets, never joins). A class-unaware
         // reader consuming both as covering entries sees today's label or
         // a wider one — additively safe, no dial (C0 §9).
-        if (flowHasLabels) {
+        if (flowHasJoin) {
           const stamp = markFlowStampEntry({
             path,
             label: {
@@ -13746,11 +13748,15 @@ export function* prepareBoundaryCommitSteps(
         }
       }
       for (const path of structureStampPaths) {
+        const at = declaredOnwardKey({ ...targetFromKey(key), path });
         // A covering derived stamp at-or-above already labels the shape;
         // structure stamps don't cover each other (exact-path semantics),
-        // so they only collapse against derived ancestors-or-equal.
+        // so they only collapse against derived ancestors-or-equal. A path a
+        // read was declared onward to keeps its membership stamp: the
+        // covering stamp carries the join, not what went onward.
         if (
-          derivedPrefixes.hasPrefixOf(path)
+          derivedPrefixes.hasPrefixOf(path) &&
+          !flowJoin.declaredOnwardAt.has(at)
         ) {
           continue;
         }
@@ -13774,10 +13780,9 @@ export function* prepareBoundaryCommitSteps(
         // (`declaredOnwardRead`), replaced from the join each reconcile
         // like the rest of the stamp. The per-item part of that read is in
         // J already, so the slot templates below need nothing of it.
-        const onward = flowJoin.declaredOnwardAt.get(
-          declaredOnwardKey({ ...targetFromKey(key), path }),
-        )?.confidentiality ?? [];
-        landedOnward.add(declaredOnwardKey({ ...targetFromKey(key), path }));
+        const onward = flowJoin.declaredOnwardAt.get(at)?.confidentiality ??
+          [];
+        landedOnward.add(at);
         const membershipConfidentiality = onward.length === 0
           ? flowConfidentiality
           : uniqueCfcAtoms([...flowConfidentiality, ...onward]);
