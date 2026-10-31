@@ -6078,14 +6078,18 @@ export class SchemaObjectTraverser<V extends FabricValue>
       } else {
         const propDoc = { address: propAddress, value: propValue };
         // When the property is asCell (and reaches here as a sigil link rather
-        // than the inline-value branch above), the descent + pointer resolution
-        // only RESOLVE THE REFERENCE to construct the Cell — they read the link
-        // target's shape, not a value the holder consumes. Those reads must not
-        // become commit-time conflict dependencies (a holder of a reference must
-        // not collide with disjoint writers under the referent's container). They
-        // stay in the journal for reactivity; the holder takes a real dependency
-        // only when it reads THROUGH the Cell in its body. A by-value property
-        // (`hasAsCell` false) is a genuine dependency and is left unmarked.
+        // than the inline-value branch above) and the walk does not traverse
+        // cells, the descent + pointer resolution only RESOLVE THE REFERENCE
+        // to construct the Cell — they read the link target's shape, not a
+        // value the holder consumes, and the scalars they pass are not marked
+        // as read. A walk that traverses cells returns the target's data
+        // instead, and marks the scalars it returns. In both cases those
+        // reads must not become commit-time conflict dependencies (a holder
+        // of a reference must not collide with disjoint writers under the
+        // referent's container). They stay in the journal for reactivity; the
+        // holder takes a real dependency only when it reads THROUGH the Cell
+        // in its body. A by-value property (`hasAsCell` false) is a genuine
+        // dependency and is left unmarked.
         const descend = () => {
           this.tx.read(propDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
           return this.traverseWithSchema(propDoc, propSchema);
