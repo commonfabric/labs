@@ -1635,8 +1635,6 @@ function resolveSpaceTarget(
     "#mentionable": ["defaultPattern", "backlinksIndex", "mentionable"],
     "#summaryIndex": ["defaultPattern", "summaryIndex"],
     "#knowledgeGraph": ["defaultPattern", "knowledgeGraph"],
-
-    "#suggestions": ["defaultPattern", "suggestionHistory"],
   };
 
   const registryTarget = parsed.key === "#pieceRegistry";

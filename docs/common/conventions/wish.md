@@ -367,7 +367,6 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#default`          | Default pattern of the current space                    |
 | `#mentionable`      | Mentionable pieces in the current space                 |
 | `#pieceRegistry`    | All pieces registered in the current space              |
-| `#suggestions`      | Suggestion history of the current space                 |
 | `#summaryIndex`     | Summary index of the current space                      |
 | `#knowledgeGraph`   | Knowledge graph of the current space                    |
 | `#now`              | Piece's first-ever load time, durable — never advances  |
