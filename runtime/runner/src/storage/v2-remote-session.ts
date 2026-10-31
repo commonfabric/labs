@@ -350,6 +350,17 @@ function frameSize(frame: unknown): number {
 }
 
 /**
+ * How many handshakes the connection a session is created on may make before
+ * the create fails, when none of them completes. Between them the memory
+ * client waits its reconnect backoff, 25, 50, 100 and 200 milliseconds, each
+ * up to a fifth longer, so the five span under half a second: long enough to
+ * ride out a host refusing a burst of dials or a brief loss of the network,
+ * and short enough that a host which is down fails its caller promptly, with
+ * an error naming the host, the attempts and the last failure.
+ */
+export const MEMORY_FIRST_HANDSHAKE_ATTEMPTS = 5;
+
+/**
  * How many memory sockets to one host may be opening at once. With a
  * connection per space, a runtime would otherwise hand the platform every
  * space's dial together, and a web view handed that many can leave some
@@ -455,6 +466,11 @@ export class WebSocketTransport implements MemoryClient.Transport {
   get supportsMessageCompression(): boolean {
     return typeof CompressionStream === "function" &&
       typeof DecompressionStream === "function";
+  }
+
+  /** The address this transport dials. */
+  get address(): URL {
+    return this.#address;
   }
 
   /** Bytes the current socket holds queued for the network, if it says. */
@@ -696,7 +712,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
   }
 
   async #open(): Promise<MemorySocketConnection> {
-    if (this.#disposed) throw new Error("Memory transport closed");
+    if (this.#disposed) {
+      throw MemoryClient.transportClosedError("Memory transport closed");
+    }
     if (this.#connection?.socket.readyState === WebSocket.OPEN) {
       return this.#connection;
     }
@@ -1463,6 +1481,14 @@ export class RemoteSessionFactory implements SessionFactory {
     });
   }
 
+  /**
+   * Mounts a session on `space` as `signer`. A connection lost before its
+   * first handshake completes is dialed again after the memory client's
+   * reconnect backoff, up to `MEMORY_FIRST_HANDSHAKE_ATTEMPTS` handshakes in
+   * all. The create then fails with `firstHandshakeFailedError()`, naming the
+   * address, the attempts and the last failure; it fails at once on a
+   * permanent failure, a failed mount, or an abort of `signal`.
+   */
   create(
     space: MemorySpace,
     signer = this.#defaultSigner,
@@ -1576,11 +1602,15 @@ export class RemoteSessionFactory implements SessionFactory {
     this.#transports.add(transport);
     const dialed: SharedConnection = {
       transport,
-      client: MemoryClient.connect({ transport, client: this.#clientInfo })
-        .then((client) => {
-          this.#relayNotices(client);
-          return client;
-        }),
+      client: MemoryClient.connect({
+        transport,
+        client: this.#clientInfo,
+        address: transport.address.href,
+        firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+      }).then((client) => {
+        this.#relayNotices(client);
+        return client;
+      }),
     };
     this.#shared.set(key, dialed);
     // A failed dial takes its entry with it, whoever is waiting on it.
@@ -1679,6 +1709,8 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        address: transport.address.href,
+        firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
       this.#relayNotices(client);
       const closeForAbort = (): void => {

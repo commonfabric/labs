@@ -158,9 +158,15 @@ describe("RemoteSessionFactory connection sharing", () => {
         { length: MEMORY_DIALS_PER_HOST + 1 },
         (_, i) => `did:key:z6Mk-dial-limit-${i}` as MemorySpace,
       );
-      // A create reaches its dial before it first waits.
+      // A create reaches its dial before it first waits. A create whose
+      // socket closes before opening dials again, so the case ends every
+      // create through its signal.
+      const controller = new AbortController();
       const creates = spaces.map((space) =>
-        factory.create(space).then(() => "opened", (error) => error)
+        factory.create(space, user, {}, controller.signal).then(
+          () => "opened",
+          (error) => error,
+        )
       );
       const dialedSpaces = () =>
         sockets.dials.map((dial) =>
@@ -172,11 +178,9 @@ describe("RemoteSessionFactory connection sharing", () => {
       expect(dialedSpaces().slice(0, MEMORY_DIALS_PER_HOST + 1)).toEqual(
         spaces,
       );
-      for (const dial of sockets.dials.slice(1, MEMORY_DIALS_PER_HOST + 1)) {
-        dial.close();
-      }
+      controller.abort(new Error("dials observed"));
       expect(await Promise.all(creates)).toMatchObject(
-        spaces.map(() => ({ name: "ConnectionError" })),
+        spaces.map(() => ({ message: "dials observed" })),
       );
     });
   });
