@@ -9457,10 +9457,10 @@ export class Runner {
     }
 
     if (!retain) {
-      cancelDeferredStart?.();
-      if (installedCancel !== undefined) {
-        this.#releaseUnownedChild(resultCell, installedCancel);
-      }
+      // A stop rather than a release: a scoped program's start hands back no
+      // registration of its own to release, and a start gated on the commit
+      // has installed none yet.
+      if (needsStart) this.stop(resultCell);
       if (!providedTx) {
         this.#runtime.prepareTxForCommit(tx);
         tx.commit();
