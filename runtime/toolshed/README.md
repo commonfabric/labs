@@ -277,12 +277,20 @@ owner failures use `not-owner`. Every operation, `create`, `redeem`, `list`,
 `revoke` and `receipts` alike, on a
 [deleted space](../../docs/specs/random-space-identities.md#deleting-a-space) is
 refused with `space-deleted` and HTTP status 410 (Gone), since no grant can
-admit anyone to such a space. That check comes after rate limiting, proof
-verification and body validation, so a request that fails any of those gets the
-refusal it would get for a live space, and learns nothing about the space.
-`space-deleted` is specified and not implemented yet. Outside the convenience
-`create` operation, transport failures remain transport failures. Malformed
-error responses use `service-error`.
+admit anyone to such a space. Over HTTP that check comes after rate limiting,
+proof verification and body validation, so a request that fails any of those
+gets the refusal it would get for a live space, and learns nothing about the
+space. The memory-session forms meet the memory server's own refusal of a
+deleted space first: a `session.open` carrying an invitation is refused, before
+it redeems anything, with an `AuthorizationError` marked `deleted: true`, and a
+`space.invite` has no session to run on, since the server revokes every session
+on a deleted space and refuses each reopen the same way. `SpaceInviteClient`'s
+redemption then falls back to the HTTP route, as it does whenever its open is
+refused with an `AuthorizationError`, and the route answers `space-deleted`. Its
+administration through a session surfaces the deleted `AuthorizationError`
+itself. `space-deleted` and these refusals are specified and not implemented
+yet. Outside the convenience `create` operation, transport failures remain
+transport failures. Malformed error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
 same serialized transaction as its ACL-only public commit. A unique receipt pair

@@ -816,10 +816,19 @@ and an invitation operation gets `space-deleted`.
 The invitation service decides `space-deleted` in `invite()`, the server's
 invitation entry point, inside the write transaction it runs every one of the
 five operations in (`executeInvite`), so a deletion committed through another
-connection is seen there as it is by the engine. The router reaches `invite()`
-only once the request has passed rate limiting, its proof has verified, and its
-body has validated
+connection is seen there as it is by the engine. Over HTTP, the router reaches
+`invite()` only once the request has passed rate limiting, its proof has
+verified, and its body has validated
 ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
+The memory-session forms never reach `invite()` for a deleted space. A
+`session.open` carrying an invitation is refused with the deleted
+`AuthorizationError` above before it redeems anything
+([`04-protocol.md`](04-protocol.md#412-logical-sessions-and-resume) §4.1.2),
+since the deletion check precedes every other part of an open. A `space.invite`
+needs a session on the space, which deletion revokes and no reopen gets back
+([`04-protocol.md`](04-protocol.md#4311-spaceinvite--administer-a-spaces-invitations)
+§4.3.11). So on that transport the refusal is the deleted `AuthorizationError`,
+marked `deleted: true`, not `space-deleted`.
 
 What follows the deletion commit revokes every session open on the space with
 the `session/revoked` reason `deleted`, and sends no `session/admissible`. It
