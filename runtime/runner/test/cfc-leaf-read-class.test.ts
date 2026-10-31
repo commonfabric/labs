@@ -129,6 +129,71 @@ describe("CFC flow labels: a cell read of a scalar", () => {
     expect(cellRead(doc, { type: "number" })).toEqual([A, B]);
   });
 
+  it("a handle to the scalar carries nothing of its value label", async () => {
+    const doc = await seeded("count-handle", 3, STALE_SHAPE_ENTRIES);
+    expect(cellRead(doc, { type: "number", asCell: ["cell"] })).toEqual([]);
+  });
+
+  it("a union of handles minted over a record carries nothing of its scalars' value labels", async () => {
+    // The branches of a union of handles are traversed to find which one
+    // applies, and the scalars they read are not what the reader gets.
+    const doc = await seeded("record-union", { name: "x" }, [
+      {
+        path: [],
+        label: { confidentiality: [A] },
+        origin: "derived",
+        observes: "shape",
+      },
+      {
+        path: ["name"],
+        label: { confidentiality: [B] },
+        origin: "derived",
+        observes: "value",
+      },
+    ]);
+    const seed = runtime.edit();
+    const holder = runtime.getCell(
+      space,
+      "count-union-holder",
+      undefined,
+      seed,
+    );
+    holder.setRaw({
+      items: [runtime.getCellFromLink(doc, undefined, seed).getAsLink()],
+    } as never);
+    expect((await seed.commit().settled).ok).toBeDefined();
+    const union = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: ["cell"],
+              },
+              {
+                type: "object",
+                properties: { title: { type: "string" } },
+                required: ["title"],
+                asCell: ["cell"],
+              },
+            ],
+          },
+        },
+      },
+    } as const;
+    const read = atoms(joinOf((tx) => {
+      const items = (holder.withTx(tx).asSchema(union).get() as {
+        items: unknown[];
+      }).items;
+      expect(items).toHaveLength(1);
+    }));
+    expect(read).not.toContain(B);
+  });
+
   it("a read that stops at the scalar consumes only its shape label", async () => {
     const doc = await seeded("count-shape", 3, STALE_SHAPE_ENTRIES);
     const shallow = joinOf((tx) =>

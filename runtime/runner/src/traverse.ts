@@ -124,6 +124,7 @@ import {
   excludeReadFromConflict,
   ignoreReadForScheduling,
   linkResolutionProbe,
+  payloadRead,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import {
@@ -153,6 +154,12 @@ const READ_FOR_SCHEDULING: IReadOptions = {
 };
 const READ_NON_RECURSIVE_FOR_SCHEDULING: IReadOptions = {
   nonRecursive: true,
+  trackReadWithoutLoad: true,
+};
+/** A scalar the traversal returns: shallow for storage, a value read for CFC. */
+const READ_PAYLOAD: IReadOptions = { nonRecursive: true, meta: payloadRead };
+const READ_PAYLOAD_FOR_SCHEDULING: IReadOptions = {
+  ...READ_PAYLOAD,
   trackReadWithoutLoad: true,
 };
 
@@ -543,13 +550,13 @@ type PlainSchemaPlan =
 /**
  * The reads a plain-schema traversal makes of one document: `paths` are the
  * containers it stepped into, read for their shape, and `values` the scalars
- * it returned, read whole. A scalar has no members, so what the traversal
- * returns from it is the payload: a value read (CFC spec §4.5.2), as the
- * general traversal records for a scalar it returns. The flow join consumes
- * a document's `value` label for a value read and only its `shape` label for
- * a shape read, and the two differ once the document's value has changed:
- * the shape label is minted at creation (§8.12.8), the value label on every
- * write.
+ * it returned, marked `payloadRead`. A scalar has no members, so what the
+ * traversal returns from it is the payload: a value read (CFC spec §4.5.2),
+ * as the general traversal marks the scalar it returns. The flow join
+ * consumes a document's `value` label for a value read and only its `shape`
+ * label for a shape read, and the two differ once the document's value has
+ * changed: the shape label is minted at creation (§8.12.8), the value label
+ * on every write. Storage sees the same shallow reads either way.
  */
 type PlainSchemaReads = {
   address: Omit<IMemorySpaceValueAddress, "path">;
@@ -4265,6 +4272,22 @@ export class SchemaObjectTraverser<V extends FabricValue>
   }
 
   // Traversal stats counters
+  /**
+   * How many enclosing traversals resolve a reference to mint a handle. A
+   * scalar read inside one is not returned to the caller, so it is read for
+   * its shape rather than marked as a payload read.
+   */
+  #mintingHandle = 0;
+
+  #whileMintingHandle<T>(body: () => T): T {
+    this.#mintingHandle++;
+    try {
+      return body();
+    } finally {
+      this.#mintingHandle--;
+    }
+  }
+
   traverseWithSchemaCalls = 0;
   traversePointerCalls = 0;
   traverseArrayCalls = 0;
@@ -5315,24 +5338,28 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #trackPlainSchemaReads(
     reads: PlainSchemaReads,
   ): void {
+    // A traversal that resolves a reference to mint a handle returns no
+    // scalar to its caller, so its scalars are read for their shape.
+    const values = this.#mintingHandle > 0 ? [] : reads.values;
+    const paths = this.#mintingHandle > 0
+      ? [...reads.paths, ...reads.values]
+      : reads.paths;
     if (this.tx.trackReadPaths) {
-      if (reads.paths.length > 0) {
-        this.tx.trackReadPaths(reads.address, reads.paths, {
-          nonRecursive: true,
-        });
+      if (paths.length > 0) {
+        this.tx.trackReadPaths(reads.address, paths, { nonRecursive: true });
       }
-      if (reads.values.length > 0) {
-        this.tx.trackReadPaths(reads.address, reads.values);
+      if (values.length > 0) {
+        this.tx.trackReadPaths(reads.address, values, READ_PAYLOAD);
       }
     } else {
-      for (const path of reads.paths) {
+      for (const path of paths) {
         this.tx.read(
           { ...reads.address, path },
           READ_NON_RECURSIVE_FOR_SCHEDULING,
         );
       }
-      for (const path of reads.values) {
-        this.tx.read({ ...reads.address, path }, READ_FOR_SCHEDULING);
+      for (const path of values) {
+        this.tx.read({ ...reads.address, path }, READ_PAYLOAD_FOR_SCHEDULING);
       }
     }
     reads.paths.length = 0;
@@ -5927,9 +5954,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // resolve the reference and are not conflict dependencies.
         const { ok: val, error } = !this.traverseCells &&
             SchemaObjectTraverser.hasAsCell(curSelector.schema)
-          ? this.tx.runWithAmbientReadMeta(
-            excludeReadFromConflict,
-            traverseElement,
+          ? this.#whileMintingHandle(() =>
+            this.tx.runWithAmbientReadMeta(
+              excludeReadFromConflict,
+              traverseElement,
+            )
           )
           : traverseElement();
         if (error !== undefined) {
@@ -6063,7 +6092,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
         };
         const missesBefore = this.context.missingLinkTargets;
         const { ok: val, error } = SchemaObjectTraverser.hasAsCell(propSchema)
-          ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+          ? this.#whileMintingHandle(() =>
+            this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+          )
           : descend();
         if (error === undefined) {
           filteredObj[propKey] = val;
@@ -6360,8 +6391,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // (CFC spec §4.5.2). The shape read the walk records at the document's
       // top consumes the document's shape label alone, which is minted at
       // creation and does not follow the value (§8.12.8). A handle returned
-      // above names the scalar without reading it.
-      this.tx.read(doc.address, READ_FOR_SCHEDULING);
+      // above, or minted by the traversal this runs in, names the scalar
+      // without reading it.
+      if (this.#mintingHandle === 0) {
+        this.tx.read(doc.address, READ_PAYLOAD_FOR_SCHEDULING);
+      }
       return doc.value;
     }
   }

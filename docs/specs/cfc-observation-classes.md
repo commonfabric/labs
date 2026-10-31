@@ -120,9 +120,12 @@ entries keep their existing component resolution.
 The class is the operation's, not the node's: a key-presence check over a
 scalar is a shape observation of it. Returning a primitive, JavaScript or
 Fabric, consumes its value, even when constructing the view first probes its
-shape, so a traversal that returns a scalar records a recursive read of it
-(`#traversePrimitive` and the plain-schema traversal's `values`). A shape-only
-storage observation continues to consume only its shape classes.
+shape, so a traversal that returns a scalar marks its shallow read of it
+`payloadRead` (`#traversePrimitive` and the plain-schema traversal's
+`values`), which the walk classifies as a value observation; storage,
+scheduling and conflict detection see the shallow read. A traversal that
+resolves a reference to mint a handle returns no scalar and marks nothing. A
+shape-only storage observation continues to consume only its shape classes.
 
 The load-bearing change is the `followRef` row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's
