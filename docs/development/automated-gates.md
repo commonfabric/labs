@@ -157,7 +157,9 @@ Each of these gates fails CI on its own, and none of them run as part of
   its number, so a deployed piece would read each moved cell's state from the
   document another cell wrote, under a pattern identity that did not change.
   The gate compiles every pattern with the merge base's compiler and with the
-  change's, without type checking, and compares the builds of each pattern
+  change's, without type checking, each under its own revision's experimental
+  flag defaults (it runs the compiles without the environment variables that
+  set a flag), and compares the builds of each pattern
   whose source files match, telling a cell apart from its neighbors by what
   writes it rather than by its schema, which the schema generator reshapes
   without moving anything. Cells holding state that share a description are

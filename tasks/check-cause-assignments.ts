@@ -23,6 +23,7 @@
 import { parse as parseJsonc } from "@std/jsonc";
 import { join, toFileUrl } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 import {
   type AmbiguousCells,
@@ -422,6 +423,27 @@ export async function dumperConfig(
 }
 
 /**
+ * The environment the dumper runs in: `env`, without the variables that set
+ * an experimental flag (`EXPERIMENTAL_ENV_VARS`), and with logging quieted.
+ * Each build is then compiled under its own revision's defaults. An inherited
+ * flag would set both builds alike, and so hide a change to its default from
+ * the comparison.
+ */
+export function dumperEnvironment(
+  env: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const flagVariables = new Set<string>(
+    Object.values(EXPERIMENTAL_ENV_VARS).filter((name) => name !== null),
+  );
+  return {
+    ...Object.fromEntries(
+      Object.entries(env).filter(([name]) => !flagVariables.has(name)),
+    ),
+    LOG_LEVEL: "error",
+  };
+}
+
+/**
  * Helper for `main()`, which dumps the patterns `files` names with the
  * compiler of the checkout at `root`, in `shards` processes at once, running
  * the dumper under the configuration at `config`.
@@ -456,7 +478,8 @@ async function dumpTree(
         ...part,
       ],
       cwd: root,
-      env: { LOG_LEVEL: "error" },
+      env: dumperEnvironment(Deno.env.toObject()),
+      clearEnv: true,
       stdout: "inherit",
       stderr: "piped",
     }).output();

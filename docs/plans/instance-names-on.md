@@ -258,22 +258,13 @@ router has restarted after that: a router's public offer is fixed for its
 process's lifetime, so one taken while an endpoint lacked `instanceNameMark`
 omits it, and every routed naming client then fails its connection.
 
-The mapping must not reach the build that `deno task check-cause-assignments`
-compares. Its dump, `tasks/cause-assignments-dump.ts`, builds each side through
-`createRuntime()` in `runtime/cli/lib/dev.ts`, which reads the experimental
-flags from the environment with `experimentalOptionsFromEnv()`. An environment
-that sets `EXPERIMENTAL_INSTANCE_NAMES` gives both sides the same value, and so
-hides a change to the default from the gate. This stage therefore keeps the
-variable out of the gate's environment, or has the dump build each side under
-that side's own defaults alone.
-
 ### 3. Tests that pass with the flag forced on — **part landed**
 
-Before the flip, the runner and piece suites pass with the runtime's default
-forced on, and so do the patterns, shell and CLI suites, the integration tests,
-and `cf test` over the pattern unit tests, run the same way. The failures such
-a run finds are made to pass in either mode, so the flip is a change to the
-default and to nothing else.
+What this stage requires: before the flip, the runner and piece suites are run
+with the runtime's default forced on, and so are the patterns, shell and CLI
+suites, the integration tests, and `cf test` over the pattern unit tests. The
+failures such a run finds are made to pass in either mode, so the flip is a
+change to the default and to nothing else.
 
 The failures a forced-on run of the runner and piece suites found are test
 assumptions rather than product bugs: compile-cache tests that read the
@@ -294,7 +285,10 @@ with the other local defaults of the flags a runtime consumes itself, and that
 module is among `COMPILER_PATHS` in `tasks/check-cause-assignments.ts`. So
 `deno task check-cause-assignments` compiles on a change to the default, and
 the flip is checked against the numbering it is meant not to move. Each side of
-the comparison is built under its own revision's defaults.
+the comparison is built under its own revision's defaults: the gate runs its
+dump without the environment variables that set an experimental flag, so
+mapping `EXPERIMENTAL_INSTANCE_NAMES` in stage 2 cannot set both sides alike
+and hide the flip.
 
 ### 5. The flip
 
