@@ -1,5 +1,6 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import type { FabricPlainObject } from "@commonfabric/api";
 import { aclDocId } from "../acl.ts";
 import * as Engine from "../v2/engine.ts";
@@ -39,8 +40,11 @@ class Wire {
     (response: ResponseMessage<FabricPlainObject>) => void
   >();
 
+  #refusing = false;
+
   constructor(server: Server) {
     this.#connection = server.connect((message) => {
+      if (this.#refusing) throw new Error("the socket has closed");
       const waiter = message.type === "response"
         ? this.#waiting.get(message.requestId)
         : undefined;
@@ -88,6 +92,11 @@ class Wire {
     return this.#sent.some((message) =>
       message.type === "response" && message.requestId === requestId
     );
+  }
+
+  /** Makes every later send throw, as a transport whose socket closed does. */
+  refuseSends(): void {
+    this.#refusing = true;
   }
 
   close(): void {
@@ -405,6 +414,25 @@ describe("pattern.lifecycle", () => {
 
       release.resolve();
       expect((await wire.response(requestId)).ok).toEqual({ pattern: "late" });
+    });
+
+    it("reports an answer its transport refuses instead of leaving it unhandled", async () => {
+      const server = serverWith();
+      server.setPatternLifecycleHandler(() =>
+        Promise.resolve({ ok: { pattern: "late" } })
+      );
+      const { wire, sessionId } = await openSession(server, ALICE);
+      const reported = Promise.withResolvers<unknown[]>();
+      using _logged = stub(console, "error", (...args: unknown[]) => {
+        reported.resolve(args);
+      });
+      wire.refuseSends();
+
+      await request(wire, sessionId);
+
+      const [message, error] = await reported.promise;
+      expect(message).toContain("could not be sent");
+      expect(error).toBeInstanceOf(Error);
     });
   });
 

@@ -2679,8 +2679,20 @@ class Connection {
         // handling returns. The answer goes out when the verb settles.
         const { space, sessionId, requestId } = parsed;
         void this.#server.runPatternLifecycle(parsed).then((response) => {
-          this.#sendSessionResponse(space, sessionId, requestId, response);
-          this.#answered.delete(requestId);
+          // A connection that closed while the verb ran has no one to tell.
+          if (this.#closed) return;
+          try {
+            this.#sendSessionResponse(space, sessionId, requestId, response);
+          } catch (error) {
+            // Nothing awaits this answer, so a transport that refuses it is
+            // reported here rather than left as an unhandled rejection.
+            console.error(
+              `memory v2: the answer to a \`pattern.lifecycle\` ${parsed.verb} could not be sent`,
+              error,
+            );
+          } finally {
+            this.#answered.delete(requestId);
+          }
         });
         return;
       }
