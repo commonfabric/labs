@@ -82,7 +82,11 @@ function homeRootLinked(runtime: Runtime, home: MemorySpace): Promise<void> {
  * handler can run again and its write land under the root. The user is the one
  * the handler run on `tx` acts for. A client runtime creates the root. A
  * serving runtime creates none, since the loop serving the Home's own space
- * creates it once that space is active, and waits until it is linked.
+ * creates it once that space is active, and waits until it is linked. The
+ * handler's pending run holds its space's scheduler meanwhile, so a Home that
+ * never gets a root stalls that space rather than failing the one event: a
+ * user's Home has its root long before an app writes into it, and a test that
+ * reaches the case shows it as a hang.
  * `undefined` when this runtime brings up no root for `error`: a space other
  * than the user's own Home gets its root another way, as
  * `SpaceRootMissingError` says, and a served run that acts for no one has no

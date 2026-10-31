@@ -1722,11 +1722,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           },
         }).ok?.value;
         if (slot === undefined) {
+          // A serving runtime's handler waits for the Home's own server to
+          // link the root (`bringUpHomeRootForRefusedWrite()`).
           // TODO(danfuzz): On a serving runtime, bring the demanding user's
           // Home root up ahead of the write instead, stamped as the
           // SpaceServer's root ensure stamps it, so that an app layered on a
           // serving runtime can create a profile before its user has ever
-          // opened Home.
+          // opened Home, whose space no server then serves.
           throw new SpaceRootMissingError(address.space);
         }
       }

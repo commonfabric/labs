@@ -2012,8 +2012,9 @@ the per-epic implementation notes).
   regained), and an address the store holds nothing at leaves no record. The
   end state is the session read path for the home space gone, with the knob.
 - **Status on 2026-10-31.** Implemented, on by default in the toolshed. The
-  test harness's serving memory server keeps it off unless a lane sets the
-  variable to `true`, so the executor and pattern suites run both postures.
+  test harness's serving memory server keeps it off unless the variable is
+  `true`, and no CI lane sets it yet, so the executor and pattern suites run
+  without it in CI, and the toolshed-backed lanes run with it.
 - **Status on 2026-10-23.** Implemented, off by default. The replica reports
   which instances the read-through found nothing at
   (`IStorageProvider.storeReportedAbsent`), and the gate before a piece's run
@@ -2103,10 +2104,12 @@ the per-epic implementation notes).
   state is the in-process arm gone, with the knob.
 - **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
   file store. The worker entry builds its process's compiled-module byte cache,
-  as the main-thread loop does. Under the worker, the pattern integration
-  suites the `MultiRuntimeHarness` drives pass; the private-inbox and FabriChat
-  suites need a serving runtime to run no child placed in a space other than
-  the one it serves (#9418).
+  as the main-thread loop does. Run with the variable `true`, the pattern
+  integration suites the `MultiRuntimeHarness` drives pass under the worker;
+  the private-inbox and FabriChat suites need a serving runtime to run no child
+  placed in a space other than the one it serves (#9418). No CI lane runs them
+  that way yet: in CI the worker runs in the toolshed-backed lanes and the
+  worker's own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
 

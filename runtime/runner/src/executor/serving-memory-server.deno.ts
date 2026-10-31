@@ -22,7 +22,7 @@
  * toolshed does over its file store, in a Worker of this process over a store
  * in a temporary directory ({@link ServingMemoryServerOptions}' `worker`).
  * Unlike a toolshed, it keeps the worker and the store read-through off
- * unless the environment turns them on, so a lane chooses its arm.
+ * unless the environment turns them on, so a run chooses its arm.
  *
  * The loop's work runs in the serving context, so a test hosting its clients
  * in the same realm tells their output apart with {@link inServingContext}.

@@ -2442,7 +2442,8 @@ export async function dispatchQueuedEvent(state: {
     // never becomes pending again), so a handler with finitely many distinct
     // inSpace names terminates; an access-list re-run repeats only when another
     // writer changed the same list in between, and a change it makes itself is
-    // a no-op on the re-run. Dispatch released the lineage registration above,
+    // a no-op on the re-run; a Home-root re-run follows the root being linked,
+    // and a linked root stays linked. Dispatch released the lineage registration above,
     // so the fresh QueuedEvent must be re-recorded: otherwise an origin that fails
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
