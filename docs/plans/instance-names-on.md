@@ -1,7 +1,7 @@
 # Turning instance names on
 
-Nothing in this plan is built yet. It is the sequence that takes the
-`instanceNames` experimental flag
+Stage 4 of this plan is built, and so is part of stage 3; nothing else is.
+The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
 bound to a `const` is specified in
@@ -232,13 +232,14 @@ anywhere.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
 refusals: the positional runtime is refused the space, the test asserts the
-refusal, and the `TODO(danfuzz)` in `runtime/runner/src/runtime.ts` that names
-the boundary goes. The memory package tests INV-16's clauses directly: a
-naming commit records the mark in its own transaction, a positional commit to
-a marked space is refused, the space's positional sessions are revoked, a
-marked space refuses a positional open and resume, an unmarked space admits
-both modes while the posture names instances, and refuses a naming open while
-it names none. Tools that copy a space's store, among them
+refusal, and the `TODO(danfuzz)` in
+`runtime/runner/src/experimental-defaults.ts` that names the boundary goes.
+The memory package tests INV-16's clauses directly: a naming commit records
+the mark in its own transaction, a positional commit to a marked space is
+refused, the space's positional sessions are revoked, a marked space refuses a
+positional open and resume, an unmarked space admits both modes while the
+posture names instances, and refuses a naming open while it names none. Tools
+that copy a space's store, among them
 [space-clone rehearsal](../development/space-clone-rehearsal.md), carry the
 mark's row with it.
 
@@ -257,26 +258,37 @@ router has restarted after that: a router's public offer is fixed for its
 process's lifetime, so one taken while an endpoint lacked `instanceNameMark`
 omits it, and every routed naming client then fails its connection.
 
-### 3. Tests that pass with the flag forced on
+### 3. Tests that pass with the flag forced on — **part landed**
 
-The runner and piece suites pass with the runtime's default forced on, and so
-do the patterns, shell and CLI suites, the integration tests, and `cf test` over
-the pattern unit tests, run the same way before the flip. The failures such a
-run finds are made to pass in either mode, so the flip is a change to the
-default and to nothing else. The ones a forced-on run of the runner and piece
-suites has found so far are test assumptions rather than product bugs:
-compile-cache tests that read the positional cache variant's key, a
-`stored-setup-build-repair.test.ts` helper that takes a positional descriptor
-that is now named, and the assertions of the default in
-`experimental-options.test.ts`.
+What this stage requires: before the flip, the runner and piece suites are run
+with the runtime's default forced on, and so are the patterns, shell and CLI
+suites, the integration tests, and `cf test` over the pattern unit tests. The
+failures such a run finds are made to pass in either mode, so the flip is a
+change to the default and to nothing else.
 
-### 4. The cause-assignment gate sees the flip
+The failures a forced-on run of the runner and piece suites found are test
+assumptions rather than product bugs: compile-cache tests that read the
+positional cache variant's key, and a `stored-setup-build-repair.test.ts`
+helper that takes a positional descriptor that is now named. Those tests pass
+in either mode. The two tests in `experimental-options.test.ts` that assert the
+default fail when it is forced on, and change with the default at the flip.
 
-`deno task check-cause-assignments` compiles only when a change touches
-`COMPILER_PATHS` in `tasks/check-cause-assignments.ts`, and
-`runtime/runner/src/runtime.ts`, where the default is set, is not among them.
-The gate is made to compile on a change to the default, so the flip is checked
-against the numbering it is meant not to move.
+Still to run with the default forced on: the full runner and piece suites,
+of which only the test files changed to pass in either mode have been run that
+way in their current form; and the patterns, shell and CLI suites, the
+integration tests, and `cf test`, none of which has been run that way at all.
+
+### 4. The cause-assignment gate sees the flip — **landed**
+
+The flag's default is set in `runtime/runner/src/experimental-defaults.ts`,
+with the other local defaults of the flags a runtime consumes itself, and that
+module is among `COMPILER_PATHS` in `tasks/check-cause-assignments.ts`. So
+`deno task check-cause-assignments` compiles on a change to the default, and
+the flip is checked against the numbering it is meant not to move. Each side of
+the comparison is built under its own revision's defaults: the gate runs its
+dump without the environment variables that set an experimental flag, so
+mapping `EXPERIMENTAL_INSTANCE_NAMES` in stage 2 cannot set both sides alike
+and hide the flip.
 
 ### 5. The flip
 

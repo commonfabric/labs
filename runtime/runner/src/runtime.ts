@@ -117,6 +117,7 @@ import {
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -1996,19 +1997,10 @@ export class Runtime {
       }
     }
 
-    // These flags are consumed from this Runtime instance. Normalize their
+    // Some flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
     // appear as an explicit override.
-    this.experimental.computedCellIds ??= true;
-    this.experimental.plainResultReceipts ??= true;
-    this.experimental.lazyMaterialization ??= true;
-    this.experimental.agentBuiltin ??= true;
-    this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a runtime whose naming mode
-    // differs from a space's data is kept away from that space;
-    // `instance-naming-modes.test.ts` pins what one does to it until then.
-    this.experimental.instanceNames ??= false;
-    this.experimental.localSessionDocuments ??= false;
+    applyLocalExperimentalDefaults(this.experimental);
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
