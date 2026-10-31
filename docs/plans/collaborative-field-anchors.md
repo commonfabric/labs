@@ -91,12 +91,16 @@ and `runtime/runtime-client`; `deno task check-commonfabric-types` in
 
 ### WP3 — Editor as a view
 
+The code editor's `highlights` surface, its `cf-selection-change` and
+`cf-highlights-mapped` events and its `docs/highlights.md` are introduced by
+PR #9390, which this package reworks; the items below name that PR's symbols.
+
 - [ ] `highlights` takes `{ id, kind?, from?, to? }`; under collaboration the
       positions are the snapshot's anchors mapped over pending edits.
 - [ ] The synchronization snapshot carries anchors, including at an unchanged
       cursor.
 - [ ] The `cf-highlights-mapped` report and its outstanding-report machinery
-      are removed.
+      are removed: the editor no longer maps highlight positions for the host.
 - [ ] `cf-selection-change` names the confirmed cursor, with the selection
       mapped back over pending edits, so a handler's `base` is a version
       Memory holds.

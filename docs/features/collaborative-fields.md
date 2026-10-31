@@ -170,8 +170,8 @@ queries, watches, point-in-time reads and server-executed handlers read
 anchors from it as plain state. The document is deleted with the field's
 release or its entity, and a client cannot write it.
 
-Comments, highlights and bookmarks are the consumers: each is an ordinary
-entity that names an anchor id, and never stores a position of its own.
+An annotation on the field, a comment, a highlight or a bookmark, is an
+ordinary entity that names an anchor id and stores no position of its own.
 
 ## Checkpoints, reconnect, and reset
 
