@@ -6,7 +6,7 @@ import { aclDocId } from "../acl.ts";
 import * as Engine from "../v2/engine.ts";
 import { connect, loopback } from "../v2/client.ts";
 import {
-  PATTERN_LIFECYCLE_MAX_CHARACTERS,
+  PATTERN_LIFECYCLE_MAX_BYTES,
   type PatternLifecycleCall,
   type PatternLifecycleHandler,
   Server,
@@ -319,15 +319,17 @@ describe("pattern.lifecycle", () => {
       expect(calls).toEqual([]);
     });
 
-    it("refuses with `payload-too-large` a request past the character bound, without calling the handler", async () => {
+    it("refuses with `payload-too-large` a request past the byte bound, without calling the handler", async () => {
       const server = serverWith();
       const { calls, handler } = recording();
       server.setPatternLifecycleHandler(handler);
       const { wire, sessionId } = await openSession(server, ALICE);
 
+      // Two bytes a character: past the byte bound with fewer characters
+      // than the bound counts.
       const response = await wire.response(
         await request(wire, sessionId, {
-          source: "x".repeat(PATTERN_LIFECYCLE_MAX_CHARACTERS),
+          source: "é".repeat(PATTERN_LIFECYCLE_MAX_BYTES / 2 + 1),
         }),
       );
 
@@ -528,7 +530,7 @@ describe("pattern.lifecycle", () => {
       try {
         const error = await session.runPatternLifecycle("upload", {
           // Two bytes a character, so the request passes the byte bound
-          // while staying under the server's character bound.
+          // with fewer characters than the bound counts.
           source: "é".repeat(ROUTED_QUEUE_LIMIT / 2 + 1),
         }).then(
           () => undefined,

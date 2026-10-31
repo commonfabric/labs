@@ -7245,6 +7245,8 @@ export class SpaceReplica
     body: FabricPlainObject,
   ): Promise<FabricPlainObject> {
     const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
     return await session.runPatternLifecycle(verb, body);
   }
 
@@ -7253,6 +7255,8 @@ export class SpaceReplica
     invite: MemoryV2Client.InviteAdministration,
   ): Promise<FabricValue> {
     const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
     return await session.administerInvites(invite);
   }
 

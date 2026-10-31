@@ -77,6 +77,7 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   "payload-too-large",
   "pattern-not-found",
   "piece-not-found",
+  "server-execution-off",
   "setup-failed",
   "slug-taken",
   "source-moved",

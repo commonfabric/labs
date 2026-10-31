@@ -1730,9 +1730,9 @@ Semantics:
 
 - a request naming a session the connection does not hold gets a
   `SessionError`
-- the server refuses a message of more than 4 MiB of characters
-  (`PATTERN_LIFECYCLE_MAX_CHARACTERS`, the most bytes a routed request may
-  take) with `payload-too-large`, so a request is refused the same way whether
+- the server refuses a message of more than 4 MiB in UTF-8
+  (`PATTERN_LIFECYCLE_MAX_BYTES`, the most bytes a routed request may take)
+  with `payload-too-large`, so a request is refused the same way whether
   or not a router carries it; a client refuses before sending when the encoded
   request takes more than 4 MiB
 - the DID the session was opened as must itself hold WRITE on the space; a

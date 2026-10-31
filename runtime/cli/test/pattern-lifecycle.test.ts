@@ -364,6 +364,18 @@ describe("pattern-lifecycle client", () => {
       expect(failure.message).toBe("the slug names a piece");
     });
 
+    it("throws a settled refusal from a memory server that runs no verbs", async () => {
+      const { cfg } = await sessionConfig(() =>
+        Promise.reject(refusal("server-execution-off"))
+      );
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.refused).toBe(true);
+    });
+
     it("throws an unsettled refusal for a code that leaves the outcome unknown", async () => {
       const { cfg } = await sessionConfig(() =>
         Promise.reject(refusal("internal"))

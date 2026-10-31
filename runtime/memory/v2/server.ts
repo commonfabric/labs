@@ -905,13 +905,11 @@ const MAX_STAGED_WATCH_SET_PARTS = 64;
 const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
 
 /**
- * Most characters a `pattern.lifecycle` message may hold: the most bytes a
- * routed request may take, so a request is refused the same way whether or
- * not a router carries it. A character is at least one byte, so a client
- * that keeps its encoded request within the routed bound is never refused
- * here.
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take: the most a routed
+ * request may take, so a request is refused the same way whether or not a
+ * router carries it.
  */
-export const PATTERN_LIFECYCLE_MAX_CHARACTERS = ROUTED_QUEUE_LIMIT;
+export const PATTERN_LIFECYCLE_MAX_BYTES = ROUTED_QUEUE_LIMIT;
 
 /** Whether an invitation service result is a redemption's receipt. */
 const isRedeemReceipt = (
@@ -1889,7 +1887,7 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(parsed, payload.length);
+          await this.#receiveOrdered(parsed, payload);
         } catch (error) {
           if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
@@ -2162,8 +2160,9 @@ class Connection {
 
   async #receiveOrdered(
     parsed: ClientMessage | RejectedClientMessage | null,
-    characters: number,
+    payload: string,
   ): Promise<void> {
+    const characters = payload.length;
     if (this.#closed) {
       return;
     }
@@ -2665,11 +2664,18 @@ class Connection {
         ) {
           return;
         }
-        if (characters > PATTERN_LIFECYCLE_MAX_CHARACTERS) {
+        // A UTF-16 code unit takes at most three UTF-8 bytes, so only a
+        // message long enough to pass the bound pays for the encoding that
+        // measures it.
+        if (
+          characters > PATTERN_LIFECYCLE_MAX_BYTES / 3 &&
+          new TextEncoder().encode(payload).length >
+            PATTERN_LIFECYCLE_MAX_BYTES
+        ) {
           this.#send(patternLifecycleRefusal(
             parsed.requestId,
             "payload-too-large",
-            `A \`pattern.lifecycle\` request holds at most ${PATTERN_LIFECYCLE_MAX_CHARACTERS} characters`,
+            `A \`pattern.lifecycle\` request takes at most ${PATTERN_LIFECYCLE_MAX_BYTES} bytes`,
           ));
           return;
         }

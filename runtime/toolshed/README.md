@@ -191,15 +191,16 @@ by the service; neither the join link nor the redemption request carries it.
 Redemption only raises access: an identity that already holds the invited access
 or more keeps what it has.
 
-All invitation operations are signed JSON POSTs under
+Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
-`receipts`. They use the existing CF1 proof, binding method, authority, path,
-body hash, and signer DID, with a maximum 300-second lifetime and 60 seconds of
-future clock skew. Bodies are limited to 4 KiB and unknown fields are refused.
-Redemption does not require an existing target-space session. Its recipient is
-always the proof signer. Creation, listing, revocation, and receipt listing
-require a current explicit OWNER entry in the space ACL. First redemption also
-requires the issuer to remain an explicit OWNER.
+`receipts`; the memory-session forms are below. They use the existing CF1 proof,
+binding method, authority, path, body hash, and signer DID, with a maximum
+300-second lifetime and 60 seconds of future clock skew. Bodies are limited to 4
+KiB and unknown fields are refused. Redemption does not require an existing
+target-space session. Its recipient is always the proof signer. Creation,
+listing, revocation, and receipt listing require a current explicit OWNER entry
+in the space ACL. First redemption also requires the issuer to remain an
+explicit OWNER.
 
 The memory server runs the same service for `create`, `list`, `revoke`, and
 `receipts` sent as a `space.invite` request on a memory session on the space

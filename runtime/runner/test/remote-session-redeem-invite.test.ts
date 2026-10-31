@@ -83,7 +83,7 @@ describe("RemoteSessionFactory.redeemInvite()", () => {
     return credentials;
   };
 
-  it("returns the receipt, grants the invitation's access, and leaves no session open", async () => {
+  it("returns the receipt, grants the invitation's access, and leaves no socket open", async () => {
     const invite = await issue();
 
     const receipt = await factory.redeemInvite(space, invite);
@@ -98,8 +98,7 @@ describe("RemoteSessionFactory.redeemInvite()", () => {
       [owner.did()]: "OWNER",
       [guest.did()]: "READ",
     });
-    expect(server.server.accessForTestingOnly.sessionsForSpace(space))
-      .toEqual([]);
+    expect(factory.getSizes().socketsOpen).toBe(0);
   });
 
   it("throws the service's refusal for a wrong code, and grants nothing", async () => {

@@ -42,7 +42,10 @@ A client sends a verb in one of two ways:
 Both reach the same code in
 `runtime/toolshed/routes/pattern-lifecycle/pattern-lifecycle.utils.ts`
 (`processUpload`, `processInstantiate`, `processSetSource`), so the arguments,
-the receipts, and the refusal codes are the same on both. `cf` sends on the
+the receipts, and the refusals a verb itself makes are the same on both. Each
+transport adds refusals of its own: the status codes of
+[The route](#the-route), and the codes listed under
+[On the memory session](#on-the-memory-session). `cf` sends on the
 memory session, and posts to the route only when the memory server does not
 advertise `patternLifecycle`.
 
@@ -83,7 +86,7 @@ one of the route's codes in the table below. Three codes differ on the session:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `invalid-request`       | `body` does not match the verb's schema; the route answers this case with 422 and the validator's body                         |
 | `lifecycle-unsupported` | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                   |
-| `payload-too-large`     | the message holds more than 4 MiB of characters; the client also refuses before sending when the encoded request exceeds 4 MiB |
+| `payload-too-large`     | the message takes more than 4 MiB in UTF-8; the client also refuses before sending when the encoded request exceeds 4 MiB      |
 
 `server-execution-off` is the refusal of a server with no handler installed, and
 `internal` that of a handler that threw. `unauthorized` and `rate-limited` do

@@ -1684,6 +1684,8 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        address: transport.address.href,
+        firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
       const { session, redemption } = await client.mountRedeeming(
         space,
