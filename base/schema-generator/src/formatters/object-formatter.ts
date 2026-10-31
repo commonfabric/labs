@@ -286,7 +286,9 @@ export class ObjectFormatter implements TypeFormatter {
       checker,
     );
     // A CFC metadata carrier a mapped type folded into the object is a
-    // label, not a member: no value holds it.
+    // label, not a member: no value holds it. A reading that has read the
+    // carriers it folded in already (`GenerationContext.carriersRead`) labels
+    // the object itself.
     let carrier: ts.Symbol | undefined;
     for (const prop of props) {
       const propName = prop.getName();
@@ -536,7 +538,7 @@ export class ObjectFormatter implements TypeFormatter {
     }
     if (required.length > 0) schema.required = required;
 
-    return carrier
+    return carrier && context.carriersRead !== type
       ? withValueRecordsOf(
         this.#schemaGenerator.withLabelsCarriedBy(
           schema,

@@ -57,6 +57,7 @@ import { writerPolicyHeldBy } from "../typescript/writer-policy.ts";
 import {
   type CarrierStamp,
   carrierStamps,
+  carrierStampsOf,
   CFC_CARRIER_PROPERTY,
   cfcCarrierProperty,
   memberValueType,
@@ -89,6 +90,8 @@ import {
 } from "../scope-placement.ts";
 import {
   EVIDENCE_LABELS,
+  joinPlacedIfcLabels,
+  placementShape,
   POLICY_READ_IN_PART,
   referenceChain,
   withIfcLabels,
@@ -605,8 +608,17 @@ const PRIMITIVE_TYPE_FLAGS = ts.TypeFlags.StringLike |
 const isPrimitiveValue = (
   type: ts.Type,
   checker: ts.TypeChecker,
+): boolean => isPrimitiveParts([type], checker);
+
+/**
+ * Whether the intersection of `intersected` is a primitive value
+ * (`isPrimitiveValue()`), each read through the parts it has.
+ */
+const isPrimitiveParts = (
+  intersected: readonly ts.Type[],
+  checker: ts.TypeChecker,
 ): boolean => {
-  const parts = type.isIntersection() ? type.types : [type];
+  const parts = intersected.flatMap(partsOf);
   return parts.some((part) => (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0) &&
     parts.every((part) =>
       (part.flags & PRIMITIVE_TYPE_FLAGS) !== 0 ||
@@ -621,6 +633,26 @@ const isPrimitiveValue = (
 /** The alternatives of `type`: its members where it is a union. */
 const alternativesOf = (type: ts.Type): readonly ts.Type[] =>
   type.isUnion() ? type.types : [type];
+
+/**
+ * Whether `alternative`, an alternative of a policy's payload given as the
+ * parts it intersects (`Payload`), is data that lists no member to find it
+ * under: neither a primitive, nor `null`, `undefined`, `void` or `never`,
+ * which hold no data, nor a type with a data member of its own
+ * (`payloadMemberDeclarations()`), as `{}`, `unknown`, an unbound parameter
+ * and a lone carrier have none.
+ */
+const listsNoMembers = (
+  alternative: readonly ts.Type[],
+  checker: ts.TypeChecker,
+): boolean =>
+  alternative.every((part) =>
+    (part.flags &
+      (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void |
+        ts.TypeFlags.Never)) === 0
+  ) &&
+  !isPrimitiveParts(alternative, checker) &&
+  payloadMemberDeclarations([alternative], checker).size === 0;
 
 /**
  * The declarations of each member `type` holds as data, by name: none for a
@@ -655,31 +687,202 @@ const dataMemberDeclarations = (
 };
 
 /**
- * The payload `metadata`'s carrier recorded, read under the bindings its
- * metadata is read under: a type parameter they bind is its argument, as
- * the checker would instantiate it.
+ * A payload a policy was written around (`CarrierStamp.of`), as the
+ * alternatives it may be, each the parts whose intersection it is. Read under
+ * bindings, a part a type parameter stands for is the argument bound to it,
+ * so `T & { y: number }` at `T = { x: string }` is `{ x: string }` and
+ * `{ y: number }`, an intersection of them the checker has no public way to
+ * build. A mapped type over a bound parameter, as `Readonly<T>`, is what it
+ * maps over, read the same way, as its members are that type's. An
+ * alternative holding no bound parameter is one part, itself.
  */
-const boundPayloadOf = (metadata: CarriedMetadata): ts.Type | undefined => {
-  let payload = metadata.of;
-  let bound = metadata.bound;
-  for (
-    let argument = payload && boundArgumentOfType(payload, bound);
-    argument;
-    argument = boundArgumentOfType(argument.type, argument.bound)
-  ) {
-    payload = argument.type;
-    bound = argument.bound;
+type Payload = readonly (readonly ts.Type[])[];
+
+/**
+ * The payload `metadata`'s carrier recorded, read under the bindings its
+ * metadata is read under (`Payload`): a type parameter they bind is its
+ * argument, as the checker would instantiate it, alone or in a union or an
+ * intersection, which distributes over a union its argument is. A mapped
+ * type over one is what it maps where it keeps every key of that
+ * (`mapsEveryKeyOf()`), and itself where it lists its keys
+ * (`listsItsKeys()`), as `Pick<T, "x">` does. `undefined` where the payload
+ * is not read: none was recorded, or it holds a mapped type over a bound
+ * parameter whose keys the bindings alone cannot name, as one renaming them
+ * with an `as` clause has, or an intersection with a part the checker defers
+ * (`isDeferredType()`), as `(T extends object ? T : never) & { y: number }`
+ * is: that part lists none of its instantiation's members, so the other
+ * parts list only some of the payload's.
+ */
+const boundPayloadOf = (
+  metadata: CarriedMetadata,
+  checker: ts.TypeChecker,
+): Payload | undefined =>
+  metadata.of && payloadUnder(metadata.of, metadata.bound, checker);
+
+/**
+ * Helper for {@link boundPayloadOf}, which returns `type` read under `bound`
+ * as a payload (`Payload`), or `undefined` where it is not read. An
+ * alternative that intersects `null`, `undefined` or `never` with anything
+ * else holds nothing, and drops out.
+ */
+const payloadUnder = (
+  type: ts.Type,
+  bound: BoundTypeParameters | undefined,
+  checker: ts.TypeChecker,
+): Payload | undefined => {
+  const argument = boundArgumentOfType(type, bound);
+  if (argument) return payloadUnder(argument.type, argument.bound, checker);
+  const source = mappedSourceOf(type, checker);
+  if (source !== undefined && holdsBoundParameter(source, bound, checker)) {
+    if (mapsEveryKeyOf(type, source)) {
+      return payloadUnder(source, bound, checker);
+    }
+    if (!listsItsKeys(type)) return undefined;
   }
-  return payload;
+  if (type.isUnion()) {
+    const read = type.types.map((alternative) =>
+      payloadUnder(alternative, bound, checker)
+    );
+    return read.every((alternatives) => alternatives !== undefined)
+      ? read.flat()
+      : undefined;
+  }
+  if (type.isIntersection() && type.types.some(isDeferredType)) {
+    return undefined;
+  }
+  if (
+    !type.isIntersection() ||
+    !type.types.some((part) => holdsBoundParameter(part, bound, checker))
+  ) {
+    return [[type]];
+  }
+  let alternatives: (readonly ts.Type[])[] = [[]];
+  for (const part of type.types) {
+    const read = payloadUnder(part, bound, checker);
+    if (read === undefined) return undefined;
+    alternatives = alternatives.flatMap((parts) =>
+      read.map((more) => [...parts, ...more])
+    );
+  }
+  return alternatives.filter((parts) =>
+    parts.length === 1 ||
+    parts.every((part) =>
+      (part.flags &
+        (ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Never)) ===
+        0
+    )
+  );
 };
 
 /**
- * A mapped type as the checker holds it, with the type it maps over:
- * `modifiersType` is `T` in `{ readonly [K in keyof T]: T[K] }`, which the
- * checker sets once it resolves the mapped type's members.
+ * Whether `type` is one the checker defers until the type parameters it is
+ * written over are bound, as a conditional type and an indexed access are,
+ * `Extract<T, U>` and `Awaited<T>` among them: read uninstantiated, it lists
+ * none of the members its instantiation has.
+ */
+const isDeferredType = (type: ts.Type): boolean =>
+  (type.flags & (ts.TypeFlags.Conditional | ts.TypeFlags.IndexedAccess)) !== 0;
+
+/**
+ * Whether `type` is a type parameter `bound` binds, or a union, an
+ * intersection or a mapped type holding one.
+ */
+const holdsBoundParameter = (
+  type: ts.Type,
+  bound: BoundTypeParameters | undefined,
+  checker: ts.TypeChecker,
+): boolean => {
+  if (boundArgumentOfType(type, bound) !== undefined) return true;
+  if (type.isUnionOrIntersection()) {
+    return type.types.some((part) => holdsBoundParameter(part, bound, checker));
+  }
+  const source = mappedSourceOf(type, checker);
+  return source !== undefined && holdsBoundParameter(source, bound, checker);
+};
+
+/**
+ * The type `type` maps over where it is a mapped type, as `Readonly<T>` and
+ * `{ [K in keyof T]: T[K] }` map over `T` (`MappedTypeWithInternals`), read
+ * once the checker has resolved its members.
+ */
+const mappedSourceOf = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type | undefined => {
+  if (((type as ts.ObjectType).objectFlags & ts.ObjectFlags.Mapped) === 0) {
+    return undefined;
+  }
+  checker.getPropertiesOfType(type);
+  return (type as MappedTypeWithInternals).modifiersType;
+};
+
+/**
+ * Whether `type`, a mapped type over `source` (`mappedSourceOf()`), has
+ * every key of `source` and no other, as `Readonly<T>` and
+ * `Pick<T, keyof T>` do: it maps `keyof source`, and gives no key a name of
+ * its own with an `as` clause.
+ */
+const mapsEveryKeyOf = (type: ts.Type, source: ts.Type): boolean => {
+  const { constraintType, declaration } = type as MappedTypeWithInternals;
+  return declaration?.nameType === undefined &&
+    constraintType !== undefined &&
+    (constraintType.flags & ts.TypeFlags.Index) !== 0 &&
+    (constraintType as ts.IndexType).type === source;
+};
+
+/**
+ * Whether `type`, a mapped type, lists its keys, as `Pick<T, "x" | "y">`
+ * does: each is a literal, and none gets a name of its own with an `as`
+ * clause.
+ */
+const listsItsKeys = (type: ts.Type): boolean => {
+  const { constraintType, declaration } = type as MappedTypeWithInternals;
+  return declaration?.nameType === undefined &&
+    constraintType !== undefined &&
+    alternativesOf(constraintType).every((key) =>
+      (key.flags &
+        (ts.TypeFlags.StringLiteral | ts.TypeFlags.NumberLiteral |
+          ts.TypeFlags.UniqueESSymbol)) !== 0
+    );
+};
+
+/**
+ * The declarations of each member `of`, a payload, holds as data, by name
+ * (`dataMemberDeclarations()`): those of every part of every alternative
+ * that is no primitive value, each name holding the declarations of each
+ * part that has it.
+ */
+const payloadMemberDeclarations = (
+  of: Payload,
+  checker: ts.TypeChecker,
+): ReadonlyMap<string, readonly ts.Declaration[]> => {
+  const members = new Map<string, ts.Declaration[]>();
+  for (const parts of of) {
+    if (isPrimitiveParts(parts, checker)) continue;
+    for (const part of parts) {
+      for (
+        const [name, declarations] of dataMemberDeclarations(part, checker)
+      ) {
+        const held = members.get(name) ?? [];
+        for (const declaration of declarations) held.push(declaration);
+        members.set(name, held);
+      }
+    }
+  }
+  return members;
+};
+
+/**
+ * A mapped type as the checker holds it once it resolves the mapped type's
+ * members: in `{ readonly [K in keyof T as N]: T[K] }`, `modifiersType` is
+ * `T`, the type it maps over, `constraintType` is `keyof T`, the keys it
+ * maps, and `declaration` is the node that writes it, whose `nameType` is
+ * `N`.
  */
 type MappedTypeWithInternals = ts.ObjectType & {
   readonly modifiersType?: ts.Type;
+  readonly constraintType?: ts.Type;
+  readonly declaration?: ts.MappedTypeNode;
 };
 
 /**
@@ -734,17 +937,17 @@ const holdsCarriersUnwritten = (
  */
 const payloadReach = (
   type: ts.Type,
-  of: ts.Type | undefined,
+  of: Payload | undefined,
   checker: ts.TypeChecker,
 ): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
   const reach = reachOfPayload(type, of, checker);
-  const held = of?.isUnion()
-    ? of.types.filter((alternative) =>
-      partsOf(alternative).every((part) => partsOf(type).includes(part))
+  const held = of && of.length > 1
+    ? of.filter((parts) =>
+      parts.flatMap(partsOf).every((part) => partsOf(type).includes(part))
     )
     : [];
   return held.length === 1
-    ? { may: reach.may, must: reachOfPayload(type, held[0], checker).must }
+    ? { may: reach.may, must: reachOfPayload(type, held, checker).must }
     : reach;
 };
 
@@ -755,7 +958,7 @@ const partsOf = (type: ts.Type): readonly ts.Type[] =>
 /** Helper for `payloadReach()`, for a payload read as a whole. */
 const reachOfPayload = (
   type: ts.Type,
-  of: ts.Type | undefined,
+  of: Payload | undefined,
   checker: ts.TypeChecker,
 ): { may: readonly string[] | "all"; must: readonly string[] | "all" } => {
   // No payload recorded (`payloadOfStamp()`): the payload's data may be
@@ -767,17 +970,19 @@ const reachOfPayload = (
     alternativesOf(type).every((alternative) =>
       isPrimitiveValue(alternative, checker)
     ) &&
-    alternativesOf(of).some((alternative) =>
-      isPrimitiveValue(alternative, checker)
-    )
+    of.some((parts) => isPrimitiveParts(parts, checker))
   ) {
     return { may: "all", must: "all" };
   }
-  const payloadMembers = dataMemberDeclarations(of, checker);
-  const payloadIndexes = alternativesOf(of).flatMap((alternative) =>
-    checker.getIndexInfosOfType(alternative)
+  const payloadMembers = payloadMemberDeclarations(of, checker);
+  const payloadIndexes = of.flatMap((parts) =>
+    parts.flatMap((part) => checker.getIndexInfosOfType(part))
   );
   const indexed = payloadIndexes.length > 0;
+  // An alternative that lists no members, such as `{}` or `unknown`, leaves
+  // its data free to be under any key, as an index signature does.
+  const open = indexed ||
+    of.some((parts) => listsNoMembers(parts, checker));
   const valueMembers = [...dataMemberDeclarations(type, checker)];
   const unwritten = holdsCarriersUnwritten(type, checker);
   // A value an object part of which has an index signature holds data under
@@ -817,14 +1022,14 @@ const reachOfPayload = (
   if (valueMembers.length === 0) {
     const whole = payloadMembers.size === 0;
     return {
-      may: whole || indexed ? "all" : [],
+      may: whole || open ? "all" : [],
       must: whole && unwritten && !holdsUnnamed ? "all" : [],
     };
   }
   // A member with no declaration may hold the payload's data under a name the
   // payload does not have: a mapped type that renames its keys keeps no
   // member's declaration, and a spread of its result keeps none either.
-  const may = indexed ? "all" as const : valueMembers
+  const may = open ? "all" as const : valueMembers
     .filter(([name, declarations]) =>
       payloadMembers.has(name) || declarations.length === 0
     )
@@ -900,7 +1105,7 @@ const placeCarriedLabels = (
   type: ts.Type,
   placed: readonly {
     readonly labels: Record<string, unknown>;
-    readonly of: ts.Type | undefined;
+    readonly of: Payload | undefined;
   }[],
   context: GenerationContext,
 ): MutableJSONSchema => {
@@ -958,6 +1163,37 @@ const cfcCarriedParts = (
 };
 
 /**
+ * The labeled parts of `type`, a labeled operand of a default-library alias
+ * or a part of one, read as `cfcCarriedParts()` reads them, except that the
+ * `CfcTag` the checker defers while the payload is a type parameter is a
+ * carrier too (`carrierStampsOf()`), as such an operand is read where the
+ * aliases holding it write it, under their bindings. A lone carrier, which
+ * the checker leaves of an intersection whose payload it drops, as it drops
+ * `unknown` and `{}`, has no payload and the carrier's policies.
+ */
+const operandCarriedParts = (
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { payload: readonly ts.Type[]; metadata: CarrierStamp[] } | undefined => {
+  if (type.isIntersection()) {
+    const metadata: CarrierStamp[] = [];
+    const rest: ts.Type[] = [];
+    for (const member of type.types) {
+      const stamps = carrierStampsOf(member, checker);
+      if (stamps) {
+        for (const stamp of stamps) metadata.push(stamp);
+      } else if (!isScopeBrandMember(member, checker)) rest.push(member);
+    }
+    return metadata.length > 0 ? { payload: rest, metadata } : undefined;
+  }
+  if (type.isUnion() || checker.getIndexInfosOfType(type).length > 0) {
+    return undefined;
+  }
+  const stamps = carrierStampsOf(type, checker);
+  return stamps && { payload: [], metadata: stamps };
+};
+
+/**
  * The remedy `cfc-write-authorized-by:unread` gives for a writer policy read
  * where no syntax names its writer, in a schema that defines a document.
  */
@@ -1004,17 +1240,12 @@ const boundArgumentOfType = (
 };
 
 /**
- * Whether `type`, the payload of an intersection of CFC metadata carriers,
- * leaves the intersection no carrier: `never`, and `null` and `undefined`,
- * alone or in a union of them, make it `never`, and `any` makes it `any`.
- * Every other payload keeps the carriers, `void` and `unknown` among them.
+ * Whether `type` is `null` or `undefined`, which a CFC alias holds beside its
+ * carrier rather than intersecting with it (`Cfc` in `packages/api/cfc.ts`),
+ * so that no policy labels it.
  */
-const leavesNoCarrier = (type: ts.Type): boolean =>
-  (type.isUnion() ? type.types : [type]).every((member) =>
-    (member.flags &
-      (ts.TypeFlags.Never | ts.TypeFlags.Null | ts.TypeFlags.Undefined |
-        ts.TypeFlags.Any)) !== 0
-  );
+const isNullishType = (type: ts.Type): boolean =>
+  (type.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) !== 0;
 
 /**
  * The metadata type a CFC carrier holds, with the bindings it is read under,
@@ -1029,26 +1260,60 @@ type CarriedMetadata = {
 };
 
 /**
- * A default-library alias mapping a labeled type's members, read for the
- * value it holds and the labels it keeps (`CommonFabricFormatter`'s
- * `#libraryView()`).
+ * One member a labeled operand may be: its payload, and the metadata of each
+ * carrier the member holds.
  */
-type LibraryView = {
+type LabeledMember = {
   /**
-   * The members of the payload of the alias's labeled operand, whose
-   * intersection the payload is (`cfcCarriedParts()`).
+   * The types the member intersects its carriers with, whose intersection
+   * its payload is (`cfcCarriedParts()`).
    */
   readonly payload: readonly ts.Type[];
 
-  /** The metadata of each carrier the operand holds. */
+  /** The metadata of each carrier the member holds, none where unlabeled. */
   readonly metadata: readonly CarriedMetadata[];
+};
+
+/**
+ * A default-library alias mapping a labeled type's members, read for the
+ * value it holds and the labels it keeps (`CommonFabricFormatter`'s
+ * `#libraryView()`), or the operand of one.
+ */
+type LibraryView = {
+  /**
+   * Each member the operand may be: one, or several for a union, or none
+   * where it is `never`.
+   */
+  readonly members: readonly LabeledMember[];
 
   /**
-   * Whether the value is the payload: a primitive, which `Readonly`,
-   * `Partial` and `Required` leave as it is. A payload of several members,
-   * or none, is an intersection, which they map as they map an object.
+   * The payload the value is, where the operand is one member whose payload
+   * is a primitive, which `Readonly`, `Partial` and `Required` leave as it
+   * is. A payload of several types, or none, is an intersection, which they
+   * map as they map an object.
    */
-  readonly primitive: boolean;
+  readonly primitive: ts.Type | undefined;
+};
+
+/** The view of `type` as one member of an operand, unlabeled. */
+const unlabeledView = (type: ts.Type): LibraryView => ({
+  members: [{ payload: [type], metadata: [] }],
+  primitive: undefined,
+});
+
+/**
+ * The payload of the one member in `members`, where there is one and its
+ * payload is one type, a primitive.
+ */
+const primitivePayloadOf = (
+  members: readonly LabeledMember[],
+): ts.Type | undefined => {
+  const [only, ...others] = members;
+  const [payload, ...intersected] = only?.payload ?? [];
+  return payload && others.length === 0 && intersected.length === 0 &&
+      (payload.flags & ts.TypeFlags.Object) === 0
+    ? payload
+    : undefined;
 };
 
 /**
@@ -1511,23 +1776,39 @@ export class CommonFabricFormatter implements TypeFormatter {
     // an object of the primitive's methods. So the value is that type as the
     // formatters after this one read it, or, where `Readonly`, `Partial` and
     // `Required` leave a primitive as it is, the primitive; and its labels
-    // are the operand's, read from its carriers in full or not at all.
+    // are those of the members the operand may be, joined. The carrier folded
+    // into the object is those members' carriers. Over a union, `Omit` folds
+    // them into one that holds every member's policies, though the value is
+    // only one of them, so the object is labeled here and not by it; over one
+    // member, the carrier is that member's, which the checker instantiated,
+    // and labels the object as well.
     const view = this.#libraryView(type, context);
     if (view) {
+      // A carrier every member holds, as one around a union operand, is one
+      // policy, read once.
       this.#reportCarriedWriter(
-        view.metadata.map((metadata) => metadata.type),
+        [
+          ...new Set(
+            view.members.flatMap(({ metadata }) =>
+              metadata.map((carried) => carried.type)
+            ),
+          ),
+        ],
         context,
       );
       const shape = view.primitive
         ? this.#schemaGenerator.formatChildType(
-          view.payload[0]!,
+          view.primitive,
           context,
           undefined,
         )
-        : this.#schemaGenerator.formatStructure(type, context);
-      // The structure may carry the same labels, from the carrier folded into
-      // it; labelling it again with them changes nothing.
-      return this.#withPlacedLabels(shape, type, view.metadata, context);
+        : this.#schemaGenerator.formatStructure(
+          type,
+          view.members.length > 1
+            ? { ...context, carriersRead: type }
+            : context,
+        );
+      return this.#withMemberLabels(shape, type, view.members, context);
     }
 
     // Two scopes' brands on one value are a wrapper nested in another with no
@@ -2834,7 +3115,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           type,
           labels.map((label, index) => ({
             labels: label,
-            of: boundPayloadOf(metadata[index]!),
+            of: boundPayloadOf(metadata[index]!, context.typeChecker),
           })),
           context,
         ),
@@ -2871,6 +3152,48 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
+   * `schema`, the schema of a value of `type` that may be any one of
+   * `members`, the members a labeled operand may be, with their labels: one
+   * member's placed as one value's are (`#withPlacedLabels()`), and several
+   * members' each placed so on the value's shape alone, then joined where
+   * they land (`joinPlacedIfcLabels()`). Each member's carriers are read in
+   * full (`#labelsOf()`), or the value is unlabeled: a member read in part
+   * could claim what its author never wrote together, and a member not read
+   * could hold a confidentiality label the join would leave out.
+   */
+  #withMemberLabels(
+    schema: MutableJSONSchema,
+    type: ts.Type,
+    members: readonly LabeledMember[],
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const [only, ...others] = members;
+    if (only && others.length === 0) {
+      return this.#withPlacedLabels(schema, type, only.metadata, context);
+    }
+    const shape = placementShape(schema);
+    const placed: MutableJSONSchema[] = [];
+    for (const { metadata } of members) {
+      const labels = this.#labelsOf(metadata, context);
+      if (!labels) return schema;
+      placed.push(placeCarriedLabels(
+        shape,
+        type,
+        labels.map((label, index) => ({
+          labels: label,
+          of: boundPayloadOf(metadata[index]!, context.typeChecker),
+        })),
+        context,
+      ));
+    }
+    return withValueRecordsOf(
+      joinPlacedIfcLabels(schema, placed),
+      schema,
+      context,
+    );
+  }
+
+  /**
    * The value of `type`, an intersection of CFC metadata carriers and other
    * members, several or none, as those members' intersection reads. The
    * checker's public API builds no intersection, so the value is read in
@@ -2902,23 +3225,33 @@ export class CommonFabricFormatter implements TypeFormatter {
   /**
    * Where `type` is a default-library alias mapping a labeled type's members
    * (`Readonly<Sec<X>>`), directly or down a chain of aliases
-   * (`#followToLibraryAlias()`), its labeled operand (`#operandView()`), and
-   * whether the value is the operand's payload: a primitive, which
-   * `Readonly`, `Partial` and `Required` leave as it is; `undefined` for any
-   * other type. `bound` binds the type parameters `type` may hold.
+   * (`#followToLibraryAlias()`), the members of its operand
+   * (`#operandView()`), one of them labeled at least, and the primitive the
+   * value is, where the operand is one member whose payload is a primitive
+   * and the alias leaves it as it is, as `Readonly`, `Partial` and `Required`
+   * do; `undefined` for any other type, a union among them: the checker
+   * distributes such an alias over a union operand where it maps the
+   * operand's own members, as `Readonly` does, and builds a union whose every
+   * member is read on its own. `bound` binds the type parameters `type` may
+   * hold.
    */
   #libraryView(
     type: ts.Type,
     context: GenerationContext,
     bound = context.boundTypeParameters,
   ): LibraryView | undefined {
+    if (type.isUnion()) return undefined;
     const followed = this.#followToLibraryAlias(type, bound, context);
     if (!followed) return undefined;
     const inner = this.#operandView(followed.operand, followed.bound, context);
-    return inner && {
-      ...inner,
-      primitive: inner.primitive &&
-        PRIMITIVE_KEEPING_LIBRARY_ALIASES.has(followed.name),
+    if (!inner?.members.some(({ metadata }) => metadata.length > 0)) {
+      return undefined;
+    }
+    return {
+      members: inner.members,
+      primitive: PRIMITIVE_KEEPING_LIBRARY_ALIASES.has(followed.name)
+        ? inner.primitive
+        : undefined,
     };
   }
 
@@ -3055,13 +3388,19 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * Helper for {@link #libraryView}, which returns the labeled parts of
-   * `operand`, the type a default-library alias mapping an object's members
-   * is given, read under `bound`: for a type parameter `bound` binds, its
-   * argument's; for an intersection of CFC metadata carriers and other
-   * members, those members as its payload's are read (`#payloadParts()`),
-   * with the carriers' metadata and any its payload adds; for such an alias
-   * in turn, its operand's; and `undefined` for any other type.
+   * Helper for {@link #libraryView}, which returns the members `operand`, the
+   * type a default-library alias mapping an object's members is given, may
+   * be under `bound`, and the payload the value is where the operand is one
+   * member whose payload is a primitive; `undefined` where `operand` is
+   * `any`, or a union holding it, which the checker reduces to it. A type
+   * parameter `bound` binds is its argument. Any other union has the members
+   * each of its own has, and is no primitive, since the checker distributes
+   * an alias that leaves one as it is over a union; a bare `unknown` among
+   * them is a member like any other, with no labels and no members of its
+   * own, so the others' labels stay; `never` has none. An intersection of CFC metadata
+   * carriers and other members, or a lone carrier (`operandCarriedParts()`),
+   * has the members its carriers label (`#carriedMembers()`), such an alias
+   * in turn its operand's, and any other type is one unlabeled member.
    */
   #operandView(
     operand: ts.Type,
@@ -3072,72 +3411,114 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (argument) {
       return this.#operandView(argument.type, argument.bound, context);
     }
-    const carried = cfcCarriedParts(operand, context.typeChecker);
-    if (!carried) return this.#libraryView(operand, context, bound);
-    const payload = this.#payloadParts(carried.payload, bound, context);
-    return payload && {
-      payload: payload.payload,
-      metadata: [
-        ...payload.metadata,
-        ...carried.metadata.map((stamp) => ({
-          type: stamp.meta,
-          bound,
-          of: payloadOfStamp(stamp, carried.payload),
-        })),
-      ],
-      primitive: payload.payload.length === 1 &&
-        (payload.payload[0]!.flags & ts.TypeFlags.Object) === 0,
-    };
+    if ((operand.flags & ts.TypeFlags.Any) !== 0) return undefined;
+    if ((operand.flags & ts.TypeFlags.Never) !== 0) {
+      return { members: [], primitive: undefined };
+    }
+    if (operand.isUnion()) {
+      const members: LabeledMember[] = [];
+      for (const member of operand.types) {
+        const view = this.#operandView(member, bound, context);
+        if (!view) return undefined;
+        for (const read of view.members) members.push(read);
+      }
+      return { members, primitive: undefined };
+    }
+    const carried = operandCarriedParts(operand, context.typeChecker);
+    if (!carried) {
+      return this.#libraryView(operand, context, bound) ??
+        unlabeledView(operand);
+    }
+    const members = this.#carriedMembers(carried, bound, context);
+    return members && { members, primitive: primitivePayloadOf(members) };
   }
 
   /**
-   * Helper for {@link #operandView}, which returns what `payload`, the
-   * members a labeled operand intersects its carriers with, is under `bound`,
-   * and the metadata of the carriers it adds to the operand's. A type
-   * parameter `bound` binds is its argument. The checker folds an argument
-   * that is itself labeled into the operand's intersection, as it folds any
-   * intersection into another, so the argument's payload members are the
-   * operand's and its carriers add their metadata. An argument that leaves
-   * the intersection no carrier (`leavesNoCarrier()`) leaves the operand
-   * unlabeled, and so returns `undefined`. Any other member adds no carrier.
+   * Helper for {@link #operandView} and {@link #payloadParts}, which returns
+   * the members `carried`, an intersection of CFC metadata carriers and other
+   * types, may be under `bound`: one for each way of taking one member that
+   * each of those types, its payload's, may be (`#payloadParts()`), as the
+   * intersection distributes over a union, each with the metadata of the
+   * carriers its members add and the intersection's own; `undefined` where
+   * any of those types is `any`. A member that is `null` or `undefined`
+   * alone is held beside the carriers, unlabeled (`isNullishType()`), and
+   * one intersecting either with anything else is nothing.
    */
-  #payloadParts(
-    payload: readonly ts.Type[],
+  #carriedMembers(
+    carried: {
+      readonly payload: readonly ts.Type[];
+      readonly metadata: readonly CarrierStamp[];
+    },
     bound: BoundTypeParameters | undefined,
     context: GenerationContext,
-  ):
-    | {
-      readonly payload: readonly ts.Type[];
-      readonly metadata: CarriedMetadata[];
-    }
-    | undefined {
-    const members: ts.Type[] = [];
-    const metadata: CarriedMetadata[] = [];
-    for (const member of payload) {
-      const argument = boundArgumentOfType(member, bound);
-      if (!argument) {
-        members.push(member);
-        continue;
-      }
-      if (leavesNoCarrier(argument.type)) return undefined;
-      const carried = cfcCarriedParts(argument.type, context.typeChecker);
-      const inner = this.#payloadParts(
-        carried?.payload ?? [argument.type],
-        argument.bound,
-        context,
+  ): LabeledMember[] | undefined {
+    let members: LabeledMember[] = [{ payload: [], metadata: [] }];
+    for (const part of carried.payload) {
+      const alternatives = this.#payloadParts(part, bound, context);
+      if (!alternatives) return undefined;
+      members = members.flatMap((member) =>
+        alternatives.map((alternative) => ({
+          payload: [...member.payload, ...alternative.payload],
+          metadata: [...member.metadata, ...alternative.metadata],
+        }))
       );
-      if (!inner) return undefined;
-      for (const part of inner.payload) members.push(part);
-      for (const part of inner.metadata) metadata.push(part);
-      for (const stamp of carried?.metadata ?? []) {
-        metadata.push({
-          type: stamp.meta,
-          bound: argument.bound,
-          of: payloadOfStamp(stamp, carried?.payload ?? []),
-        });
-      }
     }
-    return { payload: members, metadata };
+    const metadata = carried.metadata.map((stamp) => ({
+      type: stamp.meta,
+      bound,
+      of: payloadOfStamp(stamp, carried.payload),
+    }));
+    return members.flatMap((member) => {
+      if (!member.payload.some(isNullishType)) {
+        return [{
+          payload: member.payload,
+          metadata: [...member.metadata, ...metadata],
+        }];
+      }
+      return member.payload.length === 1
+        ? [{ payload: member.payload, metadata: [] }]
+        : [];
+    });
+  }
+
+  /**
+   * Helper for {@link #carriedMembers}, which returns the members `payload`,
+   * a type a labeled operand intersects its carriers with, may be under
+   * `bound`, each with the metadata of the carriers it adds to the operand's;
+   * `undefined` where it is `any`, which makes the operand `any`. A type
+   * parameter `bound` binds is its argument, which the checker folds into the
+   * operand's intersection, as it folds any type in. So the intersection
+   * distributes over a union, each member of which is read on its own,
+   * except that a union holding `any` is `any`. A bare `unknown` among them
+   * is a member adding no carrier, and a labeled one its carrier, members
+   * like any other; `never` has no members; and a type that is itself
+   * labeled folds its carriers in (`#carriedMembers()`). Any other type is
+   * one member adding no carrier.
+   */
+  #payloadParts(
+    payload: ts.Type,
+    bound: BoundTypeParameters | undefined,
+    context: GenerationContext,
+  ): LabeledMember[] | undefined {
+    const argument = boundArgumentOfType(payload, bound);
+    if (argument) {
+      return this.#payloadParts(argument.type, argument.bound, context);
+    }
+    if ((payload.flags & ts.TypeFlags.Any) !== 0) return undefined;
+    if ((payload.flags & ts.TypeFlags.Never) !== 0) return [];
+    if (payload.isUnion()) {
+      const members: LabeledMember[] = [];
+      for (const member of payload.types) {
+        const read = this.#payloadParts(member, bound, context);
+        if (!read) return undefined;
+        for (const part of read) members.push(part);
+      }
+      return members;
+    }
+    const carried = operandCarriedParts(payload, context.typeChecker);
+    return carried
+      ? this.#carriedMembers(carried, bound, context)
+      : [{ payload: [payload], metadata: [] }];
   }
 
   /**
