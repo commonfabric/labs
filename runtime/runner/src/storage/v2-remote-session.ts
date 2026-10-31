@@ -189,9 +189,10 @@ export interface SessionFactory {
    * Redeems `invite` in `space` as `signer`, the factory's default signer
    * when absent, by opening a session there whose open carries the
    * invitation (04-protocol.md §4.1.2), and returns the redemption's
-   * receipt. The session and its connection are closed before this returns;
-   * the server keeps the session for its resume grace period, as it keeps
-   * any whose connection closed.
+   * receipt. Before this returns, the session sends its close and the
+   * connection closes without waiting for the close's answer, so a session
+   * the server has not ended by the time the connection drops waits out its
+   * resume grace period there, as any whose connection closed does.
    *
    * @throws `SpaceInviteRefusal`, as the memory client's `mountRedeeming()`
    *   throws it, when the redemption is refused or the server does not
