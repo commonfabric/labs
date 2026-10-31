@@ -133,6 +133,10 @@ export class StandaloneMemoryServer {
        *  is signed. */
       connectionAuth?: boolean;
 
+      /** The invitation host, as `Server` takes it. Default: none, and the
+       *  server administers and redeems no invitations on a session. */
+      inviteHost?: string;
+
       /** Answers the non-websocket requests this address receives. Anything
        *  it declines, by answering `undefined`, is told to upgrade. */
       serve?: (
@@ -156,6 +160,9 @@ export class StandaloneMemoryServer {
         audience: standaloneMemoryAudience,
       },
       acl: options.acl,
+      ...(options.inviteHost === undefined
+        ? {}
+        : { inviteHost: options.inviteHost }),
     });
     const channels = new Set<MemoryMessageCompressionChannel>();
     const http = Deno.serve({
