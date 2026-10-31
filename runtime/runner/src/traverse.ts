@@ -5360,10 +5360,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (isSigilLink(doc.value)) return undefined;
 
     if (plan.kind === "primitive") {
-      reads.values.push(doc.address.path);
-      return matchesPlainType(doc.value, plan.type)
-        ? { ok: doc.value }
-        : fail(TRAVERSE_FAILURES.invalidType);
+      // A scalar the plan rejects is not returned: its kind was observed,
+      // its value was not.
+      if (matchesPlainType(doc.value, plan.type)) {
+        reads.values.push(doc.address.path);
+        return { ok: doc.value };
+      }
+      reads.paths.push(doc.address.path);
+      return fail(TRAVERSE_FAILURES.invalidType);
     }
 
     if (plan.kind === "array") {
@@ -5381,17 +5385,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
       reads.paths.push(doc.address.path);
       let valid = true;
       doc.value.forEach((item, index) => {
-        reads.values.push(appendToPath(doc.address.path, index.toString()));
+        const itemPath = appendToPath(doc.address.path, index.toString());
         if (matchesPlainType(item, itemPlan.type)) {
+          reads.values.push(itemPath);
           newValue[index] = item;
         } else if (itemPlan.type === "undefined") {
+          reads.paths.push(itemPath);
           newValue[index] = undefined;
         } else if (itemPlan.type === "null") {
+          reads.paths.push(itemPath);
           newValue[index] = null;
         } else {
           // Keep visiting later indices after a failure: those reads are part
           // of the scheduler/subscription surface even when the array result
-          // is invalid.
+          // is invalid. A rejected item's kind was observed, not its value.
+          reads.paths.push(itemPath);
           valid = false;
         }
       });
@@ -5428,9 +5436,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       }
       const propPath = appendToPath(doc.address.path, propKey);
       if (childPlan.kind === "primitive" && !isSigilLink(propValue)) {
-        reads.values.push(propPath);
         if (matchesPlainType(propValue, childPlan.type)) {
+          reads.values.push(propPath);
           newValue[propKey] = propValue;
+        } else {
+          reads.paths.push(propPath);
         }
       } else {
         reads.paths.push(propPath);
@@ -6340,17 +6350,18 @@ export class SchemaObjectTraverser<V extends FabricValue>
     doc: IMemorySpaceValueAttestation,
     schema: JSONSchema,
   ): FabricValue {
-    // What this returns is the scalar itself, so the read is of its value
-    // (CFC spec §4.5.2). The shape read the walk records at the document's
-    // top consumes the document's shape label alone, which is minted at
-    // creation and does not follow the value (§8.12.8).
-    this.tx.read(doc.address, READ_FOR_SCHEDULING);
     if (SchemaObjectTraverser.hasAsCell(schema)) {
       return this.objectCreator.createObject(
         getNormalizedLink(doc.address, schema),
         doc.value,
       );
     } else {
+      // What this returns is the scalar itself, so the read is of its value
+      // (CFC spec §4.5.2). The shape read the walk records at the document's
+      // top consumes the document's shape label alone, which is minted at
+      // creation and does not follow the value (§8.12.8). A handle returned
+      // above names the scalar without reading it.
+      this.tx.read(doc.address, READ_FOR_SCHEDULING);
       return doc.value;
     }
   }
