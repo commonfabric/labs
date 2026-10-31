@@ -12,12 +12,7 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import {
-  createSession,
-  type Identity,
-  legacySpaceDid,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, legacySpaceDid, Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -158,6 +153,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  type LifecycleClientConfig,
   ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
@@ -1735,13 +1731,26 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
     .serverExecution === true;
 }
 
+/**
+ * The client a served verb is sent with: signed as the configured identity,
+ * and sent on `pieces`' memory session for its space where the storage
+ * manager has one, so the verb reaches the process serving that space.
+ */
 async function lifecycleClient(
   config: SpaceConfig,
+  pieces: PiecesController,
   deps: PieceOperationDependencies,
-): Promise<{ apiUrl: URL; identity: Identity }> {
+): Promise<LifecycleClientConfig> {
+  const storageManager = (pieces.runtime as Runtime | undefined)
+    ?.storageManager;
+  const space = pieces.getSpace();
   return {
     apiUrl: new URL(config.apiUrl),
     identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
+    ...(storageManager?.runPatternLifecycle === undefined ? {} : {
+      session: (verb, body) =>
+        storageManager.runPatternLifecycle!(space, verb, body),
+    }),
   };
 }
 
@@ -1775,7 +1784,7 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, deps);
+      const client = await lifecycleClient(config, pieces, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1825,8 +1834,7 @@ async function createWithReceipt(
     } catch (error) {
       if (
         error instanceof ServedLifecycleRefusal ||
-        (error instanceof ServedLifecycleError && error.status >= 400 &&
-          error.status < 500 && error.status !== 408)
+        (error instanceof ServedLifecycleError && error.refused)
       ) {
         throw error;
       }
@@ -2169,7 +2177,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, deps), {
+    setPieceSourceOnServer)(await lifecycleClient(config, pieces, deps), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,
