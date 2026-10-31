@@ -265,7 +265,7 @@ between the two.
    append it waits for is refused or never derives. The evidence points at
    the home runtime materializing a foreign space's derivations itself while
    that space's own loop lags behind it, which the in-process ordering never
-   let happen; the cause is not yet pinned. The fabrichat room-principals
+   let happen; the cause is not yet pinned. The fabrichat room-members
    test, where a runtime one space refuses reads a list the loop derives
    across it, fails the same way on some runs. A lane running the ON arm under
    the worker is a question for stage 6, with the default.

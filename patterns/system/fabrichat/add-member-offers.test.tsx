@@ -3,10 +3,13 @@
  * manager. Bob, who holds OWNER on the test's space, starts a direct chat with
  * Alice from her message in a lobby, so his manager's people list her. In a
  * group room, an add his manager refuses, made before its catalog lists the
- * room, reads `access-only`. Once it lists the room, an add of Alice by her
- * chat address alone is offered to her through the inbox her profile points
- * at, joins her to the room's roster, and reads `offered`; an add of Carol by
- * a profile pointing at no inbox queues a notice for her, and reads `noticed`.
+ * room, reads `access-only`. Once it lists the room, and Bob has taken Alice
+ * out of the space's access list, the room's picker offers her, and an add of
+ * Alice by her chat address alone is offered to her through the inbox her
+ * profile points at, joins her to the room's roster, which makes her a member
+ * with that profile whom the picker leaves out, and reads `offered`; an add of
+ * Carol by a profile pointing at no inbox queues a notice for her, and reads
+ * `noticed`.
  * An add naming a profile that attests no one, or someone other than the
  * address it names, is refused. To a viewer with no manager, or one whose
  * manager hasn't resolved, an add reads `access-only` at once. The manager
@@ -27,9 +30,11 @@ import {
   currentPrincipal,
   equals,
   handler,
+  isWellFormedDID,
   multiUserTest,
   pattern,
   type RepresentsCurrentUser,
+  revokeSpaceAccess,
   SELF,
   spaceOf,
   type Stream,
@@ -39,6 +44,7 @@ import {
   Writable,
 } from "commonfabric";
 import type { ParticipantRoster } from "../loom/participants.tsx";
+import type { SpaceMember } from "../social-space/member-set.ts";
 import {
   countElements,
   findNodeById,
@@ -95,7 +101,41 @@ const addGesture = {
   action: CHAT_ADD_MEMBER_ACTION,
 };
 
+/** The gesture an OWNER's revocation takes. */
+const revokeGesture = {
+  surface: "FabriChatTestMembersSurface",
+  action: "FabriChatTestRevoke",
+};
+
 const typed = (text: string) => ({ type: "click", target: { value: text } });
+
+/** The member of `members` whose principal is `did`, if there is one. */
+const memberOf = (
+  members: readonly SpaceMember[] | undefined,
+  did: string,
+): SpaceMember | undefined =>
+  members?.find((member) => member.principal === did);
+
+/** What `revokeMember` is bound to. */
+interface RevokeState {
+  /** A record in the space whose access list loses the entry. */
+  room: Writable<MessagesValue>;
+
+  /** The principal whose entry is removed. */
+  principal: Writable<string>;
+}
+
+/** Removes `principal`'s entry from the space's access list. */
+const revokeMember = handler<unknown, RevokeState>((
+  _event,
+  { room, principal },
+) => {
+  const did = principal.get();
+  if (!isWellFormedDID(did)) {
+    throw new Error("The principal to revoke is not recorded yet.");
+  }
+  revokeSpaceAccess(room, did);
+});
 
 /**
  * A space no runtime here holds anything of, whose access list is therefore
@@ -218,6 +258,7 @@ interface ManagedRoomOutput {
   addParticipant: ChatRoomOutput["addParticipant"];
   addMember: ChatRoomOutput["addMember"];
   addRequests: ChatRoomOutput["addRequests"];
+  members: ChatRoomOutput["members"];
   participantPrincipals: ChatRoomOutput["participantPrincipals"];
 }
 
@@ -242,6 +283,7 @@ const ManagedRoom = pattern<ManagedRoomInput, ManagedRoomOutput>(
       addParticipant: room.addParticipant,
       addMember: room.addMember,
       addRequests: room.addRequests,
+      members: room.members,
       participantPrincipals: room.participantPrincipals,
     };
   },
@@ -432,9 +474,20 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
               `Added ${setup.aliceDid.get()}, who couldn't be told of this chat: The room isn't among this user's chats. Send them its link.`;
         }),
       },
+      // Every participant of the test is a member of its space, and the add
+      // has just granted Alice OWNER again, so Bob takes her out of the
+      // space's access list for the picker to have someone to offer.
+      {
+        action: revokeMember({
+          room: setup.room.messages,
+          principal: setup.aliceDid,
+        }),
+        event: {},
+        trustedUi: revokeGesture,
+      },
       { action: action_list_room },
-      // The room's picker offers Alice, whom Bob's people list and the room
-      // doesn't.
+      // The room's picker offers Alice, whom Bob's people list and the room's
+      // space doesn't.
       { assertion: assert(() => pickerOf(room[UI]) === "block:1") },
       // An offer names a group room, and nothing else in its space.
       {
@@ -472,7 +525,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         }),
       },
       // Named by her chat address alone, Alice is offered the room through the
-      // profile Bob's people list for her, and joins its roster.
+      // profile Bob's people list for her, and joins its roster, so she is a
+      // member again, with that profile, and the picker leaves her out.
       {
         action: room.addMember,
         event: { requestId: "add-alice", target: { value: setup.aliceDid } },
@@ -483,6 +537,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           const outcome = room.addRequests["add-alice"];
           return outcome?.status === "done" &&
             outcome.delivery === "offered" &&
+            (memberOf(room.members, setup.aliceDid.get())?.profiles.length ??
+                0) > 0 &&
             room.participantPrincipals.includes(setup.aliceDid.get()) &&
             pickerOf(room[UI]) === "none:0" &&
             shownOf(room[UI]) ===
