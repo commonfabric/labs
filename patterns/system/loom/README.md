@@ -142,9 +142,14 @@ occurrence outside it adds a new copy. `movePanel` and `duplicatePanel` accept
 an optional `before` occurrence; an absent source or anchor refuses. Duplicating
 copies the occurrence's complete target link and its title. It takes its adder
 from its own event, never from the source: a copy is added by whoever duplicates
-it, under the profile its event names or else as the principal it acted for. The
-runtime invocation identifies the new occurrence, including when that delivery
-is retried. `removePanel` removes only one occurrence and its presentation
+it, under the profile its event names or else as the principal it acted for. A
+copy records the `admission` its event names, a caller's own name for that
+admission of at most 200 characters, never the source's, and the root's other
+streams leave it as it is. So a caller whose reply was lost finds its copy by
+that name and the adder's label, whatever has happened to the copy's target or
+title since. The name says nothing about who added the panel. The runtime
+invocation identifies the new occurrence, including when that delivery is
+retried. `removePanel` removes only one occurrence and its presentation
 references. `removePiece` unregisters every occurrence of the specified complete
 piece link. Neither operation deletes the target.
 

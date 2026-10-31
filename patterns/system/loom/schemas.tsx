@@ -72,6 +72,12 @@ export interface PublishedDocument {
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.
+ *
+ * `admission` is the name the event that created a copy gave that admission
+ * (see {@link PanelAdmission}). It says nothing about who added the panel. It
+ * accepts anything here because a panel's schema is open, so a stored panel may
+ * already hold any value at this key; {@link validatePanel} holds what the root
+ * admits to a string.
  */
 export type Panel =
   | {
@@ -80,6 +86,8 @@ export type Panel =
     titleOverride?: string;
     addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
+    // deno-lint-ignore no-explicit-any
+    admission?: any;
   }
   | {
     kind: "document";
@@ -87,6 +95,8 @@ export type Panel =
     titleOverride?: string;
     addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
+    // deno-lint-ignore no-explicit-any
+    admission?: any;
   }
   | {
     kind: "url";
@@ -94,6 +104,8 @@ export type Panel =
     titleOverride?: string;
     addedBy?: PanelAdderDid;
     addedByProfile?: PanelAdderProfile;
+    // deno-lint-ignore no-explicit-any
+    admission?: any;
   };
 
 /** Shared staging and focus, independent of each viewer's session selection. */
@@ -262,12 +274,16 @@ export interface PanelAdder {
  * handler that writes a panel's adder, so all three take this shape:
  * `addPiece` requires `piece`, and `addPanel` and `duplicatePanel` require
  * `panel` and accept `before`. `addPanel` with `as` adds a copy of `panel`,
- * never recording the profile on the document passed.
+ * never recording the profile on the document passed. `admission` is the
+ * caller's own name for this admission, which a copy keeps, so that a caller
+ * whose reply was lost can find the copy whatever has happened to its fields
+ * since. Any other occurrence ignores it.
  */
 export interface PanelAdmission extends PanelAdder {
   piece?: Writable<unknown>;
   panel?: Writable<Panel>;
   before?: Writable<Panel>;
+  admission?: string;
 }
 
 /**

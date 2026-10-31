@@ -195,13 +195,48 @@ export default pattern(() => {
   const claimUnclaimed = action(() =>
     loom.viewerState.key("actingProfile").set(unclaimed)
   );
+  // A copy names the admission its event gave, so a caller whose reply was lost
+  // can find it whatever has happened to its fields since. The field is the
+  // copy's own: the document passed stays as it was, and a copy of the copy
+  // takes its own event's.
+  const stampedSource = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/stamped",
+  });
+  const stampedLoom = Loom({});
+  const addStamped = action(() =>
+    stampedLoom.addPanel.send({
+      panel: stampedSource,
+      as: member,
+      admission: "first-insert",
+    })
+  );
+  const retargetStamped = action(() =>
+    stampedLoom.retargetPanel.send({
+      panel: stampedLoom.panels[0],
+      target: { kind: "url", url: "https://example.com/retargeted" },
+    })
+  );
+  const duplicateStamped = action(() =>
+    stampedLoom.duplicatePanel.send({
+      panel: stampedLoom.panels[0],
+      as: member,
+    })
+  );
+  const addWithEmptyAdmission = action(() =>
+    stampedLoom.addPanel.send({
+      panel: stampedSource,
+      as: member,
+      admission: "",
+    })
+  );
 
   return {
     // Each refused write is reported as a CFC policy warning, and each
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 7,
+    expectRuntimeErrors: 8,
     [TESTS]: [
       { action: writeMember, event: {}, trustedUi: profileGesture },
       { action: writeOther, event: {}, trustedUi: profileGesture },
@@ -354,6 +389,34 @@ export default pattern(() => {
           )
         ),
       },
+      { action: addStamped },
+      {
+        assertion: assert(() =>
+          stampedLoom.panels.length === 1 &&
+          stampedLoom.panels[0].get().admission === "first-insert" &&
+          stampedSource.get().admission === undefined
+        ),
+      },
+      { action: retargetStamped },
+      {
+        assertion: assert(() => {
+          const panel = stampedLoom.panels[0].get();
+          return panel.kind === "url" &&
+            panel.url === "https://example.com/retargeted" &&
+            panel.admission === "first-insert";
+        }),
+      },
+      { action: duplicateStamped },
+      {
+        assertion: assert(() =>
+          stampedLoom.panels.length === 2 &&
+          stampedLoom.panels.filter((panel) =>
+              panel.get().admission === "first-insert"
+            ).length === 1
+        ),
+      },
+      { action: addWithEmptyAdmission },
+      { assertion: assert(() => stampedLoom.panels.length === 2) },
     ],
   };
 });

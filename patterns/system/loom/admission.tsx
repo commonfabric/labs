@@ -114,6 +114,13 @@ export function validatePanel(panel: Panel): void {
       "A panel's addedBy must be a DID of at most 195 characters",
     );
   }
+  if (
+    panel.admission !== undefined &&
+    (typeof panel.admission !== "string" || panel.admission.length === 0 ||
+      panel.admission.length > 200)
+  ) {
+    throw new Error("A panel's admission must be 1 to 200 characters");
+  }
 }
 
 /** Compare piece membership by complete link identity, including scope and space. */
@@ -243,6 +250,7 @@ function copyOf(source: Panel, event: PanelAdmission): Panel {
       ? {}
       : { titleOverride: source.titleOverride }),
     ...adderFields(event),
+    ...(event.admission === undefined ? {} : { admission: event.admission }),
   };
   return source.kind === "piece"
     ? { kind: "piece", piece: source.piece, ...fields }
