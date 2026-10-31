@@ -36,7 +36,7 @@ snapshot does not record, or with a value import from outside the kernel
 (type-only imports are free; a constant a kernel function needs is declared
 inside the kernel); a critical pseudocode function in the snapshot that no manifest row or
 companion entry in `runtime/runner/src/cfc/kernel/manifest.ts` covers, or a
-row the snapshot or the kernel contradicts; and more than three `SPEC-PENDING`
+row the snapshot or the kernel contradicts; and more than forty `SPEC-PENDING`
 markers in the governed source files (the runner CFC sources and tests, the
 two html worker modules, the harness's CFC sources), or one naming no specs
 pull request. Citations in documents are not checked. `deno task

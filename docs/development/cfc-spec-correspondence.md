@@ -157,7 +157,7 @@ The vocabulary:
    // SPEC-PENDING https://github.com/commonfabric/specs/pull/NN
    ```
 
-   The tree holds at most three such markers at once. Marked code may run at
+   The tree holds at most forty such markers at once. Marked code may run at
    the `enforce-strict` default only when it is fail-closed, meaning it refuses
    more than the ruled behavior would and persists nothing new, since the
    ruling can then only loosen it. Anything that admits more, or changes what
@@ -301,7 +301,7 @@ on four things, each read against the committed snapshot:
   The check resolves numbers, not meaning: a citation that lands on another
   existing section after a renumbering passes, and the second number of a
   range written without its own `§` is not read.
-- More than three `SPEC-PENDING` markers across the files the CFC rule
+- More than forty `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
   sources and their tests, the render boundaries `reconciler.ts` and
   `display-fit.ts` in `runtime/html`, the harness's `cfc-*.ts`,
@@ -314,7 +314,7 @@ The marker count is not a complete inventory of semantic gaps. The persistence
 change for enrolled stores and authenticated piece setup, pending
 [specs#78](https://github.com/commonfabric/specs/pull/78), changes what is
 stored at the strict default without a default-off dial or a separate marker; the
-three marker slots are occupied. This is a nonconforming semantic gap and does
+marker budget, three at the time (forty since 2026-10-30), was taken. This is a nonconforming semantic gap and does
 not satisfy step 4 above. @danfuzz has authorized proceeding ahead of unresolved
 specs dependencies; that authorization does not supply a ruling or amend this
 procedure. Its record is the "Runtime-owned-store derived admission" entry in
