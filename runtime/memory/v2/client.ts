@@ -149,6 +149,19 @@ const lifecycleRefusal = (code: string, message: string): Error => {
   return Object.assign(error, { code });
 };
 
+/**
+ * A `SpaceInviteRefusal` raised on the client's side, shaped as the server's
+ * own refusal arrives: `.code` names the reason.
+ */
+export const spaceInviteRefusalError = (
+  code: string,
+  message: string,
+): Error => {
+  const error = new Error(message);
+  error.name = "SpaceInviteRefusal";
+  return Object.assign(error, { code });
+};
+
 /** An invitation operation a session may send: any but redemption. */
 export type InviteAdministration = SpaceInviteRequest["invite"];
 
@@ -1406,11 +1419,10 @@ export class Client {
       if (
         session.invite !== undefined && this.serverFlags?.spaceInvites !== true
       ) {
-        const error = new Error(
+        throw spaceInviteRefusalError(
+          "invite-service-unsupported",
           "memory server does not redeem invitations on `session.open`",
         );
-        error.name = "SpaceInviteRefusal";
-        throw Object.assign(error, { code: "invite-service-unsupported" });
       }
       // A server admitting no chain refuses an open presenting one, so a
       // key holding a chain is told here rather than refused there.
@@ -3341,11 +3353,10 @@ export class SpaceSession {
   ): Promise<FabricValue> {
     await this.#ensureSessionRestored();
     if (this.#client.serverFlags?.spaceInvites !== true) {
-      const error = new Error(
+      throw spaceInviteRefusalError(
+        "invite-service-unsupported",
         "The memory server does not administer invitations",
       );
-      error.name = "SpaceInviteRefusal";
-      throw Object.assign(error, { code: "invite-service-unsupported" });
     }
     return await this.#client.request<FabricValue>({
       type: "space.invite",

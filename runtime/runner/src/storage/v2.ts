@@ -2528,11 +2528,10 @@ export class StorageManager implements IStorageManager {
     invite: { inviteId: string; code: string },
   ): Promise<RedeemReceipt> {
     if (this.#sessionFactory.redeemInvite === undefined) {
-      const error = new Error(
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
         "This storage manager's sessions cannot carry an invitation",
       );
-      error.name = "SpaceInviteRefusal";
-      throw Object.assign(error, { code: "invite-service-unsupported" });
     }
     return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }

@@ -41,10 +41,15 @@ class Wire {
   >();
 
   #refusing = false;
+  #refusingNext = false;
 
   constructor(server: Server) {
     this.#connection = server.connect((message) => {
       if (this.#refusing) throw new Error("the socket has closed");
+      if (this.#refusingNext) {
+        this.#refusingNext = false;
+        throw new Error("the message could not be encoded");
+      }
       const waiter = message.type === "response"
         ? this.#waiting.get(message.requestId)
         : undefined;
@@ -92,6 +97,11 @@ class Wire {
     return this.#sent.some((message) =>
       message.type === "response" && message.requestId === requestId
     );
+  }
+
+  /** Makes the next send throw, and the sends after it go through. */
+  refuseNextSend(): void {
+    this.#refusingNext = true;
   }
 
   /** Makes every later send throw, as a transport whose socket closed does. */
@@ -435,6 +445,21 @@ describe("pattern.lifecycle", () => {
       const [message, error] = await reported.promise;
       expect(message).toContain("could not be sent");
       expect(error).toBeInstanceOf(Error);
+    });
+
+    it("answers with `internal` when the receipt cannot be sent but a refusal can", async () => {
+      const server = serverWith();
+      server.setPatternLifecycleHandler(() =>
+        Promise.resolve({ ok: { pattern: "late" } })
+      );
+      const { wire, sessionId } = await openSession(server, ALICE);
+      using _logged = stub(console, "error", () => {});
+      wire.refuseNextSend();
+
+      const response = await wire.response(await request(wire, sessionId));
+
+      expect(response.error?.name).toBe("PatternLifecycleRefusal");
+      expect(response.error?.code).toBe("internal");
     });
   });
 

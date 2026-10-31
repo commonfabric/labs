@@ -11,6 +11,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { isFabricPlainObject } from "@commonfabric/data-model";
 import type { Identity } from "@commonfabric/identity";
+import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
@@ -26,9 +27,6 @@ export const lifecycleUrl = (apiUrl: URL, verb: string): URL => {
   return url;
 };
 
-/** A pattern-lifecycle verb's name. */
-export type LifecycleVerb = "upload" | "instantiate" | "setsrc";
-
 export interface LifecycleClientConfig {
   apiUrl: URL;
 
@@ -42,7 +40,7 @@ export interface LifecycleClientConfig {
    * over HTTP instead.
    */
   session?: (
-    verb: LifecycleVerb,
+    verb: PatternLifecycleVerb,
     body: FabricPlainObject,
   ) => Promise<FabricPlainObject>;
 }
@@ -151,7 +149,7 @@ export function wireProgram(program: RuntimeProgram): {
 
 async function call<T>(
   config: LifecycleClientConfig,
-  verb: LifecycleVerb,
+  verb: PatternLifecycleVerb,
   payload: Record<string, unknown> & { space: string },
 ): Promise<T> {
   if (config.session !== undefined) {
@@ -170,7 +168,7 @@ async function call<T>(
  */
 async function callOnSession(
   session: NonNullable<LifecycleClientConfig["session"]>,
-  verb: LifecycleVerb,
+  verb: PatternLifecycleVerb,
   { space: _space, ...payload }: Record<string, unknown> & { space: string },
 ): Promise<
   { status: "answered"; receipt: unknown } | { status: "unsupported" }
@@ -209,7 +207,7 @@ async function callOnSession(
  */
 async function callOverHttp<T>(
   config: LifecycleClientConfig,
-  verb: LifecycleVerb,
+  verb: PatternLifecycleVerb,
   payload: Record<string, unknown>,
 ): Promise<T> {
   const url = lifecycleUrl(config.apiUrl, verb);

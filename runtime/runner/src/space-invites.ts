@@ -196,6 +196,9 @@ export class SpaceInviteClient {
   /**
    * Redeems as the signer: on the open of a session on the space, where a
    * redeemer is given and its server redeems there, and over HTTP otherwise.
+   * An open that redeems and is then refused its grant, as a repeat
+   * redemption of an invitation whose access was since removed is, is also
+   * redeemed over HTTP, which returns the receipt with no current access.
    *
    * @throws SpaceInviteError with the service's code when the service refuses
    *   it; a lost session connection is thrown as it came.
@@ -207,7 +210,9 @@ export class SpaceInviteClient {
       try {
         return await this.#redeemer(request);
       } catch (error) {
-        if (!usesHttpAfter(error)) throw error;
+        const refusedGrant = error instanceof Error &&
+          error.name === "AuthorizationError";
+        if (!refusedGrant && !usesHttpAfter(error)) throw error;
       }
     }
     return await this.#request("redeem", request);

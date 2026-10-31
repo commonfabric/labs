@@ -1588,9 +1588,11 @@ export type SessionDescriptor = {
   /**
    * An invitation to redeem, as the open's principal, before the open's grant
    * is checked (04-protocol.md §4.1.2): how someone the space's access list
-   * does not name yet opens a session on it. Signed into the session.open
-   * invocation with the rest of this descriptor. A client sends it on the
-   * open that redeems and not on the resumes after it.
+   * does not name yet opens a session on it. Bound to the open's principal as
+   * the rest of this descriptor is: signed into the invocation of a signed
+   * open, and covered by the connection's authentication of an open that
+   * names its principal. A client sends it on the open that redeems and not
+   * on the resumes after it.
    */
   invite?: { inviteId: string; code: string };
 };

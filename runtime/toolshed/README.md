@@ -206,15 +206,18 @@ The memory server runs the same service for `create`, `list`, `revoke`, and
 `receipts` sent as a `space.invite` request on a memory session on the space
 (`docs/specs/memory-v2/04-protocol.md` §4.3.11). The operation runs as the DID
 the session was opened as, and takes the same body and returns the same result
-as its HTTP route. A refusal is an error named `SpaceInviteRefusal` carrying the
-service's code. Redemption cannot be a `space.invite`, since the redeeming
-identity holds no grant on the space and cannot open a session on it; instead a
-`session.open` carries the invitation in its signed descriptor, and the server
-redeems it as the open's principal before checking the open's grant (§4.1.2).
-The toolshed gives its memory server `inviteHost: normalizeInviteHost(API_URL)`,
-so codes are checked against the same host on both transports, and the server
-advertises the `spaceInvites` hello flag. A memory server given no invitation
-host refuses every `space.invite` with `invite-service-unsupported`.
+as its HTTP route, without the route's per-client rate limits: it is bounded as
+the session's other requests are. A refusal is an error named
+`SpaceInviteRefusal` carrying the service's code. Redemption cannot be a
+`space.invite`, since the redeeming identity holds no grant on the space and
+cannot open a session on it; instead a `session.open` carries the invitation in
+its descriptor, bound to the open's principal as the rest of the descriptor is,
+and the server redeems it as the open's principal before checking the open's
+grant (§4.1.2). The toolshed gives its memory server
+`inviteHost: normalizeInviteHost(API_URL)`, so codes are checked against the
+same host on both transports, and the server advertises the `spaceInvites` hello
+flag. A memory server given no invitation host refuses every `space.invite` with
+`invite-service-unsupported`.
 
 Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
 local development. It is the audience authority and verifier origin for this

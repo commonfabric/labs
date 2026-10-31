@@ -318,6 +318,36 @@ describe("space-invites", () => {
       expect(posted).toEqual(["redeem"]);
     });
 
+    it("redeems over HTTP when the open that redeems is refused its grant", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const receipt = {
+        outcome: "already-redeemed",
+        redemption: { inviteId: "a".repeat(22), did: signer.did() },
+        currentAccess: null,
+      };
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(new URL(String(input)).pathname.split("/").at(-1)!);
+          return Promise.resolve(Response.json(receipt));
+        },
+        redeemer: () =>
+          Promise.reject(
+            Object.assign(new Error("not admitted"), {
+              name: "AuthorizationError",
+            }),
+          ),
+      });
+
+      expect(
+        await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
+      ).toEqual(receipt);
+      expect(posted).toEqual(["redeem"]);
+    });
+
     it("redeems over HTTP whatever session it was given", async () => {
       const { client, sent, posted } = await clientWith(() =>
         Promise.resolve({})

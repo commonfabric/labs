@@ -443,7 +443,9 @@ interface SessionOpenRequest {
     // Inside the signed descriptor, like everything the session declares.
     spaceKind?: string;
     // An invitation the open redeems before its grant is checked (see the
-    // rules). Inside the signed descriptor, since it redeems as the signer.
+    // rules). Bound to the open's principal with the rest of the descriptor:
+    // signed into a signed open, covered by the connection's authentication
+    // of an open that names its principal.
     invite?: { inviteId: string; code: string };
   };
   invocation?: SessionOpenInvocation;
@@ -779,8 +781,9 @@ positions are the message itself, and within it `session`, `invocation`,
 `commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
 `hello` message's `flags`, a `presence.publish` message's `facets`
 together with each value in it, a `pattern.lifecycle` message's `body`,
-and a `space.invite` message's `invite` and `invite.body`. Both sides refuse anything else there, and
-the refusal is the one a string or a number in that position gets.
+a `space.invite` message's `invite` and `invite.body`, and a `session.open`
+descriptor's `invite`. Both sides refuse anything else there, and the refusal
+is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a

@@ -2691,11 +2691,22 @@ class Connection {
             this.#sendSessionResponse(space, sessionId, requestId, response);
           } catch (error) {
             // Nothing awaits this answer, so a transport that refuses it is
-            // reported here rather than left as an unhandled rejection.
+            // reported here rather than left as an unhandled rejection, and
+            // the client is told what it can be told: that the outcome is
+            // unknown, or failing that, by losing the connection.
             console.error(
               `memory v2: the answer to a \`pattern.lifecycle\` ${parsed.verb} could not be sent`,
               error,
             );
+            try {
+              this.#send(patternLifecycleRefusal(
+                requestId,
+                "internal",
+                `The answer to the ${parsed.verb} could not be sent`,
+              ));
+            } catch {
+              this.close();
+            }
           } finally {
             this.#answered.delete(requestId);
           }
@@ -3125,6 +3136,12 @@ export class Server {
    * installed, and while it is the server refuses every such request.
    */
   #patternLifecycle: PatternLifecycleHandler | undefined;
+
+  /**
+   * The `pattern.lifecycle` requests running now. Their frames' handling has
+   * returned, so `close()` waits for them here.
+   */
+  #lifecycleRuns = new Set<Promise<unknown>>();
 
   /**
    * Additive watchers of the same admission hook, independent of the host's
@@ -4583,6 +4600,8 @@ export class Server {
     for (const connection of [...this.#connections.values()]) {
       connection.close();
     }
+    // A verb still running writes through the engines closed below.
+    await Promise.all(this.#lifecycleRuns);
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     for (const engine of this.#engines.values()) {
@@ -4606,6 +4625,11 @@ export class Server {
    * `flushSessions()` (called with no `spaces` argument) cancels any
    * pending timer, runs the refresh loop to completion, and intentionally
    * does not reschedule, so a single call is sufficient.
+   *
+   * A `pattern.lifecycle` verb still running is not waited for, though its
+   * frame counts as handled: the serving loop settles a wave by awaiting
+   * this method, and a verb waits for its wave to commit. `close()` waits for
+   * the verbs.
    */
   async idle(): Promise<void> {
     // A host hands frames over without waiting for them, so the frames in
@@ -6342,9 +6366,6 @@ export class Server {
     });
   }
 
-  /** Resolve one authoritative OW54 notice. The publication lock, exact-value
-   * precondition, original-entry resolution, optional append, and index removal
-   * form one same-space atomic decision. */
   /**
    * Runs a `pattern.lifecycle` request through the installed handler, as the
    * DID its session was opened as, and returns the response to send. That
@@ -6354,6 +6375,19 @@ export class Server {
    * and a handler that throws each become an error response.
    */
   async runPatternLifecycle(
+    message: PatternLifecycleRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const run = this.#runPatternLifecycle(message);
+    this.#lifecycleRuns.add(run);
+    try {
+      return await run;
+    } finally {
+      this.#lifecycleRuns.delete(run);
+    }
+  }
+
+  /** Helper for `runPatternLifecycle()`, which does all its work. */
+  async #runPatternLifecycle(
     message: PatternLifecycleRequest,
   ): Promise<ResponseMessage<FabricPlainObject>> {
     const { requestId, space, sessionId } = message;
@@ -6520,6 +6554,9 @@ export class Server {
     return deny === null ? { principal } : { error: deny };
   }
 
+  /** Resolve one authoritative OW54 notice. The publication lock, exact-value
+   * precondition, original-entry resolution, optional append, and index removal
+   * form one same-space atomic decision. */
   async resolveEventAttention(
     message: EventAttentionResolveRequest,
   ): Promise<ResponseMessage<EventAttentionResolveResult>> {
