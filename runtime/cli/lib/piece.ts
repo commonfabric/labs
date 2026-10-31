@@ -1743,13 +1743,14 @@ async function lifecycleClient(
 ): Promise<LifecycleClientConfig> {
   const storageManager = (pieces.runtime as Runtime | undefined)
     ?.storageManager;
-  const space = pieces.getSpace();
+  const runOnSession = storageManager?.runPatternLifecycle?.bind(
+    storageManager,
+  );
   return {
     apiUrl: new URL(config.apiUrl),
     identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
-    ...(storageManager?.runPatternLifecycle === undefined ? {} : {
-      session: (verb, body) =>
-        storageManager.runPatternLifecycle!(space, verb, body),
+    ...(runOnSession === undefined ? {} : {
+      session: (space, verb, body) => runOnSession(space, verb, body),
     }),
   };
 }

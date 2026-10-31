@@ -317,6 +317,35 @@ describe("space.invite", () => {
       expect(afterwards?.name).toBe("AuthorizationError");
     });
 
+    it("refuses with `invalid-request` an anonymous open carrying an invitation, and grants nothing", async () => {
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const { space, owner, session } = await ownedSpace(server);
+      const { invite, inviteId, code } = creation(space);
+      await session.administerInvites(invite);
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+      const anonymous: SessionOpenAuthFactory = (
+        _space,
+        _session,
+        context,
+      ) => ({
+        invocation: {
+          aud: context.audience,
+          challenge: context.challenge.value,
+        },
+        authorization: {},
+      });
+
+      const failure = await failureOf(
+        client.mountRedeeming(space, { inviteId, code }, anonymous),
+      );
+      const acl = await server.readDocument(space, `of:${space}`);
+
+      expect(failure?.name).toBe("SpaceInviteRefusal");
+      expect(failure?.code).toBe("invalid-request");
+      expect(acl?.value).toEqual({ [owner]: "OWNER" });
+    });
+
     it("throws `invite-service-unsupported` without sending, against a server given no invitation host", async () => {
       const server = serverWith();
       const { space } = await ownedSpace(server);

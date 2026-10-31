@@ -11,6 +11,7 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { isFabricPlainObject } from "@commonfabric/data-model";
 import type { Identity } from "@commonfabric/identity";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
@@ -34,12 +35,13 @@ export interface LifecycleClientConfig {
   identity: Identity;
 
   /**
-   * Sends a verb, without its `space`, on the memory session of the space it
-   * acts in, as `IStorageManager.runPatternLifecycle()` does. Tried first
-   * where present; a server that does not advertise the request is called
-   * over HTTP instead.
+   * Sends a verb, with its arguments but without `space`, on the memory
+   * session of `space`, as `IStorageManager.runPatternLifecycle()` does. Tried
+   * first where present; a server that does not advertise the request is
+   * called over HTTP instead.
    */
   session?: (
+    space: MemorySpace,
     verb: PatternLifecycleVerb,
     body: FabricPlainObject,
   ) => Promise<FabricPlainObject>;
@@ -150,7 +152,7 @@ export function wireProgram(program: RuntimeProgram): {
 async function call<T>(
   config: LifecycleClientConfig,
   verb: PatternLifecycleVerb,
-  payload: Record<string, unknown> & { space: string },
+  payload: Record<string, unknown> & { space: MemorySpace },
 ): Promise<T> {
   if (config.session !== undefined) {
     const sent = await callOnSession(config.session, verb, payload);
@@ -169,7 +171,7 @@ async function call<T>(
 async function callOnSession(
   session: NonNullable<LifecycleClientConfig["session"]>,
   verb: PatternLifecycleVerb,
-  { space: _space, ...payload }: Record<string, unknown> & { space: string },
+  { space, ...payload }: Record<string, unknown> & { space: MemorySpace },
 ): Promise<
   { status: "answered"; receipt: unknown } | { status: "unsupported" }
 > {
@@ -180,7 +182,7 @@ async function callOnSession(
     throw new Error(`The \`${verb}\` arguments are not a JSON object`);
   }
   try {
-    return { status: "answered", receipt: await session(verb, body) };
+    return { status: "answered", receipt: await session(space, verb, body) };
   } catch (error) {
     const code = error instanceof Error &&
         error.name === "PatternLifecycleRefusal"
@@ -260,7 +262,7 @@ async function callOverHttp<T>(
 export async function instantiatePieceOnServer(
   config: LifecycleClientConfig,
   input: {
-    space: string;
+    space: MemorySpace;
 
     /** Stable key reused when a creation result is uncertain. */
     requestKey?: string;
@@ -311,7 +313,7 @@ export async function instantiatePieceOnServer(
 export async function setPieceSourceOnServer(
   config: LifecycleClientConfig,
   input: {
-    space: string;
+    space: MemorySpace;
     piece: string;
     program: RuntimeProgram;
     repository?: string;

@@ -600,8 +600,9 @@ Rules:
   the grant the invitation conferred. A refusal of the redemption refuses the
   open with an error named `SpaceInviteRefusal` carrying the service's code, a
   server knowing no invitation host refuses it with
-  `invite-service-unsupported`, and an open that also presents a proof chain
-  or an `actingAs` binding is refused with `invalid-request`. A client sends
+  `invite-service-unsupported`, and an anonymous open, or one that also
+  presents a proof chain or an `actingAs` binding, is refused with
+  `invalid-request`. A client sends
   `invite` only to a server advertising `spaceInvites`, on the open that
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything

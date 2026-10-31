@@ -47,13 +47,15 @@ transport adds refusals of its own: the status codes of
 [The route](#the-route), and the codes listed under
 [On the memory session](#on-the-memory-session). `cf` sends on the
 memory session, and posts to the route only when the memory server does not
-advertise `patternLifecycle`.
+advertise `patternLifecycle`. A program whose request takes more than 4 MiB is
+refused before anything is sent, although the route takes bodies up to 8 MiB:
+`cf` holds every request to the bound a routed session imposes.
 
 The session request reaches the process that serves the space, and the route
-may not. A multi-process deployment such as Estuary or Rapids runs 21 toolshed
-processes behind nginx, which spreads ordinary API requests round-robin over
-five of them and routes each space's memory WebSocket, by its `space=<did>`
-query parameter, to one of sixteen. The serving loop holds a space's lease on
+may not. A deployment that runs several toolshed processes spreads ordinary API
+requests over some of them and routes each space's memory WebSocket, by its
+`space=<did>` query parameter, to one process. The serving loop holds a space's
+lease on
 the process the space's memory socket reaches, so a POST to
 `/api/pattern-lifecycle/*` that lands on another process is refused 503
 `space-not-served`.

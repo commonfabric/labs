@@ -1443,7 +1443,8 @@ program from disk, pins its fabric imports, and sends it as a
 command connects as. That session reaches the toolshed process serving the
 space, which a plain HTTP request to a multi-process deployment may not. Against
 a memory server that does not take the request, the command posts it to the
-deployment's pattern-lifecycle route instead, signed with the same identity. The
+deployment's pattern-lifecycle route instead, signed with the same identity. A
+program whose request takes more than 4 MiB is refused before it is sent. The
 space's serving runtime compiles the program, creates the piece, and answers
 with the receipt the command prints. Where the deployment enforces ACLs, the
 identity must hold WRITE or OWNER on the space; a deployment with enforcement

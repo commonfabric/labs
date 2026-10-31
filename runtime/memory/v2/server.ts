@@ -2710,6 +2710,11 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
+        }).catch((error: unknown) => {
+          console.error(
+            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
+            error,
+          );
         });
         return;
       }

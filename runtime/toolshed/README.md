@@ -263,7 +263,9 @@ session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
 administration there and falls back to the signed HTTP request on
 `invite-service-unsupported`. Given a `redeemer`, a function that redeems as
 `IStorageManager.redeemInvite()` does, `redeem` redeems on the open of a session
-there, and sends the signed HTTP request on `invite-service-unsupported`.
+there, and sends the signed HTTP request on `invite-service-unsupported` or when
+that open is refused its grant (an `AuthorizationError`), which a repeat
+redemption of an invitation whose access was since removed is.
 
 Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
 `redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,

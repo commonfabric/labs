@@ -7,6 +7,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import {
@@ -19,7 +20,8 @@ import {
 } from "../lib/pattern-lifecycle.ts";
 
 const API_URL = new URL("http://pattern-lifecycle-test.invalid:9999/fabric/");
-const SPACE_DID = "did:key:z6MkPatternLifecycleTestSpaceAAAAAAAAAAAAAAAAAAA";
+const SPACE_DID: MemorySpace =
+  "did:key:z6MkPatternLifecycleTestSpaceAAAAAAAAAAAAAAAAAAA";
 
 const AUTH_HEADER = "CF-Request-Auth";
 const PROOF_HEADER = "CF-Request-Proof";
@@ -299,7 +301,7 @@ describe("pattern-lifecycle client", () => {
       const cfg: LifecycleClientConfig = {
         apiUrl: API_URL,
         identity: await Identity.generate(),
-        session: (verb, body) => {
+        session: (_space, verb, body) => {
           sent.push({ verb, body });
           return answer() as never;
         },
