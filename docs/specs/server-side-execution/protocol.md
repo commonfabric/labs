@@ -91,7 +91,11 @@ wave's withdrawable acceptance cannot supply that, its setup transaction
 commits directly to the store as the serving loop's own derived-class
 commit, outside the wave (serving-loop.md §3e). Every other client of
 the piece controller, such as the shell, keeps the client-side shape
-until its own migration.)*
+until its own migration. AMENDED 2026-10-30: `cf` sends each verb as a
+`pattern.lifecycle` request on the space's memory session (memory-v2
+`04-protocol.md` §4.3.10), which reaches the process that holds the
+space's lease, and posts it to `/api/pattern-lifecycle/*` only when the
+memory server does not advertise `patternLifecycle`.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic

@@ -207,16 +207,19 @@ export function startShareIntakeOf(
  * offers change. A refusal is logged once per row, under
  * `piece.share-intake`, with its reason, and so is a `conflict` Home's handler
  * returns for a row it was sent. A failure to read what vetting needs, other
- * than a refusal of access, and a send to Home that throws, leave the row
- * undecided, and so does a space whose kind the host cannot tell, or a scan
- * that fails before reaching the row. When a lost connection to the host comes
- * back (`subscribeConnectionRestored`), the instance reads again which inboxes
- * Home holds and retains and considers every row of each, so each row left
- * undecided while it was down is taken up then, or when its inbox next
- * changes. So a lone offer is taken up once what kept it waiting changes, with
- * no other offer, profile change or restart. A row sent to Home is logged at
- * info (`offer-sent`), so the logger's counts tell a send from a scan that
- * sent nothing. Nothing consumes an offer or deletes it.
+ * than a refusal of access, leaves the row undecided, and so does a space
+ * whose kind the host cannot tell; such a row waits on its space's state as a
+ * refused one does, vetted again as the instance begins following that state
+ * and then each time the state changes. A send to Home that throws, or a scan
+ * that fails before reaching the row, leaves the row undecided too. When a
+ * lost connection to the host comes back (`subscribeConnectionRestored`), the
+ * instance reads again which inboxes Home holds and retains and considers
+ * every row of each, so each row left undecided while it was down is taken up
+ * then, or when its inbox next changes. So a lone offer is taken up once what
+ * kept it waiting changes, with no other offer, profile change or restart. A
+ * row sent to Home is logged at info (`offer-sent`), so the logger's counts
+ * tell a send from a scan that sent nothing. Nothing consumes an offer or
+ * deletes it.
  *
  * Registration is Home's handler's, so an offer already registered under
  * another sender or `id` leaves the entry as it is, archived or not, and adds
@@ -643,6 +646,11 @@ export class ShareIntake {
         `Vetting the offer ${receipt}:`,
         error,
       ]);
+      // Left undecided, the row waits on its space's state as a row refused
+      // for that state does: vetted again at once, as following the state
+      // begins, and then each time the state changes. A read that keeps
+      // failing is tried at those times and no others.
+      if (offer !== undefined) this.#waitOn(row, offer.space, address);
       return;
     }
     if (this.#halted) return;
@@ -682,7 +690,9 @@ export class ShareIntake {
       );
     } catch (error) {
       // The row is left undecided, to be vetted again when its inbox next
-      // changes or a lost connection to the host comes back.
+      // changes or a lost connection to the host comes back. Its space,
+      // which vetting has just passed, no longer keeps it waiting.
+      this.#stopWaiting(row);
       logger.warn("send-failed", () => [
         `Sending Home the offer ${receipt}:`,
         error,

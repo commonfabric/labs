@@ -234,7 +234,7 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
     // Stand-ins for what the room derives; a row's streams read none of it.
     places: {},
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     messages: setup.messages,
     canJoin: true,
     manager: { joinRoom: counted },

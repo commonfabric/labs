@@ -246,7 +246,8 @@ export const MANIFEST: readonly ManifestRow[] = [
       },
     ],
     note: "the stored clauses at a path are the payload label-map entries " +
-      "there and the stored schema's declaration; the home-space and " +
+      "there and the stored schema's declaration, a `*` segment of the " +
+      "path matching any segment at its depth; the home-space and " +
       "writer-identity checks sit in the transaction's " +
       "`releaseCfcConfidentiality()`, and `releaseCellConfidentiality` adds " +
       "the route's recommended refusal of a clause the path still shows " +

@@ -41,10 +41,28 @@ A](routed-mode-a.md) step 4):
   the genesis ACL, and the durable session as the user — runs over that one
   connection, as three sessions of two principals.
 
+Either way, the factory has no more than six of its sockets to a host opening
+at a time (`MEMORY_DIALS_PER_HOST`): a dial, the first or a reconnect, waits
+until one of those has opened, closed or failed. With a connection per space
+the factory would otherwise hand the platform's WebSocket a dial for every
+space at once. A handshake that never answers keeps its place until its
+transport closes, since nothing times one out, so six such handshakes in
+flight hold up every later dial to their host.
+
 Per space, a connection of its own costs a TCP and TLS handshake, a `hello`
 exchange, a compression channel, and a toolshed socket, and a client with
 many spaces holds that many sockets against one host. The per-host connection
 costs those once per host.
+
+In both modes, a connection lost before its first handshake completes is
+dialed again after the memory client's reconnect backoff, up to five handshakes
+in all (`MEMORY_FIRST_HANDSHAKE_ATTEMPTS`), so a refused dial or a brief loss
+of the network still gets its session mounted. Each of those dials takes its
+turn among the host's dials like any other, and a failed one gives up its place
+as its socket closes or fails. When all five fail, the factory's
+create fails with an error naming the address, the attempts and the last
+failure, and the space's session error reports it from then on: loads of the
+space fail with it rather than wait for a session nothing is opening.
 
 ## 2. Goals and non-goals
 

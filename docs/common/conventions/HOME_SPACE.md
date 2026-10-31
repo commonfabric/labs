@@ -144,10 +144,13 @@ command or policy, has a place beside it. A runtime loads every profile's
 delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
 under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
-A profile created before profiles owned themselves names its creator as owner
-and has no delegation; it keeps opening on the creator's grant. The wildcard
-WRITE is there because a runtime showing a profile writes into the profile's
-space, so a visitor needs more than READ. CFC owner-protects the
+The creating runtime holds the delegation from the moment the key signs it, so
+the commit that places the profile and the copy of its pattern into the space
+are made under the profile's grant too, and creation needs nothing from the
+wildcard. A profile created before profiles owned themselves names its creator
+as owner and has no delegation; it keeps opening on the creator's grant. The
+wildcard WRITE is there because a runtime showing a profile writes into the
+profile's space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
 a visitor (a *named* `inSpace(name)` would put every

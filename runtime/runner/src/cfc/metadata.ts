@@ -13,6 +13,7 @@
  */
 
 import { isDeepFrozen } from "@commonfabric/data-model";
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { URI } from "@commonfabric/memory/interface";
 import {
   isObjectNotArray,
@@ -28,6 +29,7 @@ import type {
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { canonicalizeLogicalPath } from "./canonical.ts";
+import type { CfcConfClause } from "./clause.ts";
 import {
   cfcLabelDocumentHash,
   isCfcLabelDocumentContent,
@@ -46,6 +48,7 @@ import { readConsumesEntry } from "./observation-classes.ts";
 import type {
   CfcMetadata,
   LabelMapEntry,
+  LabelObservationClass,
   StoredCfcMetadata,
   StoredLabelMapEntry,
 } from "./types.ts";
@@ -498,6 +501,44 @@ export const readStoredCfcSchemaHash = (
   target: StoredCfcTarget,
   policy: StoredCfcReadPolicy = DEPENDENT_READ,
 ): string | undefined => readStoredEnvelope(tx, target, policy)?.schemaHash;
+
+/**
+ * The label `metadata` declares for exactly the observation class
+ * `observes`: at `path` itself, or at each of its children, as `at` says.
+ * Only `declared` entries count, so a writer that reads back what it declared
+ * last time, to carry it forward, never folds the derived stamps on the same
+ * document into its declaration. A legacy covering entry, one with no class,
+ * is not answered either: the caller re-declares one class, and carrying a
+ * covering entry forward as that class would narrow what it covers; left
+ * alone, the declared-monotonicity gate refuses the narrowing. The two axes
+ * are joined across the matching entries.
+ */
+export const cfcDeclaredLabelAt = (
+  metadata: Pick<CfcMetadata, "labelMap"> | undefined,
+  path: readonly string[],
+  observes: LabelObservationClass,
+  at: "node" | "children",
+): IFCLabel => {
+  const depth = at === "node" ? path.length : path.length + 1;
+  const confidentiality: CfcConfClause[] = [];
+  const integrity: CfcAtom[] = [];
+  for (const entry of metadata?.labelMap.entries ?? []) {
+    if (
+      entry.origin !== "declared" || entry.observes !== observes ||
+      entry.path.length !== depth || !isPrefix(path, entry.path)
+    ) {
+      continue;
+    }
+    for (const clause of entry.label.confidentiality ?? []) {
+      confidentiality.push(clause);
+    }
+    for (const atom of entry.label.integrity ?? []) integrity.push(atom);
+  }
+  return {
+    ...(confidentiality.length > 0 && { confidentiality }),
+    ...(integrity.length > 0 && { integrity }),
+  };
+};
 
 /** The labels {@link readStoredCfcLabelsForReader} answers with. */
 export type StoredCfcLabels = Pick<CfcMetadata, "labelMap">;

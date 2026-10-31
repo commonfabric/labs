@@ -221,7 +221,8 @@ keeps it on this path alone, as the checker hands the type path `any`
 itself, which holds nothing of the constituents beside it; a constituent
 whose value, with its labels and whole-value keywords set aside, is `{}` or
 `{ not: true }` is read as `any` or `never`; otherwise a union constituent
-distributes and every combination of arms is settled on its own; `unknown`
+distributes and every combination of arms is settled on its own, a cell
+holding a union being no union, as `Cell<A | B>` is one cell; `unknown`
 is the identity; an empty object part drops out and takes `null` and
 `undefined` with it, as `T & {}` does; primitives are narrowed or found
 disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
@@ -253,7 +254,15 @@ holds is set aside while the values are settled and stated of what they
 settle to, as the type path reads it from the checker's type: its scope and
 its default belong to the whole value, so two scopes refuse the
 intersection, as a scope wrapper nested in another with no cell between
-them, and defaults that differ leave none; its labels are placed as the type
+them, and defaults that differ leave none. Neither of a cell's scopes is
+set aside: its own is the cap on its handle, and the one written beside its
+handles is that of what it holds, so `Cell<PerUser<string>> & string[]` is
+`Cell<PerUser<string>>`
+(`{ type: "string", scope: "user", asCell: ["cell"] }`), while a scope
+another constituent states of the whole value caps the handle of the cell
+the intersection is, `PerUser<{ x: string }> & Cell<PerSession<{ x: string }>>`
+giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
+its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
 none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
@@ -278,13 +287,22 @@ beside another primitive (`undefined & void` is `undefined`, `string & void`
 nothing), while the wrapper is a cell, the value beside any other part; an
 unsupported-pattern fallback keeps the constituents behind it, so a nested
 or named intersection is reopened when an enclosing one reduces it
-(`(string & Brand) & number` is nothing); and a union whose arms fold to one
-schema — `void | OpaqueCell<any>`, two branded primitives with the same
+(`(string & Brand) & number` is nothing), with the scope, default and
+restrictions a reference to it states beside it stated of each of them, since
+a value of `PerUser<A & B>` is a value of `PerUser<A>` and of `PerUser<B>`, so
+`PerUser<F> & { y: number }` keeps its scope and
+`Confidential<F, L> & { y: number }` its label, while evidence beside the
+reference is stated of none of them, as no one of them is the labeled payload;
+and a union whose arms fold to one schema — `void | OpaqueCell<any>`, two branded primitives with
+the same
 fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over
 them, and the labels the survivor states are that union's (an arm accepting
-nothing is no arm, and is neither counted nor kept).
+nothing is no arm, and is neither counted nor kept). A cell written around
+such a schema, in place or beside a reference to it, holds it and keeps none
+of this: `Cell<PerUser<F>>` with `F` a union that folded or an intersection
+that fell back is one cell, whose scope stays beside its handle.
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.

@@ -2716,6 +2716,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       return {
         actor,
         released: [],
+        paths: [],
         releasedDigests: [],
         priorEnvelopeDigest,
         envelopeDigest: priorEnvelopeDigest,
@@ -2747,6 +2748,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return {
       actor,
       released: plan.released,
+      paths: plan.paths,
       releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
       priorEnvelopeDigest,
       envelopeDigest: hashStringOf(canonicalizeCfcMetadata(metadata)),

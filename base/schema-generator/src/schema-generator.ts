@@ -92,6 +92,7 @@ import {
   unionFoldedFrom,
   withIndexKeys,
   withIndexKeysNoted,
+  withIndexKeysOf,
   withOriginOf,
   withOriginsNumbered,
 } from "./schema-origins.ts";
@@ -863,9 +864,9 @@ function dedupeIntersectionParts<T extends MutableJSONSchema>(
 
 /**
  * What a schema states about its whole value besides which values it is: the
- * scope the value is stored in, and the default it takes. A value of an
- * intersection is a value of every constituent at once, so it takes what any
- * of them states.
+ * scope the value is stored in (`wholeValueScopeOf()`), and the default it
+ * takes. A value of an intersection is a value of every constituent at once,
+ * so it takes what any of them states.
  */
 type WholeValueKeywords = {
   readonly scope?: SchemaScope;
@@ -891,7 +892,10 @@ function wholeValueKeywordsOf(
     .filter(isObjectOrArray);
   const scopes = [
     ...new Set(
-      resolved.flatMap(({ scope }) => scope ? [scope as SchemaScope] : []),
+      resolved.flatMap((schema) => {
+        const scope = wholeValueScopeOf(schema, context);
+        return scope ? [scope] : [];
+      }),
     ),
   ];
   if (scopes.length > 1) throw nestedScopeError();
@@ -913,14 +917,68 @@ function wholeValueKeywordsOf(
 }
 
 /**
+ * `read`, the schema `reference` reads as. Where it is an intersection that
+ * fell back, its constituents state what `reference` states of its whole value
+ * beside the reference: its scope, its default, and its restrictions, which
+ * join those a constituent states. A value of `PerUser<A & B>` is a value of
+ * `PerUser<A>` and of `PerUser<B>`, so reopening the fallback would otherwise
+ * lose them. Its evidence is not stated of them, as evidence goes only where
+ * the labeled payload's data must be, and a constituent is not that payload. A
+ * fallback's own labels are not stated of them either, being those it kept of
+ * its constituents.
+ */
+function withConstituentsStatingBeside(
+  read: MutableJSONSchema,
+  reference: MutableJSONSchemaObj,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(read)
+    ? context.schemaOrigins?.get(read)
+    : undefined;
+  const { scope, default: value } = reference;
+  const { restrictions } = isObjectOrArray(reference.ifc)
+    ? restrictionsAndEvidence(reference.ifc)
+    : {};
+  if (
+    origin?.kind !== "intersection" ||
+    (scope === undefined && value === undefined && restrictions === undefined)
+  ) {
+    return read;
+  }
+  context.schemaOrigins?.set(read as MutableJSONSchemaObj, {
+    kind: "intersection",
+    parts: () =>
+      origin.parts().map((part) => {
+        const stated: MutableJSONSchemaObj = {
+          ...(isObjectOrArray(part) ? part : {}),
+          ...(scope !== undefined ? { scope } : {}),
+          ...(value !== undefined ? { default: value } : {}),
+        };
+        return part === false ? part : withOriginOf(
+          restrictions ? withIfcLabels(stated, restrictions) : stated,
+          part,
+          context,
+        );
+      }),
+  });
+  return read;
+}
+
+/**
  * `schema` read through local references with the keywords written beside
  * each reference in place of the definition's, as resolving a reference
  * reads them, except its labels, which join the definition's: while a schema
  * is generated, the label beside a reference is that declaration's alone,
  * and the definition's are those of the value it wraps (`declaredIfcLabels()`).
  * A definition that is itself a reference is read the same way, and a
- * reference to no definition reads as itself. A schema that is no reference
- * is returned as it came.
+ * reference to no definition reads as itself. A cell written beside a
+ * reference holds what the definition denotes, so it reads as that cell, with
+ * no record of the definition's source (`schemaOrigins`), as a cell written
+ * around it in place does, though the keys its index signature applies to
+ * (`GenerationContext.indexKeys`) stay true of it. A fallback's constituents
+ * state the keywords written beside a reference to it
+ * (`withConstituentsStatingBeside()`). A schema that is no reference is returned
+ * as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -943,14 +1001,17 @@ function withBesideKeywords(
     return withBesideKeywords(resolved, context, followed);
   }
   const read = { ...resolved, ...beside };
+  const labeled = isObjectOrArray(ifc)
+    ? withIfcLabels(read, ifc as Record<string, unknown>)
+    : read;
   return withBesideKeywords(
-    withOriginOf(
-      isObjectOrArray(ifc)
-        ? withIfcLabels(read, ifc as Record<string, unknown>)
-        : read,
-      resolved,
-      context,
-    ),
+    "asCell" in beside
+      ? withIndexKeysOf(labeled, resolved, context)
+      : withConstituentsStatingBeside(
+        withOriginOf(labeled, resolved, context),
+        schema,
+        context,
+      ),
     context,
     followed,
   );
@@ -974,14 +1035,17 @@ type LabeledArm = {
  * reads a schema and flattened through nested unions, a union whose arms
  * folded to one schema included (`schemaOrigins`), with the labels of the
  * unions it is an arm of (`LabeledArm`). A schema that is no union is its
- * own single arm.
+ * own single arm, and so is a cell, whose union is what it holds
+ * (`Cell<A | B>`) and not the value it is.
  */
 function labeledArms(
   schema: MutableJSONSchema,
   context: GenerationContext,
 ): LabeledArm[] {
   const stated = withBesideKeywords(schema, context);
-  if (!isObjectOrArray(stated)) return [{ schema: stated, labels: [] }];
+  if (!isObjectOrArray(stated) || isCellValue(stated, context)) {
+    return [{ schema: stated, labels: [] }];
+  }
   const origin = context.schemaOrigins?.get(stated);
   if (origin?.kind === "union") {
     return armsOfUnion(stated, origin.parts(), context);
@@ -1129,6 +1193,22 @@ function establishedUnnamedKeysOf(
 }
 
 /**
+ * The scope `schema` states of its whole value (`WholeValueKeywords`): its
+ * `scope`, except a cell's. The scope a cell's schema writes beside its
+ * handles is that of what the cell holds, and is part of the cell
+ * (`Cell<PerUser<T>>`); the cell's own is the cap on its handle
+ * (`PerUser<Cell<T>>`), which its value keeps.
+ */
+function wholeValueScopeOf(
+  schema: MutableJSONSchemaObj,
+  context: GenerationContext,
+): SchemaScope | undefined {
+  return isCellValue(schema, context)
+    ? undefined
+    : schema.scope as SchemaScope | undefined;
+}
+
+/**
  * `schema` as the value it denotes, without what it states about its whole
  * value (`WholeValueKeywords`), read as `withBesideKeywords()` reads it. A
  * schema stating neither, beside a reference or in it, is returned as it
@@ -1139,13 +1219,20 @@ function valueOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const stated = withBesideKeywords(schema, context);
+  const scope = isObjectOrArray(stated)
+    ? wholeValueScopeOf(stated, context)
+    : undefined;
   if (
-    !isObjectOrArray(stated) || (!("scope" in stated) && !("default" in stated))
+    !isObjectOrArray(stated) || (scope === undefined && !("default" in stated))
   ) {
     return stated === resolveLocalRef(schema, context) ? schema : stated;
   }
-  const { scope: _, default: __, ...value } = stated;
-  return withOriginOf(value, stated, context);
+  const { scope: own, default: _, ...value } = stated;
+  return withOriginOf(
+    scope === undefined && own !== undefined ? { ...value, scope: own } : value,
+    stated,
+    context,
+  );
 }
 
 /**
@@ -1311,15 +1398,17 @@ function isUnknownValue(part: MutableJSONSchema): boolean {
 }
 
 /**
- * Whether `part` declares a cell: an `asCell` entry on a schema that is not
- * `void`'s, which lowers to the opaque marker too (`schemaOrigins`).
+ * Whether `part` declares a cell: an `asCell` entry on a schema that is
+ * neither `void`'s, which lowers to the opaque marker too, nor a union's that
+ * folded to one, as `void | OpaqueCell<any>` does (`schemaOrigins`).
  */
 function isCellValue(
   part: MutableJSONSchemaObj,
   context: GenerationContext,
 ): boolean {
+  const origin = context.schemaOrigins?.get(part)?.kind;
   return Array.isArray(part.asCell) && part.asCell.length > 0 &&
-    context.schemaOrigins?.get(part)?.kind !== "void";
+    origin !== "void" && origin !== "union";
 }
 
 /**
@@ -1383,9 +1472,9 @@ function intersectionOf(
   context: GenerationContext,
 ): MutableJSONSchema {
   const expand = (schema: MutableJSONSchema): MutableJSONSchema[] => {
-    const resolved = resolveLocalRef(schema, context);
-    const origin = isObjectOrArray(resolved)
-      ? context.schemaOrigins?.get(resolved)
+    const stated = withBesideKeywords(schema, context);
+    const origin = isObjectOrArray(stated)
+      ? context.schemaOrigins?.get(stated)
       : undefined;
     return origin?.kind === "intersection"
       ? origin.parts().flatMap(expand)

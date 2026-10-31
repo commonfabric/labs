@@ -27,6 +27,7 @@ import type {
   ViewMode,
 } from "../model.ts";
 import type { DiffMaps } from "../diffdoc.ts";
+import type { ColumnOf } from "../lines.ts";
 import type { DecodedLanguageSource, LanguageDecoder } from "./decoder.ts";
 import { utf8Decoder } from "./decoder.ts";
 import { typeScriptLanguage } from "./typescript/language.ts";
@@ -194,6 +195,10 @@ export interface HunkStructureContext {
   readonly hunkEnd: number;
 
   readonly diffLineStarts: number[];
+
+  /** Code-point columns of the diff text. */
+  readonly diffColumnOf: ColumnOf;
+
   readonly rawLines: string[];
 
   /** Name → declaration index the remap contributes to (for `t` peeks). */

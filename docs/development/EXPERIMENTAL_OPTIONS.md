@@ -486,6 +486,14 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-10-30 (the verbs on the space's memory session).** Under
+  ON, the toolshed's memory server runs the verbs as `pattern.lifecycle`
+  requests and advertises `patternLifecycle`, and
+  `cf piece new` and `cf piece setsrc` send each verb on the space's memory
+  session, which reaches the process serving the space; they post to
+  `/api/pattern-lifecycle/*` only when the server does not advertise the flag
+  ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+  OFF is unchanged.
 - **Status on 2026-10-27 (the shell follows its deployment).** The first-party
   default is unchanged. The browser shell takes the arm from the toolshed that
   serves it, where its build define leaves the flag unset, so a deployment
@@ -1060,7 +1068,14 @@ holds the measurements and the conditions for revisiting.
   update alike run the inserted sibling on the carried child's document and the
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones.
+  set up shows fresh children in place of the named ones. The mechanism is
+  specified and not built: a one-way mark on each space, recorded at the first
+  commit from a naming runtime and only where the deployment's posture names
+  instances, after which the memory server admits no runtime with naming off
+  to the space (INV-16 in
+  [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
+  it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
   output by the golden fixtures and `pipeline-regressions.test.ts`, and both
   arms by `transform.test.ts`. That compiled code is never shared between the
@@ -1749,6 +1764,26 @@ the per-epic implementation notes).
 >   Older servers omit it, which parses as `false`, and a client then keeps its
 >   reports to itself rather than sending a message the server would refuse.
 >   It is permanent.
+> - **`patternLifecycle`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly while its host has installed a lifecycle handler with
+>   `Server.setPatternLifecycleHandler()`, which toolshed does while it runs
+>   the serving loop ([`serverExecution`](#serverexecution) on). It advertises
+>   the `pattern.lifecycle` request of the memory protocol chapter's section
+>   4.3.10, which runs a pattern-lifecycle verb on the space's memory session
+>   ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+>   Only the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A server that omits it parses as `false`, and `cf` then posts
+>   the verb to the HTTP route. It is permanent.
+> - **`spaceInvites`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly when it was given `inviteHost`, the public origin its invitation
+>   links name; toolshed passes `normalizeInviteHost(API_URL)`. It advertises
+>   the `space.invite` request of the memory protocol chapter's section
+>   4.3.11, which administers a space's invitations on the space's memory
+>   session. Only the server advertises it; a client reads it from `hello.ok`
+>   and never offers it. A server that omits it parses as `false`, and
+>   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
 > - **`watchRemoveV1`** is a build-inherent capability, hardwired to `true`.
 >   It advertises `session.watch.remove`, which removes watches by id and
 >   answers with only what changed (the memory protocol chapter's section

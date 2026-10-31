@@ -90,7 +90,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     composer: new Writable.perSession<ComposerState>({}),
     places: new Writable({}),
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
   };
   const row = FabriChatMessageRow({
     ...rowState,
@@ -198,7 +198,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     composer: new Writable.perSession<ComposerState>({}),
     places: new Writable({}),
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
   });
   return {
     [TESTS]: [

@@ -19,7 +19,6 @@
  */
 
 import type {
-  Definition,
   Document,
   Line,
   StructureKind,
@@ -30,7 +29,11 @@ import { flattenStructure } from "../../model.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
 import { isTokenClass } from "../../theme.ts";
 import { linesFromClasses } from "../classes.ts";
-import { structureNode, type StructureSource } from "../structure.ts";
+import {
+  structureNode,
+  type StructureSource,
+  structureSource,
+} from "../structure.ts";
 import {
   createPlainTextHighlighter,
   plainTextDocument,
@@ -272,20 +275,14 @@ export function parseDocument(
   if (ready === undefined) return plainTextDocument(text);
   const tree = parseWith(ready, parserText(grammar, text));
   try {
-    const lineStarts = computeLineStarts(text);
-    const definitions = new Map<string, Definition[]>();
-    const structure = structureNodes(
-      grammar,
-      tree.rootNode,
-      { text, lineStarts, definitions },
-      0,
-    );
+    const source = structureSource(text);
+    const structure = structureNodes(grammar, tree.rootNode, source, 0);
     return {
       text,
-      lines: colorLines(ready, tree, text, lineStarts),
+      lines: colorLines(ready, tree, text, source.lineStarts),
       structure,
       flatStructure: flattenStructure(structure),
-      definitions,
+      definitions: source.definitions,
     };
   } finally {
     tree.delete();

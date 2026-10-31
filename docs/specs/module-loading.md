@@ -867,6 +867,13 @@ cell's contents. The cache is designed around this:
   into its own space from there; when it compiled the closure in the same
   session and the write-back was deferred by a preview or failed, the load
   writes that compile back instead of compiling again.
+  A copy carries the compiled closure under the cache variant it was read
+  under. That is the runtime's own variant, unless the runner wrote the
+  closure into the origin space in the same session under another variant
+  only — a compile given its own coverage collector writes the coverage
+  variant — in which case it is that one. A closure another session wrote
+  into the origin under the coverage variant alone is read under the
+  runtime's own variant, and so is not found there.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate

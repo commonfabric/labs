@@ -12,12 +12,7 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import {
-  createSession,
-  type Identity,
-  legacySpaceDid,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, legacySpaceDid, Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -158,6 +153,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  type LifecycleClientConfig,
   ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
@@ -1735,13 +1731,27 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
     .serverExecution === true;
 }
 
+/**
+ * The client a served verb is sent with: signed as the configured identity,
+ * and sent on `pieces`' memory session for its space where the storage
+ * manager has one, so the verb reaches the process serving that space.
+ */
 async function lifecycleClient(
   config: SpaceConfig,
+  pieces: PiecesController,
   deps: PieceOperationDependencies,
-): Promise<{ apiUrl: URL; identity: Identity }> {
+): Promise<LifecycleClientConfig> {
+  const storageManager = (pieces.runtime as Runtime | undefined)
+    ?.storageManager;
+  const runOnSession = storageManager?.runPatternLifecycle?.bind(
+    storageManager,
+  );
   return {
     apiUrl: new URL(config.apiUrl),
     identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
+    ...(runOnSession === undefined ? {} : {
+      session: (space, verb, body) => runOnSession(space, verb, body),
+    }),
   };
 }
 
@@ -1775,7 +1785,7 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, deps);
+      const client = await lifecycleClient(config, pieces, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1825,8 +1835,7 @@ async function createWithReceipt(
     } catch (error) {
       if (
         error instanceof ServedLifecycleRefusal ||
-        (error instanceof ServedLifecycleError && error.status >= 400 &&
-          error.status < 500 && error.status !== 408)
+        (error instanceof ServedLifecycleError && error.refused)
       ) {
         throw error;
       }
@@ -2169,7 +2178,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, deps), {
+    setPieceSourceOnServer)(await lifecycleClient(config, pieces, deps), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,
@@ -5060,8 +5069,10 @@ const confidentialityToKeep = (
  * With `lowerConfidentiality`, the update is instead an owner's release
  * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
  * path that `input.confidentiality` does not name is removed from every label
- * there, which rewrites the stored metadata. The input then holds
- * `confidentiality` alone, naming only clauses the path already stores.
+ * there, which rewrites the stored metadata. A `*` segment of the path names
+ * every stored position it matches at its depth, the wildcard entry there
+ * among them. The input then holds `confidentiality` alone, naming only
+ * clauses the path already stores.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
@@ -5097,7 +5108,12 @@ export async function setCellCfcLabel(
   // the update silently REPLACED a value-class entry with a class-less one,
   // and the command returned null while having written a label.
   const currentView = cfcLabelViewForCommand(targetCell, path);
-  const value = targetCell.getRaw();
+  // A lowering's `*` segment names the stored positions it matches rather
+  // than a value, so what has to be present is the value it sits in.
+  const wildcard = keep === undefined ? -1 : path.indexOf("*");
+  const value = wildcard < 0
+    ? targetCell.getRaw()
+    : rootCell.key(...path.slice(0, wildcard)).getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);

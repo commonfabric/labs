@@ -57,12 +57,12 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import {
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
 } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { interceptTransaction } from "./support/intercept-transaction.ts";
 
 const signer = await Identity.fromPassphrase("replication sibling race test");
@@ -287,13 +287,14 @@ describe("closure replication: the in-flight sibling supplier race", () => {
   };
 
   /** The closure identities readable for `entry` in `space` on a fresh
-   * transaction (the replication's own read shape). */
+   * transaction (the replication's own read shape), in the variant `rt`
+   * compiles under. */
   const readableClosure = async (
     rt: Runtime,
     space: MemorySpace,
     entryIdentity: string,
   ): Promise<{ source: string[]; compiled: string[] }> => {
-    const runtimeVersion = await getCompileCacheRuntimeVersion();
+    const runtimeVersion = await compileCacheVersionOf(rt);
     const readTx = rt.edit();
     try {
       const source = await loadVerifiedSourceClosure(
@@ -302,15 +303,13 @@ describe("closure replication: the in-flight sibling supplier race", () => {
         entryIdentity,
         readTx,
       );
-      const compiled = runtimeVersion === undefined
-        ? new Map<string, unknown>()
-        : await loadCompiledClosure(
-          rt,
-          space,
-          entryIdentity,
-          { runtimeVersion },
-          readTx,
-        );
+      const compiled = await loadCompiledClosure(
+        rt,
+        space,
+        entryIdentity,
+        { runtimeVersion },
+        readTx,
+      );
       return {
         source: [...(source?.keys() ?? [])],
         compiled: [...compiled.keys()],
@@ -397,6 +396,7 @@ describe("closure replication: the in-flight sibling supplier race", () => {
           entry.identity,
         );
         expect(childState.source).toContain(entry.identity);
+        expect(childState.compiled).toContain(entry.identity);
         const rt2 = new Runtime({
           apiUrl: new URL(import.meta.url),
           storageManager,

@@ -2196,6 +2196,61 @@ describe("determineTriggeredActions", () => {
       expect(result).toEqual([action]);
     });
   });
+
+  describe("a change reported at a document's CFC envelope", () => {
+    // The differential reports a changed envelope as one change at ["cfc"]
+    // (storage/differential.ts). That wakes the same readers a change per
+    // leaf would only because each reader is judged at its own path.
+    const entries = (third: string) => [
+      { path: ["0"], label: { confidentiality: ["a"] } },
+      { path: ["1"], label: { confidentiality: ["b"] } },
+      { path: ["2"], label: { confidentiality: [third] } },
+    ];
+    const before = {
+      value: [1, 2, 3],
+      cfc: { labelMap: { entries: entries("c") } },
+    };
+    const after = {
+      value: [1, 2, 3],
+      cfc: { labelMap: { entries: entries("d") } },
+    };
+
+    it("wakes a value reader whose own path changed, and not one whose did not", () => {
+      const changed = createAction("changed");
+      const unchanged = createAction("unchanged");
+      const dependencies = new Map<Action, SortedAndCompactPaths>([
+        [changed, [["cfc", "labelMap", "entries", "2", "label"]]],
+        [unchanged, [["cfc", "labelMap", "entries", "0"]]],
+      ]);
+
+      expect(determineTriggeredActions(dependencies, before, after, ["cfc"]))
+        .toEqual([changed]);
+    });
+
+    it("wakes a shape reader whose own shape changed, and not one whose did not", () => {
+      const grown = {
+        value: [1, 2, 3],
+        cfc: {
+          labelMap: {
+            entries: [
+              ...entries("c"),
+              { path: ["3"], label: { confidentiality: ["e"] } },
+            ],
+          },
+        },
+      };
+      const entriesShape = createAction("entriesShape");
+      const labelMapShape = createAction("labelMapShape");
+      const dependencies = new Map<Action, SortedAndCompactPaths>([
+        [entriesShape, [["cfc", "labelMap", "entries"]]],
+        [labelMapShape, [["cfc", "labelMap"]]],
+      ]);
+
+      expect(determineTriggeredActions(dependencies, before, grown, ["cfc"], {
+        nonRecursive: true,
+      })).toEqual([entriesShape]);
+    });
+  });
 });
 
 //
