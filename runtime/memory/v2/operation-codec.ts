@@ -1,8 +1,13 @@
 import { rebaseUpdates, type Update } from "@codemirror/collab";
-import { ChangeSet, StateEffect, Text } from "@codemirror/state";
+import {
+  type ChangeDesc,
+  ChangeSet,
+  StateEffect,
+  Text,
+} from "@codemirror/state";
 import type { FabricValue } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { CODEMIRROR_CHANGESET_CODEC } from "../v2.ts";
+import { CODEMIRROR_CHANGESET_CODEC, type FieldAnchor } from "../v2.ts";
 
 export { CODEMIRROR_CHANGESET_CODEC, operationBaselineHash } from "../v2.ts";
 
@@ -17,9 +22,53 @@ export type OperationCodecResult = {
   operations: FabricValue[];
 };
 
+/**
+ * Anchors stated against the value before `operations`, to be mapped through
+ * them. `materialized` is the value after `operations`: with none, the value
+ * the anchors are stated against.
+ */
+export type OperationCodecAnchorInput = {
+  anchors: readonly FieldAnchor[];
+  materialized: FabricValue;
+  operations: readonly FabricValue[];
+};
+
 export type OperationCodec = {
   readonly id: string;
   integrate(input: OperationCodecInput): OperationCodecResult;
+
+  /**
+   * Maps `anchors` through integrated `operations`, in order, and returns
+   * them stated against the value after. Deterministic: the same anchors and
+   * operations map to the same ranges in every process. Throws when an anchor
+   * lies outside the value it is stated against.
+   */
+  mapAnchors(input: OperationCodecAnchorInput): FieldAnchor[];
+};
+
+/**
+ * Maps one range through one change description, as the CodeMirror codec maps
+ * every anchor and a CodeMirror editor maps a mark: the start with
+ * association 1, so text inserted at it stays outside; the end with
+ * association -1, likewise; a range the change empties collapses to the point
+ * where its start lands with association -1, and an empty range stays a point
+ * before text inserted at it.
+ */
+export const mapAnchorRange = <T extends { from: number; to: number }>(
+  range: T,
+  changes: ChangeDesc,
+): T => {
+  if (range.from === range.to) {
+    const point = changes.mapPos(range.from, -1);
+    return { ...range, from: point, to: point };
+  }
+  const from = changes.mapPos(range.from, 1);
+  const to = changes.mapPos(range.to, -1);
+  if (to <= from) {
+    const point = changes.mapPos(range.from, -1);
+    return { ...range, from: point, to: point };
+  }
+  return { ...range, from, to };
 };
 
 export class OperationCodecRegistry {
@@ -186,6 +235,38 @@ const codeMirrorChangeSetCodec: OperationCodec = {
         updates: [encodeUpdate(update)],
       })),
     };
+  },
+  mapAnchors({ anchors, materialized, operations }) {
+    if (typeof materialized !== "string") {
+      throw new Error("CodeMirror anchors require a string field");
+    }
+    const changes = operations.flatMap(decodePayload).map(({ update }) =>
+      update.changes
+    );
+    // The anchors are stated against the value before the operations: its
+    // length is what the first change set was made over, and the field's
+    // own length when there is nothing to map through.
+    const baseLength = changes.length === 0
+      ? materialized.length
+      : changes[0].length;
+    let mapped = anchors.map((anchor) => {
+      if (
+        !Number.isSafeInteger(anchor.from) ||
+        !Number.isSafeInteger(anchor.to) ||
+        anchor.from < 0 || anchor.to < anchor.from || anchor.to > baseLength
+      ) {
+        throw new Error(
+          `CodeMirror anchor ${anchor.id} lies outside the field's ${baseLength} code units`,
+        );
+      }
+      return { ...anchor };
+    });
+    // One change set at a time, as an editor maps through each transaction:
+    // a range one change empties stays a point through the rest.
+    for (const changeSet of changes) {
+      mapped = mapped.map((anchor) => mapAnchorRange(anchor, changeSet.desc));
+    }
+    return mapped;
   },
 };
 

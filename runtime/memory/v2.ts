@@ -427,6 +427,43 @@ export const streamEntriesDocId = (stream: StreamLinkRef): EntityId =>
   }`;
 
 /**
+ * Prefix of the anchors document of a collaborative field: the derived,
+ * Memory-owned entity holding the field's anchors
+ * (`07-op-views-and-annotations.md` §7.15). The engine writes it in the
+ * transaction that changes the set, and a client's write to an id under this
+ * prefix is refused. The id is content-derived from the field's address
+ * ({@link operationAnchorsDocId}), so every party addresses it with no
+ * coordination, and the document is written in the field's own scope: a
+ * per-user field's anchors are per-user.
+ */
+export const OP_ANCHORS_DOC_PREFIX = "of:op-anchors:";
+
+/**
+ * The field an anchors document belongs to, as its id is derived: entity id,
+ * scope name and value-relative path. The resolved scope key is not part of
+ * it, since the document lives in the field's scope and resolves the same way.
+ */
+export type OperationAnchorsFieldRef = {
+  id: EntityId;
+  scope?: CellScope;
+  path: readonly string[];
+};
+
+export const operationAnchorsDocId = (
+  field: OperationAnchorsFieldRef,
+): EntityId =>
+  `${OP_ANCHORS_DOC_PREFIX}${
+    hashStringOf({
+      id: field.id,
+      path: [...field.path],
+      scope: field.scope ?? "space",
+    })
+  }`;
+
+export const isOperationAnchorsDocId = (id: string): boolean =>
+  id.startsWith(OP_ANCHORS_DOC_PREFIX);
+
+/**
  * `firedAt` — SERVER-STAMPED at admission (events.md §1, protocol.md §2):
  * `user` and `session` come from the authenticated commit envelope (or,
  * for delegated appends, the validated carried actor; for wave-carried
@@ -892,6 +929,33 @@ export type OpCursor = {
 
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
 
+/**
+ * A range of a collaborative field, keyed by a client-chosen id, that Memory
+ * carries through every integrated operation. `from` and `to` are the codec's
+ * positions: for the CodeMirror codec, UTF-16 code unit offsets with `to`
+ * exclusive. An edit that deletes the covered text with nothing in its place
+ * empties the range to a point (`from === to`); a replacement of the covered
+ * text keeps the range over the replacement.
+ */
+export type FieldAnchor = {
+  id: string;
+  from: number;
+  to: number;
+};
+
+/**
+ * The anchors of a collaborative field as its anchors document holds them
+ * ({@link operationAnchorsDocId}): the field cursor the set was last restated
+ * at, and the set, sorted by id. A set carried unchanged through later
+ * operations holds at every later version, so `version` lags the field head
+ * whenever no anchor has moved since.
+ */
+export type FieldAnchorsDocument = {
+  epoch: number;
+  version: number;
+  anchors: FieldAnchor[];
+};
+
 export type OperationFieldAddress = {
   id: EntityId;
   scope?: CellScope;
@@ -928,6 +992,25 @@ export type ReleaseOpFieldOperation = OperationFieldAddress & {
   cursor: OpCursor;
 };
 
+/**
+ * Adds, replaces or removes anchors of a collaborative field. The ranges in
+ * `add` are stated against the field's value at `base`, and Memory maps them
+ * through the operations integrated after `base` before storing them, so a
+ * client anchors text it read at an older version without re-reading. `base`
+ * and `baselineHash` follow {@link ApplyOpOperation}'s contract. An
+ * `anchor-op` on a field no editor has opened activates it. An `add` of an id
+ * the field holds replaces its range; a `remove` of an id it does not hold is
+ * a no-op. The field's version does not advance: anchors are not operations.
+ */
+export type AnchorOpOperation = OperationFieldAddress & {
+  op: "anchor-op";
+  codec: string;
+  base?: OpCursor | null;
+  baselineHash?: string;
+  add?: FieldAnchor[];
+  remove?: string[];
+};
+
 export type IntegratedOperation = {
   opId: string;
   cursor: OpCursor;
@@ -949,6 +1032,23 @@ export type ApplyOpResolution = {
   duplicate: boolean;
 };
 
+/**
+ * What an `anchor-op` landed as: the field cursor its stored ranges are
+ * stated at, the added anchors as stored (mapped from the operation's base to
+ * that cursor), and the ids its `remove` found and removed.
+ */
+export type AnchorOpResolution = {
+  operationIndex: number;
+  address: OperationFieldAddress & {
+    branch: BranchName;
+    scopeKey: string;
+  };
+  codec: string;
+  cursor: OpCursor;
+  anchors: FieldAnchor[];
+  removed: string[];
+};
+
 export type OperationFieldQuery = OperationFieldAddress & {
   branch?: BranchName;
   after?: OpCursor;
@@ -965,6 +1065,13 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
   baselineHash: string;
   materialized: FabricValue;
   operations: IntegratedOperation[];
+
+  /**
+   * The field's anchors at `cursor`, sorted by id; empty for an inactive
+   * field. An `anchor-op` changes this set without advancing the cursor, so a
+   * snapshot can carry new anchors at a cursor the client has already applied.
+   */
+  anchors: FieldAnchor[];
 
   /** Lowest cursor from which the retained integrated suffix is contiguous. */
   retainedFrom?: OpCursor;
@@ -991,6 +1098,7 @@ export type Operation =
   | PatchOperation
   | DeleteOperation
   | ApplyOpOperation
+  | AnchorOpOperation
   | ReleaseOpFieldOperation
   | SqliteOperation;
 

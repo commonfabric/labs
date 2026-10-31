@@ -193,6 +193,7 @@ type StructuredDocument = {
 
 const structuredCodec: OperationCodec = {
   id: "synthetic-structured-document@1",
+  mapAnchors: ({ anchors }) => [...anchors],
   integrate({ materialized, submitted }) {
     const document = materialized as StructuredDocument;
     const node = (submitted as { append?: FabricValue }).append;

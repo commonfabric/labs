@@ -315,6 +315,7 @@ describe("v2-operation-codec", () => {
   it("enforces versioned unique ids for editor-neutral codecs", () => {
     const counter: OperationCodec = {
       id: "test-counter@1",
+      mapAnchors: ({ anchors }) => [...anchors],
       integrate({ materialized, submitted }) {
         if (
           typeof materialized !== "number" || !isObjectNotArray(submitted) ||
@@ -340,5 +341,88 @@ describe("v2-operation-codec", () => {
     expect(() => registry.register({ ...counter, id: "test-counter" })).toThrow(
       "requires a version suffix",
     );
+  });
+
+  describe("mapAnchors()", () => {
+    const codec = createDefaultOperationCodecRegistry().require(
+      CODEMIRROR_CHANGESET_CODEC,
+    );
+    const anchor = (from: number, to: number) => ({ id: "a", from, to });
+    const edit = (
+      length: number,
+      from: number,
+      to: number,
+      insert: string,
+    ) => ({
+      updates: [{
+        clientId: "alice",
+        changes: ChangeSet.of({ from, to, insert }, length).toJSON(),
+      }],
+    });
+
+    it("keeps text inserted at either end outside the range", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(2, 4)],
+        materialized: "abXcdYef",
+        operations: [edit(6, 2, 2, "X"), edit(7, 5, 5, "Y")],
+      })).toEqual([anchor(3, 5)]);
+    });
+
+    it("grows the range around text inserted inside it", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(1, 3)],
+        materialized: "abXYcd",
+        operations: [edit(4, 2, 2, "XY")],
+      })).toEqual([anchor(1, 5)]);
+    });
+
+    it("empties a range a deletion covers to the deletion's start", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(2, 4)],
+        materialized: "af",
+        operations: [edit(6, 1, 5, "")],
+      })).toEqual([anchor(1, 1)]);
+    });
+
+    it("keeps the range over a replacement of its text", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(1, 3)],
+        materialized: "aXYZd",
+        operations: [edit(4, 1, 3, "XYZ")],
+      })).toEqual([anchor(1, 4)]);
+    });
+
+    it("keeps an empty range before text inserted at it", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(2, 2)],
+        materialized: "abXcd",
+        operations: [edit(4, 2, 2, "X")],
+      })).toEqual([anchor(2, 2)]);
+    });
+
+    it("returns the anchors as given with nothing to map through", () => {
+      expect(codec.mapAnchors({
+        anchors: [anchor(0, 3)],
+        materialized: "abc",
+        operations: [],
+      })).toEqual([anchor(0, 3)]);
+    });
+
+    it("throws for a range beyond the value the anchors are stated against", () => {
+      expect(() =>
+        codec.mapAnchors({
+          anchors: [anchor(0, 7)],
+          materialized: "abcdef",
+          operations: [edit(3, 3, 3, "def")],
+        })
+      ).toThrow("outside the field's 3 code units");
+      expect(() =>
+        codec.mapAnchors({
+          anchors: [anchor(0, 4)],
+          materialized: "abc",
+          operations: [],
+        })
+      ).toThrow("outside the field's 3 code units");
+    });
   });
 });
