@@ -1444,23 +1444,24 @@ command connects as. That session reaches the toolshed process serving the
 space, which a plain HTTP request to a multi-process deployment may not. Against
 a memory server that does not take the request, the command posts it to the
 deployment's pattern-lifecycle route instead, signed with the same identity. A
-request takes at most 8 MiB, or 4 MiB on a connection through the memory router,
-and a larger one is refused before it is sent. The space's serving runtime
-compiles the program, creates the piece, and answers with the receipt the
-command prints. Where the deployment enforces ACLs, the identity must hold WRITE
-or OWNER on the space; a deployment with enforcement off admits any signed
-caller, as its memory server does. Setup, slug, and creation receipt commit
-together, so a taken name refuses before anything is created. Registration then
-invokes the default pattern's `addPiece` handler and waits for its durable
-consequence and registry readback. A failure names the created piece and a retry
-key; repeat `cf piece new` with `--request-key <key>` to resume that creation.
-The space root is the serving loop's to ensure rather than this command's. What
-stays in this process after the receipt is what opening a piece does anyway: the
-start, which `--no-start` skips; `--no-start` also asks the serving loop not to
-derive the piece until something demands it. The receipt returns once the piece
-is durable and registered, including with `--no-start`; the serving loop derives
-it on demand, so a reader that needs the derived value pulls it. Against any
-other deployment, and under `cf test`, the command performs every step itself.
+request takes at most 8 MiB. On the memory session, or 4 MiB through the memory
+router, a larger one is refused before it is sent; over the route, the
+deployment refuses it with a 413. The space's serving runtime compiles the
+program, creates the piece, and answers with the receipt the command prints.
+Where the deployment enforces ACLs, the identity must hold WRITE or OWNER on the
+space; a deployment with enforcement off admits any signed caller, as its memory
+server does. Setup, slug, and creation receipt commit together, so a taken name
+refuses before anything is created. Registration then invokes the default
+pattern's `addPiece` handler and waits for its durable consequence and registry
+readback. A failure names the created piece and a retry key; repeat
+`cf piece new` with `--request-key <key>` to resume that creation. The space
+root is the serving loop's to ensure rather than this command's. What stays in
+this process after the receipt is what opening a piece does anyway: the start,
+which `--no-start` skips; `--no-start` also asks the serving loop not to derive
+the piece until something demands it. The receipt returns once the piece is
+durable and registered, including with `--no-start`; the serving loop derives it
+on demand, so a reader that needs the derived value pulls it. Against any other
+deployment, and under `cf test`, the command performs every step itself.
 `cf piece setsrc` requests the same way against a serving deployment: it
 resolves and pins the program, sends it with the piece's id, and prints the
 receipt of the setup transaction the serving runtime committed — directly to the
