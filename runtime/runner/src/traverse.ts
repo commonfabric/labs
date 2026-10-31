@@ -540,9 +540,21 @@ type PlainSchemaPlan =
     properties: ReadonlyMap<string, PlainSchemaPlan>;
   };
 
+/**
+ * The reads a plain-schema traversal makes of one document: `paths` are the
+ * containers it stepped into, read for their shape, and `values` the scalars
+ * it returned, read whole. A scalar has no members, so what the traversal
+ * returns from it is the payload: a value read (CFC spec §4.5.2), as the
+ * general traversal records for a scalar it returns. The flow join consumes
+ * a document's `value` label for a value read and only its `shape` label for
+ * a shape read, and the two differ once the document's value has changed:
+ * the shape label is minted at creation (§8.12.8), the value label on every
+ * write.
+ */
 type PlainSchemaReads = {
   address: Omit<IMemorySpaceValueAddress, "path">;
   paths: (readonly string[])[];
+  values: (readonly string[])[];
 };
 
 const _plainSchemaPlanCache = new WeakMap<
@@ -5294,7 +5306,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> | undefined {
     const { path: _path, ...address } = doc.address;
-    const reads: PlainSchemaReads = { address, paths: [] };
+    const reads: PlainSchemaReads = { address, paths: [], values: [] };
     const result = this.#traversePlainSchemaWithReads(doc, plan, link, reads);
     this.#trackPlainSchemaReads(reads);
     return result;
@@ -5303,11 +5315,15 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #trackPlainSchemaReads(
     reads: PlainSchemaReads,
   ): void {
-    if (reads.paths.length === 0) return;
     if (this.tx.trackReadPaths) {
-      this.tx.trackReadPaths(reads.address, reads.paths, {
-        nonRecursive: true,
-      });
+      if (reads.paths.length > 0) {
+        this.tx.trackReadPaths(reads.address, reads.paths, {
+          nonRecursive: true,
+        });
+      }
+      if (reads.values.length > 0) {
+        this.tx.trackReadPaths(reads.address, reads.values);
+      }
     } else {
       for (const path of reads.paths) {
         this.tx.read(
@@ -5315,8 +5331,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
           READ_NON_RECURSIVE_FOR_SCHEDULING,
         );
       }
+      for (const path of reads.values) {
+        this.tx.read({ ...reads.address, path }, READ_FOR_SCHEDULING);
+      }
     }
     reads.paths.length = 0;
+    reads.values.length = 0;
   }
 
   #createPlainSchemaObject(
@@ -5340,9 +5360,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (isSigilLink(doc.value)) return undefined;
 
     if (plan.kind === "primitive") {
-      return matchesPlainType(doc.value, plan.type)
-        ? { ok: doc.value }
-        : fail(TRAVERSE_FAILURES.invalidType);
+      // A scalar the plan rejects is not returned: its kind was observed,
+      // its value was not.
+      if (matchesPlainType(doc.value, plan.type)) {
+        reads.values.push(doc.address.path);
+        return { ok: doc.value };
+      }
+      reads.paths.push(doc.address.path);
+      return fail(TRAVERSE_FAILURES.invalidType);
     }
 
     if (plan.kind === "array") {
@@ -5360,17 +5385,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
       reads.paths.push(doc.address.path);
       let valid = true;
       doc.value.forEach((item, index) => {
-        reads.paths.push(appendToPath(doc.address.path, index.toString()));
+        const itemPath = appendToPath(doc.address.path, index.toString());
         if (matchesPlainType(item, itemPlan.type)) {
+          reads.values.push(itemPath);
           newValue[index] = item;
         } else if (itemPlan.type === "undefined") {
+          reads.paths.push(itemPath);
           newValue[index] = undefined;
         } else if (itemPlan.type === "null") {
+          reads.paths.push(itemPath);
           newValue[index] = null;
         } else {
           // Keep visiting later indices after a failure: those reads are part
           // of the scheduler/subscription surface even when the array result
-          // is invalid.
+          // is invalid. A rejected item's kind was observed, not its value.
+          reads.paths.push(itemPath);
           valid = false;
         }
       });
@@ -5383,7 +5412,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // A `FabricPrimitive` is an opaque leaf; see the value-type dispatch's
       // arm (the plan compiles from the same schema family, so the same
       // posture applies here).
-      if (doc.value instanceof FabricPrimitive) return { ok: doc.value };
+      if (doc.value instanceof FabricPrimitive) {
+        reads.values.push(doc.address.path);
+        return { ok: doc.value };
+      }
       // TODO(danfuzz): a `FabricInstance` is not yet handled here either —
       // see the dispatch's `FabricInstance` arm. Fail loudly until it is.
       throw new Error(
@@ -5403,12 +5435,15 @@ export class SchemaObjectTraverser<V extends FabricValue>
         continue;
       }
       const propPath = appendToPath(doc.address.path, propKey);
-      reads.paths.push(propPath);
       if (childPlan.kind === "primitive" && !isSigilLink(propValue)) {
         if (matchesPlainType(propValue, childPlan.type)) {
+          reads.values.push(propPath);
           newValue[propKey] = propValue;
+        } else {
+          reads.paths.push(propPath);
         }
       } else {
+        reads.paths.push(propPath);
         const propDoc = {
           address: { ...doc.address, path: propPath },
           value: propValue,
@@ -6321,6 +6356,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
         doc.value,
       );
     } else {
+      // What this returns is the scalar itself, so the read is of its value
+      // (CFC spec §4.5.2). The shape read the walk records at the document's
+      // top consumes the document's shape label alone, which is minted at
+      // creation and does not follow the value (§8.12.8). A handle returned
+      // above names the scalar without reading it.
+      this.tx.read(doc.address, READ_FOR_SCHEDULING);
       return doc.value;
     }
   }
