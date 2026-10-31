@@ -61,8 +61,9 @@ const SuggestionHistory = pattern<Input, Output>(() => {
   const { result: entries } = wish<SuggestionHistoryEntry[] | Default<[]>>({
     query: "#suggestions",
   });
-  // `#suggestions` is an ordinary hashtag, so the wish can find a piece
-  // tagged with it whose shape is not a history list. Read that as no entries.
+  // `#suggestions` is an ordinary hashtag, so what the wish finds is a piece
+  // tagged with it, not a history list. Anything but a list reads as no
+  // entries.
   const allEntries = computed(() => Array.isArray(entries) ? entries : []);
 
   return {
