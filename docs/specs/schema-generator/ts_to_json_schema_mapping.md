@@ -287,8 +287,14 @@ beside another primitive (`undefined & void` is `undefined`, `string & void`
 nothing), while the wrapper is a cell, the value beside any other part; an
 unsupported-pattern fallback keeps the constituents behind it, so a nested
 or named intersection is reopened when an enclosing one reduces it
-(`(string & Brand) & number` is nothing); and a union whose arms fold to one
-schema — `void | OpaqueCell<any>`, two branded primitives with the same
+(`(string & Brand) & number` is nothing), with the scope, default and
+restrictions a reference to it states beside it stated of each of them, since
+a value of `PerUser<A & B>` is a value of `PerUser<A>` and of `PerUser<B>`, so
+`PerUser<F> & { y: number }` keeps its scope and
+`Confidential<F, L> & { y: number }` its label, while evidence beside the
+reference is stated of none of them, as no one of them is the labeled payload;
+and a union whose arms fold to one schema — `void | OpaqueCell<any>`, two branded primitives with
+the same
 fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over

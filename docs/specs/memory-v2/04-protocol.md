@@ -103,6 +103,8 @@ If the server accepts the protocol, it returns:
     "sessionClose": true,
     "admissionNotice": true,
     "sessionReportV1": true,
+    "patternLifecycle": true,
+    "spaceInvites": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
     "syncPartsV1": true,
@@ -378,6 +380,22 @@ server would refuse. Only the server advertises it. A client's `hello` leaves
 it out, since an older routed host refuses a `hello` carrying a flag it does
 not know.
 
+`patternLifecycle` advertises that the server runs `pattern.lifecycle`
+requests (section 4.3.10). It is not build-inherent: a server advertises it
+exactly while its host has installed a lifecycle handler, which toolshed does
+while it runs the serving loop. It defaults to `false` when absent: a client
+then sends no `pattern.lifecycle` request, and sends the verb some other way
+or not at all. Only the server advertises it, and a client's `hello` leaves it
+out.
+
+`spaceInvites` advertises that the server administers a space's invitations
+through `space.invite` requests (section 4.3.11). It is not build-inherent: a
+server advertises it exactly when its host gave it the public origin its
+invitation links name, since an invitation's code verifier is bound to that
+origin. It defaults to `false` when absent: a client then sends no
+`space.invite` request, and administers invitations some other way or not at
+all. Only the server advertises it, and a client's `hello` leaves it out.
+
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
 (sections 4.1.2 and 4.5.1). It is build-inherent and
@@ -444,6 +462,11 @@ interface SessionOpenRequest {
     // The kind the space declares in its genesis commit (see the rules).
     // Inside the signed descriptor, like everything the session declares.
     spaceKind?: string;
+    // An invitation the open redeems before its grant is checked (see the
+    // rules). Bound to the open's principal with the rest of the descriptor:
+    // signed into a signed open, covered by the connection's authentication
+    // of an open that names its principal.
+    invite?: { inviteId: string; code: string };
     // Present when the session's runtime names instances (specified, not yet
     // built; see the rules and INV-16). Absent means positional. Inside the
     // signed descriptor.
@@ -531,6 +554,12 @@ interface SessionOpenResult {
   // The kind the space's genesis commit declares; absent when it declares
   // none, or the space has no history yet.
   spaceKind?: string;
+  // The redemption of the invitation the open carried.
+  invite?: {
+    outcome: "redeemed" | "already-redeemed";
+    redemption: { inviteId: string; did: string };
+    currentAccess: "READ" | "WRITE" | "OWNER" | null;
+  };
   sessionOpen: {
     challenge: {
       value: string;
@@ -588,6 +617,19 @@ Rules:
   with no history admits the declaration, and its genesis commit must then
   carry the same kind. Every open of a space with history is told the kind its
   genesis declares, in `spaceKind`, whether the session declared one or not
+- an open carrying an `invite` first redeems it as the open's authenticated
+  principal, through the same invitation service as `space.invite` (section
+  4.3.11) and checked against the server's invitation host, and then checks
+  the open's grant, so a principal the access list did not name is admitted by
+  the grant the invitation conferred. A refusal of the redemption refuses the
+  open with an error named `SpaceInviteRefusal` carrying the service's code, a
+  server knowing no invitation host refuses it with
+  `invite-service-unsupported`, and an anonymous open, or one that also
+  presents a proof chain or an `actingAs` binding, is refused with
+  `invalid-request`. A client sends
+  `invite` only to a server advertising `spaceInvites`, on the open that
+  redeems and on none of the session's resumes: a server that does not know
+  the field would open, or refuse, the session without redeeming anything
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional (specified, not yet built). A server
   that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
@@ -712,6 +754,8 @@ interface HelloMessage {
     admissionNotice?: boolean;
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
+    patternLifecycle?: boolean;
+    spaceInvites?: boolean;
     spaceKind?: boolean;
     // Specified, not yet built (INV-16).
     instanceNameMark?: boolean;
@@ -731,6 +775,8 @@ interface RequestMessage {
     | "session.ack"
     | "session.close"
     | "event.attention.resolve"
+    | "pattern.lifecycle"
+    | "space.invite"
     | "presence.join"
     | "presence.publish"
     | "presence.leave";
@@ -772,9 +818,11 @@ Per-commit invocation / authorization persistence is deferred in this pass.
 Every position where a message names fields holds a plain object. Those
 positions are the message itself, and within it `session`, `invocation`,
 `commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
-`hello` message's `flags`, and a `presence.publish` message's `facets`
-together with each value in it. Both sides refuse anything else there, and
-the refusal is the one a string or a number in that position gets.
+`hello` message's `flags`, a `presence.publish` message's `facets`
+together with each value in it, a `pattern.lifecycle` message's `body`,
+a `space.invite` message's `invite` and `invite.body`, and a `session.open`
+descriptor's `invite`. Both sides refuse anything else there, and the refusal
+is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
@@ -840,6 +888,11 @@ interface ResponseMessage<Result> {
   error?: {
     name: string;
     message: string;
+    // Stable name of the refusal's reason, on an error whose kind classifies
+    // its refusals: a `PatternLifecycleRefusal` (section 4.3.10) or a
+    // `SpaceInviteRefusal` (section 4.3.11). A client branches on it, never on
+    // `message`.
+    code?: string;
     // On an AuthorizationError, present and `true` when the denial is an
     // anti-replay handshake race a fresh reconnect heals (an expired, used, or
     // mismatched connection challenge; a stale signed `exp`). Absent marks a
@@ -1690,6 +1743,113 @@ Semantics:
   in `removes`, and an entity it still covers is not resent unless it changed
 - the cursors of operation watches that remain are kept
 
+### 4.3.10 `pattern.lifecycle` — Run a Pattern-Lifecycle Verb
+
+`pattern.lifecycle` runs one of the pattern-lifecycle verbs — `upload`,
+`instantiate`, `setsrc` — in the session's space, as the session's principal.
+A server advertises it with the `patternLifecycle` capability flag. The verbs,
+their arguments, and their receipts are defined in
+[`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md),
+which also defines them as HTTP routes; a request on the session reaches the
+process that serves the space, since the space's memory connection is routed
+to that process.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface PatternLifecycleRequest {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  verb: "upload" | "instantiate" | "setsrc";
+  /** The verb's arguments: the route's body without `space`. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of the response: the verb's receipt. */
+type PatternLifecycleResult = Record<string, unknown>;
+```
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`PATTERN_LIFECYCLE_MAX_BYTES`, the HTTP route's body limit) with
+  `payload-too-large`. A client refuses before sending a request whose
+  encoding takes more than that, or more than its connection takes in one
+  request: 4 MiB on a routed connection (`ROUTED_QUEUE_LIMIT`), which the
+  router would otherwise refuse by closing the connection
+- the DID the session was opened as must itself hold WRITE on the space; a
+  grant reached only through a proof chain's root issuer (section 4.5.1) does
+  not count, since the verb commits with the requester's own trust. An
+  anonymous session, or a principal without WRITE, is refused with `forbidden`
+- the server hands the verb, its `body` unread, and the principal to the
+  handler its host installed; a server with no handler refuses with
+  `server-execution-off`, and a handler that throws is refused with `internal`.
+  The handler validates `body` and refuses one that does not match the verb's
+  schema with `invalid-request`
+- the server finishes handling the frame once the verb has started, and sends
+  the response when the verb settles. Frames after it for the same space are
+  not held behind the verb (section 4.11.2), and on a routed connection the
+  request's credit returns to the router when the frame's handling ends
+- a refusal is an error named `PatternLifecycleRefusal` whose `code` names the
+  reason (section 4.7); the handler's codes are those of the HTTP route
+- a client raises `lifecycle-unsupported` without sending when the server does
+  not advertise `patternLifecycle`. A connection lost before the response
+  leaves the verb's outcome unknown
+
+### 4.3.11 `space.invite` — Administer a Space's Invitations
+
+`space.invite` runs one operation of the space's invitation service as the
+session's principal. A server advertises it with the `spaceInvites` capability
+flag. The service, its operations, their bodies and results, and its refusal
+codes are defined in the
+[invitation service contract](../../../runtime/toolshed/README.md#space-invitations),
+which also exposes them as HTTP routes.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SpaceInviteRequest {
+  type: "space.invite";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  invite: {
+    operation: "create" | "list" | "revoke" | "receipts";
+    /** The operation's body, as the HTTP route takes it. */
+    body: Record<string, unknown>;
+  };
+}
+```
+
+Semantics:
+
+- `redeem` is not among the operations: the identity redeeming holds no grant
+  on the space yet, and opening a session needs READ, so redemption travels
+  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
+  `redeem`, an unknown operation, or a body that is not exactly the
+  operation's fields gets the refusal any unreadable message gets (section
+  4.2.1)
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the service runs the operation as the DID the session was opened as, with
+  the public origin the server's host configured as the invitation host; it
+  decides what that DID may do, and every operation here takes an explicit
+  OWNER grant. An anonymous session is refused with `not-owner`
+- the response's `ok` is the service's result for the operation, the body the
+  HTTP route returns
+- a refusal is an error named `SpaceInviteRefusal` whose `code` is the
+  service's code (section 4.7). A server given no invitation host refuses
+  every request with `invite-service-unsupported`, and a client raises the same
+  code without sending when the server does not advertise `spaceInvites`
+
 ## 4.4 Selectors
 
 Selectors still describe sets of entities or schema-guided traversals. The
@@ -2176,7 +2336,22 @@ interface RateLimitError extends Error {
   name: "RateLimitError";
   retryAfter: number;
 }
+
+interface PatternLifecycleRefusal extends Error {
+  name: "PatternLifecycleRefusal";
+  /** Why the verb was refused (section 4.3.10). */
+  code: string;
+}
+
+interface SpaceInviteRefusal extends Error {
+  name: "SpaceInviteRefusal";
+  /** The invitation service's refusal code (section 4.3.11). */
+  code: string;
+}
 ```
+
+A `PatternLifecycleRefusal` and a `SpaceInviteRefusal` carry `code` in the
+response's `error`, and a client branches on it.
 
 ## 4.8 Client Library API
 
@@ -2226,7 +2401,7 @@ the session cache rather than distinct server-routed effect streams.
 
 The client library rejects a refused request with an `Error` whose `name` is
 the response's `error.name` and whose `message` is its `error.message`, and
-copies onto it each marker the envelope carries: `retriable`,
+copies onto it each marker the envelope carries: `retriable`, `code`,
 `permanentEvidence`, `aclRevision`, `deleted`, `clientUpdateRequired`,
 `precondition`, `retryAfterSeq`, and `conflicts`. A consumer matches on `name`
 and the markers, never on `message`. A `session/revoked` terminates the session
@@ -2290,7 +2465,10 @@ handed over before it, so a `session.open` handed over behind the
 signed opens handed over together are handled one at a time whatever spaces
 they name. Frames for different spaces on
 one connection do not wait for each other, so a `transact` waiting for its
-space's publication lock delays nothing addressed to another space. Presence
+space's publication lock delays nothing addressed to another space. A
+`pattern.lifecycle` frame's handling ends once its verb has started, and its
+response follows when the verb settles (section 4.3.10), so the frames after it
+for its space do not wait for the verb. Presence
 messages stay outside these turns (section 4.13.4).
 
 For live sync, transact verdicts return INLINE before the independently batched

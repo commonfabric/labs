@@ -275,7 +275,13 @@ decision is `planConfidentialityRelease()` in
   entries and the stored schema's declaration at that path, the derived
   `shape` and `value` entries, and a link's own label — leaving labels at
   other paths, an ancestor's covering this one included, and the
-  label-metadata templates as they are.
+  label-metadata templates as they are. A `*` segment of the path stands for
+  any segment, so a path holding one reaches every stored position it matches
+  at its depth: the wildcard entry there, and each concrete position's
+  entries. A path naming a concrete segment leaves a wildcard entry covering
+  it as it is. The stored schema's declarations at a `*` are those of every
+  named property, tuple position and `items` there, and of the
+  `additionalProperties` of a schema naming no property.
 - **Who may.** The runtime refuses the release unless the transaction runs
   under the `cfc-confidentiality-release` builtin identity, its acting
   principal is authenticated, and the document is in the space whose DID is
@@ -288,17 +294,19 @@ decision is `planConfidentialityRelease()` in
   authority: choosing the audience of one's own content.
 - **What it refuses to leave behind.** The path's effective label view is
   read again in the releasing transaction, and a clause it still shows from a
-  position the release does not rewrite — an ancestor's or a wildcard entry,
-  a branch of the stored schema, or the cell's own schema — refuses the whole
-  release, and a change to a label that view read fails the commit. The
-  request may keep only clauses stored at the path (§8.12.7), so a path such a
-  position also labels is released only once that position is.
+  position the release does not rewrite — an ancestor's entry, a wildcard
+  entry covering a segment the path names concretely, a branch of the stored
+  schema, or the cell's own schema — refuses the whole release, and a change
+  to a label that view read fails the commit. The request may keep only
+  clauses stored at the path (§8.12.7), so a path such a position also labels
+  is released only once that position is.
 - **The record.** Each release commits with a create-only receipt in the same
   space, labeled `User(actor)` and writable only by the release writer,
-  holding the actor, the document and path, the clauses removed and their
-  canonical clause digests, and digests of the canonical envelope before and
-  after. Reads journaled before the release keep the label they consumed, so
-  what was released is what later reads see.
+  holding the actor, the document and path, the positions the clauses were
+  removed at, the clauses removed and their canonical clause digests, and
+  digests of the canonical envelope before and after. Reads journaled before
+  the release keep the label they consumed, so what was released is what
+  later reads see.
 
 This is §8.12.7 route 2c, the owner release, which differs from §4's
 rewrite event in two ways: it reaches the derived and link-carried components

@@ -41,6 +41,13 @@ The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
 dispositions and the owner's rollout decision; the flip record alone does not
 establish current readiness.
 
+**Delta 2026-10-30 (the verbs on the space's memory session): `cf` sends
+each lifecycle verb as a `pattern.lifecycle` memory request on the space's
+session, which reaches the process that holds the space's lease, and posts
+to `/api/pattern-lifecycle/*` only when the memory server does not advertise
+`patternLifecycle` (`docs/features/server-pattern-lifecycle.md`, "Sending a
+verb").**
+
 **Delta 2026-09-11 (the served source update): `setsrc` is a served verb.
 Under ON, `cf piece setsrc` sends the resolved program to
 `/api/pattern-lifecycle/setsrc`; the serving runtime uploads it as a verb

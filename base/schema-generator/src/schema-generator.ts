@@ -917,6 +917,54 @@ function wholeValueKeywordsOf(
 }
 
 /**
+ * `read`, the schema `reference` reads as. Where it is an intersection that
+ * fell back, its constituents state what `reference` states of its whole value
+ * beside the reference: its scope, its default, and its restrictions, which
+ * join those a constituent states. A value of `PerUser<A & B>` is a value of
+ * `PerUser<A>` and of `PerUser<B>`, so reopening the fallback would otherwise
+ * lose them. Its evidence is not stated of them, as evidence goes only where
+ * the labeled payload's data must be, and a constituent is not that payload. A
+ * fallback's own labels are not stated of them either, being those it kept of
+ * its constituents.
+ */
+function withConstituentsStatingBeside(
+  read: MutableJSONSchema,
+  reference: MutableJSONSchemaObj,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(read)
+    ? context.schemaOrigins?.get(read)
+    : undefined;
+  const { scope, default: value } = reference;
+  const { restrictions } = isObjectOrArray(reference.ifc)
+    ? restrictionsAndEvidence(reference.ifc)
+    : {};
+  if (
+    origin?.kind !== "intersection" ||
+    (scope === undefined && value === undefined && restrictions === undefined)
+  ) {
+    return read;
+  }
+  context.schemaOrigins?.set(read as MutableJSONSchemaObj, {
+    kind: "intersection",
+    parts: () =>
+      origin.parts().map((part) => {
+        const stated: MutableJSONSchemaObj = {
+          ...(isObjectOrArray(part) ? part : {}),
+          ...(scope !== undefined ? { scope } : {}),
+          ...(value !== undefined ? { default: value } : {}),
+        };
+        return part === false ? part : withOriginOf(
+          restrictions ? withIfcLabels(stated, restrictions) : stated,
+          part,
+          context,
+        );
+      }),
+  });
+  return read;
+}
+
+/**
  * `schema` read through local references with the keywords written beside
  * each reference in place of the definition's, as resolving a reference
  * reads them, except its labels, which join the definition's: while a schema
@@ -927,8 +975,10 @@ function wholeValueKeywordsOf(
  * reference holds what the definition denotes, so it reads as that cell, with
  * no record of the definition's source (`schemaOrigins`), as a cell written
  * around it in place does, though the keys its index signature applies to
- * (`GenerationContext.indexKeys`) stay true of it. A schema that is no
- * reference is returned as it came.
+ * (`GenerationContext.indexKeys`) stay true of it. A fallback's constituents
+ * state the keywords written beside a reference to it
+ * (`withConstituentsStatingBeside()`). A schema that is no reference is returned
+ * as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -957,7 +1007,11 @@ function withBesideKeywords(
   return withBesideKeywords(
     "asCell" in beside
       ? withIndexKeysOf(labeled, resolved, context)
-      : withOriginOf(labeled, resolved, context),
+      : withConstituentsStatingBeside(
+        withOriginOf(labeled, resolved, context),
+        schema,
+        context,
+      ),
     context,
     followed,
   );

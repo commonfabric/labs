@@ -19,4 +19,7 @@ export const MAY_HOLD_PIECES_GUIDANCE =
 /** Target selection context for both configured sessions and unattached turns. */
 export const pieceTargetingContextMessages = (
   inputCells: readonly HarnessInputCell[],
-): string[] => [inputCellsContextMessage(inputCells), PIECE_TARGETING_GUIDANCE];
+): string[] =>
+  inputCells.length > 0
+    ? [inputCellsContextMessage(inputCells), PIECE_TARGETING_GUIDANCE]
+    : [];

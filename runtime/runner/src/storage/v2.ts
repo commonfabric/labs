@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -32,6 +36,7 @@ import {
   type TransactionError,
   type URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -57,6 +62,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -256,12 +262,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-// A cell's CFC write-policy label lives at ["cfc"]. A mergeable write reads it as
-// part of the write; that read is dropped from its conflict set unless the
-// transaction also writes the envelope (`#commitReadActivities`).
-const isCfcLabelPath = (path: readonly string[]): boolean =>
-  path.length === 1 && path[0] === "cfc";
 
 const isStrictPrefixPath = (
   prefix: readonly string[],
@@ -2418,6 +2418,31 @@ export class StorageManager implements IStorageManager {
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
+  }
+
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
    * — the flag-ON client effects channel subscribes per space through
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
@@ -2495,6 +2520,20 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "This storage manager's sessions cannot carry an invitation",
+      );
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
@@ -7199,6 +7238,27 @@ export class SpaceReplica
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
+    return await session.administerInvites(invite);
+  }
+
   /** Pending (undischarged) event intents — the offline queue's live
    * content, bounded by pending-intent count (speculation.md §5). */
   pendingEventAppends(): readonly QueuedEventAppend[] {
@@ -9964,7 +10024,10 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcLabelPath(write.path)) {
+        if (
+          write.space !== this.#space ||
+          !Differential.isCfcEnvelopePath(write.path)
+        ) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -10002,7 +10065,10 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcLabelPath(read.path)) {
+      if (
+        isInternalVerifierRead(read.meta) &&
+        Differential.isCfcEnvelopePath(read.path)
+      ) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -10015,7 +10081,10 @@ export class SpaceReplica
         !readsMergeableOpArrayLength &&
         (isMergeableOpRead(read.meta) ||
           isReadMarkedAsAttemptedWrite(read.meta) ||
-          isCfcLabelPath(read.path) ||
+          // A mergeable write reads the CFC envelope as part of the write;
+          // the read leaves the conflict set unless the transaction also
+          // writes the envelope (handled above).
+          Differential.isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
@@ -12402,9 +12471,14 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
+          // A connection that never completed a handshake, in every attempt
+          // its factory allows, ends the space's session as a denial does:
+          // its readers fail with that error instead of waiting for a session
+          // nothing is still opening.
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            MemoryV2Client.isClientUpdateRequiredError(error)
+            MemoryV2Client.isClientUpdateRequiredError(error) ||
+            MemoryV2Client.isFirstHandshakeFailure(error)
           );
           if (permanent && !this.#closed) {
             this.#sessionAdmissionError = error;

@@ -71,6 +71,7 @@ const sameSessionDescriptor = (
     actingAs?: string;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    invite?: { inviteId: string; code: string };
   },
 ): boolean =>
   valueEqual(
@@ -97,7 +98,10 @@ const sameSessionDescriptor = (
   valueEqual(left.genesisRoot, right.genesisRoot) &&
   // Compared as signed, so a signed kind the message does not carry, of any
   // form, is a mismatch rather than read as no kind.
-  left.spaceKind === right.spaceKind;
+  left.spaceKind === right.spaceKind &&
+  // An invitation redeems as the signer, so one cannot be attached to or
+  // taken off a signed open in transit.
+  valueEqual(left.invite, right.invite);
 
 export type SessionOpenMessage = {
   space: string;
@@ -110,6 +114,7 @@ export type SessionOpenMessage = {
     resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    invite?: { inviteId: string; code: string };
   };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;

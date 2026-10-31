@@ -356,6 +356,35 @@ describe("well-known-grants", () => {
       expect(message).not.toContain(MAIL_ID);
     });
 
+    it("includes inspection instructions only when describe_handle is available", () => {
+      const grants: HarnessWellKnownGrant[] = [{
+        name: "piece-registry",
+        token: "cfh:a:registry",
+        ref: REGISTRY_REF,
+      }, {
+        ...MAIL_GRANT,
+        token: "cfh:a:connector",
+      }];
+      for (const describeHandleAvailable of [true, false]) {
+        const message = wellKnownGrantsContextMessage(grants, {
+          describeHandleAvailable,
+        });
+        expect(message).toContain("cfh:a:registry");
+        expect(message).toContain("cfh:a:connector");
+        expect(message).toContain("gmail-work (email)");
+        expect(message).toContain("run_pattern `inputs`");
+        expect(message).not.toContain(REGISTRY_ID);
+        expect(message).not.toContain(MAIL_ID);
+        if (describeHandleAvailable) {
+          expect(message).toContain("Use describe_handle on a granted token");
+          expect(message).toContain("use describe_handle first");
+          expect(message).toBe(wellKnownGrantsContextMessage(grants));
+        } else {
+          expect(message).not.toContain("describe_handle");
+        }
+      }
+    });
+
     it("throws for a resumed grant this build has no description for", () => {
       // The union stops one being minted, so the only way this record arises
       // is a run state written by another build and read back as JSON, where
