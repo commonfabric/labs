@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -57,6 +61,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -2410,6 +2415,31 @@ export class StorageManager implements IStorageManager {
       throw new Error("storage replica does not support event attention");
     }
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
+  }
+
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
   }
 
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
@@ -7191,6 +7221,23 @@ export class SpaceReplica
   ): Promise<EventAttentionResolveResult> {
     const { session } = await this.#activeSessionHandle();
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
+  }
+
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.administerInvites(invite);
   }
 
   /** Pending (undischarged) event intents — the offline queue's live

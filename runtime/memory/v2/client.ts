@@ -34,6 +34,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  type PatternLifecycleVerb,
   type PresenceJoinResult,
   type PresencePublication,
   type PresenceRecord,
@@ -53,6 +54,7 @@ import {
   type SessionReport,
   type SessionRevokedMessage,
   type SessionSync,
+  type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteParamsWire,
   type SqliteQueryReader,
@@ -134,6 +136,19 @@ const connectionLostWhileRestoring = (): Error =>
   toConnectionError(
     new Error("memory connection lost while restoring the session"),
   );
+
+/**
+ * A `PatternLifecycleRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const lifecycleRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "PatternLifecycleRefusal";
+  return Object.assign(error, { code });
+};
+
+/** An invitation operation a session may send: any but redemption. */
+export type InviteAdministration = SpaceInviteRequest["invite"];
 
 const logger = getLogger("memory.v2.client", {
   enabled: true,
@@ -1106,6 +1121,9 @@ export class Client {
         (error as Error & { retriable?: boolean }).retriable =
           result.error.retriable;
       }
+      if (result.error.code !== undefined) {
+        (error as Error & { code?: string }).code = result.error.code;
+      }
       if (result.error.permanentEvidence === true) {
         (error as Error & { permanentEvidence?: true }).permanentEvidence =
           true;
@@ -2050,15 +2068,17 @@ export class Client {
     const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
       .withResolvers<void>();
     this.#helloPending = ack;
-    // `sessionReportV1`, `watchRemoveV1` and `watchSetPartsV1` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
-    // never offers them. Other flags an endpoint does not know are ignored
-    // there, since the routed flag allowlists were removed (infra DEVIATIONS
-    // row 41).
+    // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
+    // `patternLifecycle` and `spaceInvites` are the server's capabilities
+    // alone: the client reads them from `hello.ok` and never offers them.
+    // Other flags an endpoint does not know are ignored there, since the
+    // routed flag allowlists were removed (infra DEVIATIONS row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
       watchSetPartsV1: _stagedSetsServerOnly,
+      patternLifecycle: _lifecycleServerOnly,
+      spaceInvites: _invitesServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3141,6 +3161,81 @@ export class SpaceSession {
     });
     this.#noteResult(result.serverSeq);
     return result;
+  }
+
+  /**
+   * Runs pattern-lifecycle verb `verb` with `body` in this session's space,
+   * as the session's principal, and returns the verb's receipt
+   * (04-protocol.md §4.3.10). The request is answered when the verb has
+   * run, however long that takes.
+   *
+   * @throws `PatternLifecycleRefusal`, with the server's stable reason as
+   *   `.code`, when the server refuses the verb. Two codes are raised here,
+   *   before anything is sent: `lifecycle-unsupported` when the server does
+   *   not advertise `patternLifecycle`, and `payload-too-large` when the
+   *   request takes more than `ROUTED_QUEUE_LIMIT` bytes. A connection lost
+   *   before the answer throws a `ConnectionError`, and the verb's outcome
+   *   is then unknown.
+   */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.patternLifecycle !== true) {
+      throw lifecycleRefusal(
+        "lifecycle-unsupported",
+        "The memory server does not advertise `patternLifecycle`",
+      );
+    }
+    const message = {
+      type: "pattern.lifecycle",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      verb,
+      body,
+    };
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > ROUTED_QUEUE_LIMIT) {
+      throw lifecycleRefusal(
+        "payload-too-large",
+        `A \`pattern.lifecycle\` request takes at most ${ROUTED_QUEUE_LIMIT} ` +
+          `bytes, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
+   * Administers this session space's invitations, as the session's
+   * principal, and returns what the invitation service returns for
+   * `invite` (04-protocol.md §4.3.11).
+   *
+   * @throws `SpaceInviteRefusal`, with the service's code as `.code`, when
+   *   the service refuses the operation, or with `invite-service-unsupported`
+   *   when the server does not advertise `spaceInvites` or knows no
+   *   invitation host.
+   */
+  async administerInvites(
+    invite: InviteAdministration,
+  ): Promise<FabricValue> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.spaceInvites !== true) {
+      const error = new Error(
+        "The memory server does not administer invitations",
+      );
+      error.name = "SpaceInviteRefusal";
+      throw Object.assign(error, { code: "invite-service-unsupported" });
+    }
+    return await this.#client.request<FabricValue>({
+      type: "space.invite",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      invite,
+    });
   }
 
   async listEntityIds(

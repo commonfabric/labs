@@ -1,6 +1,7 @@
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import * as FS from "@std/fs";
 
+import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import { verifyConnectionAuthorization } from "@commonfabric/memory/v2/connection-auth";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
@@ -108,6 +109,9 @@ export const memoryServer = new MemoryServer.Server({
   ...(sharedMemoryConnection || routerPolicy !== undefined
     ? { authorizeConnection: verifyConnectionAuthorization }
     : {}),
+  // Invitations issued here name this deployment's public origin, so the
+  // HTTP routes and `space.invite` requests check codes against the same host.
+  inviteHost: normalizeInviteHost(env.API_URL),
   sessionOpenAuth: {
     audience: memoryAudience,
   },

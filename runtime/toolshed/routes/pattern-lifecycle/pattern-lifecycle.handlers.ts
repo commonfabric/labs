@@ -1,8 +1,11 @@
 // Thin transport wrappers over pattern-lifecycle.utils.ts, the shape the
 // ingest-channels handlers set: the verified caller DID, the deployment's
-// dependencies, and the call.
+// dependencies, and the call. The same calls arrive over HTTP and as
+// `pattern.lifecycle` requests on a memory session.
 
 import { trace } from "@opentelemetry/api";
+import { getLogger } from "@commonfabric/logger";
+import type { PatternLifecycleHandler } from "@commonfabric/memory/v2/server";
 
 import env from "@/env.ts";
 import { runtime } from "@/index.ts";
@@ -21,6 +24,7 @@ import type {
 import {
   type LifecycleDeps,
   processInstantiate,
+  processLifecycleCall,
   processSetSource,
   processUpload,
 } from "./pattern-lifecycle.utils.ts";
@@ -94,3 +98,24 @@ export const setsrc: AppRouteHandler<SetSourceRoute> = async (c) => {
   if (result.status === 200) return c.json(result.body, 200);
   return c.json(result.body, result.status);
 };
+
+const sessionLogger = getLogger("toolshed.pattern-lifecycle", {
+  enabled: true,
+  level: "info",
+});
+
+/**
+ * Runs the `pattern.lifecycle` requests this process's memory server
+ * receives, as `Server.setPatternLifecycleHandler()` takes it. The memory
+ * server has already checked that the session's principal writes the space.
+ */
+export const lifecycleRequestHandler: PatternLifecycleHandler = (call) =>
+  processLifecycleCall(
+    deps({
+      warn: (obj, msg) =>
+        sessionLogger.warn("pattern-lifecycle", () => [msg, obj]),
+      info: (obj, msg) =>
+        sessionLogger.info("pattern-lifecycle", () => [msg, obj]),
+    }),
+    call,
+  );

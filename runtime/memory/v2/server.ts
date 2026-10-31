@@ -1,7 +1,7 @@
 import * as FS from "@std/fs";
 import * as Path from "@std/path";
 
-import type { FabricValue } from "@commonfabric/api";
+import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   cloneIfNecessary,
   isFabricPlainObject,
@@ -9,6 +9,7 @@ import {
   valueEqualByWalk,
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
+import { ROUTED_QUEUE_LIMIT } from "./routed-limits.ts";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
 import { StagedMap } from "@commonfabric/collections/staged-map";
@@ -66,6 +67,8 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  type PatternLifecycleRequest,
+  type PatternLifecycleVerb,
   type PresenceJoinRequest,
   type PresenceJoinResult,
   type PresenceLeaveRequest,
@@ -93,6 +96,7 @@ import {
   type SessionSync,
   type SessionViewHandle,
   type SessionViewInterest,
+  type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteNamedParamsWire,
   type SqliteNativeRow,
@@ -142,6 +146,7 @@ import {
   executeInvite,
   type InviteRequest,
   type InviteResult,
+  parseInviteOperation,
 } from "./invites.ts";
 import { SpaceInviteError } from "../space-invites.ts";
 import {
@@ -898,6 +903,40 @@ const sessionKey = (space: string, sessionId: string): string =>
  */
 const MAX_STAGED_WATCH_SET_PARTS = 64;
 const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
+
+/**
+ * Most characters a `pattern.lifecycle` message may hold: the most bytes a
+ * routed request may take, so a request is refused the same way whether or
+ * not a router carries it. A character is at least one byte, so a client
+ * that keeps its encoded request within the routed bound is never refused
+ * here.
+ */
+export const PATTERN_LIFECYCLE_MAX_CHARACTERS = ROUTED_QUEUE_LIMIT;
+
+/** The response refusing a `space.invite` request with the service's `code`. */
+const spaceInviteRefusal = (
+  requestId: string,
+  code: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: {
+    name: "SpaceInviteRefusal",
+    message: `The invitation service refused the request: ${code}`,
+    code,
+  },
+});
+
+/** The response refusing a `pattern.lifecycle` request for `code`. */
+const patternLifecycleRefusal = (
+  requestId: string,
+  code: string,
+  message: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: { name: "PatternLifecycleRefusal", message, code },
+});
 
 /**
  * A transport's sender. `payload`, when given, is `message` already encoded,
@@ -2611,6 +2650,54 @@ class Connection {
           );
         }
         return;
+      case "pattern.lifecycle": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        if (characters > PATTERN_LIFECYCLE_MAX_CHARACTERS) {
+          this.#send(patternLifecycleRefusal(
+            parsed.requestId,
+            "payload-too-large",
+            `A \`pattern.lifecycle\` request holds at most ${PATTERN_LIFECYCLE_MAX_CHARACTERS} characters`,
+          ));
+          return;
+        }
+        // A verb runs for as long as a compile and a wave commit take, so it
+        // is not awaited: the frames behind it for this space go ahead, and
+        // a routed host returns the request's credit to the router once this
+        // handling returns. The answer goes out when the verb settles.
+        const { space, sessionId, requestId } = parsed;
+        void this.#server.runPatternLifecycle(parsed).then((response) => {
+          this.#sendSessionResponse(space, sessionId, requestId, response);
+          this.#answered.delete(requestId);
+        });
+        return;
+      }
+      case "space.invite": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        const response = await this.#server.administerInvites(parsed);
+        this.#sendSessionResponse(
+          parsed.space,
+          parsed.sessionId,
+          parsed.requestId,
+          response,
+        );
+        return;
+      }
     }
   }
 
@@ -2806,6 +2893,37 @@ const isImmediateClientMessage = (
 ): message is ImmediateClientMessage =>
   isPresenceClientMessage(message) || message.type === "session.report";
 
+/** One `pattern.lifecycle` request, as a `Server` hands it to its handler. */
+export type PatternLifecycleCall = {
+  /** The space the verb runs in. */
+  space: string;
+
+  /** The DID the request's session was opened as, which holds WRITE on `space`. */
+  principal: string;
+
+  verb: PatternLifecycleVerb;
+
+  /** The verb's arguments, as the client sent them and not yet validated. */
+  body: FabricPlainObject;
+};
+
+/**
+ * What a lifecycle handler returns: the verb's receipt, or a refusal with the
+ * stable code a client branches on.
+ */
+export type PatternLifecycleOutcome =
+  | { ok: FabricPlainObject }
+  | { refusal: { code: string; message: string } };
+
+/**
+ * Runs one pattern-lifecycle verb (`Server.setPatternLifecycleHandler()`).
+ * It is called once per request, concurrently with others, and may take as
+ * long as the verb does; a rejection is answered as an `internal` refusal.
+ */
+export type PatternLifecycleHandler = (
+  call: PatternLifecycleCall,
+) => Promise<PatternLifecycleOutcome>;
+
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
  * opens the engine for a space or hands back the one already open. It
@@ -2979,6 +3097,13 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
+   * What runs `pattern.lifecycle` requests: the deployment's serving side,
+   * installed with `setPatternLifecycleHandler()`. `undefined` until one is
+   * installed, and while it is the server refuses every such request.
+   */
+  #patternLifecycle: PatternLifecycleHandler | undefined;
+
+  /**
    * Additive watchers of the same admission hook, independent of the host's
    * observer above: any number attach, and each sees every notice.
    */
@@ -3137,6 +3262,15 @@ export class Server {
         message: ConnectionAuthRequest,
         context: SessionOpenAuthContext,
       ) => Promise<string | undefined> | string | undefined;
+
+      /**
+       * The public origin that this server's invitation links name, as
+       * `normalizeInviteHost()` writes it. An invitation's code verifier is
+       * bound to it, so a server given one administers invitations through
+       * `space.invite` and advertises `spaceInvites`; a server given none
+       * refuses every `space.invite`.
+       */
+      inviteHost?: string;
 
       /**
        * Authentication data advertised in `hello.ok` and enforced for
@@ -3370,6 +3504,8 @@ export class Server {
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
       sessionOpenProofs: this.#admitsDelegations(),
+      patternLifecycle: this.#patternLifecycle !== undefined,
+      spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
     };
@@ -6163,6 +6299,150 @@ export class Server {
   /** Resolve one authoritative OW54 notice. The publication lock, exact-value
    * precondition, original-entry resolution, optional append, and index removal
    * form one same-space atomic decision. */
+  /**
+   * Runs a `pattern.lifecycle` request through the installed handler, as the
+   * DID its session was opened as, and returns the response to send. That
+   * DID itself must hold WRITE on the space: a grant reached through a
+   * session's proof chain does not carry over to a verb, which commits with
+   * the requester's own trust. Never rejects: a missing handler, a refusal,
+   * and a handler that throws each become an error response.
+   */
+  async runPatternLifecycle(
+    message: PatternLifecycleRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const { requestId, space, sessionId } = message;
+    const handler = this.#patternLifecycle;
+    if (handler === undefined) {
+      return patternLifecycleRefusal(
+        requestId,
+        "server-execution-off",
+        "This deployment does not run the serving loop, so it runs no " +
+          "pattern-lifecycle verbs",
+      );
+    }
+    try {
+      const writer = await this.#sessionWriter(space, sessionId);
+      if ("error" in writer) {
+        return writer.error.name === "AuthorizationError"
+          ? patternLifecycleRefusal(
+            requestId,
+            "forbidden",
+            writer.error.message,
+          )
+          : { type: "response", requestId, error: writer.error };
+      }
+      const outcome = await handler({
+        space,
+        principal: writer.principal,
+        verb: message.verb,
+        body: message.body,
+      });
+      return "ok" in outcome
+        ? { type: "response", requestId, ok: outcome.ok }
+        : patternLifecycleRefusal(
+          requestId,
+          outcome.refusal.code,
+          outcome.refusal.message,
+        );
+    } catch (error) {
+      console.error(
+        `memory v2: a \`pattern.lifecycle\` ${message.verb} failed`,
+        error,
+      );
+      return patternLifecycleRefusal(
+        requestId,
+        "internal",
+        `${message.verb} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Runs a `space.invite` request as the DID its session was opened as, and
+   * returns the response to send. The invitation service decides what that
+   * DID may do; administering invitations takes an explicit OWNER grant.
+   * Refusals are `SpaceInviteRefusal` errors carrying the service's code.
+   */
+  async administerInvites(
+    message: SpaceInviteRequest,
+  ): Promise<ResponseMessage<InviteResult["result"]>> {
+    const { requestId, space, sessionId } = message;
+    const host = this.options.inviteHost;
+    if (host === undefined) {
+      return spaceInviteRefusal(requestId, "invite-service-unsupported");
+    }
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return respondTypedError(
+        requestId,
+        toError("SessionError", "Unknown or replaced session for space"),
+      );
+    }
+    if (session.principal === undefined) {
+      return spaceInviteRefusal(requestId, "not-owner");
+    }
+    try {
+      return {
+        type: "response",
+        requestId,
+        ok: await this.invite({
+          ...message.invite,
+          host,
+          space,
+          principal: session.principal,
+          now: Date.now,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof SpaceInviteError) {
+        return spaceInviteRefusal(requestId, error.code);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Helper for `runPatternLifecycle()`, which returns the DID `sessionId`
+   * was opened as in `space` when that DID holds WRITE there, or the error
+   * to answer with when the session is gone, is anonymous, or holds no such
+   * grant.
+   */
+  async #sessionWriter(
+    space: string,
+    sessionId: string,
+  ): Promise<{ principal: string } | { error: V2Error }> {
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return {
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const principal = session.principal;
+    if (principal === undefined) {
+      return {
+        error: toError(
+          "AuthorizationError",
+          "An anonymous session runs no pattern-lifecycle verbs",
+        ),
+      };
+    }
+    const engine = await this.#openEngine(space);
+    if (this.#sessions.get(space, sessionId) !== session) {
+      return {
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const deny = this.#authorizeMessageWithEngine(
+      engine,
+      space,
+      principal,
+      "WRITE",
+    );
+    return deny === null ? { principal } : { error: deny };
+  }
+
   async resolveEventAttention(
     message: EventAttentionResolveRequest,
   ): Promise<ResponseMessage<EventAttentionResolveResult>> {
@@ -10360,6 +10640,19 @@ export class Server {
   }
 
   /**
+   * Installs what runs `pattern.lifecycle` requests, or with `undefined`
+   * removes it. The server advertises `patternLifecycle` from the next
+   * `hello` on while one is installed. Connections that said `hello` before
+   * keep the flags they were given, and a request one of them sends after
+   * the handler is removed is refused.
+   */
+  setPatternLifecycleHandler(
+    handler: PatternLifecycleHandler | undefined,
+  ): void {
+    this.#patternLifecycle = handler;
+  }
+
+  /**
    * Watch every commit this server admits: a session transact, a
    * delegated append, the server's own direct write, and the serving
    * loop's wave commits, each reported after the engine has applied it.
@@ -11980,6 +12273,47 @@ const parseDecodedClientMessage = (
       seq: parsed.seq,
       sidecarId: parsed.sidecarId,
       action: parsed.action,
+    };
+  }
+
+  if (
+    parsed.type === "pattern.lifecycle" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.verb === "upload" || parsed.verb === "instantiate" ||
+      parsed.verb === "setsrc") &&
+    isFabricPlainObject(parsed.body)
+  ) {
+    return {
+      type: "pattern.lifecycle",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      verb: parsed.verb,
+      body: parsed.body,
+    };
+  }
+
+  if (
+    parsed.type === "space.invite" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    isFabricPlainObject(parsed.invite)
+  ) {
+    // Redemption is refused here: it has no session to arrive on.
+    const invite = parseInviteOperation(
+      parsed.invite.operation,
+      parsed.invite.body,
+    );
+    if (invite === null || invite.operation === "redeem") return null;
+    return {
+      type: "space.invite",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      invite,
     };
   }
 

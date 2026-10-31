@@ -134,7 +134,7 @@ export interface ServedInstantiateRequest {
 }
 
 /** What `instantiate` hands back. */
-export interface ServedInstantiateReceipt {
+export type ServedInstantiateReceipt = {
   /** Retain this key when retrying creation or pending registration. */
   requestKey: string;
 
@@ -153,7 +153,7 @@ export interface ServedInstantiateReceipt {
 
   /** The name the piece was created under, when one was asked for. */
   slug?: string;
-}
+};
 
 /** What `setsrc` asks for. */
 export interface ServedSetSourceRequest {
@@ -188,7 +188,7 @@ export interface ServedSetSourceRequest {
 }
 
 /** What `setsrc` hands back: the accepted setup transaction's receipt. */
-export interface ServedSetSourceReceipt {
+export type ServedSetSourceReceipt = {
   pieceId: string;
 
   /** The pointer the piece now holds. */
@@ -206,7 +206,7 @@ export interface ServedSetSourceReceipt {
 
   /** The origin the update detached, `null` when the piece had none. */
   detachedOrigin: string | null;
-}
+};
 
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message;

@@ -14,7 +14,11 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import type { Server } from "@commonfabric/memory/v2/server";
+import type {
+  PatternLifecycleCall,
+  PatternLifecycleOutcome,
+  Server,
+} from "@commonfabric/memory/v2/server";
 import type {
   ServedInstantiateReceipt,
   ServedLifecycleReceipts,
@@ -36,6 +40,7 @@ import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
 } from "@/lib/space-authority.ts";
+import { lifecycleBodies } from "./pattern-lifecycle.routes.ts";
 
 export interface LifecycleDeps {
   /** What the writer check reads the space's ACL through. */
@@ -528,4 +533,67 @@ export async function processSetSource(
       start: input.start !== false,
     },
   });
+}
+
+/**
+ * Runs one `pattern.lifecycle` request the memory server handed over: the
+ * verb's arguments are validated as the HTTP route validates its body, the
+ * verb runs as `call.principal`, and the result becomes the outcome the
+ * memory server answers with. A body that fails validation is refused as
+ * `invalid-request`.
+ */
+export async function processLifecycleCall(
+  deps: LifecycleDeps,
+  call: PatternLifecycleCall,
+): Promise<PatternLifecycleOutcome> {
+  const result = await lifecycleResult(deps, call);
+  if (result === undefined) {
+    return {
+      refusal: {
+        code: "invalid-request",
+        message:
+          `The \`${call.verb}\` arguments do not match the verb's schema`,
+      },
+    };
+  }
+  return result.status === 200
+    ? { ok: result.body }
+    : { refusal: { code: result.body.code, message: result.body.error } };
+}
+
+/**
+ * Helper for `processLifecycleCall()`, which validates the arguments and
+ * runs the verb, returning `undefined` for arguments that fail validation.
+ */
+async function lifecycleResult(
+  deps: LifecycleDeps,
+  { space, principal, verb, body }: PatternLifecycleCall,
+): Promise<
+  | LifecycleResult<
+    | { pattern: ServedPatternRef }
+    | InstantiateReceipt
+    | ServedSetSourceReceipt
+  >
+  | undefined
+> {
+  switch (verb) {
+    case "upload": {
+      const parsed = lifecycleBodies.upload.safeParse(body);
+      return parsed.success
+        ? await processUpload(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+    case "instantiate": {
+      const parsed = lifecycleBodies.instantiate.safeParse(body);
+      return parsed.success
+        ? await processInstantiate(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+    case "setsrc": {
+      const parsed = lifecycleBodies.setsrc.safeParse(body);
+      return parsed.success
+        ? await processSetSource(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+  }
 }
