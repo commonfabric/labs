@@ -6,6 +6,7 @@
  */
 
 import {
+  equals,
   profileOwnerOf,
   type SpaceGrantLevel,
   type SpaceMemberList,
@@ -21,8 +22,8 @@ export interface SpaceMember {
   level: SpaceGrantLevel;
 
   /**
-   * The roster's profiles that are `principal`'s own, in roster order, and
-   * empty for a member with none there. A reader that shows one face for the
+   * The roster's profiles that are `principal`'s own, each once, in the order
+   * the roster first lists them, and empty for a member with none there. A reader that shows one face for the
    * member shows the first.
    */
   profiles: ParticipantProfile[];
@@ -40,7 +41,9 @@ export interface SpaceMember {
  * every other reader of whose a profile is applies, so a profile counts
  * toward a member exactly when it counts as theirs anywhere else. Call it
  * where `profileOwnerOf()` can be called, in a reactive computation or a
- * handler; a profile still loading counts toward no one until it arrives.
+ * handler; a profile still loading counts toward no one until it arrives. A
+ * profile `roster` lists more than once, as a roster joined from several
+ * does, is one profile, compared with `equals()`, and is counted once.
  */
 export const memberSet = (
   roster: readonly ParticipantProfile[],
@@ -55,7 +58,13 @@ export const memberSet = (
   );
   for (const profile of roster) {
     const owner = profileOwnerOf(profile);
-    if (owner !== undefined) members.get(owner)?.profiles.push(profile);
+    const member = owner === undefined ? undefined : members.get(owner);
+    if (
+      member !== undefined &&
+      !member.profiles.some((known) => equals(known, profile))
+    ) {
+      member.profiles.push(profile);
+    }
   }
   // The keys are distinct, so no two members compare equal.
   return [...members.values()].sort((a, b) =>

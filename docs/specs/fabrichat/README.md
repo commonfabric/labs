@@ -216,8 +216,10 @@ named principal who has no entry, combines the two. The `*` entry adds no one
 to it. It is a property of the space, the same for every pattern in it.
 `memberSet()` in the shared social-space code
 (`patterns/system/social-space/member-set.ts`) joins it from the access list and
-the roster. Until a space offers one, a reader shows the participants as
-claims.
+the roster. A client reads a space's members from the member set its root
+offers, as `members`, rather than from any one room in it; a FabriChat room in
+a space of its own is that root, and offers it. Until a space offers one, a
+reader shows the participants as claims.
 
 With a member set:
 
@@ -246,7 +248,8 @@ names the ones it needs, and they are gathered here:
 - **A member set for a social space**, readable by the space's members and by
   patterns running there (see [Social spaces](#social-spaces)).
   `spaceMembers()` gives its principals, and `memberSet()` pairs each with
-  its profiles; no space's root offers the result yet.
+  its profiles; a FabriChat room offers the result as `members`, and no other
+  space's root offers it yet.
 - **Creating a private space from a pattern.** `Factory.inSpace()` creates a
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
