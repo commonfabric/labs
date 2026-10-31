@@ -16287,10 +16287,10 @@ export class Runner {
     ]);
 
     // A serving runtime derives only the space it serves (protocol.md §2b).
-    // It instantiates a child placed in another space in the transaction that
-    // provisions it, so that the child's streams, nested ones included, are
-    // there to send to once that commits, and stops it there; the loop of the
-    // child's space runs it.
+    // It instantiates a new child placed in another space in the transaction
+    // that provisions it, so that the child's streams, nested ones included,
+    // are there to send to once that commits, and stops it there; the loop of
+    // the child's space runs it.
     const servedSpace = this.#runtime.storageManager.servingHomeSpace;
     const derivedElsewhere = servedSpace !== undefined &&
       childResultCell.space !== servedSpace;
@@ -16305,7 +16305,12 @@ export class Runner {
         storedChild,
         parentResultCell,
       );
-      if (crossSpace && !resumeExisting) {
+      // A child placed elsewhere whose setup is stored already belongs to its
+      // own space's loop, so a serving runtime neither sets it up again nor
+      // resumes it.
+      const leftAlone = derivedElsewhere &&
+        (resumeExisting || getPatternIdentityRef(storedChild) !== undefined);
+      if (crossSpace && !resumeExisting && !leftAlone) {
         // Cross-space child pattern: run it inline in a multi-space transaction
         // (child space committed first) rather than re-instantiating it in a
         // deferred second transaction, which would lose its verified-function
@@ -16336,7 +16341,7 @@ export class Runner {
         }
       }
       if (
-        !resumeExisting && plan.instanceName !== undefined &&
+        !resumeExisting && !leftAlone && plan.instanceName !== undefined &&
         getInstanceNameStamp(storedChild) !== plan.instanceName
       ) {
         storedChild.setMetaRaw(
@@ -16352,7 +16357,7 @@ export class Runner {
       // what a release has to reach.
       const outlivesParent = crossSpace ||
         this.#handlerResultPatterns.has(pattern);
-      const sourceOrigin = outlivesParent && !resumeExisting
+      const sourceOrigin = outlivesParent && !resumeExisting && !leftAlone
         ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
         : undefined;
       const options = {
@@ -16361,7 +16366,12 @@ export class Runner {
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
       };
-      const childRun: RunResult<unknown> = !resumeExisting
+      if (leftAlone && this.isRunning(childResultCell)) {
+        this.stop(childResultCell);
+      }
+      const childRun: RunResult<unknown> = leftAlone
+        ? { resultCell: childResultCell }
+        : !resumeExisting
         ? this.#runWithStartOwnership(
           instanceTx,
           patternImpl,
@@ -16373,8 +16383,8 @@ export class Runner {
           },
           !derivedElsewhere,
         )
-        : derivedElsewhere
-        ? { resultCell: childResultCell }
+        // Reached for a child in the space this runtime serves whose parent
+        // lives in another, or on a serving runtime that serves no space.
         : this.#usesScopedPrograms(childResultCell)
         ? {
           resultCell: childResultCell,

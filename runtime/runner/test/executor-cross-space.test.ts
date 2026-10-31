@@ -3109,8 +3109,15 @@ export default pattern<
       id: argument.getAsNormalizedFullLink().id,
     })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
 
+    const homeRuntime = servingRuntimes.get(homeSpace)!;
+
     expect(rooms).toHaveLength(1);
     expect(servingRuntimes.has(parseLink(rooms[0])!.space!)).toBe(true);
+    expect(
+      homeRuntime.runner.isRunning(
+        homeRuntime.getCellFromLink(parseLink(rooms[0])!),
+      ),
+    ).toBe(false);
     expect(host!.stats().foreignWriteRefusals).toBe(0);
   });
 

@@ -352,16 +352,18 @@ reinstantiating its parent resumes the child's stored pattern and arguments.
 The parent's imported module does not replace an independently adopted revision
 or an owner edit, including an edit that cleared the origin. A space-scoped
 child resumes after the parent transaction commits, with the parent's demand
-root and ownership of that particular start; scoped serving children resume
-through their per-actor program coordinator. Children without an independent
-source lifecycle continue to bind the parent's module and inputs.
+root and ownership of that particular start; a serving runtime resumes a scoped
+child in the space it serves through its per-actor program coordinator.
+Children without an independent source lifecycle continue to bind the parent's
+module and inputs.
 
 A serving runtime neither resumes nor runs a child placed in a space other
 than the one it serves, whatever its source lifecycle. It instantiates a new
 child in the transaction that provisions it, so that the child's streams, those
 of the patterns nested in it included, can be sent to once that transaction
-commits, and stops it there. A child already set up is left as it is, so a
-parent's restart there cannot roll it back either. The loop serving the child's
+commits, and stops it there. A child whose setup is stored already is left as
+it is, and stopped if it runs there, so a parent's restart on a serving runtime
+neither rebinds its inputs nor rolls it back. The loop serving the child's
 space runs it, since that loop is the only one that derives into its space
 ([protocol.md §2b](server-side-execution/protocol.md)).
 
