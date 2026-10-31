@@ -1,10 +1,24 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { PIECE_TARGETING_GUIDANCE } from "../src/piece-targeting.ts";
+import {
+  PIECE_TARGETING_GUIDANCE,
+  pieceTargetingContextMessages,
+} from "../src/piece-targeting.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
 
 describe("piece-targeting", () => {
+  it("sends targeting guidance only when pieces are attached", () => {
+    expect(pieceTargetingContextMessages([])).toEqual([]);
+    const attached = pieceTargetingContextMessages([{
+      name: "Synthetic attachment",
+      token: "cfh:a:synthetic",
+      ref: "/synthetic",
+    }]);
+    expect(attached).toContain(PIECE_TARGETING_GUIDANCE);
+    expect(attached.join("\n")).toContain("Synthetic attachment");
+  });
+
   it("retains technical guidance without prescribing how to select a target", () => {
     expect(PIECE_TARGETING_GUIDANCE).toContain(
       "resolve_piece resolves a piece slug",
