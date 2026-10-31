@@ -273,9 +273,16 @@ Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
 checks it again. A receipt-first retry never regrants removed access. New
 identities see `invite-unavailable` for unknown, wrong-code, expired, revoked,
 exhausted, or issuer-invalid invitations. Proof failures use `invalid-proof`;
-owner failures use `not-owner`. Outside the convenience `create` operation,
-transport failures remain transport failures. Malformed error responses use
-`service-error`.
+owner failures use `not-owner`. Every operation, `create`, `redeem`, `list`,
+`revoke` and `receipts` alike, on a
+[deleted space](../../docs/specs/random-space-identities.md#deleting-a-space) is
+refused with `space-deleted` and HTTP status 410 (Gone), since no grant can
+admit anyone to such a space. That check comes after rate limiting, proof
+verification and body validation, so a request that fails any of those gets the
+refusal it would get for a live space, and learns nothing about the space.
+`space-deleted` is specified and not implemented yet. Outside the convenience
+`create` operation, transport failures remain transport failures. Malformed
+error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
 same serialized transaction as its ACL-only public commit. A unique receipt pair
