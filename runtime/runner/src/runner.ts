@@ -9457,10 +9457,13 @@ export class Runner {
     }
 
     if (!retain) {
-      // A stop rather than a release: a scoped program's start hands back no
-      // registration of its own to release, and a start gated on the commit
-      // has installed none yet.
-      if (needsStart) this.stop(resultCell);
+      // A release rather than `stop()`, which would also retire every start
+      // still resolving and release the documents nothing reads, neither of
+      // which belongs to provisioning a child. A scoped program's start hands
+      // back no registration, and a release naming none still stops the
+      // shared one.
+      cancelDeferredStart?.();
+      if (needsStart) this.#releaseUnownedChild(resultCell, installedCancel);
       if (!providedTx) {
         this.#runtime.prepareTxForCommit(tx);
         tx.commit();
@@ -16367,7 +16370,7 @@ export class Runner {
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
       };
       if (leftAlone && this.isRunning(childResultCell)) {
-        this.stop(childResultCell);
+        this.#stopResult(childResultCell);
       }
       const childRun: RunResult<unknown> = leftAlone
         ? { resultCell: childResultCell }
