@@ -356,6 +356,15 @@ root and ownership of that particular start; scoped serving children resume
 through their per-actor program coordinator. Children without an independent
 source lifecycle continue to bind the parent's module and inputs.
 
+A serving runtime neither resumes nor runs a child placed in a space other
+than the one it serves, whatever its source lifecycle. It instantiates a new
+child in the transaction that provisions it, so that the child's streams, those
+of the patterns nested in it included, can be sent to once that transaction
+commits, and stops it there. A child already set up is left as it is, so a
+parent's restart there cannot roll it back either. The loop serving the child's
+space runs it, since that loop is the only one that derives into its space
+([protocol.md §2b](server-side-execution/protocol.md)).
+
 **Independent input ownership** begins with that recorded origin or revision
 history, even before the child adopts another release. The parent supplies the
 initial bindings; subsequent parent releases do not replace them. Stored links
