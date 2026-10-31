@@ -717,8 +717,8 @@ runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
 Either shape runs its loop in a Worker of the test's process when
-`SERVER_EXECUTION_WORKER` is `true` in the environment, as a toolshed does under
-that variable
+`SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed runs it
+in a worker unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
 directory, since a worker cannot open a non-persistent one. `serving.host` is

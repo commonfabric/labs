@@ -129,19 +129,20 @@ export type ServingMemoryServerOptions =
 
     /**
      * Whether the serving loop runs in a Worker of this process, over a store
-     * in a temporary directory, as a toolshed's does under
-     * `SERVER_EXECUTION_WORKER`. Default: `true` when that variable is the
-     * literal `true` in this process's environment, so a run with it set
-     * runs every test that leaves this unset under the worker. A worker
-     * takes no closure, so `prepareStorageManager`, `fetch`,
-     * `moduleByteCache`, a policy field holding a function, and the host's
-     * diagnostic hooks other than `onActivationSettled` and `onSpaceParked`
-     * are refused under it; a test that needs one says `false` here.
+     * in a temporary directory, as a toolshed's does over its file store.
+     * Default: `true` when `SERVER_EXECUTION_WORKER` is the literal `true` in
+     * this process's environment, so a run with it set runs every test that
+     * leaves this unset under the worker. A worker takes no closure, so
+     * `prepareStorageManager`, `fetch`, `moduleByteCache`, a policy field
+     * holding a function, and the host's diagnostic hooks other than
+     * `onActivationSettled` and `onSpaceParked` are refused under it; a test
+     * that needs one says `false` here.
      *
      * The environment fills three more of the policy's fields when they are
-     * left unset, as a toolshed's bootstrap does: `storeReadThrough` takes
-     * `true` when `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal
-     * `true`, `overlapWaveCommit` takes `true` when
+     * left unset, from the variables a toolshed's bootstrap reads:
+     * `storeReadThrough` takes `true` when `SERVER_EXECUTION_STORE_READ_THROUGH`
+     * is the literal `true`, where a toolshed takes it unless the variable is
+     * the literal `false`; `overlapWaveCommit` takes `true` when
      * `SERVER_EXECUTION_OVERLAP_COMMIT` is, and `flushDeadlineMs` and
      * `flushDeadlineMaxMs` take `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
      * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` when those are positive

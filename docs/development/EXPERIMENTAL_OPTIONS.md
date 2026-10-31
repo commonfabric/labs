@@ -61,8 +61,8 @@ was last checked against the code.
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
-| [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | off | Bernhard Seefeld (store read-through) | soak with the posture forced on, flip on, then delete the knob and the home-space session read path | implemented, off by default |
-| [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | off | Bernhard Seefeld (the serving loop off the request thread) | soak with the worker on, flip on, then delete the knob and the in-process arm | implemented, off by default |
+| [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
+| [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -1983,11 +1983,12 @@ the per-epic implementation notes).
   into `SpaceServerPolicy.storeReadThrough`; a harness constructing an
   `ExecutorHost` sets the policy field directly, and a test's serving memory
   server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
-  the same variable for a policy that leaves the field unset, which is how a
-  lane runs its tests under the posture. Only the literal `true` turns
-  it on; `false` and unset leave it off, and anything else leaves it off,
-  with a warning from the toolshed bootstrap and none from the test server. Meaningful only with the serving loop running
-  ([`serverExecution`](#serverexecution) on).
+  the same variable for a policy that leaves the field unset. In the toolshed
+  only the literal `false` turns it off; `true` and unset leave it on, and
+  anything else leaves it on with a warning. The test server keeps the
+  opposite default, turning it on for the literal `true` alone, which is how a
+  lane runs its tests under the posture. Meaningful only with the serving loop
+  running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the store read-through change.
 - **Purpose.** The serving runtime reads its HOME space straight from the
   space's engine instead of over its loopback session: a document its replica
@@ -2003,14 +2004,16 @@ the per-epic implementation notes).
   declares a wave quiescent. [`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
   §1 plane (a) states the posture and what it does not do, and its §3
   prefix-coverage paragraph the barrier each posture gives the settle.
-- **Current default and planned end state.** Off by default. The read-through
-  follows session delivery's rules in its own form: another principal's
-  instance is read only under a live tenure of the space's lease (a read that
-  finds the row lapsed runs the renew arm first, and is withheld when the
-  lease is not regained), and an address the store holds nothing at leaves no
-  record. What stands between it and a default is soak with the posture forced
-  on. The end state is on by default, then the session read path for the home
-  space goes.
+- **Current default and planned end state.** On by default in the toolshed,
+  off in the test harness's serving memory server. The read-through follows
+  session delivery's rules in its own form: another principal's instance is
+  read only under a live tenure of the space's lease (a read that finds the row
+  lapsed runs the renew arm first, and is withheld when the lease is not
+  regained), and an address the store holds nothing at leaves no record. The
+  end state is the session read path for the home space gone, with the knob.
+- **Status on 2026-10-31.** Implemented, on by default in the toolshed. The
+  test harness's serving memory server keeps it off unless a lane sets the
+  variable to `true`, so the executor and pattern suites run both postures.
 - **Status on 2026-10-23.** Implemented, off by default. The replica reports
   which instances the read-through found nothing at
   (`IStorageProvider.storeReportedAbsent`), and the gate before a piece's run
@@ -2063,20 +2066,24 @@ the per-epic implementation notes).
   session depth serves the session instance at the moved ratchet, and a later
   session-scoped write re-runs it under the session key. The toolshed-backed
   integration lanes pass.
-- **Path to removal.** Soak with the posture forced on, flip the default, then
-  delete the knob and the home-space session read path it replaces.
+- **Path to removal.** Soak with the default on, then delete the knob and the
+  home-space session read path it replaces.
 
 ### `SERVER_EXECUTION_WORKER`
 
 - **Toggle via.** The `SERVER_EXECUTION_WORKER` environment variable on
   toolshed, read by the serving-host bootstrap
   ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts)).
-  Only the literal `true` turns it on; `false`, empty, and unset leave it off.
-  Other values warn and leave it off. The serving memory server tests build
+  The literal `true` puts the loop in a worker and `false` keeps it on the main
+  thread. Unset or empty, the loop runs in a worker when the memory server's
+  store is a file, as a toolshed's is, and on the main thread otherwise, since
+  a worker cannot open a store that is not a file. Other values warn and take
+  that default. The serving memory server tests build
   ([`runtime/runner/src/executor/serving-memory-server.deno.ts`](../../runtime/runner/src/executor/serving-memory-server.deno.ts))
-  reads it too, where its `worker` option is left unset, and `cf test` sets that
-  option to keep its loop on its own thread. Meaningful only with the serving
-  loop running ([`serverExecution`](#serverexecution) on).
+  reads it too, where its `worker` option is left unset, and runs its loop in a
+  worker for the literal `true` alone; `cf test` sets that option to keep its
+  loop on its own thread. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that moves the serving loop
   off the request thread.
 - **Purpose.** The serving loop, its host and every serving runtime run in a Web
@@ -2091,10 +2098,17 @@ the per-epic implementation notes).
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
   [`docs/plans/serving-loop-worker.md`](../plans/serving-loop-worker.md) is the
   design and its stages.
-- **Current default and planned end state.** Off by default. The end state is
-  on by default, then the in-process arm goes, with the knob.
-- **Path to removal.** Soak with the worker on, flip the default, then delete
-  the knob and the in-process arm.
+- **Current default and planned end state.** On by default in the toolshed
+  over a file store, off in the test harness's serving memory server. The end
+  state is the in-process arm gone, with the knob.
+- **Status on 2026-10-31.** Implemented, on by default in the toolshed over a
+  file store. The worker entry builds its process's compiled-module byte cache,
+  as the main-thread loop does. Under the worker, the pattern integration
+  suites the `MultiRuntimeHarness` drives pass; the private-inbox and FabriChat
+  suites need a serving runtime to run no child placed in a space other than
+  the one it serves (#9418).
+- **Path to removal.** Soak with the default on, then delete the knob and the
+  in-process arm.
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 
