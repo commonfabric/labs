@@ -1,7 +1,8 @@
 /** Generic invitation commands use the same signed client as browser shells. */
 import { dirname, resolve } from "@std/path";
 import { Command, ValidationError } from "@cliffy/command";
-import { isDIDKey } from "@commonfabric/identity/did";
+import type { Identity } from "@commonfabric/identity";
+import { type DIDKey, isDIDKey } from "@commonfabric/identity/did";
 import {
   buildInviteLink,
   createInviteCredentials,
@@ -11,7 +12,11 @@ import {
   normalizeInviteHost,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteClient,
+  type SpaceInviteRedeemer,
+  type SpaceInviteSession,
 } from "@commonfabric/runner/space-invites";
+import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
+import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { loadIdentity } from "../lib/identity.ts";
 import { parseSpaceOptions } from "./piece.ts";
 
@@ -197,8 +202,55 @@ function requiredInviteId(
   return inviteId;
 }
 
-/** Builds the `cf space invite` command group. */
-export function buildSpaceInviteCommand() {
+/**
+ * Opens what the commands send on: memory sessions on `space`, signing as
+ * `as`, at the memory server the deployment behind `apiUrl` publishes, and
+ * what closes them. A `session` left out sends administration over HTTP
+ * alone, and a `redeemer` left out sends redemption over HTTP alone.
+ */
+export type InviteStorageOpener = (
+  options: { as: Identity; apiUrl: URL; space: DIDKey },
+) => Promise<{
+  session?: SpaceInviteSession;
+  redeemer?: SpaceInviteRedeemer;
+  close(): Promise<void>;
+}>;
+
+/**
+ * The default `InviteStorageOpener`, over a storage manager of its own at the
+ * memory host the deployment's metadata names, as `loadPieces()` opens one.
+ */
+const openInviteStorage: InviteStorageOpener = async (
+  { as, apiUrl, space },
+) => {
+  const { memoryHost } = await settingsForDeployedClient({
+    apiUrl,
+    env: Deno.env.get,
+  });
+  const manager = StorageManager.open({ as, memoryHost });
+  const administer = manager.administerInvites?.bind(manager);
+  const redeem = manager.redeemInvite?.bind(manager);
+  return {
+    ...(administer === undefined
+      ? {}
+      : { session: (invite) => administer(space, invite) }),
+    ...(redeem === undefined
+      ? {}
+      : { redeemer: (invite) => redeem(space, invite) }),
+    close: () => manager.close(),
+  };
+};
+
+/**
+ * Builds the `cf space invite` command group, which sends on the storage
+ * `openStorage` opens.
+ */
+export function buildSpaceInviteCommand(
+  openStorage: InviteStorageOpener = openInviteStorage,
+) {
+  // A client sends on memory sessions on the space as the identity, which
+  // reach the process serving the space; they close when the returned value
+  // is disposed.
   const client = async (
     options: { identity?: string; apiUrl?: string; space?: string },
   ) => {
@@ -206,15 +258,26 @@ export function buildSpaceInviteCommand() {
     if (!isDIDKey(config.space)) {
       throw new ValidationError("Invitations require an explicit space DID.");
     }
+    const space = config.space;
     const signer = await loadIdentity(config.identity);
+    const storage = await openStorage({
+      as: signer,
+      apiUrl: new URL(config.apiUrl),
+      space,
+    });
     return {
       config,
       issuer: signer.did(),
       client: new SpaceInviteClient({
         host: config.apiUrl,
-        space: config.space,
+        space,
         signer,
+        ...(storage.session === undefined ? {} : { session: storage.session }),
+        ...(storage.redeemer === undefined
+          ? {}
+          : { redeemer: storage.redeemer }),
       }),
+      [Symbol.asyncDispose]: () => storage.close(),
     };
   };
   return new Command()
@@ -275,7 +338,8 @@ export function buildSpaceInviteCommand() {
       const shell = options.shell === undefined
         ? undefined
         : normalizeInviteHost(options.shell);
-      const { client: api, config, issuer } = await client(options);
+      await using opened = await client(options);
+      const { client: api, config, issuer } = opened;
       const { request, requestFile } = await prepareInviteRequest({
         host: normalizeInviteHost(config.apiUrl),
         space: config.space,
@@ -322,16 +386,16 @@ export function buildSpaceInviteCommand() {
       const code = (options.codeFile === "-"
         ? await new Response(Deno.stdin.readable).text()
         : await Deno.readTextFile(options.codeFile)).trim();
+      await using opened = await client(options);
       console.log(
-        JSON.stringify(
-          await (await client(options)).client.redeem({ inviteId, code }),
-        ),
+        JSON.stringify(await opened.client.redeem({ inviteId, code })),
       );
     })
     .command("list", "List active invitations without their verifiers.")
-    .action(async (options) =>
-      console.log(JSON.stringify(await (await client(options)).client.list()))
-    )
+    .action(async (options) => {
+      await using opened = await client(options);
+      console.log(JSON.stringify(await opened.client.list()));
+    })
     .command(
       "revoke [invite-id:string]",
       "Disable admission without removing existing access.",
@@ -339,9 +403,8 @@ export function buildSpaceInviteCommand() {
     .usage(requiredInviteIdUsage)
     .action(async function (options, argument) {
       const inviteId = requiredInviteId(argument, this.getLiteralArgs());
-      console.log(
-        JSON.stringify(await (await client(options)).client.revoke(inviteId)),
-      );
+      await using opened = await client(options);
+      console.log(JSON.stringify(await opened.client.revoke(inviteId)));
     })
     .command(
       "receipts [invite-id:string]",
@@ -350,8 +413,7 @@ export function buildSpaceInviteCommand() {
     .usage("[invite-id] | [options] -- <invite-id>")
     .action(async function (options, argument) {
       const inviteId = optionalInviteId(argument, this.getLiteralArgs());
-      console.log(
-        JSON.stringify(await (await client(options)).client.receipts(inviteId)),
-      );
+      await using opened = await client(options);
+      console.log(JSON.stringify(await opened.client.receipts(inviteId)));
     });
 }

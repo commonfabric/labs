@@ -2,6 +2,7 @@ import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { delegationCid } from "@commonfabric/identity";
 import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   encodeMemoryBoundary,
   MEMORY_PROTOCOL,
@@ -183,6 +184,26 @@ export interface SessionFactory {
     space: MemorySpace,
     signal?: AbortSignal,
   ): Promise<MemoryProtocolFlags | null>;
+
+  /**
+   * Redeems `invite` in `space` as `signer`, the factory's default signer
+   * when absent, by opening a session there whose open carries the
+   * invitation (04-protocol.md §4.1.2), and returns the redemption's
+   * receipt. Before this returns, the session sends its close and the
+   * connection closes without waiting for the close's answer, so a session
+   * the server has not ended by the time the connection drops waits out its
+   * resume grace period there, as any whose connection closed does.
+   *
+   * @throws `SpaceInviteRefusal`, as the memory client's `mountRedeeming()`
+   *   throws it, when the redemption is refused or the server does not
+   *   redeem on `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+    signer?: Signer,
+    signal?: AbortSignal,
+  ): Promise<RedeemReceipt>;
 
   /**
    * Calls `observer` with each `session/admissible` a connection the factory
@@ -1647,6 +1668,36 @@ export class RemoteSessionFactory implements SessionFactory {
         client: this.#clientInfo,
       });
       return client.serverFlags;
+    } finally {
+      await (client?.close() ?? transport.close()).catch(() => {});
+    }
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+    signer?: Signer,
+    signal?: AbortSignal,
+  ): Promise<RedeemReceipt> {
+    const transport = this.#dedicatedTransport(space);
+    let client: MemoryClient.Client | undefined;
+    try {
+      client = await MemoryClient.connect({
+        transport,
+        signal,
+        client: this.#clientInfo,
+        address: transport.address.href,
+        firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+      });
+      const { session, redemption } = await client.mountRedeeming(
+        space,
+        invite,
+        this.#sessionPrincipal(signer ?? this.#defaultSigner),
+        signal,
+      );
+      await session.close();
+      return redemption;
     } finally {
       await (client?.close() ?? transport.close()).catch(() => {});
     }

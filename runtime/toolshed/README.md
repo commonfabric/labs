@@ -191,15 +191,33 @@ by the service; neither the join link nor the redemption request carries it.
 Redemption only raises access: an identity that already holds the invited access
 or more keeps what it has.
 
-All invitation operations are signed JSON POSTs under
+Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
-`receipts`. They use the existing CF1 proof, binding method, authority, path,
-body hash, and signer DID, with a maximum 300-second lifetime and 60 seconds of
-future clock skew. Bodies are limited to 4 KiB and unknown fields are refused.
-Redemption does not require an existing target-space session. Its recipient is
-always the proof signer. Creation, listing, revocation, and receipt listing
-require a current explicit OWNER entry in the space ACL. First redemption also
-requires the issuer to remain an explicit OWNER.
+`receipts`; the memory-session forms are below. They use the existing CF1 proof,
+binding method, authority, path, body hash, and signer DID, with a maximum
+300-second lifetime and 60 seconds of future clock skew. Bodies are limited to 4
+KiB and unknown fields are refused. Redemption does not require an existing
+target-space session. Its recipient is always the proof signer. Creation,
+listing, revocation, and receipt listing require a current explicit OWNER entry
+in the space ACL. First redemption also requires the issuer to remain an
+explicit OWNER.
+
+The memory server runs the same service for `create`, `list`, `revoke`, and
+`receipts` sent as a `space.invite` request on a memory session on the space
+(`docs/specs/memory-v2/04-protocol.md` §4.3.11). The operation runs as the DID
+the session was opened as, and takes the same body and returns the same result
+as its HTTP route, without the route's per-client rate limits: it is bounded as
+the session's other requests are. A refusal is an error named
+`SpaceInviteRefusal` carrying the service's code. Redemption cannot be a
+`space.invite`, since the redeeming identity holds no grant on the space and
+cannot open a session on it; instead a `session.open` carries the invitation in
+its descriptor, bound to the open's principal as the rest of the descriptor is,
+and the server redeems it as the open's principal before checking the open's
+grant (§4.1.2). The toolshed gives its memory server
+`inviteHost: normalizeInviteHost(API_URL)`, so codes are checked against the
+same host on both transports, and the server advertises the `spaceInvites` hello
+flag. A memory server given no invitation host refuses every `space.invite` with
+`invite-service-unsupported`.
 
 Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
 local development. It is the audience authority and verifier origin for this
@@ -239,6 +257,15 @@ parsing failures use `create-outcome-unknown`. Validation failures before
 sending remain `SpaceInviteError` refusals. `redeem` accepts only `inviteId` and
 `code`; `list` and `receipts` return arrays; `revoke` returns
 `{ "revoked": true }`.
+
+Given a `session`, a function that sends an operation on the space's memory
+session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends
+administration there and falls back to the signed HTTP request on
+`invite-service-unsupported`. Given a `redeemer`, a function that redeems as
+`IStorageManager.redeemInvite()` does, `redeem` redeems on the open of a session
+there, and sends the signed HTTP request on `invite-service-unsupported` or when
+that open is refused its grant (an `AuthorizationError`), which a repeat
+redemption of an invitation whose access was since removed is.
 
 Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
 `redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,

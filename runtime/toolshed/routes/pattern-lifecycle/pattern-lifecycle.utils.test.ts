@@ -24,6 +24,7 @@ import {
   type LifecycleDeps,
   type LifecycleResult,
   processInstantiate,
+  processLifecycleCall,
   processSetSource,
   processUpload,
 } from "./pattern-lifecycle.utils.ts";
@@ -786,5 +787,70 @@ export default pattern(() => {
     } finally {
       await rival.close();
     }
+  });
+  describe("processLifecycleCall()", () => {
+    it("returns an `upload` receipt as the outcome's `ok`", async () => {
+      const outcome = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        verb: "upload",
+        body: { program: PROGRAM },
+      });
+      const direct = ok(
+        await processUpload(deps, alice.did(), { space, program: PROGRAM }),
+      );
+      expect(outcome).toEqual({ ok: direct });
+    });
+
+    it("returns an `instantiate` receipt with its timings as the outcome's `ok`", async () => {
+      const outcome = await processLifecycleCall(deps, {
+        space,
+        principal: bob.did(),
+        verb: "instantiate",
+        body: { program: PROGRAM, register: false },
+      });
+      assert("ok" in outcome, JSON.stringify(outcome));
+      expect(outcome.ok.pieceId).toMatch(/\S/);
+      expect(outcome.ok.timings).toEqual(expect.any(Array));
+    });
+
+    it("refuses with `invalid-request` arguments the verb's schema refuses, before the host sees them", async () => {
+      const noPiece = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        verb: "setsrc",
+        body: { program: PROGRAM },
+      });
+      const bothSources = await processLifecycleCall(deps, {
+        space,
+        principal: alice.did(),
+        verb: "instantiate",
+        body: {
+          program: PROGRAM,
+          pattern: { identity: "x", symbol: "default" },
+        },
+      });
+
+      expect(noPiece).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
+      expect(bothSources).toEqual({
+        refusal: { code: "invalid-request", message: expect.any(String) },
+      });
+      expect(host!.stats().lifecycleVerbs.runs).toBe(0);
+    });
+
+    it("returns a verb's refusal under the code the HTTP route sends", async () => {
+      const outcome = await processLifecycleCall(deps, {
+        space,
+        principal: mallory.did(),
+        verb: "instantiate",
+        body: { program: PROGRAM },
+      });
+
+      expect(outcome).toEqual({
+        refusal: { code: "forbidden", message: expect.any(String) },
+      });
+    });
   });
 });

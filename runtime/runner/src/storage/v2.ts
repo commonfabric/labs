@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -32,6 +36,7 @@ import {
   type TransactionError,
   type URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -57,6 +62,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -2412,6 +2418,31 @@ export class StorageManager implements IStorageManager {
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
+  }
+
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
    * — the flag-ON client effects channel subscribes per space through
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
@@ -2489,6 +2520,20 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "This storage manager's sessions cannot carry an invitation",
+      );
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
@@ -7191,6 +7236,27 @@ export class SpaceReplica
   ): Promise<EventAttentionResolveResult> {
     const { session } = await this.#activeSessionHandle();
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
+  }
+
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
+    return await session.administerInvites(invite);
   }
 
   /** Pending (undischarged) event intents — the offline queue's live

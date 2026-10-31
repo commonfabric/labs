@@ -27,6 +27,7 @@ import {
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
+import { lifecycleRequestHandler } from "@/routes/pattern-lifecycle/pattern-lifecycle.handlers.ts";
 // Create a global runtime instance for the server
 let runtime: Runtime;
 
@@ -70,12 +71,16 @@ function startRuntimes() {
   // this process hosts the serving loop; OFF (the default) this is a
   // no-op and toolshed is byte-identical to today.
   const fetch = selfDirectedFetch(env);
-  startServerExecutionHost({
+  const loop = startServerExecutionHost({
     server: memoryServer,
     identity,
     apiUrl: new URL(env.API_URL),
     ...(fetch !== undefined ? { fetch } : {}),
   });
+  // The verbs run on the loop, so a memory session takes them while it runs.
+  if (loop !== undefined) {
+    memoryServer.setPatternLifecycleHandler(lifecycleRequestHandler);
+  }
 }
 
 export type AppType = typeof app;
@@ -110,6 +115,7 @@ const handleShutdown = async () => {
         ac.abort();
 
         console.log("Closing memory system...");
+        memoryServer.setPatternLifecycleHandler(undefined);
         await stopServerExecutionHost();
         const result = await memory.close();
         if ("error" in result) {

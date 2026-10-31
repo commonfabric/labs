@@ -20,7 +20,9 @@ import {
   isPlainObject,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import type { RedeemReceipt } from "./space-invites.ts";
 import type { ClientInfo } from "./v2/client-info.ts";
+import type { InviteOperation } from "./v2/invites.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -1157,6 +1159,9 @@ export type SessionOpenResult = {
 
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
+
+  /** The redemption of the invitation the open carried, when it carried one. */
+  invite?: RedeemReceipt;
 };
 
 export type MemoryProtocolFlags = {
@@ -1403,6 +1408,25 @@ export type MemoryProtocolFlags = {
    */
   sessionReportV1?: boolean;
 
+  /**
+   * Server capability: the server runs `pattern.lifecycle` requests
+   * (04-protocol.md §4.3.10). Advertised exactly while the deployment has a
+   * lifecycle handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and a
+   * client then sends the verbs some other way or not at all.
+   */
+  patternLifecycle?: boolean;
+
+  /**
+   * Server capability: the server administers invitations through
+   * `space.invite` requests (04-protocol.md §4.3.11). Advertised exactly
+   * while the server knows the public host its invitation links name, since
+   * an invitation's code verifier is bound to that host. Absent (an older
+   * server, or one without the host) parses to false, and a client then
+   * administers invitations some other way or not at all.
+   */
+  spaceInvites?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1458,6 +1482,8 @@ export type WireMemoryProtocolFlags = {
   admissionNotice?: boolean;
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
+  patternLifecycle?: boolean;
+  spaceInvites?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1558,6 +1584,17 @@ export type SessionDescriptor = {
    * this descriptor.
    */
   actingAs?: "space-owner";
+
+  /**
+   * An invitation to redeem, as the open's principal, before the open's grant
+   * is checked (04-protocol.md §4.1.2): how someone the space's access list
+   * does not name yet opens a session on it. Bound to the open's principal as
+   * the rest of this descriptor is: signed into the invocation of a signed
+   * open, and covered by the connection's authentication of an open that
+   * names its principal. A client sends it on the open that redeems and not
+   * on the resumes after it.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -2271,6 +2308,51 @@ export type EventAttentionResolveResult = {
 };
 
 /**
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take, as many as the
+ * HTTP route takes in a body. A routed connection bounds every request more
+ * tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
+ * smaller bound before sending it.
+ */
+export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** A pattern-lifecycle verb that a serving deployment runs on request. */
+export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+
+/**
+ * A request to run a pattern-lifecycle verb in the session's space, as the
+ * session's principal (04-protocol.md §4.3.10).
+ */
+export type PatternLifecycleRequest = {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  verb: PatternLifecycleVerb;
+
+  /**
+   * The verb's arguments, which the memory server hands to the deployment's
+   * lifecycle handler without reading them; the handler validates them, as
+   * `docs/features/server-pattern-lifecycle.md` defines.
+   */
+  body: FabricPlainObject;
+};
+
+/**
+ * A request to administer the session space's invitations, as the session's
+ * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
+ * redeeming holds no grant on the space yet, so it has no session to send on.
+ */
+export type SpaceInviteRequest = {
+  type: "space.invite";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+
+  /** The operation and its arguments. */
+  invite: Exclude<InviteOperation, { operation: "redeem" }>;
+};
+
+/**
  * Per-kind presence state, keyed by facet name. The relay bounds the map and
  * treats each value as an opaque plain object; a consumer decodes the facets
  * it knows and ignores the rest (04-protocol.md §4.13).
@@ -2460,6 +2542,14 @@ export type SessionAdmissibleMessage = {
 export type V2Error = {
   name: string;
   message: string;
+
+  /**
+   * Stable name of the reason for a refusal, on an error whose kind
+   * classifies its refusals: a `PatternLifecycleRefusal` or a
+   * `SpaceInviteRefusal`. A client branches on this, never on `message`.
+   */
+  code?: string;
+
   /** Runtime incompatibility that requires replacing the client before mounting. */
   clientUpdateRequired?: true;
 
@@ -2515,6 +2605,8 @@ export type ClientMessage =
   | SessionAckRequest
   | SessionCloseRequest
   | EventAttentionResolveRequest
+  | PatternLifecycleRequest
+  | SpaceInviteRequest
   | PresenceJoinRequest
   | PresencePublishRequest
   | PresenceLeaveRequest
@@ -2766,6 +2858,10 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records the diagnostics a client
   // reports about its session.
   sessionReportV1: true,
+  // Configuration rather than build-inherent: a `Server` advertises each
+  // from what it was given (`Server.memoryProtocolFlags()`).
+  patternLifecycle: false,
+  spaceInvites: false,
   routedAuthV1: false,
   routedCompressionV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
@@ -3011,6 +3107,18 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const patternLifecycle = value.patternLifecycle;
+  if (
+    patternLifecycle !== undefined && typeof patternLifecycle !== "boolean"
+  ) {
+    return null;
+  }
+
+  const spaceInvites = value.spaceInvites;
+  if (spaceInvites !== undefined && typeof spaceInvites !== "boolean") {
+    return null;
+  }
+
   const syncCrossingsV1 = value.syncCrossingsV1;
   if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
     return null;
@@ -3088,6 +3196,10 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then sends no
     // `session.report`.
     sessionReportV1: sessionReportV1 === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // `pattern.lifecycle` or `space.invite`.
+    patternLifecycle: patternLifecycle === true,
+    spaceInvites: spaceInvites === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3144,6 +3256,8 @@ export const wireMemoryProtocolFlags = (
   admissionNotice: flags.admissionNotice,
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
+  patternLifecycle: flags.patternLifecycle,
+  spaceInvites: flags.spaceInvites,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

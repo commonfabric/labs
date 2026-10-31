@@ -1219,8 +1219,8 @@ authority atomically with the source pointer and revision; a refused setup
 publishes no proposed authority. Successful source updates require an owned,
 durable setup transaction. Against a deployment that runs the serving loop, that
 transaction is the serving runtime's: the command sends the resolved program and
-the piece's id to the deployment's pattern-lifecycle route, and the update
-commits there, directly to the store (see
+the piece's id as a pattern-lifecycle verb, and the update commits there,
+directly to the store (see
 [Where a piece is created](#where-a-piece-is-created)). The check stays in this
 process on every deployment.
 
@@ -1438,9 +1438,16 @@ existing key does not update the note or create another one.
 Against a deployment that runs the serving loop — one whose published posture
 selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —
 `cf piece new` does not compile or commit in this process. It resolves the
-program from disk, pins its fabric imports, and sends it to the deployment's
-pattern-lifecycle route, signed with the identity the command connects as; the
-space's serving runtime compiles it, creates the piece, and answers with the
+program from disk, pins its fabric imports, and sends it as a
+`pattern.lifecycle` request on the space's memory session, as the identity the
+command connects as. That session reaches the toolshed process serving the
+space, which a plain HTTP request to a multi-process deployment may not. Against
+a memory server that does not take the request, the command posts it to the
+deployment's pattern-lifecycle route instead, signed with the same identity. A
+request takes at most 8 MiB. On the memory session a larger one is refused
+before it is sent, as is one over 4 MiB on a connection through the memory
+router; over the route, the deployment refuses it with a 413. The space's
+serving runtime compiles the program, creates the piece, and answers with the
 receipt the command prints. Where the deployment enforces ACLs, the identity
 must hold WRITE or OWNER on the space; a deployment with enforcement off admits
 any signed caller, as its memory server does. Setup, slug, and creation receipt
@@ -1455,17 +1462,17 @@ serving loop not to derive the piece until something demands it. The receipt
 returns once the piece is durable and registered, including with `--no-start`;
 the serving loop derives it on demand, so a reader that needs the derived value
 pulls it. Against any other deployment, and under `cf test`, the command
-performs every step itself, as before. `cf piece setsrc` requests the same way
-against a serving deployment: it resolves and pins the program, sends it with
-the piece's id, and prints the receipt of the setup transaction the serving
-runtime committed — directly to the store, since a source update publishes
-module update authority that requires a transaction committing to storage
-itself. What stays in this process is the refresh a client-side update runs
-after its commit: the command starts the piece it holds and reports that outcome
-beside the receipt, exiting non-zero when the refresh fails over a durable
-commit. A piece addressed at a scope keeps the client-side path.
-`cf piece setsrc --check` performs every step in this process on every
-deployment. The contract, including the refusals and their codes, is
+performs every step itself. `cf piece setsrc` requests the same way against a
+serving deployment: it resolves and pins the program, sends it with the piece's
+id, and prints the receipt of the setup transaction the serving runtime
+committed — directly to the store, since a source update publishes module update
+authority that requires a transaction committing to storage itself. What stays
+in this process is the refresh a client-side update runs after its commit: the
+command starts the piece it holds and reports that outcome beside the receipt,
+exiting non-zero when the refresh fails over a durable commit. A piece addressed
+at a scope keeps the client-side path. `cf piece setsrc --check` performs every
+step in this process on every deployment. The contract, including the refusals
+and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -3365,8 +3372,14 @@ than passing quietly.
 
 `cf space invite` uses generic invitation service version 1. All commands take
 `--api-url`, `--identity`, and an explicit space DID through `--space`, or the
-corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables. They return
-JSON and require no existing memory session to redeem.
+corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables, and return
+JSON. Each command sends on a memory session on the space as the signing
+identity, which reaches the toolshed process serving the space: `create`,
+`list`, `revoke`, and `receipts` as a `space.invite` request, and `redeem` as
+the invitation a `session.open` carries, since the redeeming identity holds no
+grant on the space until the invitation is redeemed. Against a memory server
+that does not take the operation there, the command sends the signed HTTP
+request instead.
 
 - `cf space invite create --access READ --ttl 3600 --max-uses 2` creates an
   invitation. Access is READ, WRITE, or OWNER, TTL is 1–2,592,000 seconds, and
@@ -3388,7 +3401,7 @@ the one word after `--`, which comes after every option:
 `cf space invite revoke -- -Pj4…` or
 `cf space invite redeem --code-file code.txt -- -Pj4…`.
 
-Creation saves its credentials before sending HTTP. With
+Creation saves its credentials before sending the request. With
 `--request-file <path>`, the command requires a private parent directory (0700)
 and exclusively creates a private file (0600), or loads an existing private
 regular file. Existing files are never overwritten; symlinks, malformed data,
@@ -3406,7 +3419,7 @@ Without `--request-file`, each creation saves a new file under
 returned as `requestFile` in successful JSON output. The file contains the
 bearer code and remains local until the caller removes it. Keep it private and
 retain it while a creation outcome is uncertain. Saving and syncing the file
-precedes HTTP; this supports process restart recovery, without promising
+precedes sending; this supports process restart recovery, without promising
 recovery from filesystem or power failure. Errors never print the file contents.
 
 Only explicit owners can create, list, revoke, or list receipts. One distinct

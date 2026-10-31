@@ -1,5 +1,6 @@
 import type {
   CellScope,
+  FabricPlainObject,
   FabricValue,
   SchemaPathSelector,
   TextChange,
@@ -23,6 +24,7 @@ import {
   type URI,
   type Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -40,6 +42,7 @@ import type {
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
+  PatternLifecycleVerb,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
@@ -56,6 +59,7 @@ import type {
   ViewPlan,
 } from "@commonfabric/memory/v2";
 import type {
+  InviteAdministration,
   PresenceEvent,
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
@@ -532,6 +536,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<MemoryProtocolFlags | null | undefined>;
 
   /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
+
+  /**
    * The serving manager's HOME space (a serving runtime's storage
    * manager declares it; undefined on every client manager). Consumers
    * use it to decide whether a write target is FOREIGN to the serving
@@ -910,6 +931,31 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /**
+   * Runs pattern-lifecycle verb `verb` with `body` in `space`, on this
+   * manager's memory session there and as its principal, and returns the
+   * verb's receipt. The memory server behind that session owns the space, so
+   * the verb runs where the space is served. Absent from a manager with no
+   * memory sessions; errors are the memory client's
+   * `runPatternLifecycle()`'s.
+   */
+  runPatternLifecycle?(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /**
+   * Administers `space`'s invitations on this manager's memory session
+   * there, as its principal, and returns what the invitation service
+   * returns. Absent from a manager with no memory sessions; errors are the
+   * memory client's `administerInvites()`'s.
+   */
+  administerInvites?(
+    space: MemorySpace,
+    invite: InviteAdministration,
+  ): Promise<FabricValue>;
 
   /**
    * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
@@ -3808,6 +3854,15 @@ export interface ISpaceReplica extends ISpace {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /** Like `IStorageManager.runPatternLifecycle()`, for this replica's space. */
+  runPatternLifecycle?(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /** Like `IStorageManager.administerInvites()`, for this replica's space. */
+  administerInvites?(invite: InviteAdministration): Promise<FabricValue>;
 
   /** Pending (undischarged) event intents — the offline event queue's
    * live content (speculation.md §5), bounded by pending-intent count. */

@@ -35,6 +35,8 @@ import {
   type OperationFieldQuery,
   type OperationFieldQueryResult,
   parseMemoryProtocolFlags,
+  PATTERN_LIFECYCLE_MAX_BYTES,
+  type PatternLifecycleVerb,
   type PresenceJoinResult,
   type PresencePublication,
   type PresenceRecord,
@@ -54,6 +56,7 @@ import {
   type SessionReport,
   type SessionRevokedMessage,
   type SessionSync,
+  type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteParamsWire,
   type SqliteQueryReader,
@@ -67,6 +70,7 @@ import {
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
+import type { RedeemReceipt } from "../space-invites.ts";
 import {
   compressClientMessageLabels,
   expandServerMessageCommitLabels,
@@ -135,6 +139,32 @@ const connectionLostWhileRestoring = (): Error =>
   toConnectionError(
     new Error("memory connection lost while restoring the session"),
   );
+
+/**
+ * A `PatternLifecycleRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const lifecycleRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "PatternLifecycleRefusal";
+  return Object.assign(error, { code });
+};
+
+/**
+ * A `SpaceInviteRefusal` raised on the client's side, shaped as the server's
+ * own refusal arrives: `.code` names the reason.
+ */
+export const spaceInviteRefusalError = (
+  code: string,
+  message: string,
+): Error => {
+  const error = new Error(message);
+  error.name = "SpaceInviteRefusal";
+  return Object.assign(error, { code });
+};
+
+/** An invitation operation a session may send: any but redemption. */
+export type InviteAdministration = SpaceInviteRequest["invite"];
 
 const logger = getLogger("memory.v2.client", {
   enabled: true,
@@ -312,6 +342,13 @@ export type MountOptions = {
    * execution that is configured with one, and carried on every reopen so
    * a resumed session is bounded exactly as the first open was. */
   readCeiling?: SessionReadCeiling;
+
+  /**
+   * An invitation the open redeems before its grant is checked (the wire
+   * `SessionDescriptor.invite`). Sent on the mount's own open and on none of
+   * the session's reopens, which the grant it conferred already admits.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -888,6 +925,17 @@ export class Client {
   }
 
   /**
+   * Most UTF-8 bytes one request sent whole may take on the current
+   * connection: the routed bound on a routed connection, and the transport's
+   * own where it declares one; `undefined` before the first handshake.
+   */
+  get requestBytesLimit(): number | undefined {
+    return this.#requestLimits === undefined
+      ? undefined
+      : wholeLimits(this.#requestLimits).bytes;
+  }
+
+  /**
    * How many requests this client has sent and not yet seen answered or
    * settled: a diagnostic, since every entry is dropped when its response
    * arrives, its send is refused, or its connection closes.
@@ -959,6 +1007,48 @@ export class Client {
     auth?: SessionAuth,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    return (await this.#mount(space, options, auth, signal)).session;
+  }
+
+  /**
+   * Like `mount()`, except that the open first redeems `invite` as the
+   * principal `auth` authenticates, so a principal the space's access list
+   * does not name yet is admitted by the grant the invitation confers. Returns
+   * the session with the redemption's receipt.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the service refuses the redemption, or with
+   *   `invite-service-unsupported`, before anything is sent, when the server
+   *   does not advertise `spaceInvites`.
+   */
+  async mountRedeeming(
+    space: string,
+    invite: { inviteId: string; code: string },
+    auth?: SessionAuth,
+    signal?: AbortSignal,
+  ): Promise<{ session: SpaceSession; redemption: RedeemReceipt }> {
+    const { session, result } = await this.#mount(
+      space,
+      { invite },
+      auth,
+      signal,
+    );
+    if (result.invite === undefined) {
+      await session.close();
+      throw protocolError(
+        "memory server opened the session without redeeming its invitation",
+      );
+    }
+    return { session, redemption: result.invite };
+  }
+
+  /** Helper for `mount()`, which also returns the open's result. */
+  async #mount(
+    space: string,
+    options: MountOptions,
+    auth: SessionAuth | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{ session: SpaceSession; result: SessionOpenResult }> {
     options = {
       ...options,
       ...(options.genesisRoot === undefined ? {} : {
@@ -1014,7 +1104,7 @@ export class Client {
       options.resumeAttempt,
     );
     this.#spaces.add(session);
-    return session;
+    return { session, result };
   }
 
   forgetSession(session: SpaceSession): void {
@@ -1138,6 +1228,9 @@ export class Client {
       if (result.error.retriable !== undefined) {
         (error as Error & { retriable?: boolean }).retriable =
           result.error.retriable;
+      }
+      if (result.error.code !== undefined) {
+        (error as Error & { code?: string }).code = result.error.code;
       }
       if (result.error.permanentEvidence === true) {
         (error as Error & { permanentEvidence?: true }).permanentEvidence =
@@ -1331,6 +1424,16 @@ export class Client {
       ) {
         throw protocolError(
           "memory server does not seal a space's declared kind",
+        );
+      }
+      // A server that does not know the field would open, or refuse, the
+      // session without redeeming anything.
+      if (
+        session.invite !== undefined && this.serverFlags?.spaceInvites !== true
+      ) {
+        throw spaceInviteRefusalError(
+          "invite-service-unsupported",
+          "memory server does not redeem invitations on `session.open`",
         );
       }
       // A server admitting no chain refuses an open presenting one, so a
@@ -2083,15 +2186,17 @@ export class Client {
     const ack: PromiseWithResolvers<void> & { receiveError?: Error } = Promise
       .withResolvers<void>();
     this.#helloPending = ack;
-    // `sessionReportV1`, `watchRemoveV1` and `watchSetPartsV1` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
-    // never offers them. Other flags an endpoint does not know are ignored
-    // there, since the routed flag allowlists were removed (infra DEVIATIONS
-    // row 41).
+    // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
+    // `patternLifecycle` and `spaceInvites` are the server's capabilities
+    // alone: the client reads them from `hello.ok` and never offers them.
+    // Other flags an endpoint does not know are ignored there, since the
+    // routed flag allowlists were removed (infra DEVIATIONS row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
       watchSetPartsV1: _stagedSetsServerOnly,
+      patternLifecycle: _lifecycleServerOnly,
+      spaceInvites: _invitesServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3198,6 +3303,85 @@ export class SpaceSession {
     });
     this.#noteResult(result.serverSeq);
     return result;
+  }
+
+  /**
+   * Runs pattern-lifecycle verb `verb` with `body` in this session's space,
+   * as the session's principal, and returns the verb's receipt
+   * (04-protocol.md §4.3.10). The request is answered when the verb has
+   * run, however long that takes.
+   *
+   * @throws `PatternLifecycleRefusal`, with the server's stable reason as
+   *   `.code`, when the server refuses the verb. Two codes are raised here,
+   *   before anything is sent: `lifecycle-unsupported` when the server does
+   *   not advertise `patternLifecycle`, and `payload-too-large` when the
+   *   request takes more than `PATTERN_LIFECYCLE_MAX_BYTES`, or more than
+   *   the connection takes in one request (`ROUTED_QUEUE_LIMIT` when
+   *   routed). A connection lost before the answer throws a
+   *   `ConnectionError`, and the verb's outcome is then unknown.
+   */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.patternLifecycle !== true) {
+      throw lifecycleRefusal(
+        "lifecycle-unsupported",
+        "The memory server does not advertise `patternLifecycle`",
+      );
+    }
+    const message = {
+      type: "pattern.lifecycle",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      verb,
+      body,
+    };
+    const limit = Math.min(
+      PATTERN_LIFECYCLE_MAX_BYTES,
+      this.#client.requestBytesLimit ?? PATTERN_LIFECYCLE_MAX_BYTES,
+    );
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > limit) {
+      throw lifecycleRefusal(
+        "payload-too-large",
+        `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
+          `this connection, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
+   * Administers this session space's invitations, as the session's
+   * principal, and returns what the invitation service returns for
+   * `invite` (04-protocol.md §4.3.11).
+   *
+   * @throws `SpaceInviteRefusal`, with the service's code as `.code`, when
+   *   the service refuses the operation, or with `invite-service-unsupported`
+   *   when the server does not advertise `spaceInvites` or knows no
+   *   invitation host.
+   */
+  async administerInvites(
+    invite: InviteAdministration,
+  ): Promise<FabricValue> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.spaceInvites !== true) {
+      throw spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "The memory server does not administer invitations",
+      );
+    }
+    return await this.#client.request<FabricValue>({
+      type: "space.invite",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      invite,
+    });
   }
 
   async listEntityIds(
