@@ -599,11 +599,24 @@ export class LocalJobStore {
     return row === undefined ? undefined : this.#view(row);
   }
 
-  /** The newest `limit` jobs, newest first. */
-  list(limit: number): LocalJob[] {
+  /**
+   * The newest `limit` jobs, newest first: only `of.caller`'s and only
+   * `of.profile`'s where `of` names them, so the limit counts the jobs kept.
+   */
+  list(
+    limit: number,
+    of: { caller?: string; profile?: string } = {},
+  ): LocalJob[] {
     return (this.#database.prepare(`
-      SELECT * FROM jobs ORDER BY created_at DESC, rowid DESC LIMIT :limit
-    `).all({ limit }) as JobRow[]).map((row) => this.#view(row));
+      SELECT * FROM jobs
+      WHERE (:caller IS NULL OR caller = :caller)
+        AND (:profile IS NULL OR profile = :profile)
+      ORDER BY created_at DESC, rowid DESC LIMIT :limit
+    `).all({
+      limit,
+      caller: of.caller ?? null,
+      profile: of.profile ?? null,
+    }) as JobRow[]).map((row) => this.#view(row));
   }
 
   /** The events of job `id` after `seq`, in order. */

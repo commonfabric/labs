@@ -839,6 +839,59 @@ describe("local-jobs/api", () => {
         expect((await call(`/jobs?limit=${limit}`)).status).toBe(400);
       }
     });
+
+    it("keeps the caller and profile named, and the limit counts the jobs kept", async () => {
+      const { post, call } = apiWith({
+        profiles: new Map([["ask", ASK], ["carry", ASK]]),
+      });
+      for (
+        const [caller, profile, idempotencyKey] of [
+          ["cfs:weaver", "carry", "a"],
+          ["loom-preparation", "ask", "b"],
+          ["cfs:weaver", "ask", "c"],
+          ["cfs:weaver", "carry", "d"],
+          ["loom-preparation", "carry", "e"],
+        ]
+      ) {
+        const response = await post("/jobs", {
+          ...BODY,
+          caller,
+          profile,
+          idempotencyKey,
+        });
+        expect(response.status).toBe(201);
+      }
+      const keys = async (path: string) =>
+        ((await (await call(path)).json()).jobs as {
+          idempotencyKey: string;
+        }[]).map((job) => job.idempotencyKey);
+
+      expect(await keys("/jobs?caller=cfs%3Aweaver&profile=carry")).toEqual([
+        "d",
+        "a",
+      ]);
+      expect(await keys("/jobs?caller=cfs:weaver&profile=carry&limit=1"))
+        .toEqual(["d"]);
+      expect(await keys("/jobs?caller=loom-preparation")).toEqual(["e", "b"]);
+      expect(await keys("/jobs?profile=ask")).toEqual(["c", "b"]);
+      expect(await keys("/jobs")).toEqual(["e", "d", "c", "b", "a"]);
+    });
+
+    it("returns 400 for a caller or profile named empty, twice or too long", async () => {
+      const { call } = apiWith();
+      for (
+        const query of [
+          "caller=",
+          "profile=",
+          "caller=a&caller=b",
+          `profile=${"p".repeat(201)}`,
+        ]
+      ) {
+        const response = await call(`/jobs?${query}`);
+        expect(response.status).toBe(400);
+        expect((await response.json()).code).toBe("invalid_request");
+      }
+    });
   });
 
   describe("one job", () => {

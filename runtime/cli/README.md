@@ -1934,7 +1934,8 @@ instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
 browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
-with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n` (narrowed to one
+caller's or one profile's jobs with `caller=` and `profile=`), stops one with
 `POST /jobs/<id>/cancel`, and watches one with
 `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
 after the job's terminal state. A request's `depth` (`quick`, `standard` or
