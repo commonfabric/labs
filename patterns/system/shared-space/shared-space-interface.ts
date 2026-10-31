@@ -17,6 +17,8 @@ import {
   type SharedSpaceRegistrationResult,
   type SharedSpaceRemoval,
   type SharedSpaceRemovalResult,
+  type SharedSpaceRetitle,
+  type SharedSpaceRetitleResult,
 } from "./shared-space-catalog.ts";
 
 /** Commands for admitting a vetted space and choosing its membership. */
@@ -26,6 +28,7 @@ export interface SharedSpaceCommands {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
+  retitle: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
 }
 
 /** An application's undo of its own import, under the removal contract. */

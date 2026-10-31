@@ -130,7 +130,8 @@ authority; landing Home does not switch that authority.
   settled Home or verified source-interface evidence. A consumer that removes
   entries reports the same state for a Home missing `removeSharedSpace`; that
   absence does not make Home outdated for a consumer that only registers or
-  changes membership.
+  changes membership. The same holds of a consumer that retitles entries and a
+  Home missing `retitleSharedSpace`.
 - The authenticated actor reaches their configured Home. Serving execution does
   not substitute the service identity or a pattern-compilation origin for the
   owner or Home route.
