@@ -2,12 +2,20 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
-import { buildSpaceInviteCommand } from "../commands/space-invites.ts";
+import {
+  buildSpaceInviteCommand,
+  type InviteStorageOpener,
+} from "../commands/space-invites.ts";
 import {
   inviteCodeVerifier,
   parseInviteLink,
 } from "@commonfabric/runner/space-invites";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+
+/** Opens no memory session, so every operation goes over the stubbed HTTP. */
+const httpOnly: InviteStorageOpener = () => ({
+  close: () => Promise.resolve(),
+});
 
 /**
  * Runs `cf space invite` subcommands against a stubbed fabric service that
@@ -72,7 +80,7 @@ async function inviteCli(passphrase: string) {
     return Response.json([]);
   }));
   const run = async (command: string, ...args: string[]) => {
-    await buildSpaceInviteCommand().reset().throwErrors().parse([
+    await buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
       command,
       "--api-url",
       "https://fabric.example",
@@ -87,6 +95,7 @@ async function inviteCli(passphrase: string) {
   const disposables = stack.move();
   return {
     signer,
+    keyPath,
     codePath: `${directory}/invite.code`,
     requests,
     outputs,
@@ -185,7 +194,7 @@ describe("space invite", () => {
       });
     });
     const run = (...extra: string[]) =>
-      buildSpaceInviteCommand().reset().throwErrors().parse([
+      buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
         "create",
         "--access",
         "WRITE",
@@ -250,7 +259,7 @@ describe("space invite", () => {
       ttl = "60",
       uses = "1",
     ) =>
-      buildSpaceInviteCommand().reset().throwErrors().parse([
+      buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
         "create",
         "--access",
         access,
@@ -335,7 +344,7 @@ describe("space invite", () => {
     try {
       for (const path of [symlink, childDirectory, nonprivate]) {
         await expect(
-          buildSpaceInviteCommand().reset().throwErrors().parse([
+          buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
             "create",
             "--access",
             "READ",
@@ -407,7 +416,7 @@ describe("space invite", () => {
         () => Promise.resolve(Response.json({ inviteId: saved.inviteId })),
       );
       const run = (file: string) =>
-        buildSpaceInviteCommand().reset().throwErrors().parse([
+        buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
           "create",
           "--access",
           "READ",
@@ -491,7 +500,7 @@ describe("space invite", () => {
       () => Promise.reject(new Error("unexpected request")),
     );
     const run = () =>
-      buildSpaceInviteCommand().reset().throwErrors().parse([
+      buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
         "create",
         "--access",
         "READ",
@@ -566,7 +575,7 @@ describe("space invite", () => {
         const before = JSON.stringify(invalid);
         await Deno.writeTextFile(requestFile, before, { mode: 0o600 });
         await expect(
-          buildSpaceInviteCommand().reset().throwErrors().parse([
+          buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
             "create",
             "--access",
             "READ",
@@ -603,7 +612,7 @@ describe("space invite", () => {
       () => Promise.reject(new Error("unexpected request")),
     );
     const run = (requestFile: string) =>
-      buildSpaceInviteCommand().reset().throwErrors().parse([
+      buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
         "create",
         "--access",
         "READ",
@@ -812,7 +821,7 @@ describe("space invite", () => {
     const plainId = "A".repeat(22);
     for (const command of ["redeem", "revoke", "receipts"]) {
       await expect(
-        buildSpaceInviteCommand().reset().throwErrors().parse([
+        buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
           command,
           ...common,
           dashId,
@@ -826,7 +835,7 @@ describe("space invite", () => {
         ] as const
       ) {
         await expect(
-          buildSpaceInviteCommand().reset().throwErrors().parse([
+          buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
             command,
             ...common,
             ...words,
@@ -837,7 +846,7 @@ describe("space invite", () => {
     for (const command of ["redeem", "revoke"]) {
       for (const words of [[], ["--"]]) {
         await expect(
-          buildSpaceInviteCommand().reset().throwErrors().parse([
+          buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
             command,
             ...common,
             ...words,
@@ -891,7 +900,7 @@ describe("space invite", () => {
       ] as const
     ) {
       await expect(
-        buildSpaceInviteCommand().reset().throwErrors().parse([
+        buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
           ...args,
           ...common,
         ]),
@@ -917,7 +926,7 @@ describe("space invite", () => {
     );
     try {
       await expect(
-        buildSpaceInviteCommand().reset().throwErrors().parse([
+        buildSpaceInviteCommand(httpOnly).reset().throwErrors().parse([
           "create",
           "--api-url",
           "https://fabric.example",
@@ -937,5 +946,53 @@ describe("space invite", () => {
     } finally {
       await Deno.remove(keyPath);
     }
+  });
+  it("sends administration on the memory session and makes no HTTP request for it, while redemption goes over HTTP", async () => {
+    await using cli = await inviteCli("invite CLI session");
+    const sent: unknown[] = [];
+    let closed = 0;
+    const onSession: InviteStorageOpener = ({ space }) => ({
+      session: (invite) => {
+        sent.push({ space, ...invite });
+        return Promise.resolve(
+          invite.operation === "list" ? [] : {
+            revoked: true,
+          },
+        );
+      },
+      close: () => {
+        closed++;
+        return Promise.resolve();
+      },
+    });
+    const run = async (...args: string[]) => {
+      await buildSpaceInviteCommand(onSession).reset().throwErrors().parse([
+        args[0],
+        "--api-url",
+        "https://fabric.example",
+        "--space",
+        cli.signer.did(),
+        "--identity",
+        cli.keyPath,
+        ...args.slice(1),
+      ]);
+      return JSON.parse(cli.outputs.at(-1)!);
+    };
+
+    expect(await run("list")).toEqual([]);
+    expect(await run("revoke", "a".repeat(22))).toEqual({ revoked: true });
+    await Deno.writeTextFile(cli.codePath, "b".repeat(43));
+    await run("redeem", "a".repeat(22), "--code-file", cli.codePath);
+
+    expect(sent).toEqual([
+      { space: cli.signer.did(), operation: "list", body: {} },
+      {
+        space: cli.signer.did(),
+        operation: "revoke",
+        body: { inviteId: "a".repeat(22) },
+      },
+    ]);
+    expect(cli.requests.map(({ operation }) => operation)).toEqual(["redeem"]);
+    expect(closed).toBe(2);
   });
 });
