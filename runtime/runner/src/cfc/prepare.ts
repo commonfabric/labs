@@ -4254,66 +4254,6 @@ const forEachFlowObservation = (
     }
     return traceSourcesByDoc.get(targetKey({ space, id, scope }));
   };
-  // Whether a read that did not recurse observed a scalar. Such a read
-  // observes the node's existence, its kind and which members it has (spec
-  // §4.5.2, a shape observation), and a scalar has none: what the read
-  // returned is the payload itself, which is a read of the scalar (§4.5.2),
-  // so it consumes the `value` label at the path. The runtime reads a cell's
-  // scalars this way whenever it reads the cell through its schema, so this
-  // is the ordinary read of a computed number or string. The two classes
-  // differ on a document whose value changed: the shape stamp is minted once
-  // (§8.12.8) and the value stamp is replaced on every write.
-  //
-  // The node is looked at as the read found it: as it stands now when this
-  // transaction wrote nothing at or above the path, else as the transaction
-  // found it, from the write's pre-transaction snapshot. A path the read
-  // found absent, or holding a container or a reference, is observed for
-  // its shape, as before.
-  let writeTargets: ReturnType<typeof valueWriteTargets> | undefined;
-  const scalarReads = new Map<string, boolean>();
-  const readsScalar = (
-    read: IReadActivity,
-    space: MemorySpace,
-    id: URI,
-    scope: ReturnType<typeof normalizeCellScope>,
-    logicalPath: readonly string[],
-  ): boolean => {
-    const target = targetKey({ space, id, scope });
-    const key = stringTupleKey([target, pathKey(logicalPath)]);
-    let scalar = scalarReads.get(key);
-    if (scalar !== undefined) return scalar;
-    writeTargets ??= valueWriteTargets(tx);
-    const written = writeTargets.get(target);
-    let covering: readonly string[] | undefined;
-    for (const path of written?.paths ?? []) {
-      if (
-        isPrefix(path, logicalPath) &&
-        (covering === undefined || path.length > covering.length)
-      ) {
-        covering = path;
-      }
-    }
-    let found: { link: unknown } | { value: unknown } | undefined;
-    if (written !== undefined && covering !== undefined) {
-      const writtenKey = pathKey(covering);
-      found = written.previousPresentByPath.get(writtenKey) === false
-        ? undefined
-        : pointerAlongPath(
-          written.previousValuesByPath.get(writtenKey),
-          logicalPath.slice(covering.length),
-        );
-    } else {
-      const stored = tx.read(
-        { space, id, scope, type: read.type, path: read.path },
-        { nonRecursive: true, meta: INTERNAL_VERIFIER_META },
-      );
-      found = stored.ok === undefined ? undefined : { value: stored.ok.value };
-    }
-    scalar = found !== undefined && "value" in found &&
-      found.value !== undefined && !isObjectOrArray(found.value);
-    scalarReads.set(key, scalar);
-    return scalar;
-  };
   const probeBelongsToDereference = (
     space: MemorySpace,
     id: URI,
@@ -4421,10 +4361,7 @@ const forEachFlowObservation = (
       }
       shape = "followRef";
     } else {
-      shape = read.nonRecursive === true &&
-          !readsScalar(read, space, id, scope, logicalPath)
-        ? "shape"
-        : "value";
+      shape = read.nonRecursive === true ? "shape" : "value";
     }
     if (
       consume(

@@ -105,8 +105,7 @@ A read consumes the join of every entry whose class is in its consumed set:
 | Runtime read | Consumes classes | Notes |
 |---|---|---|
 | recursive value read | `value` + `shape` + `enumerate` | reading content also reveals presence/type and, for containers, membership |
-| `nonRecursive` read of a container (key-add, length) | `shape` + `enumerate` | observes presence/cardinality, not element content |
-| `nonRecursive` read of a scalar | `value` + `shape` + `enumerate` | a scalar has no members, so what the read returns is the payload (spec §4.5.2, "read scalar"); the runtime reads a cell's scalars this way through its schema |
+| `nonRecursive` read (key-add, length, key presence) | `shape` + `enumerate` | observes presence/kind/cardinality, not content, whatever sits at the node |
 | `linkResolutionProbe` / slot-pointer read (no deref) | `followRef` | which reference sits here — **stops being excluded**; consumes the link-origin entry's `followRef` class |
 | dereference (follow a ref to its target) | the dereference trace pair it already is | unchanged; target read classified at the target path |
 
@@ -118,11 +117,12 @@ value cannot hide confidential ancestor existence. Wildcard membership
 entries also retain their independent resolution. Declared and legacy covering
 entries keep their existing component resolution.
 
-A `nonRecursive` read of a container consumes only its shape classes. Returning
-a primitive through a query-result proxy consumes its value, even when
-constructing that view first probes its shape, and so does a `nonRecursive`
-read that lands on a primitive, JavaScript or Fabric: both follow from the
-scalar row.
+The class is the operation's, not the node's: a key-presence check over a
+scalar is a shape observation of it. Returning a primitive, JavaScript or
+Fabric, consumes its value, even when constructing the view first probes its
+shape, so a traversal that returns a scalar records a recursive read of it
+(`#traversePrimitive` and the plain-schema traversal's `values`). A shape-only
+storage observation continues to consume only its shape classes.
 
 The load-bearing change is the `followRef` row: the `followRef` observation, today
 dropped from the flow join, becomes a consumed class carrying the link entry's

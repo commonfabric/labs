@@ -1,25 +1,18 @@
 /**
- * What a read that does not recurse observes, when the node it reads holds a
- * scalar.
+ * What a cell read of a scalar consumes.
  *
  * A read that stops at a node observes the node's existence, its kind and
- * which members it has (a shape observation, CFC spec §4.5.2). A scalar has
- * no members: what the read returns is the scalar itself, so the read is a
- * read of the payload (§4.5.2, "read scalar"), and it consumes the `value`
- * label at the path. The runtime records a scalar's read without recursion
- * when a cell is read through its schema, so this is the ordinary way a
- * computed number or string is read.
+ * which members it has (a shape observation, CFC spec §4.5.2), whatever the
+ * node holds. Returning a scalar is a read of the payload (§4.5.2, "read
+ * scalar"), which consumes the `value` label at the path. A cell read through
+ * its schema returns the scalars it selects, so it carries their value
+ * labels, and not the value label of a scalar it does not select.
  *
  * The two labels differ on a document whose value changed: the `shape` stamp
  * is minted once, when the document is created (§8.12.8), and the `value`
  * stamp is replaced on every write. The entries seeded below are the ones a
  * computed count stores after its input gained a row labeled `B`: the shape
  * stamp still says `A`, the value stamp says `A` and `B`.
- *
- * The stored labels are the document's state before the transaction, so a
- * read is classed by the node as it stood then: a transaction that replaces
- * the scalar with a container, or the container with a scalar, has read what
- * was there before.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -35,6 +28,7 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
 } from "../src/storage/interface.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -63,7 +57,7 @@ const STALE_SHAPE_ENTRIES: readonly LabelMapEntry[] = [
   },
 ];
 
-describe("CFC flow labels: a read that stops at a scalar", () => {
+describe("CFC flow labels: a cell read of a scalar", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
 
@@ -124,44 +118,27 @@ describe("CFC flow labels: a read that stops at a scalar", () => {
   const atoms = (join: unknown[]): string[] =>
     join.flat().map((atom) => String(atom)).sort();
 
-  it("consumes the scalar's value label, not only its shape label", async () => {
+  /** The join of a cell read of `doc` through `schema`. */
+  const cellRead = (doc: IMemorySpaceAddress, schema: JSONSchema): string[] =>
+    atoms(joinOf((tx) => {
+      runtime.getCellFromLink({ ...doc, schema }, undefined, tx).get();
+    }));
+
+  it("carries the scalar's value label, not only its shape label", async () => {
     const doc = await seeded("count", 3, STALE_SHAPE_ENTRIES);
-    const shallow = joinOf((tx) =>
-      tx.readOrThrow({ ...doc, path: ["value"] }, { nonRecursive: true })
-    );
-    expect(atoms(shallow)).toEqual([A, B]);
+    expect(cellRead(doc, { type: "number" })).toEqual([A, B]);
   });
 
-  it("classes the node as it stood before the transaction's own write", async () => {
-    const scalar = await seeded("count-replaced", 3, STALE_SHAPE_ENTRIES);
-    const wasScalar = joinOf((tx) => {
-      tx.readOrThrow({ ...scalar, path: ["value"] }, { nonRecursive: true });
-      tx.writeOrThrow({ ...scalar, path: ["value"] }, { n: 3 });
-    });
-    expect(atoms(wasScalar)).toEqual([A, B]);
-
-    const record = await seeded(
-      "record-replaced",
-      { n: 3 },
-      STALE_SHAPE_ENTRIES,
-    );
-    const wasContainer = joinOf((tx) => {
-      tx.readOrThrow({ ...record, path: ["value"] }, { nonRecursive: true });
-      tx.writeOrThrow({ ...record, path: ["value"] }, 3);
-    });
-    expect(atoms(wasContainer)).toEqual([A]);
-  });
-
-  it("consumes only the shape label when the node is a container", async () => {
-    const doc = await seeded("record", { n: 3 }, STALE_SHAPE_ENTRIES);
+  it("a read that stops at the scalar consumes only its shape label", async () => {
+    const doc = await seeded("count-shape", 3, STALE_SHAPE_ENTRIES);
     const shallow = joinOf((tx) =>
       tx.readOrThrow({ ...doc, path: ["value"] }, { nonRecursive: true })
     );
     expect(atoms(shallow)).toEqual([A]);
   });
 
-  it("consumes a scalar member's value label through its container", async () => {
-    const doc = await seeded("fields", { n: 3, m: "x" }, [
+  it("carries the value label of a scalar member it selects, not of one it does not", async () => {
+    const entries: readonly LabelMapEntry[] = [
       {
         path: [],
         label: { confidentiality: [A] },
@@ -174,31 +151,39 @@ describe("CFC flow labels: a read that stops at a scalar", () => {
         origin: "derived",
         observes: "value",
       },
-    ]);
-    const member = joinOf((tx) =>
-      tx.readOrThrow({ ...doc, path: ["value", "n"] }, {
-        nonRecursive: true,
-      })
-    );
-    const sibling = joinOf((tx) =>
-      tx.readOrThrow({ ...doc, path: ["value", "m"] }, {
-        nonRecursive: true,
-      })
-    );
-    expect(atoms(member)).toContain(B);
-    expect(atoms(sibling)).not.toContain(B);
+    ];
+    const both = await seeded("fields", { n: 3, m: "x" }, entries);
+    expect(
+      cellRead(both, {
+        type: "object",
+        properties: { n: { type: "number" }, m: { type: "string" } },
+      }),
+    ).toContain(B);
+    const other = await seeded("fields-other", { n: 3, m: "x" }, entries);
+    expect(
+      cellRead(other, {
+        type: "object",
+        properties: { m: { type: "string" } },
+      }),
+    ).not.toContain(B);
   });
 
-  it("a cell read of the scalar carries its value label", async () => {
-    const doc = await seeded("cell-count", 3, STALE_SHAPE_ENTRIES);
-    const read = joinOf((tx) => {
-      const value = runtime.getCellFromLink<number>(
-        { ...doc, schema: { type: "number" } },
-        undefined,
-        tx,
-      ).get();
-      expect(value).toBe(3);
-    });
-    expect(atoms(read)).toEqual([A, B]);
+  it("carries the value label of a scalar in a list of scalars", async () => {
+    const doc = await seeded("list", [3, 4], [
+      {
+        path: [],
+        label: { confidentiality: [A] },
+        origin: "derived",
+        observes: "shape",
+      },
+      {
+        path: ["1"],
+        label: { confidentiality: [B] },
+        origin: "derived",
+        observes: "value",
+      },
+    ]);
+    expect(cellRead(doc, { type: "array", items: { type: "number" } }))
+      .toEqual([A, B]);
   });
 });
