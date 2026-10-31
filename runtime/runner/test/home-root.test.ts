@@ -3,11 +3,15 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { bringUpHomeRootForRefusedWrite } from "../src/home-root.ts";
 import { Runtime, type RuntimeFetch } from "../src/index.ts";
 import { SpaceRootMissingError } from "../src/space-root-slot.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../src/storage/interface.ts";
 
 const user = await Identity.fromPassphrase("home root user");
 const home = user.did() as MemorySpace;
@@ -46,6 +50,27 @@ describe("home-root", () => {
         : {}),
     });
     return runtime;
+  }
+
+  /** A transaction of a served handler run acting for `actor`, if any. */
+  function handlerRun(rt: Runtime, actor?: MemorySpace) {
+    const tx = rt.edit();
+    stampWaveRunContext(tx, {
+      actionId: "handler",
+      kind: "event-handler",
+      ...(actor === undefined ? {} : { acting: { user: actor } }),
+    });
+    return tx;
+  }
+
+  /** Links a root into `space`'s `defaultPattern` slot, through `rt`. */
+  async function linkRoot(rt: Runtime, space: MemorySpace): Promise<void> {
+    const tx: IExtendedStorageTransaction = rt.edit();
+    stampWaveRunContext(tx, { actionId: "root-ensure", kind: "bookkeeping" });
+    rt.getSpaceCell(space).withTx(tx).key("defaultPattern").set(
+      rt.getCell(space, "home root").withTx(tx),
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
   }
 
   afterEach(async () => {
@@ -94,16 +119,59 @@ describe("home-root", () => {
     expect(fetched).toEqual([]);
   });
 
-  it("returns `undefined` on a serving runtime, which creates no Home root", () => {
+  it("waits on a serving runtime, creating nothing, until the run's actor's Home links a root", async () => {
+    // A serving runtime leaves creating the root to the loop serving the
+    // Home's own space, and the handler runs again once that root is linked.
     const rt = makeRuntime(service, true);
+    const run = handlerRun(rt, home);
+    let resolved = false;
 
-    const creation = bringUpHomeRootForRefusedWrite(
+    const waiting = bringUpHomeRootForRefusedWrite(
       rt,
-      new SpaceRootMissingError(service.did() as MemorySpace),
+      new SpaceRootMissingError(home),
+      run,
     );
-    creation?.catch(() => {});
+    run.abort();
+    waiting?.then(() => resolved = true);
+    await rt.storageManager.synced();
+    const resolvedBeforeRoot = resolved;
+    await linkRoot(rt, home);
+    await waiting;
 
-    expect(creation).toBeUndefined();
+    expect(waiting).toBeDefined();
+    expect(resolvedBeforeRoot).toBe(false);
+    expect(fetched).toEqual([]);
+  });
+
+  it("returns `undefined` on a serving runtime for a write refused beneath a space other than the run's actor's Home", () => {
+    const rt = makeRuntime(service, true);
+    const run = handlerRun(rt, home);
+
+    const waiting = bringUpHomeRootForRefusedWrite(
+      rt,
+      new SpaceRootMissingError(elsewhere),
+      run,
+    );
+    run.abort();
+    waiting?.catch(() => {});
+
+    expect(waiting).toBeUndefined();
+    expect(fetched).toEqual([]);
+  });
+
+  it("returns `undefined` on a serving runtime for a run that acts for no one", () => {
+    const rt = makeRuntime(service, true);
+    const run = handlerRun(rt);
+
+    const waiting = bringUpHomeRootForRefusedWrite(
+      rt,
+      new SpaceRootMissingError(home),
+      run,
+    );
+    run.abort();
+    waiting?.catch(() => {});
+
+    expect(waiting).toBeUndefined();
     expect(fetched).toEqual([]);
   });
 });
