@@ -267,4 +267,73 @@ describe("space.invite", () => {
       expect(response?.error?.name).toBe("InvalidMessageError");
     });
   });
+  describe("redemption on `session.open`", () => {
+    it("opens a session for a principal the access list does not name, and returns the receipt", async () => {
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const { space, session } = await ownedSpace(server);
+      const guest = (await Identity.generate()).did();
+      const { invite, inviteId, code } = creation(space);
+      await session.administerInvites(invite);
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+
+      const refused = await failureOf(sessionAs(server, space, guest));
+      const { redemption } = await client.mountRedeeming(
+        space,
+        { inviteId, code },
+        authAs(guest),
+      );
+      const later = await sessionAs(server, space, guest);
+
+      expect(refused?.name).toBe("AuthorizationError");
+      expect(redemption).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId, did: guest },
+        currentAccess: "READ",
+      });
+      expect(later.space).toBe(space);
+    });
+
+    it("refuses the open with the service's code for a wrong code, and grants nothing", async () => {
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const { space, session } = await ownedSpace(server);
+      const guest = (await Identity.generate()).did();
+      const { invite, inviteId } = creation(space);
+      await session.administerInvites(invite);
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+
+      const failure = await failureOf(
+        client.mountRedeeming(
+          space,
+          { inviteId, code: createInviteCredentials().code },
+          authAs(guest),
+        ),
+      );
+      const afterwards = await failureOf(sessionAs(server, space, guest));
+
+      expect(failure?.name).toBe("SpaceInviteRefusal");
+      expect(failure?.code).toEqual(expect.any(String));
+      expect(afterwards?.name).toBe("AuthorizationError");
+    });
+
+    it("throws `invite-service-unsupported` without sending, against a server given no invitation host", async () => {
+      const server = serverWith();
+      const { space } = await ownedSpace(server);
+      const guest = (await Identity.generate()).did();
+      const client = await connect({ transport: loopback(server) });
+      clients.push(client);
+
+      const failure = await failureOf(
+        client.mountRedeeming(
+          space,
+          createInviteCredentials(),
+          authAs(guest),
+        ),
+      );
+
+      expect(failure?.name).toBe("SpaceInviteRefusal");
+      expect(failure?.code).toBe("invite-service-unsupported");
+    });
+  });
 });

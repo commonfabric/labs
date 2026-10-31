@@ -24,6 +24,7 @@ import {
   type URI,
   type Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -533,6 +534,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   serverFlags?(
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined>;
+
+  /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage

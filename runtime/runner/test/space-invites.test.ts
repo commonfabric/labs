@@ -271,6 +271,53 @@ describe("space-invites", () => {
       expect(posted).toEqual([]);
     });
 
+    it("redeems through the redeemer and makes no HTTP request for it", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const receipt = {
+        outcome: "redeemed" as const,
+        redemption: { inviteId: "a".repeat(22), did: signer.did() },
+        currentAccess: "READ" as const,
+      };
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(String(input));
+          return Promise.resolve(Response.json({}));
+        },
+        redeemer: () => Promise.resolve(receipt),
+      });
+
+      expect(
+        await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
+      ).toEqual(receipt);
+      expect(posted).toEqual([]);
+    });
+
+    it("redeems over HTTP when the redeemer's server does not redeem on a session, and throws another refusal's code", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const redeemWith = (code: string) =>
+        new SpaceInviteClient({
+          host: "https://example.com",
+          space: signer.did(),
+          signer,
+          fetch: (input) => {
+            posted.push(new URL(String(input)).pathname.split("/").at(-1)!);
+            return Promise.resolve(Response.json({ outcome: "redeemed" }));
+          },
+          redeemer: () => Promise.reject(refusal(code)),
+        }).redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) });
+
+      await redeemWith("invite-service-unsupported");
+      await expect(redeemWith("invite-unavailable")).rejects.toEqual(
+        new SpaceInviteError("invite-unavailable"),
+      );
+      expect(posted).toEqual(["redeem"]);
+    });
+
     it("redeems over HTTP whatever session it was given", async () => {
       const { client, sent, posted } = await clientWith(() =>
         Promise.resolve({})

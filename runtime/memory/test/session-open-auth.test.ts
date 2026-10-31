@@ -62,6 +62,7 @@ const buildOpen = async (
     resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    invite?: { inviteId: string; code: string };
   } = {},
 ) => {
   const sub = space.did();
@@ -237,6 +238,31 @@ describe("verifySessionOpenAuthorization", () => {
       Error,
       "authorization mismatch",
     );
+  });
+
+  it("binds an invitation to the signed descriptor", async () => {
+    const invite = { inviteId: "a".repeat(22), code: "b".repeat(43) };
+    const message = await buildOpen(signedFields(), alice, { invite });
+    expect(await verifySessionOpenAuthorization(message, verifyOptions())).toBe(
+      alice.did(),
+    );
+    for (
+      const session of [{}, { invite: { ...invite, code: "c".repeat(43) } }]
+    ) {
+      await expect(
+        verifySessionOpenAuthorization(
+          { ...message, session },
+          verifyOptions(),
+        ),
+      ).rejects.toThrow("authorization mismatch");
+    }
+    const unsigned = await buildOpen(signedFields());
+    await expect(
+      verifySessionOpenAuthorization(
+        { ...unsigned, session: { invite } },
+        verifyOptions(),
+      ),
+    ).rejects.toThrow("authorization mismatch");
   });
 
   it("accepts a valid signed open and returns the issuer principal", async () => {

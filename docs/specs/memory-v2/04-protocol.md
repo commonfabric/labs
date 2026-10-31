@@ -442,6 +442,9 @@ interface SessionOpenRequest {
     // The kind the space declares in its genesis commit (see the rules).
     // Inside the signed descriptor, like everything the session declares.
     spaceKind?: string;
+    // An invitation the open redeems before its grant is checked (see the
+    // rules). Inside the signed descriptor, since it redeems as the signer.
+    invite?: { inviteId: string; code: string };
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -525,6 +528,12 @@ interface SessionOpenResult {
   // The kind the space's genesis commit declares; absent when it declares
   // none, or the space has no history yet.
   spaceKind?: string;
+  // The redemption of the invitation the open carried.
+  invite?: {
+    outcome: "redeemed" | "already-redeemed";
+    redemption: { inviteId: string; did: string };
+    currentAccess: "READ" | "WRITE" | "OWNER" | null;
+  };
   sessionOpen: {
     challenge: {
       value: string;
@@ -582,6 +591,18 @@ Rules:
   with no history admits the declaration, and its genesis commit must then
   carry the same kind. Every open of a space with history is told the kind its
   genesis declares, in `spaceKind`, whether the session declared one or not
+- an open carrying an `invite` first redeems it as the open's authenticated
+  principal, through the same invitation service as `space.invite` (section
+  4.3.11) and checked against the server's invitation host, and then checks
+  the open's grant, so a principal the access list did not name is admitted by
+  the grant the invitation conferred. A refusal of the redemption refuses the
+  open with an error named `SpaceInviteRefusal` carrying the service's code, a
+  server knowing no invitation host refuses it with
+  `invite-service-unsupported`, and an open that also presents a proof chain
+  or an `actingAs` binding is refused with `invalid-request`. A client sends
+  `invite` only to a server advertising `spaceInvites`, on the open that
+  redeems and on none of the session's resumes: a server that does not know
+  the field would open, or refuse, the session without redeeming anything
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -1763,7 +1784,8 @@ interface SpaceInviteRequest {
 Semantics:
 
 - `redeem` is not among the operations: the identity redeeming holds no grant
-  on the space yet, and opening a session needs READ. A `space.invite` naming
+  on the space yet, and opening a session needs READ, so redemption travels
+  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
   `redeem`, an unknown operation, or a body that is not exactly the
   operation's fields gets the refusal any unreadable message gets (section
   4.2.1)

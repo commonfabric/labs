@@ -148,7 +148,7 @@ import {
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { SpaceInviteError } from "../space-invites.ts";
+import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -912,6 +912,11 @@ const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
  * here.
  */
 export const PATTERN_LIFECYCLE_MAX_CHARACTERS = ROUTED_QUEUE_LIMIT;
+
+/** Whether an invitation service result is a redemption's receipt. */
+const isRedeemReceipt = (
+  result: InviteResult["result"],
+): result is RedeemReceipt => !Array.isArray(result) && "outcome" in result;
 
 /** The response refusing a `space.invite` request with the service's `code`. */
 const spaceInviteRefusal = (
@@ -5902,6 +5907,28 @@ export class Server {
         capabilityPrincipal = chain?.rootIssuer;
         delegationEnd = chain?.expiresAt;
       }
+      // An invitation the open carries is redeemed as the open's principal
+      // before its grant is checked, so the grant it confers admits this
+      // open. Redemption names the principal's own DID, so it is refused
+      // alongside a chain or a binding, which act under another's grant.
+      let redemption: RedeemReceipt | undefined;
+      const invite = message.session.invite;
+      if (invite !== undefined) {
+        if (
+          principal === undefined || presentsChain || actingAs !== undefined
+        ) {
+          return spaceInviteRefusal(message.requestId, "invalid-request");
+        }
+        const redeemed = await this.#redeemOnOpen(
+          message.space,
+          principal,
+          invite,
+        );
+        if ("refusal" in redeemed) {
+          return spaceInviteRefusal(message.requestId, redeemed.refusal);
+        }
+        redemption = redeemed.receipt;
+      }
       const deny = this.#authorizeMessageWithEngine(
         engine,
         message.space,
@@ -6125,6 +6152,7 @@ export class Server {
           ...(catchup ? { sync: catchup.effect } : {}),
           ...(spaceKind !== undefined ? { spaceKind } : {}),
           sessionOpen: nextSessionOpen,
+          ...(redemption === undefined ? {} : { invite: redemption }),
         },
       };
     } catch (error) {
@@ -6399,6 +6427,37 @@ export class Server {
       if (error instanceof SpaceInviteError) {
         return spaceInviteRefusal(requestId, error.code);
       }
+      throw error;
+    }
+  }
+
+  /**
+   * Helper for `openSession()`, which redeems `invite` in `space` as
+   * `principal` and returns the receipt, or the invitation service's refusal
+   * code, `invite-service-unsupported` on a server given no invitation host.
+   */
+  async #redeemOnOpen(
+    space: string,
+    principal: string,
+    invite: { inviteId: string; code: string },
+  ): Promise<{ receipt: RedeemReceipt } | { refusal: string }> {
+    const host = this.options.inviteHost;
+    if (host === undefined) return { refusal: "invite-service-unsupported" };
+    try {
+      const result = await this.invite({
+        operation: "redeem",
+        body: invite,
+        host,
+        space,
+        principal,
+        now: Date.now,
+      });
+      if (!isRedeemReceipt(result)) {
+        throw new Error("The invitation service returned no redemption");
+      }
+      return { receipt: result };
+    } catch (error) {
+      if (error instanceof SpaceInviteError) return { refusal: error.code };
       throw error;
     }
   }
@@ -12003,6 +12062,12 @@ const parseDecodedClientMessage = (
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
     if (readCeiling === null) return null;
+    let invite: { inviteId: string; code: string } | undefined;
+    if (parsed.session.invite !== undefined) {
+      const redeem = parseInviteOperation("redeem", parsed.session.invite);
+      if (redeem?.operation !== "redeem") return null;
+      invite = redeem.body;
+    }
     return {
       type: "session.open",
       requestId: parsed.requestId,
@@ -12043,6 +12108,7 @@ const parseDecodedClientMessage = (
         ...(isSpaceKind(parsed.session.spaceKind)
           ? { spaceKind: parsed.session.spaceKind }
           : {}),
+        ...(invite === undefined ? {} : { invite }),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation

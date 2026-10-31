@@ -12,6 +12,7 @@ import {
   normalizeInviteHost,
   SPACE_INVITE_CAPABILITY,
   SpaceInviteClient,
+  type SpaceInviteRedeemer,
   type SpaceInviteSession,
 } from "@commonfabric/runner/space-invites";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
@@ -201,40 +202,47 @@ function requiredInviteId(
 }
 
 /**
- * Opens what an administering command sends on: a memory session on `space`
- * signing as `as` against the memory server at `memoryHost`, and what closes
- * it. A `session` left out sends over HTTP alone.
+ * Opens what the commands send on: memory sessions on `space`, signing as
+ * `as` against the memory server at `memoryHost`, and what closes them. A
+ * `session` left out sends administration over HTTP alone, and a `redeemer`
+ * left out sends redemption over HTTP alone.
  */
 export type InviteStorageOpener = (
   options: { as: Identity; memoryHost: URL; space: DIDKey },
-) => { session?: SpaceInviteSession; close(): Promise<void> };
+) => {
+  session?: SpaceInviteSession;
+  redeemer?: SpaceInviteRedeemer;
+  close(): Promise<void>;
+};
 
 /** The default `InviteStorageOpener`, over a storage manager of its own. */
 const openInviteStorage: InviteStorageOpener = ({ as, memoryHost, space }) => {
   const manager = StorageManager.open({ as, memoryHost });
   const administer = manager.administerInvites?.bind(manager);
+  const redeem = manager.redeemInvite?.bind(manager);
   return {
     ...(administer === undefined
       ? {}
       : { session: (invite) => administer(space, invite) }),
+    ...(redeem === undefined
+      ? {}
+      : { redeemer: (invite) => redeem(space, invite) }),
     close: () => manager.close(),
   };
 };
 
 /**
- * Builds the `cf space invite` command group, whose administering commands
- * send on the storage `openStorage` opens.
+ * Builds the `cf space invite` command group, which sends on the storage
+ * `openStorage` opens.
  */
 export function buildSpaceInviteCommand(
   openStorage: InviteStorageOpener = openInviteStorage,
 ) {
-  // An administering client sends on a memory session on the space as the
-  // identity, which reaches the process serving the space; the session goes
-  // when the returned value is disposed. A redeeming one has no session to
-  // open, since its identity holds no grant on the space yet.
+  // A client sends on memory sessions on the space as the identity, which
+  // reach the process serving the space; they close when the returned value
+  // is disposed.
   const client = async (
     options: { identity?: string; apiUrl?: string; space?: string },
-    administers: boolean,
   ) => {
     const config = parseSpaceOptions(options);
     if (!isDIDKey(config.space)) {
@@ -242,13 +250,11 @@ export function buildSpaceInviteCommand(
     }
     const space = config.space;
     const signer = await loadIdentity(config.identity);
-    const storage = administers
-      ? openStorage({
-        as: signer,
-        memoryHost: new URL(config.apiUrl),
-        space,
-      })
-      : undefined;
+    const storage = openStorage({
+      as: signer,
+      memoryHost: new URL(config.apiUrl),
+      space,
+    });
     return {
       config,
       issuer: signer.did(),
@@ -256,11 +262,12 @@ export function buildSpaceInviteCommand(
         host: config.apiUrl,
         space,
         signer,
-        ...(storage?.session === undefined ? {} : { session: storage.session }),
+        ...(storage.session === undefined ? {} : { session: storage.session }),
+        ...(storage.redeemer === undefined
+          ? {}
+          : { redeemer: storage.redeemer }),
       }),
-      [Symbol.asyncDispose]: async () => {
-        await storage?.close();
-      },
+      [Symbol.asyncDispose]: () => storage.close(),
     };
   };
   return new Command()
@@ -321,7 +328,7 @@ export function buildSpaceInviteCommand(
       const shell = options.shell === undefined
         ? undefined
         : normalizeInviteHost(options.shell);
-      await using opened = await client(options, true);
+      await using opened = await client(options);
       const { client: api, config, issuer } = opened;
       const { request, requestFile } = await prepareInviteRequest({
         host: normalizeInviteHost(config.apiUrl),
@@ -369,14 +376,14 @@ export function buildSpaceInviteCommand(
       const code = (options.codeFile === "-"
         ? await new Response(Deno.stdin.readable).text()
         : await Deno.readTextFile(options.codeFile)).trim();
-      await using opened = await client(options, false);
+      await using opened = await client(options);
       console.log(
         JSON.stringify(await opened.client.redeem({ inviteId, code })),
       );
     })
     .command("list", "List active invitations without their verifiers.")
     .action(async (options) => {
-      await using opened = await client(options, true);
+      await using opened = await client(options);
       console.log(JSON.stringify(await opened.client.list()));
     })
     .command(
@@ -386,7 +393,7 @@ export function buildSpaceInviteCommand(
     .usage(requiredInviteIdUsage)
     .action(async function (options, argument) {
       const inviteId = requiredInviteId(argument, this.getLiteralArgs());
-      await using opened = await client(options, true);
+      await using opened = await client(options);
       console.log(JSON.stringify(await opened.client.revoke(inviteId)));
     })
     .command(
@@ -396,7 +403,7 @@ export function buildSpaceInviteCommand(
     .usage("[invite-id] | [options] -- <invite-id>")
     .action(async function (options, argument) {
       const inviteId = optionalInviteId(argument, this.getLiteralArgs());
-      await using opened = await client(options, true);
+      await using opened = await client(options);
       console.log(JSON.stringify(await opened.client.receipts(inviteId)));
     });
 }

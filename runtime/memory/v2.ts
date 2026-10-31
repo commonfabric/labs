@@ -20,6 +20,7 @@ import {
   isPlainObject,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import type { RedeemReceipt } from "./space-invites.ts";
 import type { ClientInfo } from "./v2/client-info.ts";
 import type { InviteOperation } from "./v2/invites.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
@@ -1158,6 +1159,9 @@ export type SessionOpenResult = {
 
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
+
+  /** The redemption of the invitation the open carried, when it carried one. */
+  invite?: RedeemReceipt;
 };
 
 export type MemoryProtocolFlags = {
@@ -1580,6 +1584,15 @@ export type SessionDescriptor = {
    * this descriptor.
    */
   actingAs?: "space-owner";
+
+  /**
+   * An invitation to redeem, as the open's principal, before the open's grant
+   * is checked (04-protocol.md §4.1.2): how someone the space's access list
+   * does not name yet opens a session on it. Signed into the session.open
+   * invocation with the rest of this descriptor. A client sends it on the
+   * open that redeems and not on the resumes after it.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**

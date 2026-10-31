@@ -68,6 +68,7 @@ import {
   type WatchSetResult,
   type WatchSpec,
 } from "../v2.ts";
+import type { RedeemReceipt } from "../space-invites.ts";
 import {
   compressClientMessageLabels,
   expandServerMessageCommitLabels,
@@ -313,6 +314,13 @@ export type MountOptions = {
    * execution that is configured with one, and carried on every reopen so
    * a resumed session is bounded exactly as the first open was. */
   readCeiling?: SessionReadCeiling;
+
+  /**
+   * An invitation the open redeems before its grant is checked (the wire
+   * `SessionDescriptor.invite`). Sent on the mount's own open and on none of
+   * the session's reopens, which the grant it conferred already admits.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -941,6 +949,48 @@ export class Client {
     auth?: SessionAuth,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    return (await this.#mount(space, options, auth, signal)).session;
+  }
+
+  /**
+   * Like `mount()`, except that the open first redeems `invite` as the
+   * principal `auth` authenticates, so a principal the space's access list
+   * does not name yet is admitted by the grant the invitation confers. Returns
+   * the session with the redemption's receipt.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the service refuses the redemption, or with
+   *   `invite-service-unsupported`, before anything is sent, when the server
+   *   does not advertise `spaceInvites`.
+   */
+  async mountRedeeming(
+    space: string,
+    invite: { inviteId: string; code: string },
+    auth?: SessionAuth,
+    signal?: AbortSignal,
+  ): Promise<{ session: SpaceSession; redemption: RedeemReceipt }> {
+    const { session, result } = await this.#mount(
+      space,
+      { invite },
+      auth,
+      signal,
+    );
+    if (result.invite === undefined) {
+      await session.close();
+      throw protocolError(
+        "memory server opened the session without redeeming its invitation",
+      );
+    }
+    return { session, redemption: result.invite };
+  }
+
+  /** Helper for `mount()`, which also returns the open's result. */
+  async #mount(
+    space: string,
+    options: MountOptions,
+    auth: SessionAuth | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<{ session: SpaceSession; result: SessionOpenResult }> {
     options = {
       ...options,
       ...(options.genesisRoot === undefined ? {} : {
@@ -996,7 +1046,7 @@ export class Client {
       options.resumeAttempt,
     );
     this.#spaces.add(session);
-    return session;
+    return { session, result };
   }
 
   forgetSession(session: SpaceSession): void {
@@ -1317,6 +1367,17 @@ export class Client {
         throw protocolError(
           "memory server does not seal a space's declared kind",
         );
+      }
+      // A server that does not know the field would open, or refuse, the
+      // session without redeeming anything.
+      if (
+        session.invite !== undefined && this.serverFlags?.spaceInvites !== true
+      ) {
+        const error = new Error(
+          "memory server does not redeem invitations on `session.open`",
+        );
+        error.name = "SpaceInviteRefusal";
+        throw Object.assign(error, { code: "invite-service-unsupported" });
       }
       // A server admitting no chain refuses an open presenting one, so a
       // key holding a chain is told here rather than refused there.

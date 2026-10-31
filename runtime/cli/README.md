@@ -3358,12 +3358,13 @@ than passing quietly.
 `cf space invite` uses generic invitation service version 1. All commands take
 `--api-url`, `--identity`, and an explicit space DID through `--space`, or the
 corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables, and return
-JSON. Every command except `redeem` opens a memory session on the space as the
-signing identity and sends the operation there as a `space.invite` request,
-which reaches the toolshed process serving the space; against a memory server
-that does not administer invitations, it sends the signed HTTP request instead.
-`redeem` always sends the signed HTTP request, since the redeeming identity
-holds no grant on the space yet and so cannot open a session on it.
+JSON. Each command sends on a memory session on the space as the signing
+identity, which reaches the toolshed process serving the space: `create`,
+`list`, `revoke`, and `receipts` as a `space.invite` request, and `redeem` as
+the invitation a `session.open` carries, since the redeeming identity holds no
+grant on the space until the invitation is redeemed. Against a memory server
+that does not take the operation there, the command sends the signed HTTP
+request instead.
 
 - `cf space invite create --access READ --ttl 3600 --max-uses 2` creates an
   invitation. Access is READ, WRITE, or OWNER, TTL is 1–2,592,000 seconds, and

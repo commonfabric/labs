@@ -40,6 +40,22 @@ export type {
   RedeemReceipt,
 } from "@commonfabric/memory/space-invites";
 
+/**
+ * Whether a session-path failure leaves the operation to HTTP: true for a
+ * `SpaceInviteRefusal` naming `invite-service-unsupported`, which the server
+ * sends, or the client raises, when the operation cannot go on a session.
+ *
+ * @throws SpaceInviteError for another `SpaceInviteRefusal`, with its code.
+ */
+function usesHttpAfter(error: unknown): boolean {
+  const code = error instanceof Error && error.name === "SpaceInviteRefusal"
+    ? (error as Error & { code?: unknown }).code
+    : undefined;
+  if (typeof code !== "string") return false;
+  if (code === "invite-service-unsupported") return true;
+  throw new SpaceInviteError(code);
+}
+
 /** Creation settings with optional credentials for an exact retry. */
 export type CreateSpaceInviteOptions =
   & Pick<CreateInvite, "access" | "ttlSeconds" | "maxUses">
@@ -77,11 +93,19 @@ export type SpaceInviteSession = (
 ) => Promise<FabricValue>;
 
 /**
+ * Redeems an invitation on a memory session whose open carries it, as
+ * `IStorageManager.redeemInvite()` does for one space.
+ */
+export type SpaceInviteRedeemer = (
+  invite: { inviteId: string; code: string },
+) => Promise<RedeemReceipt>;
+
+/**
  * Client for generic space invitations. Administration goes on the space's
- * memory session where one is given and its server takes it there, and as a
- * signed HTTP request otherwise; redemption is always a signed HTTP request,
- * since the one redeeming has no session on the space yet. Failed creation
- * retains credentials for uncertain retries.
+ * memory session where one is given, and redemption on the open of a session
+ * where a redeemer is given, each where the server takes it there; anything
+ * else is a signed HTTP request. Failed creation retains credentials for
+ * uncertain retries.
  */
 export class SpaceInviteClient {
   #host: string;
@@ -89,11 +113,12 @@ export class SpaceInviteClient {
   #signer: FirstPartyHttpSigner;
   #fetch: typeof fetch;
   #session: SpaceInviteSession | undefined;
+  #redeemer: SpaceInviteRedeemer | undefined;
 
   /**
    * Constructs an instance which binds every operation to one service
-   * origin, space, and signing identity, and sends administration on
-   * `session` when given.
+   * origin, space, and signing identity, sends administration on `session`
+   * when given, and redeems through `redeemer` when given.
    */
   constructor(
     options: {
@@ -102,6 +127,7 @@ export class SpaceInviteClient {
       signer: FirstPartyHttpSigner;
       fetch?: typeof fetch;
       session?: SpaceInviteSession;
+      redeemer?: SpaceInviteRedeemer;
     },
   ) {
     this.#host = normalizeInviteHost(options.host);
@@ -109,6 +135,7 @@ export class SpaceInviteClient {
     this.#signer = options.signer;
     this.#fetch = options.fetch ?? fetch;
     this.#session = options.session;
+    this.#redeemer = options.redeemer;
   }
 
   /** Creates credentials locally; preserve the returned code to deliver the link. */
@@ -166,9 +193,24 @@ export class SpaceInviteClient {
     });
   }
 
-  /** Redeems as the signer, without first opening a target-space session. */
-  redeem(request: { inviteId: string; code: string }): Promise<RedeemReceipt> {
-    return this.#request("redeem", request);
+  /**
+   * Redeems as the signer: on the open of a session on the space, where a
+   * redeemer is given and its server redeems there, and over HTTP otherwise.
+   *
+   * @throws SpaceInviteError with the service's code when the service refuses
+   *   it; a lost session connection is thrown as it came.
+   */
+  async redeem(
+    request: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#redeemer !== undefined) {
+      try {
+        return await this.#redeemer(request);
+      } catch (error) {
+        if (!usesHttpAfter(error)) throw error;
+      }
+    }
+    return await this.#request("redeem", request);
   }
 
   /** Lists active metadata visible to the current explicit owner. */
@@ -201,14 +243,7 @@ export class SpaceInviteClient {
       try {
         return await this.#session(invite) as T;
       } catch (error) {
-        const code = error instanceof Error &&
-            error.name === "SpaceInviteRefusal"
-          ? (error as Error & { code?: unknown }).code
-          : undefined;
-        if (typeof code !== "string") throw error;
-        if (code !== "invite-service-unsupported") {
-          throw new SpaceInviteError(code);
-        }
+        if (!usesHttpAfter(error)) throw error;
       }
     }
     return await this.#request(invite.operation, invite.body);

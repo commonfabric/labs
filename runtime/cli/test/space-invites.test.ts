@@ -947,7 +947,7 @@ describe("space invite", () => {
       await Deno.remove(keyPath);
     }
   });
-  it("sends administration on the memory session and makes no HTTP request for it, while redemption goes over HTTP", async () => {
+  it("sends administration and redemption on memory sessions and makes no HTTP request", async () => {
     await using cli = await inviteCli("invite CLI session");
     const sent: unknown[] = [];
     let closed = 0;
@@ -959,6 +959,14 @@ describe("space invite", () => {
             revoked: true,
           },
         );
+      },
+      redeemer: (invite) => {
+        sent.push({ space, operation: "redeem", body: invite });
+        return Promise.resolve({
+          outcome: "redeemed",
+          redemption: { inviteId: invite.inviteId, did: cli.signer.did() },
+          currentAccess: "READ",
+        });
       },
       close: () => {
         closed++;
@@ -982,7 +990,8 @@ describe("space invite", () => {
     expect(await run("list")).toEqual([]);
     expect(await run("revoke", "a".repeat(22))).toEqual({ revoked: true });
     await Deno.writeTextFile(cli.codePath, "b".repeat(43));
-    await run("redeem", "a".repeat(22), "--code-file", cli.codePath);
+    expect(await run("redeem", "a".repeat(22), "--code-file", cli.codePath))
+      .toMatchObject({ outcome: "redeemed" });
 
     expect(sent).toEqual([
       { space: cli.signer.did(), operation: "list", body: {} },
@@ -991,8 +1000,13 @@ describe("space invite", () => {
         operation: "revoke",
         body: { inviteId: "a".repeat(22) },
       },
+      {
+        space: cli.signer.did(),
+        operation: "redeem",
+        body: { inviteId: "a".repeat(22), code: "b".repeat(43) },
+      },
     ]);
-    expect(cli.requests.map(({ operation }) => operation)).toEqual(["redeem"]);
-    expect(closed).toBe(2);
+    expect(cli.requests).toEqual([]);
+    expect(closed).toBe(3);
   });
 });

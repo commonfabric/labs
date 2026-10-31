@@ -36,6 +36,7 @@ import {
   type TransactionError,
   type URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -2519,6 +2520,21 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      const error = new Error(
+        "This storage manager's sessions cannot carry an invitation",
+      );
+      error.name = "SpaceInviteRefusal";
+      throw Object.assign(error, { code: "invite-service-unsupported" });
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
