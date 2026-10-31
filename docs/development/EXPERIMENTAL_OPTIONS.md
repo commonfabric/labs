@@ -486,6 +486,14 @@ flags it adopts from the deployment it runs against.
   retires and the OFF code path is removed — a separate post-soak PR (the plan's
   Phase 7 task 2; it also removes the opposite suites and the
   `toolshed-baked-opposite` capability).
+- **Status on 2026-10-30 (the verbs on the space's memory session).** Under
+  ON, the toolshed's memory server runs the verbs as `pattern.lifecycle`
+  requests and advertises `patternLifecycle`, and
+  `cf piece new` and `cf piece setsrc` send each verb on the space's memory
+  session, which reaches the process serving the space; they post to
+  `/api/pattern-lifecycle/*` only when the server does not advertise the flag
+  ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+  OFF is unchanged.
 - **Status on 2026-10-27 (the shell follows its deployment).** The first-party
   default is unchanged. The browser shell takes the arm from the toolshed that
   serves it, where its build define leaves the flag unset, so a deployment
@@ -1749,6 +1757,26 @@ the per-epic implementation notes).
 >   Older servers omit it, which parses as `false`, and a client then keeps its
 >   reports to itself rather than sending a message the server would refuse.
 >   It is permanent.
+> - **`patternLifecycle`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly while its host has installed a lifecycle handler with
+>   `Server.setPatternLifecycleHandler()`, which toolshed does while it runs
+>   the serving loop ([`serverExecution`](#serverexecution) on). It advertises
+>   the `pattern.lifecycle` request of the memory protocol chapter's section
+>   4.3.10, which runs a pattern-lifecycle verb on the space's memory session
+>   ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)).
+>   Only the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A server that omits it parses as `false`, and `cf` then posts
+>   the verb to the HTTP route. It is permanent.
+> - **`spaceInvites`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly when it was given `inviteHost`, the public origin its invitation
+>   links name; toolshed passes `normalizeInviteHost(API_URL)`. It advertises
+>   the `space.invite` request of the memory protocol chapter's section
+>   4.3.11, which administers a space's invitations on the space's memory
+>   session. Only the server advertises it; a client reads it from `hello.ok`
+>   and never offers it. A server that omits it parses as `false`, and
+>   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
 > - **`watchRemoveV1`** is a build-inherent capability, hardwired to `true`.
 >   It advertises `session.watch.remove`, which removes watches by id and
 >   answers with only what changed (the memory protocol chapter's section

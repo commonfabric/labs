@@ -4,9 +4,9 @@ Under server execution, the three verbs that give a space a pattern — upload a
 program, instantiate a piece from it, and replace a piece's source — run on the
 space's serving runtime. The client's part is to resolve the program from disk
 and request; the serving side compiles, materializes or replaces, and commits.
-This document is the contract for that: the route a client calls, the authority
-it needs, where the verb runs, what comes back, and what still happens on the
-client.
+This document is the contract for that: the two ways a client sends a verb, the
+authority it needs, where the verb runs, what comes back, and what still happens
+on the client.
 
 A source update carries module-update authority, which
 [`module-loading.md`](../specs/module-loading.md) requires to be published from
@@ -24,11 +24,76 @@ serving runtime, and a check does not freeze the space
 
 The verbs run only when `EXPERIMENTAL_SERVER_EXECUTION` selects the ON arm
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#serverexecution)).
-Off the flag a deployment has no serving loop, the route answers 503, and `cf`
-performs each verb in its own process as it always has. `cf test` runs a whole
-stack in memory and is untouched either way.
+Off the flag a deployment has no serving loop, its memory server does not
+advertise `patternLifecycle`, the route answers 503, and `cf` performs each verb
+in its own process. `cf test` runs a whole stack in memory and is untouched
+either way.
 
-## The route
+## Sending a verb
+
+A client sends a verb in one of two ways:
+
+- as a `pattern.lifecycle` request on its memory session on the space
+  ([`04-protocol.md` §4.3.10](../specs/memory-v2/04-protocol.md#4310-patternlifecycle--run-a-pattern-lifecycle-verb)),
+  which a memory server takes while it advertises the `patternLifecycle` hello
+  flag;
+- as a POST to the HTTP route, [The route](#the-route) below.
+
+Both reach the same code in
+`runtime/toolshed/routes/pattern-lifecycle/pattern-lifecycle.utils.ts`
+(`processUpload`, `processInstantiate`, `processSetSource`), so the arguments,
+the receipts, and the refusal codes are the same on both. `cf` sends on the
+memory session, and posts to the route only when the memory server does not
+advertise `patternLifecycle`.
+
+The session request reaches the process that serves the space, and the route
+may not. A multi-process deployment such as Estuary or Rapids runs 21 toolshed
+processes behind nginx, which spreads ordinary API requests round-robin over
+five of them and routes each space's memory WebSocket, by its `space=<did>`
+query parameter, to one of sixteen. The serving loop holds a space's lease on
+the process the space's memory socket reaches, so a POST to
+`/api/pattern-lifecycle/*` that lands on another process is refused 503
+`space-not-served`.
+
+### On the memory session
+
+The request is `{ type: "pattern.lifecycle", requestId, space, sessionId, verb,
+body }`, where `verb` is `upload`, `instantiate`, or `setsrc`, and `body` holds
+the verb's arguments: the fields of the route's body below, without `space`,
+which the session supplies. The response's `ok` is the verb's receipt, the same
+object the route returns.
+
+The toolshed installs its handler on the memory server with
+`Server.setPatternLifecycleHandler()` once the serving loop starts, and removes
+it at shutdown; the server advertises `patternLifecycle` exactly while a handler
+is installed. The handler (`lifecycleRequestHandler` in
+`pattern-lifecycle.handlers.ts`) validates `body` against the route's schemas
+without `space` (`lifecycleBodies` in `pattern-lifecycle.routes.ts`) and runs
+the verb through `processLifecycleCall()`.
+
+The memory server finishes handling the request's frame once the verb has
+started, and sends the response when the verb settles. Frames sent after it for
+the same space on that connection are handled without waiting for the verb, and
+on a routed connection the request's credit returns to the router at once.
+
+A refusal is an error response named `PatternLifecycleRefusal` whose `code` is
+one of the route's codes in the table below. Three codes differ on the session:
+
+| code                    | meaning                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `invalid-request`       | `body` does not match the verb's schema; the route answers this case with 422 and the validator's body                         |
+| `lifecycle-unsupported` | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                   |
+| `payload-too-large`     | the message holds more than 4 MiB of characters; the client also refuses before sending when the encoded request exceeds 4 MiB |
+
+`server-execution-off` is the refusal of a server with no handler installed, and
+`internal` that of a handler that threw. `unauthorized` and `rate-limited` do
+not occur on the session, since the session open authenticated the caller.
+`SpaceSession.runPatternLifecycle(verb, body)` in
+`runtime/memory/v2/client.ts` sends the request, and
+`IStorageManager.runPatternLifecycle(space, verb, body)` sends it on a storage
+manager's session for `space`.
+
+### The route
 
 Three POST endpoints under `/api/pattern-lifecycle`, mounted by
 `runtime/toolshed/routes/pattern-lifecycle/`. Every body carries `space`, the
@@ -65,8 +130,8 @@ reports by its key can be found among the traces. If a verb fails, its completed
 phases still reach the request span; phases never reached are absent. The
 failure keeps its refusal code and response status across the worker port.
 
-A refusal is a JSON body `{ error, code }`. `code` is stable and is what a
-client branches on; `error` is prose for a person.
+A refusal over HTTP is a JSON body `{ error, code }`. `code` is stable and is
+what a client branches on; `error` is prose for a person.
 
 | status | code                                             | meaning                                                                                                                                                       |
 | ------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,7 +151,15 @@ so a client that sends what the schema describes never sees it.
 
 ## Authority
 
-Every call carries the CF1 first-party request proof
+A `pattern.lifecycle` request runs as the DID its memory session was opened as
+(the session's principal). Before the verb starts, the memory server requires
+that DID itself to hold WRITE on the space, resolved as it resolves an authored
+commit. A grant the session holds only through a proof chain's root issuer does
+not count, since the verb commits with the requester's own trust. An anonymous
+session, or a principal without WRITE, is refused `forbidden`. The handler then
+runs the same writer check as the route, below, for that DID.
+
+A call over HTTP carries the CF1 first-party request proof
 ([`toolshed-access-control.md`](../specs/toolshed-access-control.md)), signed
 with the caller's own identity key; `cf` signs with the identity it connects as.
 The route then requires that DID to hold WRITE or OWNER on the space's ACL,
@@ -112,13 +185,13 @@ setup mints attributes to the requester rather than to the serving identity.
 
 `ExecutorHost.runLifecycleVerb` hands a verb to the space's `SpaceServer`,
 activating the space if it is parked. A verb request is an activation trigger of
-its own: the requester holds no session on the space, so the criteria the
-session-open and admission hooks consult do not apply. The `SpaceServer` queues
-the verb and runs it as a step of its next wave cycle, after the root ensure and
-ahead of the event drain, awaited in full, so every transaction the verb seals
-joins that cycle's wave. The request settles once the wave has committed and the
-verb's `confirm` step — a read of the durable state the verb was to leave — has
-passed. A seal's acceptance is not durability, since the wave commit can
+its own: a request over HTTP comes with no session on the space, so the
+criteria the session-open and admission hooks consult do not apply to it. The
+`SpaceServer` queues the verb and runs it as a step of its next wave cycle,
+after the root ensure and ahead of the event drain, awaited in full, so every
+transaction the verb seals joins that cycle's wave. The request settles once the
+wave has committed and the verb's `confirm` step — a read of the durable state
+the verb was to leave — has passed. A seal's acceptance is not durability, since the wave commit can
 withdraw a contribution, and this is what keeps a receipt from naming a piece
 that is not there. A space that parks before a queued verb runs rejects it, and
 the host queues the verb once more on the successor tenure.
@@ -251,7 +324,9 @@ failed (`failures`).
 
 The seed this implements records the direction as "client speculative-local,
 server-state wins", and for `cf` there is nothing to speculate: the CLI resolves
-the program locally — reading the files, pinning fabric imports — and sends it.
+the program locally — reading the files, pinning fabric imports — and sends it
+on the space's memory session, or to the route when the memory server does not
+take it there.
 What `cf piece new` still does in its own process after the receipt is what any
 client does when it opens a piece: it starts the piece, which under the flag
 runs the graph as speculation while the serving loop serves the derived values.
@@ -306,11 +381,16 @@ it moves onto.
   and a plain `startPiece()` resolves over the same refusal;
   `runtime/cli/test/piece.test.ts` checks that a served `setsrc` refreshes
   the piece through that option.
+- `runtime/memory/test/v2-pattern-lifecycle.test.ts` — the
+  `pattern.lifecycle` request: the `patternLifecycle` flag, the session and
+  WRITE checks, each refusal code, the size bound on both sides, and a frame
+  handled while the verb still runs.
 - `runtime/toolshed/routes/pattern-lifecycle/` — the writer check against a
-  real ACL document, the status each refusal maps to, and the middleware order
-  in front of the handler.
-- `runtime/cli/test/pattern-lifecycle.test.ts` — the client's signing and
-  refusal handling against a stubbed fetch;
+  real ACL document, the status each refusal maps to, the middleware order in
+  front of the handler, and a session request's validation and outcome.
+- `runtime/cli/test/pattern-lifecycle.test.ts` — the client's signing, its
+  choice between the session and the route, and refusal handling against a
+  stubbed fetch and session;
   `runtime/cli/test/piece-integration.test.ts` and
   `runtime/cli/integration/integration.sh` drive the real verbs against a
   toolshed in both CI arms.
