@@ -951,7 +951,8 @@ capability-gate controller, and the serving loop the multi-runtime harness hosts
 on the test's thread all inject that cache into every runtime they create. A
 custom runtime in this suite must do the same. A serving loop that
 `SERVER_EXECUTION_WORKER` puts in a worker cannot, since a worker takes no
-closure, and its runtimes compile without the cache. Setting
+closure: its runtimes share a cache the worker builds for itself, which holds
+only what the worker compiled. Setting
 `CF_COMPILE_CACHE_FILE` only tells the test-support cache where to persist its
 bytes; a runtime uses those bytes only when it receives the cache through its
 `moduleByteCache` option.
