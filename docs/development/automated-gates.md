@@ -169,14 +169,16 @@ Each of these gates fails CI on its own, and none of them run as part of
   reports among them. A pattern that fails to compile on
   either side fails the gate, unless that side's own
   `tasks/pattern-compat-unevaluable.ts` lists it. The gate
-  compiles only for a change touching `base/js-compiler/`,
-  `runtime/runner/src/builder/`, `runtime/runner/src/builtins/`,
-  `runtime/runner/src/harness/`, `base/schema-generator/src/` or
-  `base/ts-transformers/src/`, or its own files (`COMPILER_PATHS` and
-  `GATE_PATHS` in `tasks/check-cause-assignments.ts`), and passes any other
-  change without compiling. A move that has to ship is declared in
-  `tasks/cause-assignments-accepted-moves.ts`, naming the two builds by the
-  digests the failure prints and giving a reason
+  compiles only for a change touching what a pattern's numbering is built by,
+  which is `base/js-compiler/`, `runtime/runner/src/builder/`,
+  `runtime/runner/src/builtins/`, `runtime/runner/src/harness/`,
+  `base/schema-generator/src/`, `base/ts-transformers/src/`, and
+  `runtime/runner/src/experimental-defaults.ts` (the local defaults of the
+  experimental flags a runtime consumes itself), or touching its own files
+  (`COMPILER_PATHS` and `GATE_PATHS` in `tasks/check-cause-assignments.ts`),
+  and passes any other change without compiling. A move that has to ship is
+  declared in `tasks/cause-assignments-accepted-moves.ts`, naming the two
+  builds by the digests the failure prints and giving a reason
 - `deno task check-test-aliases` — a test-identity alias line that was edited or
   removed rather than appended, mapped an identity twice, or formed a cycle. The
   lines live under `tasks/test-identity-aliases/`, in files named after the last

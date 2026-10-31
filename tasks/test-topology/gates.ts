@@ -411,7 +411,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     kind: "gate",
     run: ["task", "check-cause-assignments"],
     args: ({ baseRef }) => [baseRef],
-    // The trees a pattern's numbering is built by, and the gate's own
+    // The paths a pattern's numbering is built by, and the gate's own
     // modules. The task passes a change touching none of them without
     // compiling anything, so the two lists are one.
     reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],

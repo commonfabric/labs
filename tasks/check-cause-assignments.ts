@@ -39,19 +39,22 @@ import {
 } from "./cause-assignments-accepted-moves.ts";
 
 /**
- * The trees a pattern's numbering is built by: the transformer that lowers
+ * The paths a pattern's numbering is built by: the transformer that lowers
  * pattern source, the compiler and harness driving it, the builder that
  * numbers the cells and classifies them, the builtins whose node factories
  * and result schemas the builder takes in (`sqliteQuery`'s factory runs
- * `lift()` as its module evaluates), and the schema generator that
- * classification reads. The gate passes a change touching none of them, or
- * its own files, without compiling anything; a change elsewhere that moves a
- * cell is one it does not see.
+ * `lift()` as its module evaluates), the schema generator that
+ * classification reads, and the local defaults of the experimental flags a
+ * runtime consumes itself, any of which can change what the compiler builds.
+ * The gate passes a change touching none of them, or its own files, without
+ * compiling anything; a change elsewhere that moves a cell is one it does not
+ * see.
  */
 export const COMPILER_PATHS: readonly string[] = [
   "base/js-compiler/",
   "runtime/runner/src/builder/",
   "runtime/runner/src/builtins/",
+  "runtime/runner/src/experimental-defaults.ts",
   "runtime/runner/src/harness/",
   "base/schema-generator/src/",
   "base/ts-transformers/src/",

@@ -2599,7 +2599,14 @@ The Category 1 flags are declared as the `ExperimentalOptions` interface in
 the per-flag defaults live in the summary table above and each flag's
 section, not in a second list here — propagates each one to its ambient
 control point, and then reads the effective state back so that
-`runtime.experimental.*` reflects what is actually in effect.
+`runtime.experimental.*` reflects what is actually in effect. A flag the
+runtime consumes from its own instance, with no ambient control point, takes
+its default from `applyLocalExperimentalDefaults()` in
+[`runtime/runner/src/experimental-defaults.ts`](../../runtime/runner/src/experimental-defaults.ts).
+A flag's default can change what the compiler builds from a pattern's source,
+so `deno task check-cause-assignments` compiles on any change to that module
+([`automated-gates.md`](automated-gates.md)), and a changed default is held to
+the cell numbering an unchanged pattern already has.
 
 First-party construction config is centralized in
 [`runtime/runner/src/runtime-presets.ts`](../../runtime/runner/src/runtime-presets.ts),
