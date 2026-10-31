@@ -381,12 +381,12 @@ async function sendReviewed(
 
 /**
  * The paths of `link`'s document whose stored label carries a
- * `PersonalSpace` atom, with `/` joining each path's keys.
+ * `PersonalSpace` atom.
  */
 function personalSpacePathsOf(
   runtime: Runtime,
   link: Parameters<typeof readStoredCfcMetadata>[1],
-): string[] {
+): string[][] {
   const tx = runtime.edit();
   try {
     return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
@@ -395,7 +395,7 @@ function personalSpacePathsOf(
           (atom as { type?: unknown }).type === OWNER_LABEL.type
         )
       )
-      .map((entry) => entry.path.join("/"));
+      .map((entry) => [...entry.path]);
   } finally {
     tx.abort("label read");
   }
@@ -430,15 +430,16 @@ async function stampCatalogTitle(
 
 /**
  * For each document in Home's space holding a `sessionProfile` slot, as the
- * FabriChat manager's arguments do, the paths of that slot whose stored label
- * carries a `PersonalSpace` atom.
+ * FabriChat manager's arguments do, the paths covering that slot whose stored
+ * label carries a `PersonalSpace` atom: the slot and anything under it, the
+ * document's root, and a wildcard over its top-level keys.
  */
 async function sessionProfileStampsIn(runtime: Runtime) {
   const controller = new PiecesController(
     createSession({ identity: owner, spaceDid: owner.did() }),
     runtime,
   );
-  const stamps: string[][] = [];
+  const stamps: string[][][] = [];
   for (const id of await controller.listEntityIds() ?? []) {
     const holder = runtime.getCellFromLink({
       space: owner.did(),
@@ -449,7 +450,9 @@ async function sessionProfileStampsIn(runtime: Runtime) {
     if (!isObjectNotArray(value) || !("sessionProfile" in value)) continue;
     stamps.push(
       personalSpacePathsOf(runtime, holder.getAsNormalizedFullLink())
-        .filter((path) => path.split("/")[0] === "sessionProfile"),
+        .filter((path) =>
+          path.length === 0 || path[0] === "sessionProfile" || path[0] === "*"
+        ),
     );
   }
   return stamps;
@@ -1831,7 +1834,7 @@ describe("Home shared-space catalog", () => {
           await stampCatalogTitle(runtime, catalog, registration.space);
           expect(
             personalSpacePathsOf(runtime, catalog.getAsNormalizedFullLink()),
-          ).toContain(`entries/${registration.space}/title`);
+          ).toContainEqual(["entries", registration.space, "title"]);
 
           const peer = await fresh();
           const sessions = [
