@@ -3,9 +3,11 @@
  * `PersonalSpace` label, as a pointer can come to carry its inbox's label.
  * Ada's Home stand-in lives in her home space, and her manager's profile lives
  * in a space of its own. A start reads only as much of her profile as tells
- * it she has one, so a group with no other members, and a direct room with
- * someone named by principal, each land in a space of its own that admits no
- * such label.
+ * it she has one, and a group's create leaves the profiles it names that are
+ * her own out before reading any inbox pointer, so a group with no other
+ * members, a group naming her own profile, and a direct room with someone
+ * named by principal each land in a space of its own that admits no such
+ * label.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -37,6 +39,13 @@ const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
 // A stand-in for another principal, a base58btc key as a principal's is.
 const CY = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 
+/** A link to `address`, as an event carries one. */
+const linkTo = (address: { id: string; space: string; path: string[] }) => ({
+  "/": {
+    "link@1": { id: address.id, path: address.path, space: address.space },
+  },
+});
+
 describe("fabrichat labeled own profile across runtimes", () => {
   let harness: MultiRuntimeHarness;
   let ada: MultiRuntimeSession;
@@ -55,9 +64,10 @@ describe("fabrichat labeled own profile across runtimes", () => {
       spaceDid: home,
     });
     [ada] = harness.sessions;
-    await ada.send("createProfile", { name: "Ada" });
+    await ada.send("createProfile", {});
     await harness.settle();
-    expect(await ada.read(["profiles", 0, "name"])).toBe("Ada");
+    expect(await ada.read(["profiles", 0, "inbox", "piece", "offers"]))
+      .toEqual([]);
   });
 
   afterEach(async () => {
@@ -74,6 +84,21 @@ describe("fabrichat labeled own profile across runtimes", () => {
     expect(await ada.read(["requests", "g-team", "status"])).toBe("done");
 
     const room = await ada.link(["requests", "g-team", "entry", "room"]);
+    expect(await ada.read(["about", "kind"], { piece: room })).toBe("group");
+  });
+
+  it("creates a group naming one of her own profiles", async () => {
+    const profile = await ada.link(["profiles", 0]);
+    await ada.send("createGroup", {
+      requestId: "g-own",
+      title: "Own",
+      members: [],
+      profiles: [linkTo(profile)],
+    }, START_ACTION);
+    await harness.settle();
+    expect(await ada.read(["requests", "g-own", "status"])).toBe("done");
+
+    const room = await ada.link(["requests", "g-own", "entry", "room"]);
     expect(await ada.read(["about", "kind"], { piece: room })).toBe("group");
   });
 
