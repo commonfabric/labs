@@ -495,7 +495,9 @@ export type QueuedEvent = {
    * while transient commit retries remain disabled and belong to the drain's
    * wave cadence. There is no name-resolution retry count: RetryImmediately is
    * bounded by the monotonic space-name cache (each re-run resolves at least one
-   * previously-unresolved name, and a resolved name never becomes pending again).
+   * previously-unresolved name, and a resolved name never becomes pending again),
+   * and a re-run after a Home's root is brought up or linked follows a root
+   * that stays linked.
    */
   retry: boolean;
 
