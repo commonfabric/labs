@@ -9319,8 +9319,11 @@ export class Runner {
    * duplicate event can reuse a winner's deterministic result cell, and must
    * never stop that shared winner when its create-only receipt loses.
    *
-   * With `start` false the run writes the piece's setup and starts nothing,
-   * and leaves a piece whose setup is stored already as it is.
+   * With `retain` false the run stops the piece as soon as it has started
+   * it. Starting instantiates the piece's graph in the transaction, which
+   * stores what the patterns nested in it set up, and stopping leaves nothing
+   * of the piece running here. Such a run leaves a piece whose setup is
+   * stored already as it is.
    */
   #runWithStartOwnership<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -9328,7 +9331,7 @@ export class Runner {
     argument: T,
     resultCell: Cell<R>,
     options: RunnerRunOptions = {},
-    start = true,
+    retain = true,
   ): RunResult<R> {
     // Before anything this run stages: retiring a registration cancels any
     // start pending for the result, and one staged here would take this
@@ -9382,7 +9385,7 @@ export class Runner {
       tx,
       resultCell,
     );
-    if (toName !== undefined && !start) {
+    if (toName !== undefined && !retain) {
       if (!providedTx) {
         this.#runtime.prepareTxForCommit(tx);
         tx.commit();
@@ -9431,7 +9434,7 @@ export class Runner {
 
     let installedCancel: Cancel | undefined;
     let cancelDeferredStart: Cancel | undefined;
-    if (needsStart && start) {
+    if (needsStart) {
       if (
         tx.tx.immediate === true &&
         (tx.tx as { deferRunnerStartUntilCommit?: boolean })
@@ -9451,6 +9454,18 @@ export class Runner {
           options,
         );
       }
+    }
+
+    if (!retain) {
+      cancelDeferredStart?.();
+      if (installedCancel !== undefined) {
+        this.#releaseUnownedChild(resultCell, installedCancel);
+      }
+      if (!providedTx) {
+        this.#runtime.prepareTxForCommit(tx);
+        tx.commit();
+      }
+      return { resultCell };
     }
 
     // The setup writes are staged in this transaction; the registration is
@@ -16269,8 +16284,10 @@ export class Runner {
     ]);
 
     // A serving runtime derives only the space it serves (protocol.md §2b).
-    // It sets up a child placed in another space in the transaction that
-    // provisions it, and that space's own loop runs the child.
+    // It instantiates a child placed in another space in the transaction that
+    // provisions it, so that the child's streams, nested ones included, are
+    // there to send to once that commits, and stops it there; the loop of the
+    // child's space runs it.
     const servedSpace = this.#runtime.storageManager.servingHomeSpace;
     const derivedElsewhere = servedSpace !== undefined &&
       childResultCell.space !== servedSpace;
@@ -16286,10 +16303,10 @@ export class Runner {
         parentResultCell,
       );
       if (crossSpace && !resumeExisting) {
-        // Cross-space child pattern: set it up inline in a multi-space
-        // transaction (child space committed first) rather than in a deferred
-        // second transaction, which would lose its verified-function identity.
-        // The journal allows the cross-space write once opted in.
+        // Cross-space child pattern: run it inline in a multi-space transaction
+        // (child space committed first) rather than re-instantiating it in a
+        // deferred second transaction, which would lose its verified-function
+        // identity. The journal allows the cross-space write once opted in.
         this.enableCrossSpaceChildCommit(
           instanceTx,
           childResultCell.space,

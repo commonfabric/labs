@@ -3030,12 +3030,11 @@ export default pattern<
 
   it("leaves a served `inSpace(name)` child's derivations to the loop of the space it is placed in, while a home derivation reads them", async () => {
     // protocol.md §2b: a space's own loop is its only deriver. The home
-    // runtime writes the child's setup in the handler's provisioning batch
-    // and runs none of the child's graph; the room space's loop, warmed by
-    // that batch, derives the child. Were the child's graph running on the
-    // home runtime, the home `spelled` derivation would pull the child's
-    // `map` there, and the home wave would refuse its writes into the room
-    // space.
+    // runtime instantiates the child in the handler's provisioning batch and
+    // stops it there; the room space's loop, warmed by that batch, derives
+    // the child. Were the child's graph still running on the home runtime,
+    // the home `spelled` derivation would pull the child's `map` there, and
+    // the home wave would refuse its writes into the room space.
     const servingRuntimes = new Map<MemorySpace, Runtime>();
     onServingRuntime = (runtime) => {
       servingRuntimes.set(runtime.storageManager.servingHomeSpace!, runtime);
@@ -3113,6 +3112,153 @@ export default pattern<
     expect(rooms).toHaveLength(1);
     expect(servingRuntimes.has(parseLink(rooms[0])!.space!)).toBe(true);
     expect(host!.stats().foreignWriteRefusals).toBe(0);
+  });
+
+  it("leaves a served `inSpace(name)` child's nested streams addressable once the child is provisioned, before the space it is placed in serves it", async () => {
+    // The child's `add` is a stream of a pattern nested in it, which exists
+    // once the child's graph is instantiated. The creating handler queues a
+    // home event that sends to it, and the room space's serving runtime is
+    // held back until that event has run, so the send finds only what the
+    // provisioning batch stored. A send that does not find a stream there
+    // writes into the room space instead of appending an event to it.
+    const roomRuntimeHeld = Promise.withResolvers<void>();
+    onServingRuntime = (runtime) =>
+      runtime.storageManager.servingHomeSpace === homeSpace
+        ? Promise.resolve()
+        : roomRuntimeHeld.promise;
+    try {
+      clientManager = SharedServerStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      clientRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: clientManager,
+        experimental: { serverExecution: true },
+      });
+      const compiled = await clientRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import {
+  type Cell,
+  handler,
+  pattern,
+  type Stream,
+  type Writable,
+} from "commonfabric";
+type RoomLink = { names: string[] };
+const addName = handler<{ name: string }, { names: Writable<string[]> }>(
+  ({ name }, { names }) => {
+    names.push(name);
+  },
+);
+const Core = pattern<
+  { names: Writable<string[]> },
+  { add: Stream<{ name: string }> }
+>(({ names }) => ({ add: addName({ names }) }));
+const Room = pattern<
+  { names: Writable<string[]> },
+  { names: string[]; add: Stream<{ name: string }> }
+>(({ names }) => {
+  const core = Core({ names });
+  return { names, add: core.add };
+});
+function roomLinkOf(room: unknown): Cell<RoomLink>;
+function roomLinkOf(room: unknown): unknown {
+  return room;
+}
+function addStreamOf(
+  room: Cell<RoomLink>,
+): Cell<{ add: Stream<{ name: string }> }>;
+function addStreamOf(room: Cell<RoomLink>): unknown {
+  return room;
+}
+const joinRoom = handler<{ room: Cell<RoomLink> }, Record<PropertyKey, never>>(
+  (event) => {
+    addStreamOf(event.room).key("add").send({ name: "ada" });
+  },
+);
+const create = handler<
+  { title: string },
+  {
+    rooms: Writable<Cell<RoomLink>[]>;
+    joining: Stream<{ room: Cell<RoomLink> }>;
+  }
+>((_, { rooms, joining }) => {
+  const room = roomLinkOf(Room.inSpace("lobby")({ names: [] }));
+  rooms.push(room);
+  joining.send({ room });
+});
+export default pattern<
+  { rooms: Writable<Cell<RoomLink>[]> },
+  {
+    create: Stream<{ title: string }>;
+    joining: Stream<{ room: Cell<RoomLink> }>;
+  }
+>(({ rooms }) => {
+  const joining = joinRoom({});
+  return { create: create({ rooms, joining }), joining };
+});`,
+        }],
+      }, { space: homeSpace });
+      const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+        homeSpace,
+        "in-space-nested-stream-argument",
+      );
+      const result = clientRuntime.getCell<{ create: unknown }>(
+        homeSpace,
+        "in-space-nested-stream-result",
+        compiled.resultSchema,
+      );
+      await Promise.all([argument.sync(), result.sync()]);
+      const seed = clientRuntime.edit();
+      argument.withTx(seed).set({ rooms: [] });
+      clientRuntime.run(seed, compiled, argument, result);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await clientManager.synced();
+      host = newHost();
+      const engine = await server.engineForSpace(homeSpace);
+      const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+        (engine.database.prepare(
+          "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+        ).all() as { id: string }[]).flatMap(({ id }) =>
+          (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ??
+            []
+        );
+
+      result.key("create").send({ title: "lobby" });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries().length === 2 &&
+          entries().every((entry) => entry.consequenced),
+      );
+      const failures = entries().map((entry) => entry.status);
+      roomRuntimeHeld.resolve();
+      const rooms = (readDoc(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+      const room = clientRuntime.getCellFromLink<{ names: string[] }>(
+        parseLink(rooms[0])!,
+        {
+          type: "object",
+          properties: { names: { type: "array", items: { type: "string" } } },
+        },
+      );
+      const names = await waitForCellValue<string[]>(
+        clientRuntime,
+        room.key("names"),
+        (names) => names !== undefined && names.length > 0,
+        { stuckLabel: "the room space's loop to run the queued add" },
+      );
+
+      expect(failures).toEqual([undefined, undefined]);
+      expect(names).toEqual(["ada"]);
+    } finally {
+      roomRuntimeHeld.resolve();
+    }
   });
 
   it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
