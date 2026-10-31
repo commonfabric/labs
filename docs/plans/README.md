@@ -307,6 +307,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the verb flags and result shapes that offer none, the source `--space` needs
   before any of it is reachable by name, and the gate that keeps completion
   from falling behind the command tree again.
+- [Turning instance names on](instance-names-on.md) sequences what comes
+  before the `instanceNames` flag turns on: a one-way mark on each space,
+  recorded at the first commit from a naming runtime and only where the
+  deployment names instances, after which the memory server admits no
+  positional runtime to it; then the flag's env mapping, the tests that assume
+  its default, the flip, and the flag's removal.
 - [Handler-callable egress](handler-callable-egress.md) records the capability
   a pattern does not have: a network request a handler can issue and await,
   which the runtime records and gates the way it records and gates a node
