@@ -3028,6 +3028,93 @@ export default pattern<
     expect((await acked.promise).status().status).toBe("error");
   });
 
+  it("leaves a served `inSpace(name)` child's derivations to the loop of the space it is placed in, while a home derivation reads them", async () => {
+    // protocol.md §2b: a space's own loop is its only deriver. The home
+    // runtime writes the child's setup in the handler's provisioning batch
+    // and runs none of the child's graph; the room space's loop, warmed by
+    // that batch, derives the child. Were the child's graph running on the
+    // home runtime, the home `spelled` derivation would pull the child's
+    // `map` there, and the home wave would refuse its writes into the room
+    // space.
+    const servingRuntimes = new Map<MemorySpace, Runtime>();
+    onServingRuntime = (runtime) => {
+      servingRuntimes.set(runtime.storageManager.servingHomeSpace!, runtime);
+      return Promise.resolve();
+    };
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import {
+  action,
+  computed,
+  pattern,
+  type Stream,
+  type Writable,
+} from "commonfabric";
+const Room = pattern<{ title: string }, { title: string; letters: string[] }>(
+  ({ title }) => {
+    const chars = computed(() => title.split(""));
+    return { title, letters: chars.map((char) => char.toUpperCase()) };
+  },
+);
+export default pattern<
+  { rooms: Writable<{ letters: string[] }[]> },
+  { create: Stream<{ title: string }>; spelled: string }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace("lobby")({ title }));
+  }),
+  spelled: computed(() =>
+    rooms.get().map((room) => (room.letters ?? []).join("")).join(",")
+  ),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+      homeSpace,
+      "in-space-derivation-argument",
+    );
+    const result = clientRuntime.getCell<{ create: unknown; spelled: string }>(
+      homeSpace,
+      "in-space-derivation-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ rooms: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    result.key("create").send({ title: "lobby" });
+    await waitForCellValue<string>(
+      clientRuntime,
+      result.key("spelled"),
+      (spelled) => spelled === "LOBBY",
+      { stuckLabel: "the home derivation to read the room's letters" },
+    );
+    await servingRuntimes.get(homeSpace)!.idle();
+    const engine = await server.engineForSpace(homeSpace);
+    const rooms = (readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+
+    expect(rooms).toHaveLength(1);
+    expect(servingRuntimes.has(parseLink(rooms[0])!.space!)).toBe(true);
+    expect(host!.stats().foreignWriteRefusals).toBe(0);
+  });
+
   it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {
     // The default root is servable, so the room space's own serving ensure
     // can create one there if it reaches the space before the child.

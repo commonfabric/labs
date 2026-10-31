@@ -356,6 +356,12 @@ root and ownership of that particular start; scoped serving children resume
 through their per-actor program coordinator. Children without an independent
 source lifecycle continue to bind the parent's module and inputs.
 
+A serving runtime runs no child placed in a space other than the one it serves.
+It writes a new child's setup in the transaction that provisions the child, and
+leaves one already set up as it is; the loop serving the child's space runs it,
+since that loop is the only one that derives into its space
+([protocol.md §2b](server-side-execution/protocol.md)).
+
 **Independent input ownership** begins with that recorded origin or revision
 history, even before the child adopts another release. The parent supplies the
 initial bindings; subsequent parent releases do not replace them. Stored links
