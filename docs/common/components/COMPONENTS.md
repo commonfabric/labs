@@ -199,6 +199,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-space-create` | Label field + create button that creates a new space owned by the signed-in identity, with a random DID, and adds it to that identity's Home space list; fires `cf-space-created` with `{ did, label }`; the label is the entry's name | |
 | `cf-space-link` | Renders a space as a clickable navigation pill; opens the space by `spaceDid` when given, else by the legacy `spaceName` | |
 | `cf-submit-input` | Text field + submit button whose real (trusted) click carries the typed text as `event.target.value` with the surface's UI integrity, so it can authorize an owner-protected runtime write; prefer over `cf-message-input` when the submit gesture must be trusted | `$draft` |
+| `cf-suggestions` | Draws the ranked suggestion cards anchored at one thing, at a fixed size; emits take and seen events for the host to bind (see [cf-suggestions](#cf-suggestions)) | `$items`, `$about` |
 | `cf-svg` | Renders SVG content from a string; safe for untrusted content, and anything that would run script is dropped | |
 | `cf-switch` | Toggle switch for binary on/off state | `$checked` |
 | `cf-tab` | Individual tab button used within `cf-tab-list` | |
@@ -1249,6 +1250,56 @@ verified audience changed after preparation. Once the released link is stored
 successfully, the component emits `cf-shared` with no payload. A consuming
 handler reads its bound result cell; the event does not carry source values or
 identity claims.
+
+## cf-suggestions
+
+`cf-suggestions` draws, from a ranked list of suggestion cards, only those
+anchored at one thing. Bind `$items` to the list, best card first, and `$about`
+to the thing whose cards to draw. Set `tags` to draw only cards carrying at
+least one of those tags.
+
+Each card is an object with a string `id` and these optional fields:
+
+- `revision` — a string the host can re-check before acting on a take;
+- `title` and `body` — the text drawn;
+- `about` — references to what the card is about, most important first;
+- `act` — what taking the card does, an object whose `target` is a reference;
+- `source` — who suggested it: a reference to a piece, or a string id for an
+  outside suggester;
+- `anchor` — a reference to where the card is drawn inline;
+- `tags` — strings.
+
+A card's anchor is its `anchor` when it has one; otherwise it is the first
+entry of its `about`, else its act's `target`, else its `source` when that is a
+piece. A card with no anchor is never drawn inline, and a card without a string
+`id` is never drawn. Anchors compare by the cell each names (space, entity, and
+path), without following a cell that holds a link. Cards draw at a fixed size,
+which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
+(at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no
+card, the element takes no room.
+
+The component performs no act. It emits two events for the host to bind, both
+with detail `{ id, revision, card }`, where `card` is a link to the card's
+entry in the bound list:
+
+- `cf-suggestion-take` fires when the person takes a card with its **Take**
+  button. Only a trusted click counts, on a card the browser reports shown (at
+  least half of it on screen) and, where the browser tracks occlusion,
+  unobscured (nothing drawn over it, and no opacity, transform, or filter
+  applied to it), for at least half a second as it is drawn now. A card that
+  has just appeared, moved, or been rewritten starts that half second over. A
+  scripted click takes nothing. The event is one the component dispatches, so
+  the handler receives no gesture provenance with it: these rules decide
+  whether the event fires at all. The same card can be taken more than once, so
+  a host treats a repeated take as a no-op.
+- `cf-suggestion-seen` fires the first time a card is shown, once per card for
+  the life of the element. A host counting impressions dedupes across elements
+  and remounts.
+
+```tsx
+// Shown as JSX element children.
+<cf-suggestions $items={items} $about={piece} />
+```
 
 ## cf-custody-seal
 
