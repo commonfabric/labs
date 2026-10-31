@@ -793,15 +793,20 @@ export class PatternManager {
    * the caller-named origin is a provenance heuristic — the in-memory artifact
    * index serves patterns with no per-space persist, so a running piece's space
    * can lack the closure entirely — while the closure is content-addressed, so
-   * any recorded persist target holds byte-identical, integrity-gated docs.
+   * any recorded persist target holds a complete, integrity-gated closure
+   * under each variant recorded for it.
    * A load served from memory consults it too, with
    * `#closurePersistsInFlight`, to tell whether its own space holds the
    * closure and which space to copy it from
    * (`#copyClosureForLoadFromMemory()`).
+   * Each space maps to the compile-cache runtime versions the compiled
+   * closure was written there under, so that a replication reads an origin
+   * under a variant the origin holds; a persist of the source closure alone
+   * adds none.
    * Growth: monotonic for the session, bounded by the module identities ×
-   * spaces this manager actually persisted (strings plus small DID sets).
+   * spaces this manager actually persisted × the variants it wrote there.
    */
-  #persistedClosureSpaces = new Map<string, Set<MemorySpace>>();
+  #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
 
   /**
    * Failed replications _parked_ for event-driven re-supply (the one supplier
@@ -831,8 +836,9 @@ export class PatternManager {
   >();
 
   /**
-   * Records a durable closure persist's target for
-   * `#replicateClosures()`' fallback-origin read — under EVERY module
+   * Records a durable closure persist's target, and the compile-cache
+   * `runtimeVersion` its compiled closure was written under when it wrote
+   * one, for `#replicateClosures()`' fallback-origin read — under EVERY module
    * identity of the persisted set, not just the persist call's entry: the
    * write functions persist one addressable doc per module, and the
    * replicated entry is routinely a MODULE of a larger compiled closure
@@ -853,14 +859,20 @@ export class PatternManager {
   #recordPersistedClosureSpaces(
     identities: Iterable<string>,
     space: MemorySpace,
+    runtimeVersion: string | undefined,
   ): void {
     for (const identity of identities) {
       let spaces = this.#persistedClosureSpaces.get(identity);
       if (spaces === undefined) {
-        spaces = new Set();
+        spaces = new Map();
         this.#persistedClosureSpaces.set(identity, spaces);
       }
-      spaces.add(space);
+      let versions = spaces.get(space);
+      if (versions === undefined) {
+        versions = new Set();
+        spaces.set(space, versions);
+      }
+      if (runtimeVersion !== undefined) versions.add(runtimeVersion);
       const parked = this.#parkedFailedReplications.get(identity);
       if (parked === undefined) continue;
       for (const [key, record] of [...parked]) {
@@ -923,7 +935,8 @@ export class PatternManager {
     if (checkRecordedSupply) {
       let usable = false;
       for (
-        const space of this.#persistedClosureSpaces.get(wantedIdentity) ?? []
+        const space of this.#persistedClosureSpaces.get(wantedIdentity)
+          ?.keys() ?? []
       ) {
         if (space !== record.toSpace) {
           usable = true;
@@ -1106,6 +1119,25 @@ export class PatternManager {
     byIdentityHits: number;
   } {
     return { ...this.#esmCacheStats };
+  }
+
+  /**
+   * The version a compile in this runtime caches its compiled code under: the
+   * build's compile-cache runtime version, with the suffix of this runtime's
+   * instance naming mode and of `options.patternCoverage`. `undefined` when the
+   * build has no compile-cache runtime version, in which case no compiled code
+   * is cached at all.
+   */
+  async compileCacheRuntimeVersion(
+    options: { patternCoverage: boolean },
+  ): Promise<string | undefined> {
+    return moduleByteCacheRuntimeVersion(
+      await getCompileCacheRuntimeVersion(),
+      {
+        patternCoverage: options.patternCoverage,
+        instanceNames: namesInstances(this.#runtime.experimental),
+      },
+    );
   }
 
   /** The sizes of the in-memory compiled-code caches. */
@@ -1606,7 +1638,7 @@ export class PatternManager {
     if (durable?.has(space) || inFlight?.has(space)) return;
     // A durable origin ahead of one still writing, whose write may yet fail;
     // the retained compile only when neither exists.
-    const origin = durable?.values().next().value ??
+    const origin = durable?.keys().next().value ??
       inFlight?.keys().next().value;
     if (origin === undefined) {
       const retained = this.#retainedCompiles.get(entryIdentity);
@@ -1704,16 +1736,32 @@ export class PatternManager {
         .map((entry) => entry.settled);
       if (older.length > 0) await Promise.allSettled(older);
     }
-    // Replicate the same cached variant the compile path uses — the coverage
-    // suffix keeps an instrumented closure from being served under an ordinary
-    // key (and vice versa).
-    const runtimeVersion = moduleByteCacheRuntimeVersion(
-      await getCompileCacheRuntimeVersion(),
-      {
-        patternCoverage: this.#runtime.patternCoverage !== undefined,
-        instanceNames: namesInstances(this.#runtime.experimental),
-      },
-    );
+    // The variant this runtime's own compiles cache under. The coverage suffix
+    // keeps an instrumented closure from being served under an ordinary key
+    // (and vice versa), so a copy keeps the variant it was read under.
+    const ownRuntimeVersion = await this.compileCacheRuntimeVersion({
+      patternCoverage: this.#patternCoverageFor() !== undefined,
+    });
+
+    /**
+     * The variant to read `origin`'s compiled closure under: this runtime's
+     * own, unless this manager wrote the closure into `origin` under another
+     * variant only, in which case that one. A runtime's naming mode is fixed,
+     * and a compile's coverage collector is the one thing a call can vary,
+     * so the other variant is the coverage one a compile given its own
+     * collector writes, and there is at most one of it.
+     */
+    const runtimeVersionIn = (origin: MemorySpace): string | undefined => {
+      const written = this.#persistedClosureSpaces.get(entryIdentity)
+        ?.get(origin);
+      if (
+        ownRuntimeVersion === undefined || written === undefined ||
+        written.size === 0 || written.has(ownRuntimeVersion)
+      ) {
+        return ownRuntimeVersion;
+      }
+      return written.values().next().value;
+    };
 
     /** One origin's verified closure read, complete or classified.
      * Verification recomputes module identities with the default ("")
@@ -1724,6 +1772,7 @@ export class PatternManager {
     const readOrigin = async (origin: MemorySpace): Promise<
       | {
         complete: true;
+        runtimeVersion: string | undefined;
         sourceDocs: NonNullable<
           Awaited<ReturnType<typeof loadVerifiedSourceClosure>>
         >;
@@ -1733,6 +1782,7 @@ export class PatternManager {
       }
       | { complete: false; reason: string }
     > => {
+      const runtimeVersion = runtimeVersionIn(origin);
       const readTx = this.#runtime.edit();
       let sourceDocs;
       let compiledDocs;
@@ -1785,7 +1835,7 @@ export class PatternManager {
           }
         }
       }
-      return { complete: true, sourceDocs, compiledDocs };
+      return { complete: true, runtimeVersion, sourceDocs, compiledDocs };
     };
 
     /**
@@ -1795,9 +1845,11 @@ export class PatternManager {
      * writer — `loadPatternByIdentity` serves patterns from the in-memory
      * artifact index with no per-space persist. The closure is
      * CONTENT-ADDRESSED: any space this manager durably persisted this
-     * entry into holds byte-identical docs (the verified read recomputes
-     * identities and the CFC integrity gate stays fail-closed), so retry
-     * the read against the recorded persist targets before failing. Loud
+     * entry into holds a complete, integrity-gated closure under a variant
+     * it recorded there (the verified read recomputes identities and the
+     * CFC integrity gate stays fail-closed), so retry the read against the
+     * recorded persist targets, each under its own variant, before
+     * failing. Loud
      * on use: the lane log shows when the heuristic origin was dry. An
      * incomplete result carries the PRIMARY origin's reason, which the
      * `closure-replication-failed` line reports.
@@ -1808,7 +1860,8 @@ export class PatternManager {
       const primary = await readOrigin(fromSpace);
       if (primary.complete) return primary;
       for (
-        const fallback of this.#persistedClosureSpaces.get(entryIdentity) ?? []
+        const fallback of this.#persistedClosureSpaces.get(entryIdentity)
+          ?.keys() ?? []
       ) {
         if (fallback === fromSpace || fallback === toSpace) continue;
         let read: Awaited<ReturnType<typeof readOrigin>>;
@@ -1910,7 +1963,7 @@ export class PatternManager {
       // persist record will name.
       throw new ClosureReplicationSupplyError(origin.reason, entryIdentity);
     }
-    const { sourceDocs, compiledDocs } = origin;
+    const { runtimeVersion, sourceDocs, compiledDocs } = origin;
     const modules: CacheableModule[] = [];
     const fabricDependencies = new Set<string>();
     for (const [identity, doc] of sourceDocs) {
@@ -2014,13 +2067,9 @@ export class PatternManager {
           "cannot authorize source update without verified source closures",
         );
       }
-      const runtimeVersion = moduleByteCacheRuntimeVersion(
-        await getCompileCacheRuntimeVersion(),
-        {
-          patternCoverage: this.#patternCoverageFor() !== undefined,
-          instanceNames: namesInstances(this.#runtime.experimental),
-        },
-      );
+      const runtimeVersion = await this.compileCacheRuntimeVersion({
+        patternCoverage: this.#patternCoverageFor() !== undefined,
+      });
       const prepared = Object.freeze({}) as PreparedSourceUpdate;
       this.#sourceUpdates.set(prepared, {
         space,
@@ -2269,13 +2318,9 @@ export class PatternManager {
     const runtimeVersion =
       byteCache === undefined && persistenceSpace === undefined
         ? undefined
-        : moduleByteCacheRuntimeVersion(
-          await getCompileCacheRuntimeVersion(),
-          {
-            patternCoverage: patternCoverage !== undefined,
-            instanceNames: namesInstances(this.#runtime.experimental),
-          },
-        );
+        : await this.compileCacheRuntimeVersion({
+          patternCoverage: patternCoverage !== undefined,
+        });
     if (
       persistenceSpace === undefined &&
       (byteCache === undefined || runtimeVersion === undefined)
@@ -2361,13 +2406,9 @@ export class PatternManager {
     // recompile-with-coverage) rather than reuse uninstrumented bytes. Source
     // docs are keyed by content identity, not by this version, so they stay
     // shared — a coverage run reuses the persisted source and only recompiles.
-    const runtimeVersion = moduleByteCacheRuntimeVersion(
-      await getCompileCacheRuntimeVersion(),
-      {
-        patternCoverage: patternCoverage !== undefined,
-        instanceNames: namesInstances(this.#runtime.experimental),
-      },
-    );
+    const runtimeVersion = await this.compileCacheRuntimeVersion({
+      patternCoverage: patternCoverage !== undefined,
+    });
     if (runtimeVersion === undefined) {
       const { id, graph, mainSpecifier, entryIdentity, modules } = await harness
         .compileToRecordGraph(
@@ -2833,13 +2874,9 @@ export class PatternManager {
     // so no same-version peer can publish a compiled closure for bytes this
     // session cannot compile itself.
     const key = `${space}\0${entryIdentity}`;
-    const runtimeVersion = moduleByteCacheRuntimeVersion(
-      await getCompileCacheRuntimeVersion(),
-      {
-        patternCoverage: this.#patternCoverageFor() !== undefined,
-        instanceNames: namesInstances(this.#runtime.experimental),
-      },
-    );
+    const runtimeVersion = await this.compileCacheRuntimeVersion({
+      patternCoverage: this.#patternCoverageFor() !== undefined,
+    });
     if (this.#coldLoadNegativeMemo.suppresses(key, runtimeVersion)) {
       return undefined;
     }
@@ -2903,13 +2940,9 @@ export class PatternManager {
     // Select the same cached variant the compile path wrote. A coverage-on
     // runtime resumes from the instrumented closure; reading the ordinary key
     // here would serve uninstrumented bodies for an instrumented run.
-    const runtimeVersion = moduleByteCacheRuntimeVersion(
-      await getCompileCacheRuntimeVersion(),
-      {
-        patternCoverage: patternCoverage !== undefined,
-        instanceNames: namesInstances(this.#runtime.experimental),
-      },
-    );
+    const runtimeVersion = await this.compileCacheRuntimeVersion({
+      patternCoverage: patternCoverage !== undefined,
+    });
     if (runtimeVersion === undefined) {
       record("no-version");
       return await this.#tryColdLoadByIdentity(
@@ -3658,7 +3691,11 @@ export class PatternManager {
           this.#failedCompileCacheRecoveries.delete(
             compileCacheRecoveryKey(space, entryIdentity),
           );
-          this.#recordPersistedClosureSpaces(identities, space);
+          this.#recordPersistedClosureSpaces(
+            identities,
+            space,
+            opts.runtimeVersion,
+          );
           return;
         }
         this.#persistedCompileCacheClosures.delete(persistenceSlotKey);
@@ -3682,7 +3719,11 @@ export class PatternManager {
       this.#failedCompileCacheRecoveries.delete(
         compileCacheRecoveryKey(space, entryIdentity),
       );
-      this.#recordPersistedClosureSpaces(identities, space);
+      this.#recordPersistedClosureSpaces(
+        identities,
+        space,
+        opts.runtimeVersion,
+      );
     })();
     this.#inProgressCompileCacheWrites.set(persistenceSlotKey, {
       closureSignature,
@@ -3839,7 +3880,7 @@ export class PatternManager {
     this.#trackCacheWriteBack(space, entryIdentity, identities, writeBack);
     try {
       await writeBack;
-      this.#recordPersistedClosureSpaces(identities, space);
+      this.#recordPersistedClosureSpaces(identities, space, undefined);
     } finally {
       this.#untrackCacheWriteBack(space, entryIdentity, identities, writeBack);
     }

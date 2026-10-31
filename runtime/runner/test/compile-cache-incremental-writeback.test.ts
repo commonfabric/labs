@@ -22,6 +22,7 @@ import {
 } from "../src/compilation-cache/cell-cache.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 // These tests drive the sync parse internals directly (below the async flow
 // boundaries that normally load the deferred compiler stack), so load it here.
@@ -369,6 +370,9 @@ describe("descendant-missing compiled closure degrades to a clean recompile", ()
     let smB: EmulatedStorageManager | undefined;
     let runtimeB: Runtime | undefined;
     try {
+      // What both runtimes compile under: `RTVER` with their variant's suffix.
+      const runtimeVersion = await compileCacheVersionOf(runtimeA);
+
       // Real compile for real module bodies, but persist BY HAND: the full
       // source closure plus a compiled set that is missing /util.ts — the
       // entry-present/descendant-missing state no chunk interruption can
@@ -385,7 +389,7 @@ describe("descendant-missing compiled closure degrades to a clean recompile", ()
         space,
         compiledSubset,
         entryIdentity,
-        { runtimeVersion: RTVER },
+        { runtimeVersion },
         tx,
       );
       tx.prepareCfc();
@@ -406,7 +410,7 @@ describe("descendant-missing compiled closure degrades to a clean recompile", ()
         runtimeB,
         space,
         entryIdentity,
-        { runtimeVersion: RTVER },
+        { runtimeVersion },
         preTx,
       );
       preTx.abort?.();
@@ -432,7 +436,7 @@ describe("descendant-missing compiled closure degrades to a clean recompile", ()
         runtimeB,
         space,
         entryIdentity,
-        { runtimeVersion: RTVER },
+        { runtimeVersion },
         healTx,
       );
       healTx.abort?.();

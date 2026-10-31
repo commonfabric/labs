@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   Engine,
   Runtime,
@@ -7,8 +9,11 @@ import {
   StorageManager,
 } from "./engine-test-support.ts";
 import type { RuntimeProgram } from "./engine-test-support.ts";
-import type { ModuleByteCache } from "../src/runtime.ts";
+import type { Pattern } from "../src/builder/types.ts";
+import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
 import type { CompiledModuleArtifact } from "../src/harness/types.ts";
+import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
+import type { ModuleByteCache } from "../src/runtime.ts";
 
 /**
  * The pattern-load seam `PatternManager.compileAndRegisterModules` must INDEX
@@ -194,6 +199,86 @@ describe("PatternManager.compileAndRegisterModules", () => {
       ).rejects.toThrow("write refused");
       expect(runtime.patternManager.programModuleIdentities(identity))
         .toBeUndefined();
+    });
+
+    it("supplies an `inSpace()` child's space with the closure under the variant a per-call coverage compile wrote", async () => {
+      // The runtime carries no coverage collector of its own, so the
+      // program's closure is written under the coverage variant only because
+      // the call asked for it. The child's space is supplied from that
+      // closure when the parent instantiates the child there.
+
+      const space = signer.did();
+      const childSpace = (await Identity.fromPassphrase(
+        "compile-and-register-modules child space",
+      )).did();
+      const withChild: RuntimeProgram = {
+        main: "/main.tsx",
+        files: [
+          {
+            name: "/main.tsx",
+            contents: [
+              "import { pattern } from 'commonfabric';",
+              "export const child = pattern<{ label: string }>(",
+              "  ({ label }) => ({ label }),",
+              ");",
+              "export default pattern(() => ({",
+              `  kid: child.inSpace("${childSpace}")({ label: "hi" }),`,
+              "}));",
+            ].join("\n"),
+          },
+        ],
+      };
+      const replicationFailures = () => {
+        const counts = getLoggerCountsBreakdown()["pattern-manager"] as
+          | Record<string, { warn?: number; error?: number }>
+          | undefined;
+        return {
+          parked: counts?.["closure-replication-parked"]?.warn ?? 0,
+          failed: counts?.["closure-replication-failed"]?.error ?? 0,
+        };
+      };
+      const before = replicationFailures();
+
+      const result = await runtime.patternManager.compileAndRegisterModules(
+        withChild,
+        { patternCoverage: new PatternCoverageCollector() },
+        { space },
+      );
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell<Record<string, unknown>>(
+        space,
+        "compile-and-register-modules inSpace parent",
+        undefined,
+        tx,
+      );
+      const running = runtime.run(
+        tx,
+        result.main!["default"] as Pattern,
+        {},
+        resultCell,
+      );
+      await tx.commit().settled;
+      await running.pull();
+      await runtime.idle();
+      await runtime.patternManager.flushCompileCacheWrites();
+      await runtime.storageManager.synced();
+
+      const { identity } = runtime.patternManager.getArtifactEntryRef(
+        result.main!["child"] as object,
+      )!;
+      const runtimeVersion = (await runtime.patternManager
+        .compileCacheRuntimeVersion({ patternCoverage: true }))!;
+      const readTx = runtime.edit();
+      const inChildSpace = await loadCompiledClosure(
+        runtime,
+        childSpace,
+        identity,
+        { runtimeVersion },
+        readTx,
+      );
+      readTx.abort?.();
+      expect(inChildSpace.has(identity)).toBe(true);
+      expect(replicationFailures()).toEqual(before);
     });
 
     it("writes nothing into a space when none is given", async () => {
