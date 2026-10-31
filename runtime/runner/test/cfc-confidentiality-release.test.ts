@@ -13,6 +13,7 @@ import {
   planConfidentialityRelease,
 } from "../src/cfc/confidentiality-release-plan.ts";
 import { commitCfcFieldValue } from "../src/cfc/label-representation.ts";
+import { cfcLabelViewForResolvedCell } from "../src/cfc/label-view.ts";
 import type { CfcConfClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { LabelMapEntry } from "../src/cfc/types.ts";
@@ -21,6 +22,11 @@ import { isAllowedAuthoredImportSpecifier } from "../src/sandbox/runtime-module-
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-confidentiality-release",
@@ -137,6 +143,49 @@ describe("confidentiality release", () => {
       expect(plan.entries).toEqual([ancestor]);
     });
 
+    it("removes the released clauses from every entry a `*` segment matches at its depth, and from no other", () => {
+      const others = [
+        entry([], { confidentiality: [owner] }),
+        entry(["a"], { confidentiality: [owner] }, { observes: "shape" }),
+        entry(["a", "x", "y"], { confidentiality: [owner] }),
+        entry(["b", "x"], { confidentiality: [owner] }),
+      ];
+      const plan = planConfidentialityRelease({
+        actor,
+        path: ["a", "*"],
+        entries: [
+          ...others,
+          entry(["a", "*"], { confidentiality: [owner] }, {
+            observes: "followRef",
+          }),
+          entry(["a", "*"], { confidentiality: [owner] }, {
+            observes: "value",
+          }),
+          entry(["a", "x"], { confidentiality: [owner] }),
+        ],
+        schema: undefined,
+        keep: [],
+      });
+
+      expect(plan.released).toEqual([owner]);
+      expect(plan.paths).toEqual([["a", "*"], ["a", "x"]]);
+      expect(plan.entries).toEqual(others);
+    });
+
+    it("leaves a wildcard entry that covers a concrete path as it is", () => {
+      const wildcard = entry(["a", "*"], { confidentiality: [owner] });
+      const plan = planConfidentialityRelease({
+        actor,
+        path: ["a", "x"],
+        entries: [wildcard, entry(["a", "x"], { confidentiality: [owner] })],
+        schema: undefined,
+        keep: [],
+      });
+
+      expect(plan.paths).toEqual([["a", "x"]]);
+      expect(plan.entries).toEqual([wildcard]);
+    });
+
     it("keeps a stored commitment the input names in plaintext", () => {
       const committed = { type: owner.type, owner: commitCfcFieldValue(actor) };
       const entries = [entry([], { confidentiality: [committed] })];
@@ -224,6 +273,106 @@ describe("confidentiality release", () => {
           b: { type: "string", ifc: { confidentiality: [owner] } },
         },
       });
+    });
+
+    it("removes a declaration reached through `items` at a `*` segment", () => {
+      const schema = {
+        type: "object",
+        properties: {
+          list: {
+            type: "array",
+            items: { type: "string", ifc: { confidentiality: [owner] } },
+          },
+        },
+      } as const satisfies JSONSchema;
+      const plan = planConfidentialityRelease({
+        actor,
+        path: ["list", "*"],
+        entries: [],
+        schema,
+        keep: [],
+      });
+
+      expect(plan.released).toEqual([owner]);
+      expect(plan.paths).toEqual([["list", "*"]]);
+      expect(plan.schema).toEqual({
+        type: "object",
+        properties: { list: { type: "array", items: { type: "string" } } },
+      });
+    });
+
+    it("removes the declarations at every named property and tuple position a `*` segment matches", () => {
+      const secret = {
+        type: "string",
+        ifc: { confidentiality: [owner] },
+      } as const satisfies JSONSchema;
+      const schema = {
+        type: "object",
+        properties: {
+          record: {
+            type: "object",
+            properties: { a: secret, b: { type: "string" } },
+          },
+          tuple: { type: "array", prefixItems: [secret], items: secret },
+        },
+      } as const satisfies JSONSchema;
+      const lower = (path: string[]) =>
+        planConfidentialityRelease({
+          actor,
+          path,
+          entries: [],
+          schema,
+          keep: [],
+        });
+
+      expect(lower(["record", "*"]).schema).toEqual({
+        ...schema,
+        properties: {
+          ...schema.properties,
+          record: {
+            type: "object",
+            properties: { a: { type: "string" }, b: { type: "string" } },
+          },
+        },
+      });
+      expect(lower(["tuple", "*"]).paths).toEqual([
+        ["tuple", "*"],
+        ["tuple", "0"],
+      ]);
+      expect(lower(["tuple", "*"]).schema).toEqual({
+        ...schema,
+        properties: {
+          ...schema.properties,
+          tuple: {
+            type: "array",
+            prefixItems: [{ type: "string" }],
+            items: { type: "string" },
+          },
+        },
+      });
+    });
+
+    it("throws for a declaration a `*` segment reaches through a reference", () => {
+      const schema = {
+        type: "object",
+        $defs: {
+          Secret: { type: "string", ifc: { confidentiality: [owner] } },
+        },
+        properties: {
+          a: { $ref: "#/$defs/Secret" },
+          b: { type: "string", ifc: { confidentiality: [owner] } },
+        },
+      } as const satisfies JSONSchema;
+
+      expect(() =>
+        planConfidentialityRelease({
+          actor,
+          path: ["*"],
+          entries: [],
+          schema,
+          keep: [],
+        })
+      ).toThrow("which a release does not rewrite");
     });
 
     it("throws for a declaration reached through a reference", () => {
@@ -391,6 +540,122 @@ describe("confidentiality release", () => {
           releaseCellConfidentiality(list.key("items").key(0), []),
         ).rejects.toThrow("from a position a release does not rewrite");
         expect(storedEntries(list)).toEqual(before);
+      });
+
+      describe("at a wildcard entry", () => {
+        // A catalog record whose wildcard entry labels every field, as a
+        // derivation stamps one, with one field also labeled on its own.
+        const committed = {
+          type: owner.type,
+          owner: commitCfcFieldValue(actor),
+        };
+        const record = ["rooms", "r"];
+        const recordEntry: LabelMapEntry = {
+          path: record,
+          label: { confidentiality: [committed] },
+          origin: "derived",
+          observes: "shape",
+        };
+
+        /**
+         * Stores the record with `recordEntry`, a wildcard entry under it
+         * holding `wildcard`, and an entry at its `host` field, and returns
+         * the document's cell.
+         */
+        const seedRecord = async (wildcard: CfcConfClause[]) => {
+          const cell = runtime.getCell<unknown>(
+            actor,
+            "runner-cfc-release-rooms",
+          );
+          const tx = runtime.edit();
+          writeSeedEnvelopeDoc(tx, actor);
+          seedStoredEnvelope(tx, {
+            ...cell.getAsNormalizedFullLink(),
+            path: [],
+          }, {
+            value: { rooms: { r: { host: "h", title: "t" } } },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [
+                  recordEntry,
+                  ...(["followRef", "shape", "value"] as const).map((
+                    observes,
+                  ) => ({
+                    path: [...record, "*"],
+                    label: { confidentiality: wildcard },
+                    origin: "derived",
+                    observes,
+                  })),
+                  {
+                    path: [...record, "host"],
+                    label: { confidentiality: [committed] },
+                    origin: "derived",
+                    observes: "value",
+                  },
+                ],
+              },
+            },
+          } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          return cell;
+        };
+
+        /** The confidentiality `cell` shows at `path`. */
+        const shownAt = (cell: Cell<unknown>, path: string[]) =>
+          cfcLabelViewForResolvedCell(cell.key(...path))?.entries
+            .filter((entry) => entry.path.length === 0)
+            .flatMap((entry) => entry.label.confidentiality ?? []) ?? [];
+
+        it("lowers the wildcard entry and every position it matches, with a receipt naming each", async () => {
+          const cell = await seedRecord([committed]);
+          expect(shownAt(cell, [...record, "title"])).toContainEqual(committed);
+
+          const release = await releaseCellConfidentiality(
+            cell.key(...record, "*"),
+            [],
+          );
+
+          expect(release.released).toEqual([committed]);
+          expect(release.paths).toEqual([
+            [...record, "*"],
+            [...record, "host"],
+          ]);
+          expect(storedEntries(cell)).toEqual([recordEntry]);
+          expect(shownAt(cell, [...record, "title"])).toEqual([]);
+          expect(shownAt(cell, [...record, "host"])).toEqual([]);
+          const tx = runtime.edit();
+          expect(
+            runtime.getCellFromLink(release.receipt!, undefined, tx).get(),
+          ).toMatchObject({
+            path: [...record, "*"],
+            paths: [[...record, "*"], [...record, "host"]],
+            released: [committed],
+          });
+          tx.abort();
+        });
+
+        it("refuses a concrete path the wildcard entry covers, and writes nothing", async () => {
+          const cell = await seedRecord([committed]);
+          const before = storedEntries(cell);
+
+          await expect(
+            releaseCellConfidentiality(cell.key(...record, "host"), []),
+          ).rejects.toThrow("from a position a release does not rewrite");
+          expect(storedEntries(cell)).toEqual(before);
+        });
+
+        it("refuses a wildcard entry holding a clause anyone else shares, and writes nothing", async () => {
+          const cell = await seedRecord([committed, cfcAtom.user(other)]);
+          const before = storedEntries(cell);
+
+          await expect(
+            releaseCellConfidentiality(cell.key(...record, "*"), []),
+          ).rejects.toThrow(`is not ${actor}'s alone to release`);
+          expect(storedEntries(cell)).toEqual(before);
+        });
       });
 
       it("keeps a version-2 envelope at version 2", async () => {

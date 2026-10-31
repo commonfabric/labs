@@ -12468,9 +12468,14 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
+          // A connection that never completed a handshake, in every attempt
+          // its factory allows, ends the space's session as a denial does:
+          // its readers fail with that error instead of waiting for a session
+          // nothing is still opening.
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            MemoryV2Client.isClientUpdateRequiredError(error)
+            MemoryV2Client.isClientUpdateRequiredError(error) ||
+            MemoryV2Client.isFirstHandshakeFailure(error)
           );
           if (permanent && !this.#closed) {
             this.#sessionAdmissionError = error;

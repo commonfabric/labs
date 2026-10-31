@@ -5068,8 +5068,10 @@ const confidentialityToKeep = (
  * With `lowerConfidentiality`, the update is instead an owner's release
  * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
  * path that `input.confidentiality` does not name is removed from every label
- * there, which rewrites the stored metadata. The input then holds
- * `confidentiality` alone, naming only clauses the path already stores.
+ * there, which rewrites the stored metadata. A `*` segment of the path names
+ * every stored position it matches at its depth, the wildcard entry there
+ * among them. The input then holds `confidentiality` alone, naming only
+ * clauses the path already stores.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
@@ -5105,7 +5107,12 @@ export async function setCellCfcLabel(
   // the update silently REPLACED a value-class entry with a class-less one,
   // and the command returned null while having written a label.
   const currentView = cfcLabelViewForCommand(targetCell, path);
-  const value = targetCell.getRaw();
+  // A lowering's `*` segment names the stored positions it matches rather
+  // than a value, so what has to be present is the value it sits in.
+  const wildcard = keep === undefined ? -1 : path.indexOf("*");
+  const value = wildcard < 0
+    ? targetCell.getRaw()
+    : rootCell.key(...path.slice(0, wildcard)).getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);

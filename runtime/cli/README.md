@@ -1721,6 +1721,18 @@ echo '{"confidentiality":[]}' \
   | cf cell set-label --cell ID queue --dangerously-allow-lowering-confidentiality
 ```
 
+A `*` segment in the path stands for any segment, as it does in the label
+`get-label` shows. Such a path lowers the wildcard label stored there, which
+covers every element or field at that depth, and the label stored at each
+element or field it matches; the path needs no value of its own, only the one
+holding the `*`. A path naming one element or field leaves the wildcard label
+alone, so lower a wildcard label through a path with `*` in its place.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID 'entries/*' --dangerously-allow-lowering-confidentiality
+```
+
 The identity may lower confidentiality only in its own space, the space whose
 DID is the identity's, and only for clauses whose every alternative stands for
 the identity alone: its DID, a `User`, `Context` or `Resource` atom naming it,
@@ -1729,12 +1741,12 @@ or its own space as `Space` or `PersonalSpace`. A `User` subject or a
 place of the DID. A clause with any other alternative refuses the whole
 lowering, and every clause stays in place. So does a clause the path still shows
 afterwards that the input does not name, from a position the lowering does not
-rewrite: an ancestor's or a wildcard label, a branch of the stored schema, or
-the piece's own schema, which a change to the pattern lowers. Each lowering
-commits with a create-only receipt in that space, readable by the identity
-alone, recording the clauses removed and digests of the stored metadata before
-and after. Reads served before the lowering keep the label they were served
-under.
+rewrite: an ancestor's label, a wildcard label covering a segment the path names
+concretely, a branch of the stored schema, or the piece's own schema, which a
+change to the pattern lowers. Each lowering commits with a create-only receipt
+in that space, readable by the identity alone, recording the clauses removed,
+the paths they were removed at, and digests of the stored metadata before and
+after. Reads served before the lowering keep the label they were served under.
 
 ## Invocation sessions
 

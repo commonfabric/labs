@@ -9,6 +9,7 @@ import {
   isPlainObject,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
   type ClientCommit,
@@ -269,6 +270,19 @@ export type ConnectOptions = {
 
   transport: Transport;
   signal?: AbortSignal;
+
+  /** Where `transport` connects, named in the error of a failed connect. */
+  address?: string;
+
+  /**
+   * How many handshakes the connect may make, one when absent. Each after the
+   * first follows a failed one after the reconnect backoff. A permanent
+   * failure fails the connect at once, and so does any failure on a transport
+   * without `reset()`, which cannot discard a failed connection to try again.
+   * When more than one is allowed and every one fails, the connect rejects
+   * with `firstHandshakeFailedError()`. Must be a positive safe integer.
+   */
+  firstHandshakeAttempts?: number;
 };
 
 /**
@@ -844,6 +858,12 @@ export class Client {
   }
 
   static async connect(options: ConnectOptions): Promise<Client> {
+    const attempts = options.firstHandshakeAttempts ?? 1;
+    if (!Number.isSafeInteger(attempts) || attempts < 1) {
+      throw new RangeError(
+        debugStr`Invalid first handshake attempts: $quote${attempts}`,
+      );
+    }
     const info = options.client === undefined
       ? createClientInfo({ application: "memory", gitSha: null })
       : parseClientInfo(options.client);
@@ -859,8 +879,21 @@ export class Client {
     options.signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
       if (options.signal?.aborted) throw abortError();
-      await client.#hello();
+      if (attempts === 1) {
+        await client.#hello();
+      } else {
+        await client.#reconnect({ attempts, address: options.address });
+        if (client.#fatalError !== null) throw client.#fatalError;
+      }
       if (options.signal?.aborted) throw abortError();
+      // The reconnect loop ends connected, failed, or closed. A client is
+      // closed only by an abort of `signal` until `connect()` returns it, and
+      // the check above reports that, so this one guards that invariant.
+      if (!client.#connected) {
+        // deno-coverage-ignore-start -- only an abort closes it mid-connect
+        throw new Error("memory client closed before its first handshake");
+      }
+      // deno-coverage-ignore-stop
       return client;
     } catch (error) {
       await client.close().catch(() => {});
@@ -2571,7 +2604,15 @@ export class Client {
     void this.#reconnect().catch(() => undefined);
   }
 
-  async #reconnect(): Promise<void> {
+  /**
+   * Reconnects, handshaking until one succeeds, the client closes, or a
+   * failure is permanent. `firstHandshake`, for the handshakes a connect
+   * makes, bounds them: the last allowed one to fail fails the client with
+   * `firstHandshakeFailedError()`.
+   */
+  async #reconnect(
+    firstHandshake?: { attempts: number; address?: string },
+  ): Promise<void> {
     if (this.#closed) {
       throw new Error("memory client is closed");
     }
@@ -2624,6 +2665,22 @@ export class Client {
             const err = error instanceof Error
               ? error
               : new Error(String(error));
+            if (
+              firstHandshake !== undefined &&
+              attempt + 1 >= firstHandshake.attempts
+            ) {
+              // A close, as the abort of a connect's signal makes, cancelled
+              // the attempts rather than spending them.
+              if (this.#closed) return;
+              const failure = firstHandshakeFailedError(
+                attempt + 1,
+                firstHandshake.address,
+                err,
+              );
+              logger.error("first-handshake-failed", () => [failure.message]);
+              this.#discardConnection(failure);
+              return;
+            }
             if (!this.#discardConnection(err)) return;
             await this.#waitForReconnectDelay(reconnectDelayMs(attempt));
             attempt += 1;
@@ -5357,6 +5414,44 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
 export const receiveFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownReceiveFailed: true });
 
+/**
+ * Returns the error a transport rejects a send with once it is closed for
+ * good. The client gives up on a connection that fails with it, rather than
+ * repeating a handshake that no later attempt can complete.
+ */
+export const transportClosedError = (message: string): Error =>
+  Object.assign(new Error(message), { permanent: true });
+
+/**
+ * Returns the error a connect rejects with when every one of the `attempts`
+ * handshakes it was allowed has failed, `cause` being the last failure. It
+ * names `address` when given, and the client reads it as permanent.
+ */
+export const firstHandshakeFailedError = (
+  attempts: number,
+  address: string | undefined,
+  cause: Error,
+): Error =>
+  Object.assign(
+    connectionError(
+      (address === undefined
+        ? "Memory connection"
+        : `Memory connection to ${backtickQuote(address)}`) +
+        ` failed its first handshake ${attempts} times; the last failure was ` +
+        `${describeError(cause)}`,
+      cause,
+    ),
+    { permanent: true, firstHandshakeFailed: true },
+  );
+
+/**
+ * Returns whether `error` is one `firstHandshakeFailedError()` made: a
+ * connection that never completed a handshake.
+ */
+export const isFirstHandshakeFailure = (error: unknown): boolean =>
+  (error as { firstHandshakeFailed?: unknown } | null)
+    ?.firstHandshakeFailed === true;
+
 const isOwnReceiveFailure = (error: unknown): boolean =>
   (error as { ownReceiveFailed?: unknown } | null)?.ownReceiveFailed === true;
 
@@ -5439,7 +5534,8 @@ export function isClientUpdateRequiredError(error: unknown): error is Error & {
 }
 
 // A reconnect handshake failure the whole client must give up on rather than
-// retry: an incompatible protocol negotiation at hello. An authorization denial
+// retry: an incompatible protocol negotiation at hello, or a transport closed
+// for good (`transportClosedError()`). An authorization denial
 // is deliberately NOT here — it is per-space, handled inside restore() by
 // terminating just that session, so it never escalates to a client-wide failure
 // that would take down sessions for other spaces.

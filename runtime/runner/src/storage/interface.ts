@@ -2992,8 +2992,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * authenticated, and the document to sit in that principal's own space.
    * Removes every stored clause at the path that `input.keep` does not name,
    * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. Writes
-   * nothing when there is nothing to remove.
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
    *
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
