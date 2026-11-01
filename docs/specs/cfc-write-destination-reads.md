@@ -67,9 +67,12 @@ destination to do that carries the marker.
 **The array append snapshot.** `Cell.push()` and `Cell.pushAll()` read the
 destination array to build their tail-relative append. The snapshot carries
 `writeDestinationRead` and `mergeableOpRead`: its existing entries stay at the
-same destination, and only caller-supplied entries are appended. Neither method
-returns a value, so neither existing content nor the array's length reaches the
-caller. This lets a writer append a scalar or a held cell reference to an
+same destination, and only caller-supplied entries are appended. The indices
+those entries land at, and the `length` written beside them, come from the
+snapshot; the array's `shape` label, which a reader of `length` consumes, keeps
+whatever clause the stored length carried, so a later read of the length is
+still labeled with it. Neither method returns a value, so neither existing
+content nor the array's length reaches the caller. This lets a writer append a scalar or a held cell reference to an
 owner-confidential array without observing its membership. The destination's
 write policy still applies, and explicit source reads still contribute their
 labels. Object anchoring's ancestry reads retain their ordinary classification.

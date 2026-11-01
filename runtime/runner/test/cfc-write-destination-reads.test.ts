@@ -115,6 +115,29 @@ const PUBLIC_SCHEMA = {
   },
 } as const satisfies JSONSchema;
 
+/** A list that admits only public values, and the same list ungated. */
+const PUBLIC_LIST_SCHEMA = {
+  type: "object",
+  properties: {
+    list: {
+      type: "array",
+      items: { ifc: { maxConfidentiality: [] } },
+      ifc: { maxConfidentiality: [] },
+    },
+  },
+} as const satisfies JSONSchema;
+
+const UNGATED_LIST_SCHEMA = {
+  type: "object",
+  properties: { list: { type: "array", items: { type: "string" } } },
+} as const satisfies JSONSchema;
+
+/** A public slot a length can be copied into. */
+const PUBLIC_COUNT_SCHEMA = {
+  type: "object",
+  properties: { n: { type: "number", ifc: { maxConfidentiality: [] } } },
+} as const satisfies JSONSchema;
+
 /** The same store, declaring no ceiling. */
 const UNGATED_SCHEMA = {
   type: "object",
@@ -715,8 +738,7 @@ describe("CFC write-destination reads", () => {
     // the pair a deployment ships with, under which that write lands and
     // stamps what it read.
 
-    const withStampedStore = async (
-      name: string,
+    const withShippedRuntime = async (
       body: (runtime: Runtime) => Promise<void>,
     ): Promise<void> => {
       const storageManager = StorageManager.emulate({ as: signer });
@@ -727,6 +749,17 @@ describe("CFC write-destination reads", () => {
         cfcFlowLabels: "persist",
       });
       try {
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+      }
+    };
+
+    const withStampedStore = (
+      name: string,
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> =>
+      withShippedRuntime(async (runtime) => {
         const seed = runtime.edit();
         runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, seed)
           .set({ v: "x" });
@@ -747,10 +780,7 @@ describe("CFC write-destination reads", () => {
         ).toContain(SOURCE_ATOM);
 
         await body(runtime);
-      } finally {
-        await runtime.dispose();
-      }
-    };
+      });
 
     it("commits a constant write into the stamped store", async () => {
       await withStampedStore("ceiling-rewrite", async (runtime) => {
@@ -759,6 +789,51 @@ describe("CFC write-destination reads", () => {
           .set({ v: "public" });
         tx.prepareCfc();
         expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+      });
+    });
+
+    it("commits a push onto a stamped list, whose length stays labeled", async () => {
+      await withShippedRuntime(async (runtime) => {
+        const seed = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, seed)
+          .set({ v: "x" });
+        runtime.getCell(space, "ceiling-list", UNGATED_LIST_SCHEMA, seed)
+          .set({ list: [] });
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tainted = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, tainted)
+          .key("v").get();
+        runtime.getCell(space, "ceiling-list", UNGATED_LIST_SCHEMA, tainted)
+          .key("list").set(["a", "b"]);
+        tainted.prepareCfc();
+        expect(refusalOf(await tainted.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const push = runtime.edit();
+        runtime.getCell(space, "ceiling-list", PUBLIC_LIST_SCHEMA, push)
+          .key("list").push("c");
+        push.prepareCfc();
+        expect(refusalOf(await push.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        // The push took the stored length to place "c", and the length a
+        // reader sees still carries the clause the stored one did.
+        const copy = runtime.edit();
+        const n = runtime.getCell(
+          space,
+          "ceiling-list",
+          UNGATED_LIST_SCHEMA,
+          copy,
+        ).key("list").key("length").get();
+        expect(n).toBe(3);
+        runtime.getCell(space, "ceiling-count", PUBLIC_COUNT_SCHEMA, copy)
+          .set({ n: typeof n === "number" ? n : -1 });
+        copy.prepareCfc();
+        expect(refusalOf(await copy.commit().settled)).toContain(
+          "maxConfidentiality failed at /n",
+        );
       });
     });
 
