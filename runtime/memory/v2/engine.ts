@@ -2113,12 +2113,6 @@ ADD COLUMN holder TEXT;
 `);
 };
 
-// Server-execution v2 stage D: derived-class commits carry their per-write
-// identity annotations and consequenceOf inside the commit row (protocol.md
-// §1, §7). Historical rows stay NULL — both fields are derived-only and no
-// derived commit predates them. Runs after migrateCommitHolder so migrated
-// stores and fresh stores agree on column order (class, holder, annotations,
-// consequence_of).
 // Anchors of a collaborative field ride the field head and its checkpoints,
 // and a submission records the anchors it carried
 // (07-op-views-and-annotations.md §7.8). Rows from before the columns read as
@@ -2152,6 +2146,12 @@ ADD COLUMN anchors JSON;
   }
 };
 
+// Server-execution v2 stage D: derived-class commits carry their per-write
+// identity annotations and consequenceOf inside the commit row (protocol.md
+// §1, §7). Historical rows stay NULL — both fields are derived-only and no
+// derived commit predates them. Runs after migrateCommitHolder so migrated
+// stores and fresh stores agree on column order (class, holder, annotations,
+// consequence_of).
 const migrateCommitWaveCarriage = (database: Database): void => {
   // One guard per column, matching the prior migrations' shape: ALTERs
   // are not transactional as a pair, and migrations run on every store

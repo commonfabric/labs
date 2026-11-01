@@ -32,7 +32,8 @@ This plan carries what is left to build on top of Memory's part.
   runtime call returning the anchors document.
 - **Written** from pattern code with `content.addAnchor(id, range, { base? })`
   and `content.removeAnchor(id)`, recorded on the transaction like
-  `applyChanges()` and emitted after the field's `apply-op` in the commit.
+  `applyChanges()` and carried on the field's `apply-op` in the commit, or on
+  one with an empty payload when the transaction changed no text.
 - The **editor** is a view: under collaboration its highlight positions come
   from the snapshot's anchors, mapped over its pending local edits; the host's
   `highlights` names which ids to draw and with what kind.
