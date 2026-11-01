@@ -58,8 +58,12 @@ lease holder's process component is minted by the main thread per worker
 start, so a worker started in place of one that died never shares its
 predecessor's holder.
 [`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
-places each crossing; the in-process arrangement, the default, is
-unchanged.)*
+places each crossing. A host with the loop on its main thread
+(`SERVER_EXECUTION_WORKER=false`) does the same work without the port.
+Either way, the loop's crossings into other spaces go to those spaces'
+owners over the deployment's route
+([owner routing](../../plans/serving-loop-owner-routing.md), on by
+default); a host given no route keeps them on its own memory server.)*
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and

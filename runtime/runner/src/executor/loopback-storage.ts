@@ -57,6 +57,56 @@ export type LoopbackOptions = Omit<Options, "memoryHost" | "spaceHostMap"> & {
   route?: Pick<RouteOptions, "createTransport">;
 };
 
+/**
+ * `inner` with its receiver wrapped by `wrapReceiver`, every other member
+ * delegated. A transport is a class instance as often as a plain object,
+ * and a spread of one keeps no method of its class, so each member is
+ * named here, and `executor-loopback-storage.test.ts` holds the list to the type's
+ * members: a member the type gains and this leaves out is a member every
+ * loopback session loses. An optional member `inner` lacks is absent here
+ * too, since the client reads a member's presence as a capability.
+ */
+export function delegatingTransport(
+  inner: MemoryClient.Transport,
+  wrapReceiver: (
+    next: (payload: string) => void,
+  ) => (payload: string) => void,
+): MemoryClient.Transport {
+  return {
+    ...(inner.supportsMessageCompression === undefined ? {} : {
+      supportsMessageCompression: inner.supportsMessageCompression,
+    }),
+    ...(inner.supportsRouterStreaming === undefined ? {} : {
+      supportsRouterStreaming: inner.supportsRouterStreaming,
+    }),
+    ...(inner.messageLimits === undefined
+      ? {}
+      : { messageLimits: inner.messageLimits }),
+    send: (payload) => inner.send(payload),
+    close: () => inner.close(),
+    ...(inner.reset === undefined ? {} : { reset: () => inner.reset!() }),
+    setReceiver: (next) => inner.setReceiver(wrapReceiver(next)),
+    ...(inner.setCloseReceiver === undefined ? {} : {
+      setCloseReceiver: (receiver: (error?: Error) => void) =>
+        inner.setCloseReceiver!(receiver),
+    }),
+    ...(inner.setMessageCompressionEnabled === undefined ? {} : {
+      setMessageCompressionEnabled: (enabled: boolean) =>
+        inner.setMessageCompressionEnabled!(enabled),
+    }),
+    ...(inner.setRoutedMessagesEnabled === undefined ? {} : {
+      setRoutedMessagesEnabled: (
+        ...args: Parameters<
+          NonNullable<MemoryClient.Transport["setRoutedMessagesEnabled"]>
+        >
+      ) => inner.setRoutedMessagesEnabled!(...args),
+    }),
+    ...(inner.delivered === undefined
+      ? {}
+      : { delivered: () => inner.delivered!() }),
+  };
+}
+
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
@@ -117,37 +167,14 @@ class LoopbackSessionFactory implements SessionFactory {
       ? this.#plane.createTransport()
       : MemoryClient.loopback(this.#plane);
     const report = this.#onServerFrame;
-    // Delegated member by member: a transport is a class instance as often
-    // as a plain object, and a spread of one keeps no method of its class.
-    return {
-      ...(inner.supportsMessageCompression === undefined ? {} : {
-        supportsMessageCompression: inner.supportsMessageCompression,
-      }),
-      ...(inner.supportsRouterStreaming === undefined ? {} : {
-        supportsRouterStreaming: inner.supportsRouterStreaming,
-      }),
-      ...(inner.messageLimits === undefined
-        ? {}
-        : { messageLimits: inner.messageLimits }),
-      send: (payload) => inner.send(payload),
-      close: () => inner.close(),
-      ...(inner.reset === undefined ? {} : { reset: () => inner.reset!() }),
-      setReceiver: (next) =>
-        inner.setReceiver((payload) =>
-          runInServingContext(true, () => {
-            next(payload);
-            report?.(payload);
-          })
-        ),
-      ...(inner.setCloseReceiver === undefined ? {} : {
-        setCloseReceiver: (receiver: (error?: Error) => void) =>
-          inner.setCloseReceiver!(receiver),
-      }),
-      ...(inner.setMessageCompressionEnabled === undefined ? {} : {
-        setMessageCompressionEnabled: (enabled: boolean) =>
-          inner.setMessageCompressionEnabled!(enabled),
-      }),
-    };
+    return delegatingTransport(
+      inner,
+      (next) => (payload) =>
+        runInServingContext(true, () => {
+          next(payload);
+          report?.(payload);
+        }),
+    );
   }
 
   async create(
