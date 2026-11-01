@@ -11,7 +11,10 @@ import env from "@/env.ts";
 import { runtime } from "@/index.ts";
 import { identity } from "@/lib/identity.ts";
 import { aclDocId } from "@commonfabric/memory/acl";
-import { serverExecutionHost } from "@/lib/server-execution.ts";
+import {
+  serverExecutionHost,
+  serverExecutionRoute,
+} from "@/lib/server-execution.ts";
 import { hostsSpaceInStore } from "@/lib/space-authority.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
@@ -47,6 +50,7 @@ const deps = (logger: LifecycleDeps["logger"]): LifecycleDeps => ({
       (await memoryServer.readDocument(space, aclDocId(space)))?.value,
   },
   host: serverExecutionHost,
+  route: serverExecutionRoute,
   append: (entry) => memoryServer.commitDelegatedAppend(entry),
   readDocument: (space, id) => memoryServer.readDocument(space, id),
   watchAdmittedCommits: (watcher) => memoryServer.watchAdmittedCommits(watcher),
