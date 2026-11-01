@@ -32,11 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 API_URL="${API_URL:-http://localhost:8000}"
 
-if [ -n "${CF_BINARY:-}" ]; then
-  CF="$CF_BINARY"
-else
-  CF="deno task --quiet --cwd $REPO_ROOT cf"
-fi
+source "$SCRIPT_DIR/cf-launcher.sh"
 
 PASS=0
 FAIL=0
@@ -75,7 +71,7 @@ WORK="$(mktemp -d)"
 # nothing to say about why.
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY="$WORK/identity.key"
-  $CF id new > "$CF_IDENTITY" 2> /dev/null || {
+  "${CF[@]}" id new > "$CF_IDENTITY" 2> /dev/null || {
     echo "could not mint an identity for the drill" >&2
     exit 1
   }
@@ -84,7 +80,7 @@ export CF_IDENTITY
 
 # Opening a space never creates it, so the drill makes a fresh one; `cf space
 # create` prints the new space's DID.
-SPACE=$($CF space create --quiet --api-url "$API_URL")
+SPACE=$("${CF[@]}" space create --quiet --api-url "$API_URL")
 case "$SPACE" in
   did:key:*) ;;
   *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
@@ -115,7 +111,7 @@ step "deploy the topics board into a fresh space ($SPACE)"
 # id would keep working, and silently. What breaks this is stdout ceasing to
 # carry a bare fid line at all, and that failure is loud — nothing matches,
 # `BOARD` is empty, and the step stops here naming what it did not find.
-$CF piece new -q "$REPO_ROOT/patterns/apps/topics/main.tsx" \
+"${CF[@]}" piece new -q "$REPO_ROOT/patterns/apps/topics/main.tsx" \
   --root "$REPO_ROOT" --space "$SPACE" --api-url "$API_URL" \
   > "$WORK/deploy.out" 2> "$WORK/deploy.err"
 BOARD="$(grep -xE 'fid1:[A-Za-z0-9_-]+' "$WORK/deploy.out" | head -1)"
@@ -130,7 +126,7 @@ BOARD="$(grep -xE 'fid1:[A-Za-z0-9_-]+' "$WORK/deploy.out" | head -1)"
 
 step "seed: one topic with markdown body, two comments, one link"
 BODY='# Drill\n\n    indented code block\n    second line\n\ntrailing prose'
-$CF piece call -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+"${CF[@]}" piece call -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
   addTopic "{\"title\":\"Drill: alpha\",\"body\":\"$BODY\",\"agentName\":\"drill\"}" \
   > "$WORK/create.json" 2> /dev/null
 TOPIC_ALIAS="$(jq -r '.result.topic["$link"] // empty' "$WORK/create.json")"
@@ -139,7 +135,7 @@ TOPIC_ALIAS="$(jq -r '.result.topic["$link"] // empty' "$WORK/create.json")"
 # board-published topic address when present, else re-read it.
 if [ -z "$TOPIC_ALIAS" ]; then
   TOPIC_ALIAS="$(
-    $CF cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+    "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
       topics --input --select '@' 2> /dev/null | jq -r '.[0]["$link"]'
   )"
 fi
@@ -154,13 +150,13 @@ fi
 CREATED_NAME="$(jq -r '.result.name // empty' "$WORK/create.json")"
 [ "$CREATED_NAME" = "1" ] && ok "create returned the allocated name: 1" ||
   bad "create returned name '$CREATED_NAME', expected 1"
-$CF piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
+"${CF[@]}" piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
   --api-url "$API_URL" addComment \
   '{"body":"first drill comment","agentName":"drill"}' > /dev/null 2>&1
-$CF piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
+"${CF[@]}" piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
   --api-url "$API_URL" addComment \
   '{"body":"second drill comment","agentName":"drill"}' > /dev/null 2>&1
-$CF piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
+"${CF[@]}" piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
   --api-url "$API_URL" addLink \
   '{"kind":"pr","url":"https://example.com/pr/1","label":"PR 1","agentName":"drill"}' \
   > /dev/null 2>&1
@@ -181,7 +177,7 @@ step "snapshot the space store (VACUUM INTO) and export from it"
 # left behind looks exactly as live as the one being served. Which file inside a
 # store belongs to this run is no more decidable by looking than which store is.
 SPACE_DB="$(
-  $CF inspect summary "$SPACE" --json 2> "$WORK/inspect.err" |
+  "${CF[@]}" inspect summary "$SPACE" --json 2> "$WORK/inspect.err" |
     jq -r '.path // empty'
 )"
 [ -n "$SPACE_DB" ] && ok "space store: $SPACE_DB" || {
@@ -217,10 +213,10 @@ COUNTS="$(jq -r '[(.topics | length), (.topics[0].content.comments | length)] | 
 
 step "clobber the topic the way a bad migration would"
 echo '{"title":"CLOBBERED","body":"gone","comments":[]}' |
-  $CF piece apply -q --piece "$TOPIC" --space "$SPACE" \
+  "${CF[@]}" piece apply -q --piece "$TOPIC" --space "$SPACE" \
     --api-url "$API_URL" > /dev/null 2>&1
 CLOBBERED_TITLE="$(
-  $CF cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
     title --input 2> /dev/null
 )"
 [ "$CLOBBERED_TITLE" = '"CLOBBERED"' ] && ok "clobber landed" ||
@@ -236,13 +232,13 @@ deno run --allow-run --allow-read --allow-env \
 }
 
 step "verify: byte-exact content, live board link, idempotent rerun"
-$CF cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
+"${CF[@]}" cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
   body --input > "$WORK/live-body.json" 2> /dev/null
 jq -e --slurpfile live "$WORK/live-body.json" \
   '.topics[0].content.body == $live[0]' "$WORK/export.json" > /dev/null &&
   ok "body byte-exact, markdown intact" || bad "body differs from export"
 LIVE_COMMENTS="$(
-  $CF cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
     comments --input 2> /dev/null | jq 'length'
 )"
 [ "$LIVE_COMMENTS" = "2" ] && ok "both comments back" ||
@@ -250,7 +246,7 @@ LIVE_COMMENTS="$(
 # The mention universe is a derived board index. Recompute its owner before
 # checking the restored connection: a plain cell read returns stored output
 # and cannot establish whether a cold index reflects the restored content.
-$CF cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+"${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
   --step mentionable --select title > "$WORK/mention-index.json" \
   2> "$WORK/mention-index.err" &&
   jq -e --slurpfile index "$WORK/mention-index.json" \
@@ -261,7 +257,7 @@ $CF cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
   cat "$WORK/mention-index.err" >&2
 }
 MENTION_TITLES="$(
-  $CF cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" cell get -q --piece "$TOPIC" --space "$SPACE" --api-url "$API_URL" \
     --input mentionable --select title 2> /dev/null | jq 'length'
 )"
 [ "$MENTION_TITLES" = "1" ] && ok "mentionable resolves through the board" ||
@@ -285,16 +281,16 @@ step "the namespace verbs' own results"
 # list, no names for them. Now the run has something to write, and `assigned`
 # has to carry it. Last step in the drill, since it leaves the namespace
 # rebuilt rather than as the restore left it.
-printf '{}' | $CF cell set -q --piece "$BOARD" --space "$SPACE" \
+printf '{}' | "${CF[@]}" cell set -q --piece "$BOARD" --space "$SPACE" \
   --api-url "$API_URL" names > /dev/null 2>&1
 CLEARED="$(
-  $CF cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
     names 2> /dev/null | jq -c 'keys'
 )"
 [ "$CLEARED" = "[]" ] && ok "namespace emptied for the backfill" ||
   bad "namespace did not empty: $CLEARED"
 BACKFILL="$(
-  $CF piece call -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" piece call -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
     backfillNames \
     '{"agentName":"drill"}' 2> /dev/null
 )"
@@ -304,7 +300,7 @@ ASSIGNED="$(printf '%s\n' "$BACKFILL" | jq -c '.result.assigned // empty')"
   bad "backfill reported '$ASSIGNED', expected [\"1\"]"
 # And it wrote what it reported, rather than reporting a name it never stored.
 REFILLED="$(
-  $CF cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
+  "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
     names 2> /dev/null | jq -c 'keys'
 )"
 [ "$REFILLED" = '["1"]' ] && ok "the namespace carries the name it reported" ||
