@@ -1002,6 +1002,81 @@ describe("cf-iframe cell bridge", () => {
       ).resolves.toEqual({ rows: [] });
       expect(queried).toEqual(["of:database"]);
     });
+
+    it("rejects with the abort's reason, and holds no subscription on the source, once its wait is aborted", async () => {
+      // This producer never writes, so only the abort ends the wait.
+
+      const held = new Set<CellHandle<unknown>>();
+      const waiting = Promise.withResolvers<void>();
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            if (request.type === RequestType.CellPull) {
+              if (request.cell.path[0] !== "database") {
+                return Promise.resolve({ value: undefined });
+              }
+              const schema = request.cell.schema;
+              if (
+                typeof schema === "object" && schema !== null &&
+                "asCell" in schema
+              ) {
+                return Promise.resolve({
+                  value: { id: "computed:database-producer" },
+                });
+              }
+              waiting.resolve();
+              return Promise.resolve({ value: undefined });
+            }
+            if (request.type === RequestType.CellResolveAsCell) {
+              return Promise.resolve({
+                cell: {
+                  ...request.cell,
+                  id: "of:resolved-context",
+                  schema: {
+                    type: "object",
+                    properties: {
+                      database: { type: "object", asCell: ["sqlite"] },
+                    },
+                  },
+                },
+              });
+            }
+            return Promise.resolve({});
+          },
+          subscribe: (cell: CellHandle<unknown>) => {
+            held.add(cell);
+            return Promise.resolve();
+          },
+          unsubscribe: (cell: CellHandle<unknown>) => {
+            held.delete(cell);
+            return Promise.resolve();
+          },
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      const context = new CellHandle<Record<string, unknown>>(runtime, {
+        ...ref,
+        schema: true,
+      });
+      const setup = new AbortController();
+      const reason = new Error("setup abandoned");
+
+      const resolving = resolveCellContextBridge(
+        context,
+        { database: "sqlite" },
+        setup.signal,
+      );
+      await waiting.promise;
+      expect([...held].map((cell) => cell.ref().schema)).toEqual([
+        { asCell: ["sqlite"] },
+        { type: "object", additionalProperties: true },
+      ]);
+      setup.abort(reason);
+
+      await expect(resolving).rejects.toBe(reason);
+      expect([...held]).toEqual([]);
+    });
   });
 
   it("ignores inherited resource-kind hints", async () => {
