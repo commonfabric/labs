@@ -147,10 +147,10 @@ export const webSocketRoute = (
   };
 };
 
-/** A routed session to one target space's owner, and its position counter. */
 /** The id of the server's watch on document `id` for a routed session. */
 const routedWatchId = (id: string): string => `routed:${id}`;
 
+/** A routed session to one target space's owner, and its position counter. */
 type RoutedSession = {
   /** The connection the session is open on, closed with the session. */
   client: MemoryClient.Client;
