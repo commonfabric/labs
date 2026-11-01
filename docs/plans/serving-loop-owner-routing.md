@@ -344,8 +344,11 @@ alone. The crossings a process sends through the route are counted by kind in
 its serving loop's stats (`servingLoop.routed` under `/api/health/stats`,
 serving-loop.md §7), which is how the test tells a routed crossing from one
 that stayed home, and how a deployment does. The cross-space scenario of the
-server-execution benchmarks (an event from one space into another) is measured
-with the flag on and off.
+server-execution benchmarks (`lunch-poll-read-scale` with
+`CF_READ_SCALE_PROFILE_LOCATION=cross-space`) is measured with the flag on and
+off; on one toolshed the two arms differ by less than the spread within each,
+so the route costs nothing the benchmark can see (the R4 pull request records
+the samples).
 
 ## Stages
 
