@@ -265,13 +265,15 @@ giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
 its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
-none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
+none, or holds data under keys it does not name, through an index signature
+or as an array, and evidence (`integrity`, `addIntegrity`) goes on the whole result
 only where the labeled constituent holds all of its data, every member any
 constituent declares, its items where one is an array, and the values under
 keys no member names where one has an index signature, and otherwise on the
 members it declares, as data another constituent holds may be data the
 labeled one never established; a union's restrictions go on the members any
-of its arms declares, and its evidence on the members of the arm the value
+of its arms declares, or on the whole result where an arm holds data under
+keys it does not name, and its evidence on the members of the arm the value
 is. A keyword written beside a reference is read in place of the
 definition's, through a chain of references, except its labels, which join
 the definition's. A merge met again inside itself, as the members of two
@@ -357,11 +359,28 @@ just the same; a closed object carries none) covers every key: a key an arm
 has only through one takes the signature's schema and casts no vote on
 being required, and an `Omit` from a surface every arm covers that way
 keeps just the signature, the named members dissolving into it as they do
-in `keyof T`. A `Pick` naming a key some arm lacks, or a union with an
-arm that is no object, keeps the general path. Unions these rules build —
-a tuple's items, a shared property, a merged signature — fold equal arms by
-value-model equality (`dedupeByValueEqual`), flatten a bare nested union,
-and keep an `unknown` arm beside the others as a synthetic union does.
+in `keyof T`. An `unknown` arm, labeled or not, has no keys, as
+`keyof unknown` is `never`, so it is an object with no members: `Omit` of a
+union holding one keeps no member. A `Pick` naming a key some arm lacks, or a
+union with another arm that is no object, keeps the general path. Since the
+value is whichever arm it is, the labels of each arm, its own and those
+declared on the unions it is an arm of, are placed on the object as far as
+they reach, as the type path places a member's (§11, "A label lands on the
+part of a value its policy was written around"), and then joined where they
+land (`joinPlacedIfcLabels`), every value of each read in full or none
+of them, as a union read by type is. A label written around members the
+object leaves out lands nowhere where its arm holds its data under those
+members alone, and evidence lands nowhere in any case, so
+`Omit<Integrity<T, L>, keyof T>` and `Omit<Confidential<T, L>, keyof T>`
+carry no label; a restriction written around an arm that names no members,
+as `unknown` does, or that has an index signature, labels the whole object.
+A metadata key the lowering could not read at all is not declared on the
+arm, so a member holding one counts as read. A bare `unknown` arm has no
+labels and no members. Unions these
+rules build — a tuple's items, a shared property, a merged signature — fold
+equal arms by value-model equality (`dedupeByValueEqual`), flatten a bare
+nested union, and keep an `unknown` arm beside the others as a synthetic
+union does.
 `NonNullable` removes `null` and `undefined` from a direct schema (to
 `false`), an array-valued `type`, an `enum`'s values, a union's arms, or a
 referenced definition. The synthetic alias, tuple, intersection, and
@@ -1605,7 +1624,24 @@ Mechanics:
   `base/api/cfc.ts`), because TypeScript merges a carrier into whatever
   its value is merged into: an intersection, a spread, a mapped type. So a
   label is placed by the payload it records, never by where the carrier sits
-  (`placeCarriedLabels`, `payloadReach`):
+  (`placeCarriedLabels`, `payloadReach`). A payload read under bindings has
+  each type parameter it holds read as the argument bound to it, wherever in
+  the payload the parameter stands, part by part where it stands in an
+  intersection, which distributes over a union the argument is, and a mapped
+  type over one that keeps every key of it, as `Readonly<T>` and
+  `Pick<T, keyof T>` do, read as what it maps over: so
+  `Confidential<T & { y: number }, L>` and
+  `Confidential<Readonly<T> & { y: number }, L>` at `T = { x: string }` were
+  written around `x` as well as `y` (`boundPayloadOf`). A mapped type over
+  one that lists its keys, as `Pick<T, "x">` does, is read by those keys.
+  Any other, whose keys the bindings alone cannot name, as one that renames
+  them with an `as` clause or picks keys a bound parameter gives, leaves the
+  payload unread: its restrictions land on the whole value, and its evidence
+  nowhere. So does an intersection with a part the checker defers until its
+  parameters are bound, a conditional type, as `(T extends object ? T : never)`,
+  `Extract<T, U>` and `Awaited<T>` are, or an indexed access, as `T["data"]`
+  is: read uninstantiated, that part lists none of its instantiation's
+  members, and the others would only partly list the payload's.
   - A restriction lands wherever the payload's data may be: on each member of
     the value the payload names, and on each member with no declaration. A
     mapped type that renames its keys keeps no member's declaration, nor does
@@ -1714,51 +1750,82 @@ Mechanics:
   union distributes, `(A | C) & B` being `(A & B) | (C & B)`, and each
   member of the union is labeled.
 - A default-library alias that maps an object's members (`Readonly`,
-  `Partial`, `Required`, `Pick`, `Omit`) does not keep a labelled operand's
+  `Partial`, `Required`, `Pick`, `Omit`) does not keep a labeled operand's
   carrier as a member of its own: over an object it folds the carrier into
   the object it builds, as one more property, which `Pick` may leave out,
   and over a primitive it builds an object of the primitive's methods. Read
-  by type, such an alias over a labelled operand (an intersection holding
-  carriers, or such an alias in turn) is the type the checker builds, read
-  as any other type is and never holding the carrier, labelled with the
-  operand's labels, read from its carriers in full or not at all and placed
-  by the payloads they record (above). Only
-  where `Readonly`, `Partial` or `Required` stands over a primitive, which
-  such an alias leaves as it is, is the value the primitive; a payload of
-  several members, or none, is an intersection, which they map as they map
-  an object. So
-  `Readonly<Sec<string>>` is a labelled string, `Pick<Sec<string>,
-  "length">` a labelled `{ length: number }`, a recursion through
-  `Partial<Node>` a definition of its own, and `Pick<Sec<X>, "a">` keeps the
-  label though `Pick` drops the carrier. The checker names a `Pick` or an
-  `Omit` over literal keys by a user's alias of it, and holds that alias's
-  arguments, so an alias whose whole body references another alias is
-  followed to it, down a chain of such aliases, until it reaches one of
-  these; a chain that reaches anything else, or comes back to an alias on
-  it, is not followed. Each alias along the chain binds its parameters to the
-  arguments the one before writes for them, one left out to its parameter's
-  default, and the first alias to the checker's arguments. The operand is the
-  type the last alias's reference writes, read under that alias's bindings,
-  so the alias reads as the one it names written out with its arguments in
-  place: `Select<Sec<X>>`, where `type Select<T> = Pick<T, "a">`, as
-  `Pick<Sec<X>, "a">`, and `Select<["b"]>`, where `type Select<L> =
-  Pick<Confidential<X, L>, "a">`, as `Pick<Confidential<X, ["b"]>, "a">`. A
-  bound parameter is its argument, and a carrier's metadata is read with the
-  parameters it holds bound. Where a member of the operand's payload is a
-  bound parameter, the checker folds the argument into the operand's
-  intersection:
-  the carriers of an argument that is itself labeled join the operand's, and
-  an argument that leaves the intersection no carrier (`never`, `null`,
-  `undefined`, a union of the last two, or `any`) leaves the operand
-  unlabeled. Any other argument keeps the operand's carriers as they are, a
-  union among them, whose every member carries them, though the alias
-  written out distributes its intersection over the union and reads
-  unlabeled. Both sides bind the first alias's parameters to the checker's
-  arguments, never to the ones a reference writes, so they agree. Written
-  under bindings, a `Pick` or an `Omit` of a labeled operand keeps the label
-  too, while a user's alias of one there is a mapped type over a bound
-  parameter, which is not fully read (below). Any other object that holds a
-  carrier as a property, as a mapped type its author wrote does
+  by type, such an alias over a labeled operand (an intersection holding
+  carriers, a union holding one, or such an alias in turn) is the type the
+  checker builds, read as any other type is and never holding the carrier,
+  labeled with the labels of the members the operand may be, each member's
+  read from its carriers in full or not at all and placed by the payloads
+  they record (above). Where the operand is one member, the carrier the
+  checker folded into the object is that member's, instantiated, and labels
+  the object too, so a payload no binding can be read through still places
+  its labels; where it is several, the folded carrier holds every member's
+  policies at once, and is not read. A union operand may be any of its members, each read
+  on its own once its parameters are bound, and is unlabeled where a member
+  is `any`, to which the checker reduces it. A bare `unknown` member has no
+  labels and no members, so the other members' labels stay, landing where
+  they reach, though the checker reduces `unknown | X` to `unknown`: a label
+  is kept wherever the union is read before the checker reduces it, as a
+  user's alias read under its bindings is, and lost where the checker hands
+  over the reduced type, as for `Omit<unknown | Sec<X>, never>` written out.
+  So `OmitOpen<unknown>`, where `type OmitOpen<T> = Omit<T | Sec<T>, never>`,
+  carries `Sec`'s label, written around a payload that names no members, on
+  the whole object. A labeled `unknown` (`Confidential<unknown, L>`) is its
+  carrier, a member like any other. The checker distributes `Readonly`, `Partial` and `Required` over
+  one, so each member of the union they build keeps its own labels. `Pick`
+  and `Omit` build one object from whichever member the value is, so it has
+  every member's labels joined, as a narrowed union read does
+  (`joinMemberIfcLabels`), where they land: the object carries each
+  confidentiality label any member places on it and each other label every
+  member places on it alike, and a property of it carries each
+  confidentiality label any member places on that property, and each other
+  label every member places on that property or on the whole object alike,
+  past those the object carries. Each member's carriers are read in full, or
+  the object is unlabeled. Only where `Readonly`, `Partial` or `Required`
+  stands over a primitive, which such an alias leaves as it is, is the value
+  the primitive; a payload of several members, or none, is an intersection,
+  which they map as they map an object. So `Readonly<Sec<string>>` is a
+  labeled string, `Pick<Sec<string>, "length">` a labeled
+  `{ length: number }`, a recursion through `Partial<Node>` a definition of
+  its own, `Pick<Sec<X>, "a">` keeps the label though `Pick` drops the
+  carrier, and `Pick<Sec<X> | Confidential<Y, ["b"]>, "a">` has both labels.
+  The checker names a `Pick` or an `Omit` over literal keys by a user's alias
+  of it, and holds that alias's arguments, so an alias whose whole body
+  references another alias is followed to it, down a chain of such aliases,
+  until it reaches one of these; a chain that reaches anything else, or
+  comes back to an alias on it, is not followed. Each alias along the chain
+  binds its parameters to the arguments the one before writes for them, one
+  left out to its parameter's default, and the first alias to the checker's
+  arguments. The operand is the type the last alias's reference writes, read
+  under that alias's bindings, so the alias reads as the one it names
+  written out with its arguments in place: `Select<Sec<X>>`, where
+  `type Select<T> = Pick<T, "a">`, as `Pick<Sec<X>, "a">`, and
+  `Select<["b"]>`, where `type Select<L> = Pick<Confidential<X, L>, "a">`, as
+  `Pick<Confidential<X, ["b"]>, "a">`. A bound parameter is its argument,
+  and a carrier's metadata is read with the parameters it holds bound. Where
+  a member of the operand's payload is a bound parameter, the checker folds
+  the argument into the operand's intersection, which distributes over a
+  union, so each member of one is read on its own, and an operand whose
+  payload holds several such unions is a member for each way of taking one
+  member from each: the carriers of a member that is itself labeled join the
+  operand's, `never` drops out, leaving the operand unlabeled where no member
+  is left, `null` and `undefined`, which a CFC alias holds beside its carrier
+  (`Cfc` in `base/api/cfc.ts`), are members no policy labels, `any` makes
+  the operand `any`, unlabeled, and a bare `unknown` is a member adding no
+  carrier. A carrier the checker defers while its payload is a parameter
+  (`CfcTag<T, M>`) is read from the stamp it is given. So
+  `Select<Confidential<X, ["b"]> | Y>`, where
+  `type Select<T> = Pick<Sec<T>, "a">`, reads as
+  `Pick<Sec<Confidential<X, ["b"]> | Y>, "a">`, labeled with both. Both
+  sides bind the first alias's parameters to the checker's arguments, never
+  to the ones a reference writes, so they agree. Written under bindings, a
+  `Pick` or an `Omit` of a labeled operand places and joins the labels of
+  every member too (§2), while a user's alias of one there is a mapped type
+  over a bound parameter, which is not fully read (below). Any other object
+  that holds a carrier as a property, as a mapped type its author wrote does
   (`{ readonly [K in keyof Sec<X>]: Sec<X>[K] }`), is labeled by it, each
   metadata the carrier's type holds read in full or none and placed by the
   payload it records (above), and never holds the carrier as a member: no
