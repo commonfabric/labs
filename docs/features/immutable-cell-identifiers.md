@@ -79,8 +79,11 @@ remain on the original mutable array element. Moving an inline element's value
 behind an immutable ID changes its addressing, not what the computation depends
 on. `resolveAsCell()` reads the containers on its way to an element for their
 shape alone, so a transaction that resolves a cell inside a document depends on
-that element and on the keys along the path, not on the rest of the document. A
-link or an explicitly declared cell handle already has its own identity.
+that element and on the keys along the path, not on the rest of the document.
+`resolveAsCell({ inlineArrayItemsInPlace: true })` names the element at its
+stored address instead and mints nothing, for a caller that looks the target up
+and keeps no handle to it. A link or an explicitly declared cell handle already
+has its own identity.
 
 Traversal snapshots inline object or array elements read as values. An element
 requested as a cell keeps its array-slot address. A context with

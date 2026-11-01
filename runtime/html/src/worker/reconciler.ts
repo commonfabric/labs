@@ -272,6 +272,12 @@ type DecidingRead = {
   readonly reads: readonly (SinkConsumedLabel | undefined)[];
 };
 
+/**
+ * Whether `value`, read from `cell`, is the whole result of a pattern: a value
+ * carrying a view, held at the root of a document a pattern's result is
+ * stored in. A field inside such a document that carries a view of its own is
+ * not one, so a renderer showing it does not become a piece target.
+ */
 function isNestedPatternOutput(value: unknown, cell: Cell<unknown>): boolean {
   if (
     !isObjectOrArray(value) || !(UI in value) ||
@@ -279,6 +285,7 @@ function isNestedPatternOutput(value: unknown, cell: Cell<unknown>): boolean {
   ) return false;
 
   try {
+    if (cell.getAsNormalizedFullLink().path.length > 0) return false;
     const patternIdentity = cell.getMetaRaw("patternIdentity");
     return isObjectOrArray(patternIdentity) &&
       typeof (patternIdentity as Record<string, unknown>).identity ===
@@ -1608,10 +1615,16 @@ export class WorkerReconciler {
     }
   }
 
-  /** Follow a link-valued child to the result cell whose UI is rendered. */
+  /**
+   * Follow a link-valued child to the result cell whose UI is rendered. The
+   * cell names its stored position rather than a snapshot of an inline
+   * element: what is read off it on each read of the child — its space, and
+   * whether its document is a pattern's result — is the stored document's,
+   * and a snapshot would cost a hash of the element per read.
+   */
   #resolveCellForBinding(cell: Cell<unknown>): Cell<unknown> {
     try {
-      return cell.resolveAsCell();
+      return cell.resolveAsCell({ inlineArrayItemsInPlace: true });
     } catch {
       return cell;
     }
@@ -1788,7 +1801,9 @@ export class WorkerReconciler {
     try {
       labelView = cfcLabelViewForCell(cell);
       if (labelView === undefined) {
-        labelView = cfcLabelViewForCell(cell.resolveAsCell());
+        labelView = cfcLabelViewForCell(
+          cell.resolveAsCell({ inlineArrayItemsInPlace: true }),
+        );
       }
     } catch {
       labelView = undefined;
@@ -1824,7 +1839,9 @@ export class WorkerReconciler {
    */
   #resolveCellLabelView(cell: Cell<unknown>): CfcLabelView | undefined {
     return cfcLabelViewSourceForCell(cell).view ??
-      cfcLabelViewSourceForCell(cell.resolveAsCell()).view;
+      cfcLabelViewSourceForCell(
+        cell.resolveAsCell({ inlineArrayItemsInPlace: true }),
+      ).view;
   }
 
   /**
