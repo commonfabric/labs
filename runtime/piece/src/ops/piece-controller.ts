@@ -35,6 +35,7 @@ import {
   KeepAsCell,
   keepLaterConfirmation,
   knownPieceReleasedAt,
+  markDurableReadTx,
   materializeStoredValueForValidation,
   type MemorySpace,
   mergeSchemaDefaults,
@@ -3279,6 +3280,14 @@ class PiecePropIo implements PieceCellIo {
       | undefined;
 
     const { ok, error } = await pieces.runtime.editWithRetry((tx) => {
+      // The write reads durable state. Under server execution this runtime
+      // previews server-owned derivations in speculation layers that exist
+      // only in its own process, and a commit whose read basis names one is
+      // refused for good (speculation.md §6). The write's reads, among them
+      // the whole destination root that write-destination validation
+      // materializes (derived outputs included), would name a layer standing
+      // over any document they reach.
+      markDurableReadTx(tx);
       // Each attempt decides afresh what it wrote: a retry can resolve the
       // same path to a durable destination where the attempt before it found
       // a stream.
