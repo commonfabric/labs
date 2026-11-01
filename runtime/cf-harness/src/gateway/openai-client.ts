@@ -339,7 +339,8 @@ const selectRequestId = (headers: Headers): string | undefined => {
   return undefined;
 };
 
-const responseBodyDiagnosticFields = (body: string) => ({
+/** Returns a bounded response excerpt with its original byte count. */
+export const responseBodyDiagnosticFields = (body: string) => ({
   responseBodyBytes: textByteLength(body),
   responseBodyExcerpt: body.slice(0, MAX_ERROR_BODY_EXCERPT_CHARS),
   responseBodyTruncated: body.length > MAX_ERROR_BODY_EXCERPT_CHARS,

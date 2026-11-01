@@ -1384,6 +1384,19 @@ items as `outputItemTypes`, which together say whether a blank reply was a
 `completed` response with an empty message, a reasoning item alone, or no item
 at all.
 
+A blank reply also writes `model-turn-<n>-empty-reply.json` beside the run
+report. Its `modelAttemptSequence` links to the report's attempt record. The
+diagnostic names the decoder and records its decoded text length, trimmed text
+length, and function-call count, with the reason it judged the reply empty.
+`responseBodyExcerpt` retains the provider payload as JSON, bounded to 2,048
+characters like other response-body diagnostics; `responseBodyBytes` records the
+full serialized UTF-8 size and `responseBodyTruncated` marks a cut excerpt.
+Codex evidence includes the terminal response and the collected streamed output
+items, which supply decoder input when the terminal output is empty. These
+payloads stay in the sidecar artifact, outside transcripts, reports, and
+standard output. Normal text replies and tool-only replies write no such
+artifact.
+
 A failed attempt carries the provider's own reason wherever the provider stated
 one. `providerError` holds the provider's `type`, `code`, and `message` as the
 provider sent them — from the body of a non-2xx response, from an in-stream
