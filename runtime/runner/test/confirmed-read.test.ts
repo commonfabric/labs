@@ -15,7 +15,11 @@ import type {
   SealedCommitVerdict,
   URI,
 } from "../src/storage/interface.ts";
-import { readConfirmed, readDurable } from "../src/confirmed-read.ts";
+import {
+  readConfirmed,
+  readDurable,
+  speculationSettledFor,
+} from "../src/confirmed-read.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { writeResultSchemaMeta } from "../src/result-schema-meta.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -753,42 +757,42 @@ describe("confirmed-read", () => {
     expect(read).toEqual({ value: 9, confirmed: false });
   });
 
-  describe("readDurable()", () => {
-    /**
-     * Seals a speculative layer over the reader's `note`, showing `value` in
-     * place of what the note holds, and returns what settles it.
-     */
-    function speculate(note: Cell<Note>, value: Note): {
-      settle: (verdict: SealedCommitVerdict) => Promise<void>;
-    } {
-      const { id, scope } = note.getAsNormalizedFullLink();
-      const replica = readerManager.open(space).replica;
-      const verdict = Promise.withResolvers<SealedCommitVerdict>();
-      const sealed = replica.sealNative!(
-        {
-          operations: [{
-            op: "set",
-            id,
-            type: "application/json",
-            value: { ...replica.getDocument(id, scope), value },
-          }],
-        },
-        undefined,
-        verdict.promise,
-        { speculative: true },
-      );
-      return {
-        settle: async (outcome) => {
-          verdict.resolve(outcome);
-          await sealed.settled;
-        },
-      };
-    }
-
-    const retirement: SealedCommitVerdict = {
-      withdrawn: { message: "retired", superseded: true },
+  /**
+   * Seals a speculative layer over the reader's `note`, showing `value` in
+   * place of what the note holds, and returns what settles it.
+   */
+  function speculate(note: Cell<Note>, value: Note): {
+    settle: (verdict: SealedCommitVerdict) => Promise<void>;
+  } {
+    const { id, scope } = note.getAsNormalizedFullLink();
+    const replica = readerManager.open(space).replica;
+    const verdict = Promise.withResolvers<SealedCommitVerdict>();
+    const sealed = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id,
+          type: "application/json",
+          value: { ...replica.getDocument(id, scope), value },
+        }],
+      },
+      undefined,
+      verdict.promise,
+      { speculative: true },
+    );
+    return {
+      settle: async (outcome) => {
+        verdict.resolve(outcome);
+        await sealed.settled;
+      },
     };
+  }
 
+  const retirement: SealedCommitVerdict = {
+    withdrawn: { message: "retired", superseded: true },
+  };
+
+  describe("readDurable()", () => {
     it("returns the value stored beneath a speculation layer", async () => {
       await write("masked", 1);
       const masked = await loaded("masked");
@@ -888,6 +892,73 @@ describe("confirmed-read", () => {
 
       const read = readDurable(reader, (tx) => plain.withTx(tx).get()?.n);
       expect(read).toEqual({ value: 1 });
+    });
+  });
+
+  describe("speculationSettledFor()", () => {
+    /** A speculative-basis refusal of a commit that read `notes`. */
+    function refusalReading(...notes: Cell<Note>[]) {
+      return {
+        name: "SpeculativeBasisError",
+        transaction: {
+          reads: {
+            pending: notes.map((note) => {
+              const { id, scope } = note.getAsNormalizedFullLink();
+              return { id, scope };
+            }),
+          },
+        },
+      };
+    }
+
+    it("returns `undefined` for a rejection that is not a speculative-basis refusal", async () => {
+      await write("conflicted", 1);
+      const conflicted = await loaded("conflicted");
+      speculate(conflicted, { n: 5 });
+
+      expect(
+        speculationSettledFor(reader, space, { name: "ConflictError" }),
+      ).toBeUndefined();
+    });
+
+    it("returns a promise resolving once the layer over what the refused commit read settles, and not before", async () => {
+      await write("refused", 1);
+      const refused = await loaded("refused");
+      const layer = speculate(refused, { n: 5 });
+
+      const settling = speculationSettledFor(
+        reader,
+        space,
+        refusalReading(refused),
+      );
+      let settled = false;
+      settling?.then(() => settled = true);
+      await reader.idle();
+      const settledBefore = settled;
+      await layer.settle(retirement);
+      await settling;
+
+      expect(settling).toBeDefined();
+      expect(settledBefore).toBe(false);
+    });
+
+    it("returns a resolved promise once no layer stands over what the refused commit read", async () => {
+      // A layer can settle while the refusal travels back to the writer, which
+      // then writes again at once.
+
+      await write("retired", 1);
+      const retired = await loaded("retired");
+      const layer = speculate(retired, { n: 5 });
+      await layer.settle(retirement);
+
+      const settling = speculationSettledFor(
+        reader,
+        space,
+        refusalReading(retired),
+      );
+
+      expect(settling).toBeDefined();
+      await settling;
     });
   });
 });

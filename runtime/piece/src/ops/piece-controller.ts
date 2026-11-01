@@ -3843,9 +3843,11 @@ class PiecePropIo implements PieceCellIo {
     // whose read basis names one is refused for good (speculation.md §6). The
     // write's reads can reach such a value: validating a supplied link reads
     // its source's producer metadata, and write-destination validation reads
-    // the destination's whole root, derived outputs included. So a write
-    // refused for that waits until those values settle and writes again,
-    // reading what the server settled.
+    // the destination's whole root, derived outputs included. The refusal
+    // names the layers the write read, which nothing else could tell before
+    // the write ran, so a write refused for that waits until those layers
+    // settle, at once where they already have, and writes again, reading what
+    // the server settled.
     for (
       let settled = speculationSettledFor(
         pieces.runtime,

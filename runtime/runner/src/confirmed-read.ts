@@ -139,8 +139,10 @@ export function readDurable<R>(
  * Returns a promise that resolves once the client speculation layers over the
  * documents a refused commit read have settled, for a commit the replica of
  * `space` refused because its read basis named one of those layers (a
- * `SpeculativeBasisError`, `speculation.md` §6). Returns `undefined` for any
- * other rejection, and when none of those layers stands any longer.
+ * `SpeculativeBasisError`, `speculation.md` §6). The promise is already
+ * resolved when none of those layers stands any longer, as when one settled
+ * while the refusal travelled back. Returns `undefined` for any other
+ * rejection.
  *
  * Such a commit read a value this runtime previews and the server has not
  * settled, so it can never be accepted as it is. A writer that may read such
@@ -162,9 +164,7 @@ export function speculationSettledFor(
     const settled = replica.whenSpeculationSettled?.(id as URI, scope);
     if (settled !== undefined) standing.set(key, settled);
   }
-  return standing.size === 0
-    ? undefined
-    : Promise.all(standing.values()).then(() => {});
+  return Promise.all(standing.values()).then(() => {});
 }
 
 /**
