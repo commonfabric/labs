@@ -117,8 +117,21 @@ class LoopbackSessionFactory implements SessionFactory {
       ? this.#plane.createTransport()
       : MemoryClient.loopback(this.#plane);
     const report = this.#onServerFrame;
+    // Delegated member by member: a transport is a class instance as often
+    // as a plain object, and a spread of one keeps no method of its class.
     return {
-      ...inner,
+      ...(inner.supportsMessageCompression === undefined ? {} : {
+        supportsMessageCompression: inner.supportsMessageCompression,
+      }),
+      ...(inner.supportsRouterStreaming === undefined ? {} : {
+        supportsRouterStreaming: inner.supportsRouterStreaming,
+      }),
+      ...(inner.messageLimits === undefined
+        ? {}
+        : { messageLimits: inner.messageLimits }),
+      send: (payload) => inner.send(payload),
+      close: () => inner.close(),
+      ...(inner.reset === undefined ? {} : { reset: () => inner.reset!() }),
       setReceiver: (next) =>
         inner.setReceiver((payload) =>
           runInServingContext(true, () => {
@@ -126,6 +139,14 @@ class LoopbackSessionFactory implements SessionFactory {
             report?.(payload);
           })
         ),
+      ...(inner.setCloseReceiver === undefined ? {} : {
+        setCloseReceiver: (receiver: (error?: Error) => void) =>
+          inner.setCloseReceiver!(receiver),
+      }),
+      ...(inner.setMessageCompressionEnabled === undefined ? {} : {
+        setMessageCompressionEnabled: (enabled: boolean) =>
+          inner.setMessageCompressionEnabled!(enabled),
+      }),
     };
   }
 

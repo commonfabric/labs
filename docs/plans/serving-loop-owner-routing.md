@@ -309,9 +309,12 @@ The stages below are not separately safe:
 - Routing reads without writes stops a process from seeing its own writes into
   another space.
 
-So the flag stays off until all of R1–R3 have landed, and every test of the
-routed arm sets it. R4 turns it on in the toolshed, where `MEMORY_URL` is always
-set, which is correct for a single process and for 21.
+So the flag turns on only with all of R1–R3 landed. It is on by default in the
+toolshed, where `MEMORY_URL` is always set, which is correct for a single
+process and for 21, and `SERVER_EXECUTION_OWNER_ROUTING=false` keeps every
+crossing on the process's own memory server. The runner's harnesses route only
+where a test hands their host a route, so every test of the routed arm sets
+one.
 
 ## Testing
 
@@ -333,10 +336,12 @@ holder's process component (`adoptProcessInstanceId` in
 read row tells the hosts' sessions apart by their connections, so the shared
 component is nothing the harness has to work around.
 
-R4 adds one integration test with two toolshed processes behind a proxy that
-routes `?space=` the way nginx does, and measures the cross-space scenario of
-the server-execution benchmarks (an event from one space into another) with the
-flag on and off.
+`runtime/runner/integration/owner-routing.test.ts` runs two toolshed processes
+from source behind a proxy in the test process that routes `?space=` the way
+nginx does, over one memory directory: a served run on one process writes into
+a space owned by the other, and the write lands on its owner alone. The
+cross-space scenario of the server-execution benchmarks (an event from one
+space into another) is measured with the flag on and off.
 
 ## Stages
 
@@ -367,7 +372,7 @@ flag on and off.
    - Test: X on A derives from Y on B and is woken by B's commits; a named
      scoped read of Y's instance for an actor whom Y grants READ is admitted on
      B, and one for an actor whom Y does not grant is refused.
-4. [ ] **R4: on by default.**
+4. [x] **R4: on by default.**
    - The toolshed passes `MEMORY_URL` and turns the flag on.
    - The two-process integration test, and the cross-space measurement.
    - `serving-loop-worker.md` and `serving-loop.md` §1 drop the in-process

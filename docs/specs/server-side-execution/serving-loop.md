@@ -764,11 +764,12 @@ executing:
   2026-08-18/19; protocol.md §2b's free-read row carries the full
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
-  With owner routing (`docs/plans/serving-loop-owner-routing.md`) that
-  session reaches the foreign space's owner from the home's process,
-  and the owner's commits wake the home loop over it; without the
-  route the session is on the home's own memory server, which v2 then
-  assumes holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
+  That session reaches the foreign space's owner from the home's
+  process over the deployment's route (owner routing,
+  `docs/plans/serving-loop-owner-routing.md`, on by default), and the
+  owner's commits wake the home loop over it; a host given no route
+  opens the session on its own memory server, which v2 then assumes
+  holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
   the registration; a foreign commit's frames arrive on that session,
   the scheduler runs autonomously off storage notifications, and the
@@ -1831,15 +1832,15 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's `eventId` horizon keeps processing exactly-once.
   This closes the crash window between wave commit and delivery
   that a process-local append queue could not survive.
-  **Delivery path.** Without a route, a row is delivered as a
-  delegated append on the host's own memory server. With the host
-  given a route to each space's owner
-  (`SERVER_EXECUTION_OWNER_ROUTING`,
-  [owner routing](../../plans/serving-loop-owner-routing.md)), a
-  row is delivered as a `served` `append` on the target's routed
-  session (04-protocol.md §4.3.12), which the owner admits exactly
-  as its own host's delegated append; the host keeps one such
-  session per target space for as long as a tenure uses it. The
+  **Delivery path.** A row is delivered as a `served` `append` on
+  the target's routed session (04-protocol.md §4.3.12) over the
+  host's route to each space's owner
+  (`SERVER_EXECUTION_OWNER_ROUTING`, on by default,
+  [owner routing](../../plans/serving-loop-owner-routing.md)),
+  which the owner admits exactly as its own host's delegated
+  append; the host keeps one such session per target space for as
+  long as a tenure uses it. A host given no route delivers the row
+  as a delegated append on its own memory server. The
   owner's `refused` answer is LT4's deterministic rejection, which
   writes the failure notice in the source; `unavailable`,
   `internal` and a transport failure are transient, and the row is
