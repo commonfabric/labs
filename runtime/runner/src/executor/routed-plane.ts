@@ -11,7 +11,10 @@
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import type { SessionDescriptor } from "@commonfabric/memory/v2";
+import type {
+  GraphQueryResult,
+  SessionDescriptor,
+} from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
   type ClientBuild,
@@ -63,7 +66,8 @@ export type RoutedScope = {
    * watches, the document `id` in `space` among them, until the returned
    * function is called. The push is the owner's, so a commit from whichever
    * process made it reaches the caller. A session's watches share one push,
-   * so a caller reads the document itself to learn whether its own changed.
+   * which wakes every watcher on the session, so a caller reads the
+   * document itself to learn whether its own changed.
    */
   watchDocument(
     space: MemorySpace,
@@ -71,7 +75,10 @@ export type RoutedScope = {
     onChange: () => void,
   ): Promise<() => void>;
 
-  /** Releases the scope's hold on every session it used. */
+  /**
+   * Releases the scope's hold on every session it used. A call on the scope
+   * after this fails, so a user that outlives its own close opens nothing.
+   */
   dispose(): void;
 };
 
@@ -125,6 +132,16 @@ type RoutedSession = {
 
   /** The position of the last append sent on the session, from zero. */
   localSeq: number;
+
+  /**
+   * The watchers of each document watched on the session. The server holds
+   * one watch per document, added with its first watcher and removed with
+   * its last, and one subscription to the session's view wakes them all.
+   */
+  watchers: Map<string, Set<() => void>>;
+
+  /** The subscription the watchers share, open while any document is watched. */
+  subscription?: AsyncIterator<GraphQueryResult>;
 };
 
 /**
@@ -140,6 +157,9 @@ export class RoutedPlane {
 
   /** The scopes that have used each target space's session. */
   readonly #users = new Map<string, Set<RoutedScope>>();
+
+  /** The scopes disposed, which no call opens a session for again. */
+  readonly #disposed = new WeakSet<RoutedScope>();
 
   /** Closes in flight, which `close()` waits out. */
   readonly #closing = new Set<Promise<void>>();
@@ -162,7 +182,10 @@ export class RoutedPlane {
       append: (space, entry) => this.#append(scope, space, entry),
       watchDocument: (space, id, onChange) =>
         this.#watchDocument(scope, space, id, onChange),
-      dispose: () => this.#release(scope),
+      dispose: () => {
+        this.#disposed.add(scope);
+        this.#release(scope);
+      },
     };
     return scope;
   }
@@ -196,46 +219,90 @@ export class RoutedPlane {
     return { deduped, ...(typeof seq === "number" ? { seq } : {}) };
   }
 
-  /** Adds a watch for `id` on `space`'s session and wakes `onChange` on it. */
+  /**
+   * Wakes `onChange` on each push of `space`'s session, with the document
+   * `id` watched there from its first watcher to its last.
+   */
   async #watchDocument(
     scope: RoutedScope,
     space: MemorySpace,
     id: string,
     onChange: () => void,
   ): Promise<() => void> {
-    const { session } = await this.#use(scope, space);
+    const routed = await this.#use(scope, space);
+    const { session } = routed;
     const watchId = `routed:${id}`;
-    const view = await session.watchAdd([{
-      id: watchId,
-      kind: "graph",
-      // A watch for the wake alone: the document's value is read from the
-      // shared store, so the walk follows nothing.
-      query: {
-        roots: [{ id, scope: "space", selector: { path: [], schema: false } }],
-      },
-    }]);
-    const results = view.subscribe();
-    let watching = true;
-    void (async () => {
-      while (watching) {
-        const next = await results.next();
-        if (next.done) return;
-        onChange();
+    let watchers = routed.watchers.get(id);
+    if (watchers === undefined) {
+      watchers = new Set();
+      routed.watchers.set(id, watchers);
+      try {
+        const view = await session.watchAdd([{
+          id: watchId,
+          kind: "graph",
+          // A watch for the wake alone: the document's value is read from
+          // the shared store, so the walk follows nothing.
+          query: {
+            roots: [{
+              id,
+              scope: "space",
+              selector: { path: [], schema: false },
+            }],
+          },
+        }]);
+        if (routed.subscription === undefined) {
+          routed.subscription = this.#subscribe(routed, view);
+        }
+      } catch (error) {
+        // The document is not watched, so its next watcher adds the watch.
+        if (routed.watchers.get(id) === watchers) routed.watchers.delete(id);
+        throw error;
       }
-    })();
+    }
+    watchers.add(onChange);
     // The removal is sent on a session the scope may be releasing at the
     // same time, and a session that closed first has no watch to remove.
     return () => {
-      watching = false;
-      void results.return?.();
+      if (!watchers.delete(onChange) || watchers.size > 0) return;
+      if (routed.watchers.get(id) === watchers) routed.watchers.delete(id);
       void session.watchRemoveSync([watchId]).catch(() => {});
+      if (routed.watchers.size === 0 && routed.subscription !== undefined) {
+        void routed.subscription.return?.();
+        routed.subscription = undefined;
+      }
     };
+  }
+
+  /**
+   * Subscribes to `view` and wakes every watcher on `routed` for each push,
+   * until the subscription is returned or the view closes. The view's
+   * iterators compete for each push, so one iterator per session is what
+   * lets every watcher see every push.
+   */
+  #subscribe(
+    routed: RoutedSession,
+    view: { subscribe(): AsyncIterator<GraphQueryResult> },
+  ): AsyncIterator<GraphQueryResult> {
+    const results = view.subscribe();
+    void (async () => {
+      for (;;) {
+        const next = await results.next();
+        if (next.done) return;
+        for (const watchers of [...routed.watchers.values()]) {
+          for (const wake of [...watchers]) wake();
+        }
+      }
+    })();
+    return results;
   }
 
   /** Marks `scope` a user of `space`'s session and returns the session. */
   #use(scope: RoutedScope, space: MemorySpace): Promise<RoutedSession> {
     if (this.#closed) {
       return Promise.reject(new Error("the routed plane is closed"));
+    }
+    if (this.#disposed.has(scope)) {
+      return Promise.reject(new Error("the routed scope is disposed"));
     }
     let users = this.#users.get(space);
     if (users === undefined) {
@@ -272,7 +339,7 @@ export class RoutedPlane {
         { actingAs: "space-owner" },
         this.#options.sessionOpenAuth,
       );
-      return { client, session, localSeq: 0 };
+      return { client, session, localSeq: 0, watchers: new Map() };
     } catch (error) {
       await client.close().catch(() => {});
       throw error;

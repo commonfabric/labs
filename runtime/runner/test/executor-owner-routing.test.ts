@@ -36,6 +36,7 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { SpaceOutbox } from "../src/executor/outbox.ts";
 import {
   RoutedPlane,
+  type RoutedScope,
   type RouteOptions,
 } from "../src/executor/routed-plane.ts";
 import { servedRequestHandler } from "../src/executor/served-requests.ts";
@@ -512,5 +513,161 @@ describe("executor owner routing", () => {
     cancel();
     scope.dispose();
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+  it("wakes every watcher on a session's shared push, and keeps a document's watch until its last watcher cancels", async () => {
+    const plane = new RoutedPlane(route());
+    planes.push(plane);
+    await createStreamDoc("B", targetSpace, stream.id);
+    const scope = plane.scope();
+    let localSeq = 0;
+    const append = (eventId: string) =>
+      servers.B.commitDelegatedAppend({
+        targetSpace,
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId,
+        payload: {},
+        actingPrincipal: aliceSigner.did(),
+        actingSession: "sess-1",
+        capabilityRef: "cap-routed",
+        sessionId: "owner-direct",
+        localSeq: ++localSeq,
+      });
+    // Each watcher settles its own deferred once the entry it waits for is
+    // in the document, whichever push woke it.
+    const watcher = (eventId: string) => {
+      const landed = Promise.withResolvers<void>();
+      const wake = () => {
+        void entriesOn("B", targetSpace, sidecar).then((entries) => {
+          if (entries.some((entry) => entry.eventId === eventId)) {
+            landed.resolve();
+          }
+        });
+      };
+      return { landed: landed.promise, wake };
+    };
+    const first = watcher("evt-shared-1");
+    const second = watcher("evt-shared-1");
+    const cancelFirst = await scope.watchDocument(
+      targetSpace,
+      sidecar,
+      first.wake,
+    );
+    const cancelSecond = await scope.watchDocument(
+      targetSpace,
+      sidecar,
+      second.wake,
+    );
+    await append("evt-shared-1");
+    // One push on the shared session woke both watchers of the document.
+    await Promise.all([first.landed, second.landed]);
+
+    cancelFirst();
+    const third = watcher("evt-shared-2");
+    const cancelThird = await scope.watchDocument(
+      targetSpace,
+      sidecar,
+      third.wake,
+    );
+    await append("evt-shared-2");
+    // The first watcher's cancel left the document watched for the second
+    // watcher, which a later watcher joined.
+    await third.landed;
+    cancelSecond();
+    cancelThird();
+    scope.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("refuses a call on a disposed scope, so a user that outlives its close opens no session", async () => {
+    const plane = new RoutedPlane(route());
+    planes.push(plane);
+    const scope = plane.scope();
+    scope.dispose();
+    await expect(scope.append(targetSpace, {
+      targetStream: sidecar,
+      targetStreamLink: stream,
+      eventId: "evt-after-dispose",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "cap-routed",
+    })).rejects.toThrow("the routed scope is disposed");
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("retires an append too large to send as a deterministic refusal, with the notice on the source entry", async () => {
+    const engine = await servers.A.engineForSpace(homeSpace);
+    const lease = new ExecutionLeaseCycle({
+      engine,
+      space: homeSpace,
+      holder,
+    });
+    if (!lease.acquire()) throw new Error("test lease acquire failed");
+    const stats = emptyServingLoopStats();
+    // The route the client refuses before sending: an append past the
+    // request's byte limit, as `SpaceSession.runServed` answers it.
+    const tooLarge: RoutedScope = {
+      append: () =>
+        Promise.reject(Object.assign(new Error("the append is too large"), {
+          name: "ServedRequestRefusal",
+          code: "payload-too-large",
+        })),
+      watchDocument: () => Promise.reject(new Error("not a watch")),
+      dispose: () => {},
+    };
+    const outbox = new SpaceOutbox({
+      stats,
+      server: servers.A,
+      engine,
+      space: homeSpace,
+      sessionId: holder,
+      localSeqRef: { value: 0 },
+      route: tooLarge,
+    });
+    const sourceStream = {
+      id: "of:routed-large-source-stream",
+      path: [] as string[],
+    };
+    const sourceSidecar = streamEntriesDocId(sourceStream);
+    await createStreamDoc("A", homeSpace, sourceStream.id);
+    await servers.A.commitDelegatedAppend({
+      targetSpace: homeSpace,
+      targetStream: sourceSidecar,
+      targetStreamLink: sourceStream,
+      eventId: "evt-large-source",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "cap-source",
+      sessionId: "owner-routing-source",
+      localSeq: 1,
+    });
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 2,
+      rows: [{
+        targetSpace,
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId: "evt-routed-large",
+        payload: {},
+        actingPrincipal: aliceSigner.did(),
+        actingSession: "sess-1",
+        capabilityRef: "cap-routed",
+        sourceEvent: { sidecarId: sourceSidecar, eventId: "evt-large-source" },
+      }],
+    });
+
+    expect((await outbox.deliverPendingAppends()).remaining).toBe(0);
+
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(0);
+    expect(stats.outbox.failed).toBe(1);
+    const [sourceEntry] = await entriesOn("A", homeSpace, sourceSidecar);
+    expect(sourceEntry.deliveryFailures?.map((f) => f.eventId)).toEqual([
+      "evt-routed-large",
+    ]);
+    lease.release();
   });
 });
