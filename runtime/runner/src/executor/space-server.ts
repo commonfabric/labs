@@ -91,7 +91,7 @@ import {
   markRuntimeInjectedEventKeys,
   sanitizeRuntimeInjectedEventKeys,
 } from "../cell.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
+import { addressKey, type NormalizedFullLink } from "../link-types.ts";
 import {
   EXECUTION_LEASE_RENEW_INTERVAL_MS,
   EXECUTION_LEASE_TTL_MS,
@@ -778,6 +778,15 @@ type StreamEntryAddress = {
  * (natural double-buffering: commits arriving mid-wave belong to the
  * NEXT wave, serving-loop.md §3).
  */
+/**
+ * The key an origin follow is remembered by: the result document's address,
+ * scope included, since a scoped instance of a piece is a document of its
+ * own, with its own pattern pointer and origin where it carries them.
+ */
+function originFollowKey(root: OwningRootAddress): string {
+  return addressKey({ ...root, path: [] });
+}
+
 export class SpaceServer implements TransactionSealDestination {
   readonly #options: SpaceServerOptions;
   readonly #holder: string;
@@ -952,27 +961,27 @@ export class SpaceServer implements TransactionSealDestination {
   readonly #failedStartRoots = new Set<string>();
 
   /**
-   * Result doc ids of the pieces whose origin this tenure has followed. A
-   * piece's origin is followed once per tenure, before the tenure's first
-   * start of it (§3e); a start asked for before that is declined, and the
-   * follow queued below.
+   * The result documents, by `originFollowKey()`, of the pieces whose origin
+   * this tenure has followed. A piece's origin is followed once per tenure,
+   * before the tenure's first start of it (§3e); a start asked for before
+   * that is declined, and the follow queued below.
    */
   readonly #followedOrigins = new Set<string>();
 
   /**
-   * The pieces whose origin this tenure is following, by result doc id, each
-   * with the follow's completion: the roots of the starts this tenure
+   * The pieces whose origin this tenure is following, by `originFollowKey()`,
+   * each with the follow's completion: the roots of the starts this tenure
    * declined for the follow. A follow runs beside the loop's cycles, and its
    * completion wakes the loop for the start it declined.
    */
   readonly #originFollowsInFlight = new Map<string, Promise<void>>();
 
   /**
-   * Result doc ids of the pieces whose follow completed since the cycle
-   * began. They count as followed from the next cycle on, so every start a
-   * cycle asks about gets the same answer: a served event a wave deferred
-   * for the follow is not overtaken by a later one on its stream whose start
-   * the same wave admits.
+   * The result documents, by `originFollowKey()`, of the pieces whose follow
+   * completed since the cycle began. They count as followed from the next
+   * cycle on, so every start a cycle asks about gets the same answer: a
+   * served event a wave deferred for the follow is not overtaken by a later
+   * one on its stream whose start the same wave admits.
    */
   readonly #originFollowsSettled = new Set<string>();
 
@@ -6693,7 +6702,9 @@ export class SpaceServer implements TransactionSealDestination {
     if (runtime === undefined || !this.#active) return;
     this.#cycleCounter += 1;
     this.#discardEmptyWave();
-    for (const id of this.#originFollowsSettled) this.#followedOrigins.add(id);
+    for (const key of this.#originFollowsSettled) {
+      this.#followedOrigins.add(key);
+    }
     this.#originFollowsSettled.clear();
     // The tenure's owed space-root ensure (OW45 arm-B stage 1) runs
     // single-flight BEFORE the tenure's ordinary steps: the event drain
@@ -6763,13 +6774,14 @@ export class SpaceServer implements TransactionSealDestination {
    * demand key the pass left pending or a served event the drain deferred.
    */
   readonly #originFollowed = (root: OwningRootAddress): boolean => {
-    if (this.#followedOrigins.has(root.id)) return true;
+    const key = originFollowKey(root);
+    if (this.#followedOrigins.has(key)) return true;
     // A follow that completed during this cycle counts from the next one, so
     // every start the cycle asks about gets the same answer; a second key
     // resolving to the same root owes no second follow.
-    if (this.#originFollowsSettled.has(root.id)) return false;
+    if (this.#originFollowsSettled.has(key)) return false;
     const runtime = this.#runtime;
-    if (runtime !== undefined && !this.#originFollowsInFlight.has(root.id)) {
+    if (runtime !== undefined && !this.#originFollowsInFlight.has(key)) {
       this.#startOriginFollow(runtime, root);
     }
     return false;
@@ -6788,6 +6800,7 @@ export class SpaceServer implements TransactionSealDestination {
    */
   #startOriginFollow(runtime: Runtime, root: OwningRootAddress): void {
     const start = performance.now();
+    const key = originFollowKey(root);
     const cell = runtime.getCellFromLink({ ...root, path: [] });
     // The reconciler reads the piece's pattern pointer and origin off the
     // loaded document; a piece the start walk reached through its chain may
@@ -6811,8 +6824,8 @@ export class SpaceServer implements TransactionSealDestination {
       },
     ).finally(() => {
       if (!this.#active || this.#runtime !== runtime) return;
-      this.#originFollowsInFlight.delete(root.id);
-      this.#originFollowsSettled.add(root.id);
+      this.#originFollowsInFlight.delete(key);
+      this.#originFollowsSettled.add(key);
       this.#options.stats.originFollows += 1;
       timing.time(start, "executor", "wave", "origin-follow");
       // The starts declined for this follow are a structure retry and an
@@ -6821,7 +6834,7 @@ export class SpaceServer implements TransactionSealDestination {
       this.#eventScanOwed = true;
       this.#feedArrived?.resolve();
     });
-    this.#originFollowsInFlight.set(root.id, follow);
+    this.#originFollowsInFlight.set(key, follow);
   }
 
   /**
