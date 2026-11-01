@@ -80,6 +80,9 @@ import {
   type ScopeKey,
   scopeKeyApplicableTo,
   type ScopeKeyIdentity,
+  SERVED_REQUEST_MAX_BYTES,
+  type ServedRequest,
+  type ServedRequestKind,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type ServerMessage,
   type SessionAckRequest,
@@ -932,6 +935,17 @@ const patternLifecycleRefusal = (
   type: "response",
   requestId,
   error: { name: "PatternLifecycleRefusal", message, code },
+});
+
+/** The response refusing a `served` request for `code`. */
+const servedRequestRefusal = (
+  requestId: string,
+  code: string,
+  message: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: { name: "ServedRequestRefusal", message, code },
 });
 
 /**
@@ -2711,6 +2725,62 @@ class Connection {
         });
         return;
       }
+      case "served": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        // Measured as a `pattern.lifecycle` request is: only a message long
+        // enough to pass the bound pays for the encoding that measures it.
+        if (
+          characters > SERVED_REQUEST_MAX_BYTES / 3 &&
+          new TextEncoder().encode(payload).length > SERVED_REQUEST_MAX_BYTES
+        ) {
+          this.#send(servedRequestRefusal(
+            parsed.requestId,
+            "payload-too-large",
+            `A \`served\` request takes at most ${SERVED_REQUEST_MAX_BYTES} bytes`,
+          ));
+          return;
+        }
+        // A foreign wave batch takes a wave commit to apply, so the request
+        // is not awaited, as a lifecycle verb is not: the frames behind it
+        // go ahead, and the answer goes out when the crossing settles.
+        const { space, sessionId, requestId } = parsed;
+        void this.#server.runServedRequest(parsed).then((response) => {
+          if (this.#closed) return;
+          try {
+            this.#sendSessionResponse(space, sessionId, requestId, response);
+          } catch (error) {
+            console.error(
+              `memory v2: the answer to a \`served\` ${parsed.kind} could not be sent`,
+              error,
+            );
+            try {
+              this.#send(servedRequestRefusal(
+                requestId,
+                "internal",
+                `The answer to the ${parsed.kind} could not be sent`,
+              ));
+            } catch {
+              this.close();
+            }
+          } finally {
+            this.#answered.delete(requestId);
+          }
+        }).catch((error: unknown) => {
+          console.error(
+            `memory v2: answering a \`served\` ${parsed.kind} failed`,
+            error,
+          );
+        });
+        return;
+      }
       case "space.invite": {
         if (
           !this.#requireSession(
@@ -2956,6 +3026,42 @@ export type PatternLifecycleHandler = (
   call: PatternLifecycleCall,
 ) => Promise<PatternLifecycleOutcome>;
 
+/** One `served` request, as a `Server` hands it to its handler. */
+export type ServedRequestCall = {
+  /** The space the crossing lands in: the session's space. */
+  space: string;
+
+  /** The DID the session was opened as, which is in the delegating class. */
+  principal: string;
+
+  /** The session the request came on, which a commit it makes is keyed by. */
+  sessionId: string;
+
+  kind: ServedRequestKind;
+
+  /** The crossing, as the sender sent it and not yet validated. */
+  body: FabricPlainObject;
+};
+
+/**
+ * What a served request handler returns: the kind's result, or a refusal
+ * with the stable code the sender branches on. `refused` is a deterministic
+ * admission refusal, which the sender does not retry; `unavailable` says the
+ * owner cannot serve the crossing now, which the sender treats as transient.
+ */
+export type ServedRequestOutcome =
+  | { ok: FabricPlainObject }
+  | { refusal: { code: "refused" | "unavailable"; message: string } };
+
+/**
+ * Runs one `served` request (`Server.setServedRequestHandler()`). It is
+ * called once per request, concurrently with others, and may take as long
+ * as the crossing does; a rejection is answered as an `internal` refusal.
+ */
+export type ServedRequestHandler = (
+  call: ServedRequestCall,
+) => Promise<ServedRequestOutcome>;
+
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
  * opens the engine for a space or hands back the one already open. It
@@ -3136,8 +3242,14 @@ export class Server {
   #patternLifecycle: PatternLifecycleHandler | undefined;
 
   /**
-   * The `pattern.lifecycle` requests running now. Their frames' handling has
-   * returned, so `close()` waits for them here.
+   * What runs `served` requests; `undefined` while no handler is installed,
+   * and while it is the server refuses every such request as unavailable.
+   */
+  #servedRequests: ServedRequestHandler | undefined;
+
+  /**
+   * The `pattern.lifecycle` and `served` requests running now. Their frames'
+   * handling has returned, so `close()` waits for them here.
    */
   #lifecycleRuns = new Set<Promise<unknown>>();
 
@@ -3543,6 +3655,7 @@ export class Server {
       connectionAuth: this.options.authorizeConnection !== undefined,
       sessionOpenProofs: this.#admitsDelegations(),
       patternLifecycle: this.#patternLifecycle !== undefined,
+      servedRequests: this.#servedRequests !== undefined,
       spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
@@ -6431,6 +6544,84 @@ export class Server {
         requestId,
         "internal",
         `${message.verb} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Runs one `served` request through the installed handler and returns the
+   * response to send (04-protocol.md §4.3.12). The session's principal must
+   * be in the delegating class: the request stands for a crossing another
+   * serving process of the deployment admitted on a wave's behalf, and the
+   * carriage it brings is validated at the engine, so the class is what the
+   * server trusts. Never rejects: a refusal, a missing handler, and a
+   * handler that throws each become an error response.
+   */
+  async runServedRequest(
+    message: ServedRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const run = this.#runServedRequest(message);
+    this.#lifecycleRuns.add(run);
+    try {
+      return await run;
+    } finally {
+      this.#lifecycleRuns.delete(run);
+    }
+  }
+
+  /** Helper for `runServedRequest()`, which does all its work. */
+  async #runServedRequest(
+    message: ServedRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const { requestId, space, sessionId } = message;
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return {
+        type: "response",
+        requestId,
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const principal = session.principal;
+    if (principal === undefined || !this.#isDelegatingPrincipal(principal)) {
+      return servedRequestRefusal(
+        requestId,
+        "forbidden",
+        "A `served` request is admitted only from a session of the " +
+          "delegating class",
+      );
+    }
+    const handler = this.#servedRequests;
+    if (handler === undefined) {
+      return servedRequestRefusal(
+        requestId,
+        "unavailable",
+        "This process runs no serving loop, so it admits no served crossing",
+      );
+    }
+    try {
+      const outcome = await handler({
+        space,
+        principal,
+        sessionId,
+        kind: message.kind,
+        body: message.body,
+      });
+      return "ok" in outcome
+        ? { type: "response", requestId, ok: outcome.ok }
+        : servedRequestRefusal(
+          requestId,
+          outcome.refusal.code,
+          outcome.refusal.message,
+        );
+    } catch (error) {
+      console.error(`memory v2: a \`served\` ${message.kind} failed`, error);
+      return servedRequestRefusal(
+        requestId,
+        "internal",
+        `${message.kind} failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -10765,6 +10956,17 @@ export class Server {
   }
 
   /**
+   * Installs what runs `served` requests, or with `undefined` removes it.
+   * The server advertises `servedRequests` from the next `hello` on while
+   * one is installed, as `setPatternLifecycleHandler` advertises
+   * `patternLifecycle`; a request sent after the handler is removed is
+   * refused as unavailable.
+   */
+  setServedRequestHandler(handler: ServedRequestHandler | undefined): void {
+    this.#servedRequests = handler;
+  }
+
+  /**
    * Watch every commit this server admits: a session transact, a
    * delegated append, the server's own direct write, and the serving
    * loop's wave commits, each reported after the engine has applied it.
@@ -12410,6 +12612,25 @@ const parseDecodedClientMessage = (
       space: parsed.space,
       sessionId: parsed.sessionId,
       verb: parsed.verb,
+      body: parsed.body,
+    };
+  }
+
+  if (
+    parsed.type === "served" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.kind === "append" || parsed.kind === "commit" ||
+      parsed.kind === "acl") &&
+    isFabricPlainObject(parsed.body)
+  ) {
+    return {
+      type: "served",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      kind: parsed.kind,
       body: parsed.body,
     };
   }
