@@ -17,7 +17,6 @@ import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
   DemandChangeReason,
-  ServedAclChange,
   ServedAclChangeVerdict,
   Server,
   SessionDemand,
@@ -28,9 +27,9 @@ import {
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
-import type { SpaceAccessChange } from "../builder/types.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
@@ -60,15 +59,6 @@ export type PortLike = {
     listener: (event: MessageEvent) => void,
   ): void;
   start?(): void;
-};
-
-/**
- * A served access-list change as it crosses the port: the function that
- * applies it replaced by the list of changes it applies, from which the other
- * side rebuilds the function.
- */
-export type ServedAclChangeData = Omit<ServedAclChange, "change"> & {
-  readonly changes: readonly SpaceAccessChange[];
 };
 
 /** The entry `Server.commitDelegatedAppend()` takes. */
