@@ -5,6 +5,7 @@ import type {
   HarnessTranscriptMessage,
 } from "../contracts/transcript.ts";
 import type { HarnessCredentialOwnerRef } from "../contracts/run-manifest.ts";
+import type { HarnessEmptyReplyDiagnostic } from "./empty-reply.ts";
 import type { HarnessProviderError } from "./provider-error.ts";
 import type { HarnessModelAttemptRetry } from "./transport-retry.ts";
 
@@ -181,6 +182,9 @@ export const HARNESS_MODEL_USAGE_NUMERIC_FIELDS = [
 export interface HarnessModelTurnResult {
   assistant: HarnessAssistantTranscriptMessage;
   usage?: HarnessModelUsage;
+
+  /** Empty-reply evidence for artifact persistence, outside public reports. */
+  emptyReply?: HarnessEmptyReplyDiagnostic;
 
   /** Model identifier returned by the provider for this response. */
   observedModel?: string;

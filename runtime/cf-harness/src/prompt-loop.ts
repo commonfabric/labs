@@ -4302,6 +4302,21 @@ export class CfHarnessPromptLoop {
         }
         if (toolCalls.length === 0) {
           if (assistantMessage.content.trim().length === 0) {
+            if (response.emptyReply !== undefined) {
+              const attempt = modelAttempts.at(-1);
+              try {
+                await this.engine.artifactStore?.persistEmptyReply?.({
+                  modelTurn: modelTurns,
+                  ...(attempt?.modelTurn === modelTurns
+                    ? { modelAttemptSequence: attempt.sequence }
+                    : {}),
+                  diagnostic: response.emptyReply,
+                });
+              } catch {
+                // Diagnostic storage must not replace the empty-reply
+                // failure or prevent the existing submit_result notice.
+              }
+            }
             // A run that returns through `submit_result` is asked once to
             // submit rather than failed on its first blank turn, provided a
             // turn that still offers tools follows; a second blank turn
