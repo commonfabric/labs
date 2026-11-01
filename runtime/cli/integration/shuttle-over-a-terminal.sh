@@ -70,10 +70,15 @@ FIXTURE="$SCRIPT_DIR/pattern/shuttle-place.tsx"
 DRIVER="$SCRIPT_DIR/shuttle-terminal.py"
 
 # Prefer a built binary when the harness supplies one; fall back to source.
+#
+# The fallback names the directory `cf` runs in, because step 32 reads that
+# directory back and the launcher would otherwise take an inherited `INIT_CWD`
+# in preference to it. `deno task` sets `INIT_CWD` only where it is not already
+# set, so under an enclosing `deno task` it names wherever that one started.
 if [ -n "${CF_BINARY:-}" ]; then
   CF="$CF_BINARY"
 else
-  CF="deno task --quiet --cwd $REPO_ROOT cf"
+  CF="deno task --quiet --cwd $REPO_ROOT cf --cwd $PWD --"
 fi
 
 PASS=0
