@@ -41,9 +41,9 @@ The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
 dispositions and the owner's rollout decision; the flip record alone does not
 establish current readiness.
 
-**Delta 2026-10-31 (the verbs on the space's memory session): a lifecycle
-verb travels only as a `pattern.lifecycle` memory request on the space's
-session, which reaches the process that serves the space; the toolshed
+**Delta 2026-10-31 (the verbs on the space's memory session): under ON, a
+lifecycle verb travels only as a `pattern.lifecycle` memory request on the
+space's session, which reaches the process that serves the space; the toolshed
 serves no HTTP route for the verbs (`docs/features/server-pattern-lifecycle.md`,
 "Sending a verb").**
 

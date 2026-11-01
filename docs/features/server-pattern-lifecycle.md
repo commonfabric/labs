@@ -37,7 +37,7 @@ which a memory server takes while it advertises the `patternLifecycle` hello
 flag. The session reaches the process that serves the space: a deployment that
 runs several toolshed processes routes each space's memory WebSocket, by its
 `space=<did>` query parameter, to one process, and the serving loop serves the
-space on that process. A request takes at most 8 MiB
+space on that process. A request takes at most 8 MiB in UTF-8
 (`PATTERN_LIFECYCLE_MAX_BYTES`). On a connection through the memory router a
 request takes at most 4 MiB, the router's request bound, and the client refuses
 a larger one before sending it.
@@ -137,8 +137,8 @@ The handler then checks that DID against the space's ACL itself: it must hold
 WRITE or OWNER there, resolved the way the memory server resolves an authored
 commit — the wildcard grant and the service principals count — so a caller the
 memory server would admit writing directly is admitted, and no other. A
-deployment with ACL enforcement off admits every caller, as its memory server
-does. One denial covers a malformed DID, a space the deployment does not host,
+deployment with ACL enforcement off admits every authenticated caller, as its
+memory server does. One denial covers a malformed DID, a space the deployment does not host,
 an absent ACL, and a caller without a grant, so the check is not an existence
 oracle over the deployment's spaces.
 

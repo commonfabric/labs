@@ -1443,15 +1443,15 @@ program from disk, pins its fabric imports, and sends it as a
 command connects as. That session reaches the toolshed process serving the
 space. Against a memory server that does not take the request, the command fails
 with `lifecycle-unsupported` before anything is sent. A request takes at most 8
-MiB, and at most 4 MiB on a connection through the memory router; a larger one
-is refused before it is sent. The space's serving runtime compiles the program,
-creates the piece, and answers with the receipt the command prints. Where the
-deployment enforces ACLs, the identity must hold WRITE or OWNER on the space; a
-deployment with enforcement off admits any authenticated caller, as its memory
-server does. Setup, slug, and creation receipt commit together, so a taken name
-refuses before anything is created. Registration then invokes the default
-pattern's `addPiece` handler and waits for its durable consequence and registry
-readback. A failure names the created piece and a retry key; repeat
+MiB in UTF-8, and at most 4 MiB on a connection through the memory router; a
+larger one is refused before it is sent. The space's serving runtime compiles
+the program, creates the piece, and answers with the receipt the command prints.
+Where the deployment enforces ACLs, the identity must hold WRITE or OWNER on the
+space; a deployment with enforcement off admits any authenticated caller, as its
+memory server does. Setup, slug, and creation receipt commit together, so a
+taken name refuses before anything is created. Registration then invokes the
+default pattern's `addPiece` handler and waits for its durable consequence and
+registry readback. A failure names the created piece and a retry key; repeat
 `cf piece new` with `--request-key <key>` to resume that creation. The space
 root is the serving loop's to ensure rather than this command's. What stays in
 this process after the receipt is what opening a piece does anyway: the start,
