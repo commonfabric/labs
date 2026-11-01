@@ -2162,9 +2162,8 @@ the per-epic implementation notes).
   serving runtime creates takes the same route as a signed `session.open`
   rather than a `served` request: the session signed by the new space's own
   key is opened with the space's owner, and its first commit, the access
-  list, lands there. The loop's sessions in every space but its home, which
-  are its reads of other spaces, are opened with the owner too, so the
-  owner's commits wake it.
+  list, lands there. The loop's read sessions in other spaces are opened with
+  the owner too, so the owner's commits wake it.
   [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
   is the design and its stages.
 - **Current default and planned end state.** On by default in toolshed,

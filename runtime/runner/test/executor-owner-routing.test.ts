@@ -1255,6 +1255,132 @@ export default pattern<
     }
   });
 
+  it("re-asks a foreign actor's grant when the space's owner changes its access list in another process: a refused actor's instance is pulled once granted, and a granted actor is refused once revoked", async () => {
+    newHost("A");
+    newHost("B");
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+    const bobKey = resolveScopeKey("user", { principal: bobDid });
+    const aclId = `of:${targetSpace}`;
+
+    // Alice owns the target space, and Bob's user-scoped instance of the doc
+    // lives there, written on its owner, engine-direct.
+    const docId = "of:routed-read-regranted";
+    await servers.B.writeDocument(targetSpace, aclId, { [aliceDid]: "OWNER" });
+    applyCommit(await servers.B.engineForSpace(targetSpace), {
+      sessionId: "owner-routing-setup",
+      space: targetSpace,
+      principal: bobDid,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: docId,
+          scope: "user",
+          value: { value: { draft: "bob's" } } as never,
+        }],
+      },
+    });
+
+    // Alice's demand on a home doc activates the home space on A.
+    const clientManager = EmulatedStorageManager.connectTo(servers.A, {
+      as: aliceSigner,
+    });
+    managers.push(clientManager);
+    const clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    runtimes.push(clientRuntime);
+    const demandCell = clientRuntime.getCell<{ ping: number }>(
+      homeSpace,
+      "routed-read-regrant-demand",
+      undefined,
+    );
+    const cancel = demandCell.sink(() => {});
+    try {
+      await activated("A", homeSpace);
+      const manager = servingRuntimes.get("A")!
+        .storageManager as LoopbackStorageManager;
+      const foreignUser = { space: targetSpace, scope: "user" as const };
+      /** The documents `manager` lands from here on, by address. */
+      const integrations = () => {
+        const log = new ArrivalLog<
+          { id: string; scope?: string; scopeKey?: string }
+        >();
+        manager.subscribe({
+          next: (notification) => {
+            if (
+              notification.type === "pull" ||
+              notification.type === "integrate"
+            ) {
+              for (const { address } of notification.changes) {
+                log.record({
+                  id: address.id,
+                  scope: address.scope,
+                  scopeKey: address.scopeKey,
+                });
+              }
+            }
+            return undefined;
+          },
+        });
+        return log;
+      };
+      const syncBob = () =>
+        manager.open(targetSpace).sync(
+          docId as never,
+          { path: [], schema: false },
+          "user",
+          bobKey,
+        );
+
+      // The list grants Bob nothing: refused before the read leaves A.
+      const refused = await syncBob();
+      expect(refused.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(manager.scopedReadStanding(foreignUser, { principal: bobDid }))
+        .toBe("refused");
+
+      // The owner grants Bob READ, on B. No host fan-out reaches A: the
+      // list's new version reaches A's replica over its routed session,
+      // which asks the grant again and pulls the read it refused.
+      const granted = integrations();
+      await servers.B.writeDocument(targetSpace, aclId, {
+        [aliceDid]: "OWNER",
+        [bobDid]: "READ",
+      });
+      await granted.matching((entry) =>
+        entry.id === docId && entry.scopeKey === bobKey
+      );
+      expect(manager.scopedReadStanding(foreignUser, { principal: bobDid }))
+        .toBe("admitted");
+      expect(
+        (manager.open(targetSpace).replica.getDocument(
+          docId as never,
+          "user",
+          { principal: bobDid },
+        )?.value as { draft?: string } | undefined)?.draft,
+      ).toBe("bob's");
+
+      // The owner revokes Bob, on B: once the list's version without him
+      // lands, the next read awaits the grant asked again, and is refused.
+      const revoked = integrations();
+      await servers.B.writeDocument(targetSpace, aclId, {
+        [aliceDid]: "OWNER",
+      });
+      await revoked.matching((entry) =>
+        entry.id === aclId && (entry.scope ?? "space") === "space"
+      );
+      const refusedAgain = await syncBob();
+      expect(refusedAgain.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(manager.scopedReadStanding(foreignUser, { principal: bobDid }))
+        .toBe("refused");
+    } finally {
+      cancel();
+    }
+  });
+
   // The owner's handler
   //
   // What the handler refuses before the owner's admission sees it, and what

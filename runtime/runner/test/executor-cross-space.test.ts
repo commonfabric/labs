@@ -2066,7 +2066,11 @@ describe("Phase 5 cross-space serving", () => {
       );
 
       // Alice's own instance: unresolved until her grant is asked for,
-      // admitted once the probe answers, and asked for once per actor.
+      // admitted once the probe answers, and asked for once per actor —
+      // and once more for every actor asked about when the list itself
+      // first lands in the replica, which watches it from the first ask on,
+      // since a verdict asked before the list reached it may have been
+      // decided on an older one.
       const alice = { principal: aliceDid };
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe(
         "unresolved",
@@ -2076,12 +2080,33 @@ describe("Phase 5 cross-space serving", () => {
         alice,
       );
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
-      expect(probed).toEqual([`${foreignSpace}\0${aliceDid}`]);
+      expect(probed[0]).toBe(`${foreignSpace}\0${aliceDid}`);
+      /** Resolves once the replica's copy of the list grants `principal`. */
+      const listGrants = (principal: string): Promise<void> => {
+        const held = manager.open(foreignSpace).replica as SpaceReplica;
+        const id = `of:${foreignSpace}` as never;
+        const grants = (doc: { value?: unknown } | undefined): boolean =>
+          (doc?.value as Record<string, unknown> | undefined)?.[principal] !==
+            undefined;
+        if (grants(held.getDocument(id))) return Promise.resolve();
+        return new Promise((resolve) => {
+          const cancel = held.sinkDocument(id, (doc) => {
+            if (!grants(doc)) return;
+            cancel();
+            resolve();
+          });
+        });
+      };
+      await listGrants(aliceDid);
+      expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${aliceDid}`,
+      ]);
       await manager.syncInstance(
         { space: foreignSpace, id: "of:x-other" as never, scope: "session" },
         { principal: aliceDid, sessionId: "alice-session" as never },
       );
-      expect(probed).toHaveLength(1);
+      expect(probed).toHaveLength(2);
 
       // Bob's instance: refused on the list, typed, with the list's reason.
       const bob = { principal: bobDid };
@@ -2097,12 +2122,13 @@ describe("Phase 5 cross-space serving", () => {
       );
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
 
-      // Word of an access-list change asks about every actor again at once,
-      // each last verdict standing meanwhile: alice's instances, already
-      // loaded and never pulled again, stay admitted throughout. Once alice
-      // grants bob READ, his standing turns admitted on the probe's answer
-      // alone, and the read refused earlier is pulled again for him, since
-      // nothing else would load it.
+      // Word of an access-list change, the list's new version landing in
+      // the replica over the session its reads go through, asks about every
+      // actor again at once, each last verdict standing meanwhile: alice's
+      // instances, already loaded and never pulled again, stay admitted
+      // throughout. Once alice grants bob READ, his standing turns admitted
+      // on the probe's answer alone, and the read refused earlier is pulled
+      // again for him, since nothing else would load it.
       const replica = manager.open(foreignSpace).replica as SpaceReplica;
       const repulled: string[] = [];
       const originalSync = replica.sync.bind(replica);
@@ -2114,9 +2140,8 @@ describe("Phase 5 cross-space serving", () => {
         [aliceDid]: "OWNER",
         [bobDid]: "READ",
       });
-      manager.noteSpaceAclChanged(foreignSpace);
+      await listGrants(bobDid);
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
-      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
       await manager.syncInstance(
         { space: foreignSpace, id: "of:x-other" as never, scope: "user" },
         bob,
@@ -2124,6 +2149,7 @@ describe("Phase 5 cross-space serving", () => {
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("admitted");
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
       expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
         `${foreignSpace}\0${aliceDid}`,
         `${foreignSpace}\0${bobDid}`,
         `${foreignSpace}\0${aliceDid}`,

@@ -518,10 +518,14 @@ serving runtime never reads another principal's, nor its own instance
 of a foreign scoped document. Both ends of the stack decide it: (i)
 the serving runtime's storage plane asks the co-hosted memory server
 before the read leaves it, keeps the verdict per (space, actor), and
-asks about every actor again on word of a change to that space's list
-(`noteSpaceAclChanged`), the last verdict standing until the new one
-lands, so a revoked actor's instances are refused from the answer on
-and a newly granted actor's refused reads are pulled again; (ii) admission resolves the same
+asks about every actor again on word of a change to that space's list,
+the last verdict standing until the new one lands, so a revoked actor's
+instances are refused from the answer on and a newly granted actor's
+refused reads are pulled again — word that its replica of the space
+takes from the list document itself, watched over the session its reads
+go through, so a change the space's owner commits in another process
+reaches it there, and that the host's `noteSpaceAclChanged` gives it
+for the commits the host's own memory server admits; (ii) admission resolves the same
 grant for a named scoped root a service-identity session reads in a
 space it does not serve on that memory server, from the owner's own
 process or routed from another, and REFUSES an UNNAMED one from a
