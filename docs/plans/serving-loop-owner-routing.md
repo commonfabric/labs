@@ -74,6 +74,15 @@ A send whose session is not connected fails the way a transport failure does
 today. The outbox already treats that as transient (`serving-loop.md` §5,
 LT4), and the wave treats it as a foreign failure (below).
 
+The memory router's routed mode (`MEMORY_ROUTER_CONFIG_FILE`,
+[`CONFIGURATION.md`](../development/CONFIGURATION.md)) is a separate, private
+listener that these deployments do not run. On it, `Server.options.ownsSpace`
+refuses a `session.open` for a space the process does not own, and the routed
+host admits no `actingAs` binding. The routed session of this plan reaches the
+owner's direct listener through the deployment's own `?space=` route, where the
+binding is admitted. On a deployment that runs both, `ownsSpace` is a second
+fence that agrees with the route; the route is what picks the owner.
+
 ## The memory protocol: `served`
 
 A session request, beside `pattern.lifecycle`
@@ -112,8 +121,9 @@ The answer is `{ ok }` with the kind's result, or `{ refusal: { code, message }
 - `unavailable`: the owner has no serving loop.
 - `internal`: anything else.
 
-A transport failure produces no answer at all, and the caller treats it as
-transient.
+A transport failure produces no answer at all. The caller treats it, and
+`unavailable` and `internal`, as transient: the outbox keeps the row and stops
+its drain, and the wave fails foreign and replays.
 
 The memory server admits a `served` request only from a session whose principal
 is in the delegating class, which is the process identity under the server
@@ -144,7 +154,10 @@ delivery is at least once, the target's `eventId` horizon dedupes, and a
 deterministic refusal writes the failure notice in the source. The
 pattern-lifecycle handler's registration delivery, which appends to the
 `addPiece` stream of the space root it registers into, sends the same request
-when that space is not the one its process serves.
+when that space is not the one its process serves. That delivery then observes
+the registration's outcome through the same routed session, with a watch on the
+stream document, where it watched its own server's admitted commits: the owner
+consequences the event, and only the owner's push says when.
 ([commonfabric/labs#9437](https://github.com/commonfabric/labs/pull/9437)
 removes the HTTP route. The session handler's delivery is what remains.)
 
@@ -207,10 +220,23 @@ minted and whose lease it cannot see. So the row changes:
   the service DID from passing on this process's lease rows. A deployment
   whose processes hold one key gives that second process the same trust, and
   this plan is what makes it a peer.
-- **Also goes:** the lapse machinery that hangs from the lease
-  (`leaseHolderReads` re-keying on the current lease, `leaseHolderReadsLapsed`,
-  `noteLeaseReacquired`). A session's keyed delivery becomes a property of its
-  principal for the session's life.
+  [`verification-coverage.md`](../specs/server-side-execution/verification-coverage.md)
+  records a Phase-1 acceptance that waits on that sharpening; the stage that
+  makes the change records its retirement there.
+- **What stays:** the session's keyed delivery (`leaseHolderReads`, and the
+  `scopeKey` field it puts on the wire). It is armed by the first admitted
+  named read, and from then on it is a property of the session's principal for
+  the session's life.
+- **Also goes:** the lapse machinery that hangs from the lease:
+  `leaseHolderReadsLapsed`, its re-arm when the lease is lost, and
+  `noteLeaseReacquired` with its port notice.
+- **The unnamed-scope guard:** `#denyForeignServingScopedRead` decides that a
+  serving session is reading a foreign space by finding a live lease it holds
+  on some other space of the same server. A routed session holds none there. It
+  decides instead by principal class: a delegating-class session that does not
+  hold the read space's live lease on this server is reading a foreign space,
+  and its unnamed scoped read is refused as now. Home reads stay on the
+  loopback session and keep passing on the holder equality.
 
 This is the one ruling the plan needs on admission. Once the plan is approved,
 the ruling is recorded where `protocol.md` §2 records the 2026-08-03 ruling it
@@ -260,8 +286,21 @@ owns it. Routed sessions connect through that `Server`'s `connect()` over the
 loopback transport, so the harness needs no HTTP. Every assertion is about
 which server admitted what and which host serves what.
 
+Two details make the two hosts behave as two processes would. The serving
+memory server of the test support
+(`runtime/runner/src/executor/serving-memory-server.deno.ts`) takes a store it
+is handed, so two of them open one file. And the lease holder's process
+component (`adoptProcessInstanceId` in
+`runtime/memory/v2/execution-lease.ts`) is one value per module instance, so
+the hosts of one test process mint one holder until R3. The read row binds a
+serving session's holder to that component, so R1 and R2 leave it shared and
+assert on which server admitted what; from R3 on, each host takes its own
+component, and the two holders differ as two processes' do.
+
 R4 adds one integration test with two toolshed processes behind a proxy that
-routes `?space=` the way nginx does.
+routes `?space=` the way nginx does, and measures the cross-space scenario of
+the server-execution benchmarks (an event from one space into another) with the
+flag on and off.
 
 ## Stages
 
@@ -269,7 +308,8 @@ routes `?space=` the way nginx does.
    - The flag and its registry entry.
    - The host's route input, under the worker too.
    - `served` with `append`, its admission and its handler installation.
-   - The outbox and the lifecycle registration delivery send through it.
+   - The outbox and the lifecycle registration delivery send through it, and
+     the delivery observes its outcome through the routed session.
    - `04-protocol.md` gets the request.
    - `serving-loop.md` §5 and `protocol.md` §2b get the delivery path.
    - Test: an event from X's loop on server A into Y, owned by B, is admitted by
@@ -285,14 +325,15 @@ routes `?space=` the way nginx does.
      not land, and the event replays once B is back.
 3. [ ] **R3: reads through the owner, and the read row.**
    - Remote sessions for every space but the home.
-   - The read-row change, with its ruling recorded in `protocol.md` §2.
+   - The read-row change, with its ruling recorded in `protocol.md` §2, and
+     the Phase-1 acceptance it retires recorded in `verification-coverage.md`.
    - `serving-loop.md` §3b and `runtime-mapping.md` follow.
    - Test: X on A derives from Y on B and is woken by B's commits; a named
      scoped read of Y's instance for an actor whom Y grants READ is admitted on
      B, and one for an actor whom Y does not grant is refused.
 4. [ ] **R4: on by default.**
    - The toolshed passes `MEMORY_URL` and turns the flag on.
-   - The two-process integration test.
+   - The two-process integration test, and the cross-space measurement.
    - `serving-loop-worker.md` and `serving-loop.md` §1 drop the in-process
      crossings from their description of the default.
 5. [ ] **L: the lease in memory.** The section below. It lands only after a
@@ -306,9 +347,19 @@ Holding it in memory removes the two problems the stored row causes:
 
 - A space stays unserved after a process is killed and restarted, until its
   predecessor's row expires.
-- A cold pattern compile blocks the worker thread for longer than the 15 s TTL,
-  so the leases lapse, and every space that worker serves aborts its in-flight
-  wave.
+- Any stall of the worker thread longer than the 15 s TTL lapses every lease
+  that worker holds, and every space it serves aborts its in-flight wave. The
+  recorded cause of such a stall is a long settle starving the renew timer,
+  which the mid-wave renew (`serving-loop.md` §2) covers; the stored lease
+  turns every other stall of that length into the same loss.
+
+**Precondition.** The route never moves a space between running processes.
+With the lease in memory, nothing stored stops the old owner from serving a
+space its new owner starts to serve. A change to the set of processes behind
+the route drains and restarts them all. The deployment's mapping is a function
+of the space's DID and the process count
+([`random-space-identities.md`](../specs/random-space-identities.md)), so a
+restart under an unchanged count keeps every space where it was.
 
 **What the lease becomes.**
 
@@ -335,8 +386,11 @@ Holding it in memory removes the two problems the stored row causes:
   held is consulted or waited for.
 
 **The watchdog.** This is the one wait the design keeps, because a thread that
-has stopped cannot report that it has stopped. It is the only timer left in the
-lease:
+has stopped cannot report that it has stopped. It replaces the stored lease's
+TTL as the liveness rule, and it is more tolerant: a stalled worker keeps its
+spaces for 60 s where the TTL released them after 15 s, so its successor serves
+them later than it does today, and no space is served by two processes in
+between because none can be. It is the only timer left in the lease:
 
 - The worker posts a heartbeat every 10 s from a timer of its own.
 - The main thread checks every 10 s. When it has had no message of any kind
