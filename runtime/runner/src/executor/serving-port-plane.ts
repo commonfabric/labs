@@ -42,14 +42,13 @@ import {
   type PlaneRequests,
   PortEndpoint,
   type PortLike,
-  type ServedAclChangeData,
   type ServingLoopDiagnostics,
 } from "./serving-port-protocol.ts";
+import { servedAclChangeData } from "./served-acl-change.ts";
 import type { WaveCommitSinkDeps } from "./space-server.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { ViewInterestCache } from "./view-interests.ts";
 import type {
-  ListedServedAclChange,
   WaveCommitRejection,
   WaveCommitSink,
   WaveReadQuery,
@@ -84,24 +83,6 @@ export type ServingPlaneHost = {
     verb: LifecycleVerbDescriptor,
   ) => Promise<LifecycleVerbRun>;
   close: () => Promise<void>;
-};
-
-/**
- * A served access-list change as data: the list its function applies in place
- * of the function. The wave attaches the list to every change it builds; a
- * change without one cannot cross.
- */
-const servedAclChangeData = (
-  change: ServedAclChange,
-): ServedAclChangeData => {
-  const { change: _apply, ...data } = change as ListedServedAclChange;
-  if (data.changes === undefined) {
-    throw new Error(
-      `the access-list change to ${change.space} carries no change list, ` +
-        "so it cannot cross to the memory server's thread",
-    );
-  }
-  return data;
 };
 
 /** A session as the mirror holds it. */

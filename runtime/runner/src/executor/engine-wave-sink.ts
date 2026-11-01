@@ -141,6 +141,183 @@ export function waveCommitFailureResult(
   };
 }
 
+/** The commit `batch` makes, numbered `localSeq` on the sink's session. */
+const waveBatchCommit = (batch: WaveSpaceCommit, localSeq: number) => ({
+  localSeq,
+  reads: { confirmed: [...(batch.confirmedReads ?? [])], pending: [] },
+  operations: [...batch.operations],
+  ...(batch.preconditions.length > 0
+    ? { preconditions: [...batch.preconditions] }
+    : {}),
+  // Same-space emitted event entries (LT1): declared so admission
+  // stamps their stream seqs (events.md §2's wave carriage).
+  ...(batch.eventAppends !== undefined && batch.eventAppends.length > 0
+    ? { eventAppends: [...batch.eventAppends] }
+    : {}),
+});
+
+/**
+ * Commits `batch`, a foreign provisioning batch (protocol.md §2b), against
+ * `engine`, the store of its space, as an authored-class commit under the
+ * DELEGATED admission row: the batch's carried acting identity and
+ * capabilityRef ride the commit metadata, admission validates completeness,
+ * and scoped writes key from the CARRIED identity. Idempotent by
+ * deterministic destination ids, so no wave-basis re-verification and no
+ * basis rows. The commit is keyed by `envelope`, the committing session and
+ * its number for it. Four batches are refused before anything is applied,
+ * each deterministically: one carrying sqlite operations, one into a fresh
+ * store with no genesis, one writing the space's ACL document, and one with
+ * scoped writes and no delegated carriage. The process that serves the
+ * space's loop calls this for its own waves' foreign batches, and for the
+ * ones another process sends it as the space's owner.
+ */
+export function commitForeignWaveBatch(
+  engine: Engine,
+  batch: WaveSpaceCommit,
+  envelope: { sessionId: string; principal?: string; localSeq: number },
+): Result<{ seq: number }, WaveCommitRejection> {
+  const commit = waveBatchCommit(batch, envelope.localSeq);
+  try {
+    if (batch.operations.some((op) => op.op === "sqlite")) {
+      // No Phase-1 producer folds sqlite into a foreign provisioning
+      // batch, and the attachment identity for a foreign run is
+      // Phase 5's cross-space design — refused, never silently
+      // applied against a mis-keyed file.
+      return {
+        error: {
+          name: "WaveCommitRejected",
+          message: "sqlite ops in a FOREIGN wave batch are refused: " +
+            "no sanctioned producer folds sqlite into provisioning, " +
+            "and the foreign attachment identity rides the " +
+            "grant-scoped read design (protocol.md §2, §2b; the " +
+            "stage-G discharge covers home batches only — Phase 5 " +
+            "kept this refusal deliberately)",
+        },
+      };
+    }
+    // INV-13 mirrored on the engine-direct plane (OW31 B4, RULED
+    // 2026-08-18; protocol.md §2's genesis clause): a foreign batch
+    // never lands in a FRESH store ahead of its genesis ACL — the
+    // space's commit #1 is the ACL, signed by the space's own keys
+    // and naming the acting user OWNER. The session plane enforces
+    // this in `#validateAclCommit`'s precedence clause, in the
+    // `observe` and `enforce` memory ACL modes; this mirror holds in
+    // every mode, `off` included. Of the two
+    // other engine-direct committers, this sink is the one that
+    // writes provisioning DATA batches (the third,
+    // `Server.commitDelegatedAppend`, appends outbox-carried events
+    // to stream sidecars and never writes an `of:<space>` ACL doc —
+    // no genesis-bypass vector; review F7 on #6156), and before
+    // this refusal the sink silently
+    // bypassed the invariant (a served `.inSpace()` create whose
+    // data commit won the race with the provider mount's genesis
+    // minted an ACL-less space). A served `.inSpace()` target is
+    // created, genesis included, before its handler re-runs, and the
+    // accept gate refuses a write into a space no store holds, so
+    // hitting this refusal means a write aimed at a space nobody
+    // created got past the gate — foreign failure ⇒ home withheld ⇒
+    // replay (§2b's existing failure semantics). Populated ACL-less legacy
+    // spaces (serverSeq > 0) are not this refusal's subject — the
+    // accept gate already fails closed on them.
+    if (
+      serverSeq(engine) === 0 &&
+      readState(engine, { id: `of:${batch.space}` }) === null
+    ) {
+      return {
+        error: {
+          name: "WaveCommitRejected",
+          message: `foreign wave batch into fresh space ` +
+            `${batch.space} refused: the space requires its genesis ` +
+            "ACL commit — signed by the space identity, naming the " +
+            "acting user OWNER — before any data commit (INV-13 " +
+            "mirrored at the sink; OW31, protocol.md §2's genesis " +
+            "clause, §2b)",
+        },
+      };
+    }
+    // No foreign batch writes the target space's ACL document: the
+    // delegated admission checks carriage and nothing of INV-12's shape
+    // or of the carried actor's level, so it is refused here, naming the
+    // operation, in every memory ACL mode. The engine refuses the same
+    // write in a derived (home) batch.
+    const aclId = aclDocId(batch.space);
+    const aclOperation = batch.operations.findIndex((op) =>
+      op.op !== "sqlite" && op.id === aclId
+    );
+    if (aclOperation !== -1) {
+      return {
+        error: {
+          name: "AclDocumentWriteRefused",
+          message: `foreign wave batch into ${batch.space} refused: ` +
+            `operation ${aclOperation} writes ${aclId}, the space ACL ` +
+            "document, which no wave batch may write (INV-12)",
+          failedOperation: aclOperation,
+        },
+      };
+    }
+    //
+    // A scoped write with NO delegated carriage is still REFUSED,
+    // not silently mis-keyed: the plain path would key it from the
+    // sink's own principal — the empty-instance trap, cross-space
+    // edition (protocol.md §1, §2).
+    if (batch.delegated === undefined) {
+      for (const op of batch.operations) {
+        if (
+          op.op === "sqlite" || op.scope === undefined ||
+          op.scope === "space"
+        ) {
+          continue;
+        }
+        return {
+          error: {
+            name: "WaveCommitRejected",
+            message: "scoped write in a foreign wave batch refused " +
+              `(op ${op.id}, scope "${op.scope}"): without delegated ` +
+              "carriage the row would silently key from the sink's " +
+              "own principal; scoped foreign admission requires the " +
+              "acting-identity + capabilityRef delegated row " +
+              "(protocol.md §2, §2b)",
+          },
+        };
+      }
+    }
+    const applied = applyCommit(engine, {
+      sessionId: envelope.sessionId,
+      space: batch.space,
+      principal: envelope.principal,
+      commit,
+      ...(batch.delegated === undefined ? {} : { delegated: batch.delegated }),
+    });
+    return { ok: { seq: applied.seq } };
+  } catch (error) {
+    return waveCommitFailureResult(error);
+  }
+}
+
+/**
+ * The notice `Server.noteExecutorCommit()` takes for `batch`'s commit at
+ * `seq` in `engine`, or `undefined` where the store holds no such commit: an
+ * authored commit carrying the warm request (serving-loop.md §1), since the
+ * batch durably staged setup into the space and its target should warm.
+ */
+export function foreignWaveCommitNotice(
+  engine: Engine,
+  batch: WaveSpaceCommit,
+  seq: number,
+): AdmittedCommitNotice | undefined {
+  const record = selectCommitsSince(engine, { fromSeq: seq - 1, limit: 1 })
+    .find((entry) => entry.seq === seq);
+  if (record === undefined) return undefined;
+  return {
+    space: batch.space,
+    seq,
+    class: "authored",
+    sessionId: record.sessionId,
+    writes: warmWritesOf(batch),
+    warm: true,
+  };
+}
+
 export class EngineWaveCommitSink implements WaveCommitSink {
   readonly #engineFor: (space: MemorySpace) => Engine;
   readonly #sessionId: string;
@@ -376,144 +553,19 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const engine = this.#engineFor(batch.space);
-    const commit = {
-      localSeq: ++this.#localSeq.value,
-      reads: { confirmed: [...(batch.confirmedReads ?? [])], pending: [] },
-      operations: [...batch.operations],
-      ...(batch.preconditions.length > 0
-        ? { preconditions: [...batch.preconditions] }
-        : {}),
-      // Same-space emitted event entries (LT1): declared so admission
-      // stamps their stream seqs (events.md §2's wave carriage).
-      ...(batch.eventAppends !== undefined && batch.eventAppends.length > 0
-        ? { eventAppends: [...batch.eventAppends] }
-        : {}),
-    };
+    const localSeq = ++this.#localSeq.value;
+    if (!batch.home) {
+      const result = commitForeignWaveBatch(engine, batch, {
+        sessionId: this.#sessionId,
+        principal: this.#principal,
+        localSeq,
+      });
+      if (result.ok !== undefined) this.#report(engine, batch, result.ok.seq);
+      return Promise.resolve(result);
+    }
+    const commit = waveBatchCommit(batch, localSeq);
     const hasSqliteOps = batch.operations.some((op) => op.op === "sqlite");
     try {
-      if (!batch.home) {
-        if (hasSqliteOps) {
-          // No Phase-1 producer folds sqlite into a foreign provisioning
-          // batch, and the attachment identity for a foreign run is
-          // Phase 5's cross-space design — refused, never silently
-          // applied against a mis-keyed file.
-          return Promise.resolve({
-            error: {
-              name: "WaveCommitRejected",
-              message: "sqlite ops in a FOREIGN wave batch are refused: " +
-                "no sanctioned producer folds sqlite into provisioning, " +
-                "and the foreign attachment identity rides the " +
-                "grant-scoped read design (protocol.md §2, §2b; the " +
-                "stage-G discharge covers home batches only — Phase 5 " +
-                "kept this refusal deliberately)",
-            },
-          });
-        }
-        // Foreign provisioning commit (protocol.md §2b): authored-class
-        // under the DELEGATED admission row — the batch's carried acting
-        // identity + capabilityRef ride the commit metadata, admission
-        // validates completeness, and scoped writes key from the CARRIED
-        // identity. Idempotent by deterministic destination ids — no
-        // wave-basis re-verification and no basis rows.
-        //
-        // INV-13 mirrored on the engine-direct plane (OW31 B4, RULED
-        // 2026-08-18; protocol.md §2's genesis clause): a foreign batch
-        // never lands in a FRESH store ahead of its genesis ACL — the
-        // space's commit #1 is the ACL, signed by the space's own keys
-        // and naming the acting user OWNER. The session plane enforces
-        // this in `#validateAclCommit`'s precedence clause, in the
-        // `observe` and `enforce` memory ACL modes; this mirror holds in
-        // every mode, `off` included. Of the two
-        // other engine-direct committers, this sink is the one that
-        // writes provisioning DATA batches (the third,
-        // `Server.commitDelegatedAppend`, appends outbox-carried events
-        // to stream sidecars and never writes an `of:<space>` ACL doc —
-        // no genesis-bypass vector; review F7 on #6156), and before
-        // this refusal the sink silently
-        // bypassed the invariant (a served `.inSpace()` create whose
-        // data commit won the race with the provider mount's genesis
-        // minted an ACL-less space). A served `.inSpace()` target is
-        // created, genesis included, before its handler re-runs, and the
-        // accept gate refuses a write into a space no store holds, so
-        // hitting this refusal means a write aimed at a space nobody
-        // created got past the gate — foreign failure ⇒ home withheld ⇒
-        // replay (§2b's existing failure semantics). Populated ACL-less legacy
-        // spaces (serverSeq > 0) are not this refusal's subject — the
-        // accept gate already fails closed on them.
-        if (
-          serverSeq(engine) === 0 &&
-          readState(engine, { id: `of:${batch.space}` }) === null
-        ) {
-          return Promise.resolve({
-            error: {
-              name: "WaveCommitRejected",
-              message: `foreign wave batch into fresh space ` +
-                `${batch.space} refused: the space requires its genesis ` +
-                "ACL commit — signed by the space identity, naming the " +
-                "acting user OWNER — before any data commit (INV-13 " +
-                "mirrored at the sink; OW31, protocol.md §2's genesis " +
-                "clause, §2b)",
-            },
-          });
-        }
-        // No foreign batch writes the target space's ACL document: the
-        // delegated admission checks carriage and nothing of INV-12's shape
-        // or of the carried actor's level, so it is refused here, naming the
-        // operation, in every memory ACL mode. The engine refuses the same
-        // write in a derived (home) batch.
-        const aclId = aclDocId(batch.space);
-        const aclOperation = batch.operations.findIndex((op) =>
-          op.op !== "sqlite" && op.id === aclId
-        );
-        if (aclOperation !== -1) {
-          return Promise.resolve({
-            error: {
-              name: "AclDocumentWriteRefused",
-              message: `foreign wave batch into ${batch.space} refused: ` +
-                `operation ${aclOperation} writes ${aclId}, the space ACL ` +
-                "document, which no wave batch may write (INV-12)",
-              failedOperation: aclOperation,
-            },
-          });
-        }
-        //
-        // A scoped write with NO delegated carriage is still REFUSED,
-        // not silently mis-keyed: the plain path would key it from the
-        // sink's own principal — the empty-instance trap, cross-space
-        // edition (protocol.md §1, §2).
-        if (batch.delegated === undefined) {
-          for (const op of batch.operations) {
-            if (
-              op.op === "sqlite" || op.scope === undefined ||
-              op.scope === "space"
-            ) {
-              continue;
-            }
-            return Promise.resolve({
-              error: {
-                name: "WaveCommitRejected",
-                message: "scoped write in a foreign wave batch refused " +
-                  `(op ${op.id}, scope "${op.scope}"): without delegated ` +
-                  "carriage the row would silently key from the sink's " +
-                  "own principal; scoped foreign admission requires the " +
-                  "acting-identity + capabilityRef delegated row " +
-                  "(protocol.md §2, §2b)",
-              },
-            });
-          }
-        }
-        const applied = applyCommit(engine, {
-          sessionId: this.#sessionId,
-          space: batch.space,
-          principal: this.#principal,
-          commit,
-          ...(batch.delegated === undefined
-            ? {}
-            : { delegated: batch.delegated }),
-        });
-        this.#report(engine, batch, applied.seq);
-        return Promise.resolve({ ok: { seq: applied.seq } });
-      }
       // The sqlite bound's discharge (stage G): attach the cell-db
       // file(s) the batch's folded sqlite ops target BEFORE the engine
       // transaction (ATTACH cannot run inside one), detach in finally
@@ -617,30 +669,24 @@ export class EngineWaveCommitSink implements WaveCommitSink {
   #report(engine: Engine, batch: WaveSpaceCommit, seq: number): void {
     if (this.#reportCommit === undefined) return;
     try {
+      if (!batch.home) {
+        const notice = foreignWaveCommitNotice(engine, batch, seq);
+        if (notice !== undefined) this.#reportCommit(notice);
+        return;
+      }
       const record = selectCommitsSince(engine, { fromSeq: seq - 1, limit: 1 })
         .find((entry) => entry.seq === seq);
       if (record === undefined) return;
-      this.#reportCommit(
-        batch.home
-          ? {
-            space: batch.space,
-            seq,
-            class: "derived",
-            // The lease holder the batch names, which is this sink's own
-            // session: the loop commits under the holder's session.
-            holder: batch.holder ?? this.#sessionId,
-            sessionId: record.sessionId,
-            writes: record.writes as AdmittedCommitNotice["writes"],
-          }
-          : {
-            space: batch.space,
-            seq,
-            class: "authored",
-            sessionId: record.sessionId,
-            writes: warmWritesOf(batch),
-            warm: true,
-          },
-      );
+      this.#reportCommit({
+        space: batch.space,
+        seq,
+        class: "derived",
+        // The lease holder the batch names, which is this sink's own
+        // session: the loop commits under the holder's session.
+        holder: batch.holder ?? this.#sessionId,
+        sessionId: record.sessionId,
+        writes: record.writes as AdmittedCommitNotice["writes"],
+      });
     } catch (error) {
       // The commit is in the store whatever the report did, so a failure to
       // announce it is logged rather than returned as a failed commit, which

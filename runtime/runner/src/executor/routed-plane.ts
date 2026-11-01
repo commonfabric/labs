@@ -11,7 +11,11 @@
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
-import type { SessionDescriptor } from "@commonfabric/memory/v2";
+import {
+  encodeMemoryBoundary,
+  type ServedRequestKind,
+  type SessionDescriptor,
+} from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import {
   type ClientBuild,
@@ -25,10 +29,12 @@ import {
   toSpaceWebSocketAddress,
   WebSocketTransport,
 } from "../storage/v2-remote-session.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type {
   ServedAppendEntry,
   ServedAppendResult,
 } from "./served-requests.ts";
+import type { WaveSpaceCommit } from "./wave.ts";
 
 /** How a host reaches the owner of any space: the deployment's route. */
 export type RouteOptions = {
@@ -57,6 +63,27 @@ export type RoutedScope = {
     space: MemorySpace,
     entry: Omit<ServedAppendEntry, "localSeq">,
   ): Promise<ServedAppendResult>;
+
+  /**
+   * Sends `batch`, a foreign wave batch into `space`, through its owner,
+   * which commits it as the sender's own sink would (protocol.md §2b) and
+   * answers with the seq it committed at. The owner's refusal is thrown as
+   * a `ServedRefusal`; a failure to reach the owner is thrown as whatever
+   * the transport raised. Numbered like an append.
+   */
+  commit(space: MemorySpace, batch: WaveSpaceCommit): Promise<{ seq: number }>;
+
+  /**
+   * Sends `change`, a served run's change to the access list of `space`,
+   * through its owner, which admits and commits it as its own server would
+   * (`Server.commitServedAclChange()`), and answers with the seq of the
+   * commit, or with none where the change left the list as it was. Refusals
+   * and failures are thrown as `commit` throws them. Numbered like an append.
+   */
+  acl(
+    space: MemorySpace,
+    change: ServedAclChangeData,
+  ): Promise<{ seq?: number }>;
 
   /**
    * Calls `onChange` each time the owner pushes a change the session
@@ -123,7 +150,7 @@ type RoutedSession = {
   /** The session, open as the service identity bound to the space's owner. */
   session: MemoryClient.SpaceSession;
 
-  /** The position of the last append sent on the session, from zero. */
+  /** The position of the last crossing sent on the session, from zero. */
   localSeq: number;
 };
 
@@ -160,6 +187,8 @@ export class RoutedPlane {
   scope(): RoutedScope {
     const scope: RoutedScope = {
       append: (space, entry) => this.#append(scope, space, entry),
+      commit: (space, batch) => this.#commit(scope, space, batch),
+      acl: (space, change) => this.#acl(scope, space, change),
       watchDocument: (space, id, onChange) =>
         this.#watchDocument(scope, space, id, onChange),
       dispose: () => this.#release(scope),
@@ -175,18 +204,13 @@ export class RoutedPlane {
     await Promise.all([...this.#closing]);
   }
 
-  /** Sends `entry` on `space`'s session, numbered after its last append. */
+  /** Sends `entry` on `space`'s session, numbered after its last crossing. */
   async #append(
     scope: RoutedScope,
     space: MemorySpace,
     entry: Omit<ServedAppendEntry, "localSeq">,
   ): Promise<ServedAppendResult> {
-    const routed = await this.#use(scope, space);
-    const sent: ServedAppendEntry = { ...entry, localSeq: ++routed.localSeq };
-    const result = await routed.session.runServed(
-      "append",
-      sent as unknown as FabricPlainObject,
-    );
+    const result = await this.#run(scope, space, "append", entry);
     const { seq, deduped } = result as Partial<ServedAppendResult>;
     if (typeof deduped !== "boolean") {
       throw new Error(
@@ -194,6 +218,62 @@ export class RoutedPlane {
       );
     }
     return { deduped, ...(typeof seq === "number" ? { seq } : {}) };
+  }
+
+  /** Sends `batch` on `space`'s session, in the memory boundary's encoding. */
+  async #commit(
+    scope: RoutedScope,
+    space: MemorySpace,
+    batch: WaveSpaceCommit,
+  ): Promise<{ seq: number }> {
+    const result = await this.#run(scope, space, "commit", {
+      batch: encodeMemoryBoundary(batch as unknown as FabricPlainObject),
+    });
+    const { seq } = result as { seq?: unknown };
+    if (typeof seq !== "number") {
+      throw new Error(`the owner of ${space} answered a commit with no seq`);
+    }
+    return { seq };
+  }
+
+  /** Sends `change` on `space`'s session. */
+  async #acl(
+    scope: RoutedScope,
+    space: MemorySpace,
+    change: ServedAclChangeData,
+  ): Promise<{ seq?: number }> {
+    const result = await this.#run(scope, space, "acl", { change });
+    const { seq } = result as { seq?: unknown };
+    return typeof seq === "number" ? { seq } : {};
+  }
+
+  /**
+   * Sends one `served` request of `kind` on `space`'s session, with `body`
+   * and the number after the session's last crossing, and returns the
+   * owner's answer. A session whose server advertises no `servedRequests`
+   * is closed, so the next crossing dials the owner afresh: the server
+   * advertises the capability exactly while its loop runs, and a session
+   * opened while it did not is told nothing when it starts to.
+   */
+  async #run(
+    scope: RoutedScope,
+    space: MemorySpace,
+    kind: ServedRequestKind,
+    body: object,
+  ): Promise<FabricPlainObject> {
+    const routed = await this.#use(scope, space);
+    const sent = { ...body, localSeq: ++routed.localSeq };
+    try {
+      return await routed.session.runServed(
+        kind,
+        sent as unknown as FabricPlainObject,
+      );
+    } catch (error) {
+      if (isServedRefusal(error, "served-unsupported")) {
+        this.#closeSession(space);
+      }
+      throw error;
+    }
   }
 
   /** Adds a watch for `id` on `space`'s session and wakes `onChange` on it. */
