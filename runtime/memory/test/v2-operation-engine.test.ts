@@ -6,6 +6,7 @@ import { toFileUrl } from "@std/path";
 import {
   applyCommit,
   applyWaveCommit,
+  authoredSeqThrough,
   close,
   ConflictError,
   createBranch,
@@ -30,6 +31,7 @@ import {
 } from "../v2/execution-lease.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
+  createDefaultOperationCodecRegistry,
   operationBaselineHash,
   OperationCodecRegistry,
 } from "../v2/operation-codec.ts";
@@ -425,6 +427,35 @@ describe("v2-operation-engine", () => {
           },
         })
       ).toThrow(OpSubmissionMismatchError);
+    } finally {
+      close(engine);
+      await Deno.remove(path);
+    }
+  });
+
+  it("reports the highest authored commit at or below a captured head", async () => {
+    const { engine, path } = await openTestEngine();
+    try {
+      expect(authoredSeqThrough(engine, 0)).toBe(0);
+      for (const localSeq of [1, 2]) {
+        applyCommit(engine, {
+          sessionId: "session:authored",
+          commit: {
+            localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:authored-${localSeq}`,
+              value: { value: localSeq },
+            }],
+          },
+        });
+      }
+      expect(authoredSeqThrough(engine, 1)).toBe(1);
+      expect(authoredSeqThrough(engine, 10)).toBe(2);
+      expect(() => authoredSeqThrough(engine, -1)).toThrow(
+        "nonnegative integer",
+      );
     } finally {
       close(engine);
       await Deno.remove(path);
@@ -2749,7 +2780,185 @@ describe("v2-operation-engine", () => {
           OpCodecError,
           "anchor-count limit",
         );
+        refused(
+          anchorsOp(
+            "of:floor",
+            "refused:11",
+            at,
+            { add: ["a"] } as unknown as FieldAnchorChanges,
+          ),
+          ProtocolError,
+          "anchor is malformed",
+        );
+        refused(
+          anchorsOp("of:floor", "refused:12", at, { remove: [""] }),
+          ProtocolError,
+          "removed anchor id is malformed",
+        );
         expect(snapshot()).toEqual(before);
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("refuses an operation that would leave the field holding more anchors than the limit", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:full", "a");
+        const held = () =>
+          (read(engine, { id: anchorsDoc("of:full") }) as unknown as {
+            value: { anchors: unknown[] };
+          }).value.anchors.length;
+        commit(engine, [
+          anchorsOp("of:full", "alice:1", "a", {
+            add: Array.from({ length: 1024 }, (_, index) => ({
+              id: `a${index}`,
+              from: 0,
+              to: 1,
+            })),
+          }),
+        ]);
+        expect(held()).toBe(1024);
+        // Replacing a held id keeps the count; a new id would exceed it.
+        commit(engine, [
+          anchorsOp("of:full", "alice:2", { epoch: 1, version: 0 }, {
+            add: [{ id: "a0", from: 1, to: 1 }],
+          }),
+        ]);
+        expect(held()).toBe(1024);
+        const oneMore = () =>
+          commit(engine, [
+            anchorsOp("of:full", "alice:3", { epoch: 1, version: 0 }, {
+              add: [{ id: "one-more", from: 0, to: 1 }],
+            }),
+          ]);
+        expect(oneMore).toThrow(OpCodecError);
+        expect(oneMore).toThrow("more than 1024 anchors");
+        expect(held()).toBe(1024);
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("reports a codec that cannot map the stored anchors, maps none of the carried ones, or refuses the payload", async () => {
+      const codemirror = createDefaultOperationCodecRegistry().require(
+        CODEMIRROR_CHANGESET_CODEC,
+      );
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const engine = await open({
+        url: toFileUrl(path),
+        operationCodecs: new OperationCodecRegistry([
+          codemirror,
+          {
+            id: "test-anchorless@1",
+            mapAnchors: (input) => codemirror.mapAnchors(input),
+            integrate(input) {
+              const { anchors: _anchors, ...result } = codemirror.integrate(
+                input,
+              );
+              return result;
+            },
+          },
+          {
+            id: "test-refusing@1",
+            mapAnchors: (input) => codemirror.mapAnchors(input),
+            integrate() {
+              throw new ProtocolError("the codec refused the payload");
+            },
+          },
+          {
+            id: "test-strict@1",
+            mapAnchors() {
+              throw new ProtocolError("the codec refused the stored anchors");
+            },
+            integrate: (input) => codemirror.integrate(input),
+          },
+        ]),
+      });
+      try {
+        // A stored anchor the codec cannot map: its row names a range beyond
+        // the field. The edit is refused and lands once the row is repaired.
+        setup(engine, "of:unmappable", "hello");
+        commit(engine, [
+          anchorsOp("of:unmappable", "alice:1", "hello", {
+            add: [{ id: "h", from: 0, to: 5 }],
+          }),
+        ]);
+        const storeAnchors = (to: number) =>
+          engine.database.prepare(
+            `UPDATE op_field_epoch SET anchors = :anchors
+             WHERE id = 'of:unmappable'`,
+          ).run({
+            anchors: encodeMemoryBoundary([{ id: "h", from: 0, to }]),
+          });
+        const edit = () =>
+          commit(engine, [
+            applyOp(
+              "of:unmappable",
+              "alice:2",
+              { epoch: 1, version: 0 },
+              changes(5, 0, "> "),
+            ),
+          ]);
+        storeAnchors(9);
+        expect(edit).toThrow(OpCodecError);
+        expect(edit).toThrow("could not map the field's anchors");
+        storeAnchors(5);
+        edit();
+        expect(read(engine, { id: anchorsDoc("of:unmappable") })).toEqual({
+          value: {
+            epoch: 1,
+            version: 1,
+            anchors: [{ id: "h", from: 2, to: 7 }],
+          },
+        });
+
+        // A codec that integrates the payload but returns no mapped anchors
+        // for the ones the operation carried.
+        setup(engine, "of:anchorless", "hello");
+        const anchorless = () =>
+          commit(engine, [{
+            ...anchorsOp("of:anchorless", "alice:1", "hello", {
+              add: [{ id: "h", from: 0, to: 5 }],
+            }),
+            codec: "test-anchorless@1",
+          }]);
+        expect(anchorless).toThrow(OpCodecError);
+        expect(anchorless).toThrow("did not map the carried anchors");
+        expect(read(engine, { id: anchorsDoc("of:anchorless") })).toBeNull();
+
+        // A codec's own protocol error reaches the client as it was thrown.
+        setup(engine, "of:refusing", "hello");
+        const refusing = () =>
+          commit(engine, [{
+            ...applyOp("of:refusing", "alice:1", "hello", changes(5, 5, "!")),
+            codec: "test-refusing@1",
+          }]);
+        expect(refusing).toThrow(ProtocolError);
+        expect(refusing).toThrow("the codec refused the payload");
+
+        // So does one it throws while mapping the stored anchors.
+        setup(engine, "of:strict", "hello");
+        commit(engine, [{
+          ...anchorsOp("of:strict", "alice:1", "hello", {
+            add: [{ id: "h", from: 0, to: 5 }],
+          }),
+          codec: "test-strict@1",
+        }]);
+        const strict = () =>
+          commit(engine, [{
+            ...applyOp(
+              "of:strict",
+              "alice:2",
+              { epoch: 1, version: 0 },
+              changes(5, 0, "> "),
+            ),
+            codec: "test-strict@1",
+          }]);
+        expect(strict).toThrow(ProtocolError);
+        expect(strict).toThrow("the codec refused the stored anchors");
       } finally {
         close(engine);
         await Deno.remove(path);
@@ -2912,6 +3121,21 @@ describe("v2-operation-engine", () => {
           path: body,
         })).toEqual({ cursor: { epoch: 1, version: 4 }, prunedOperations: 2 });
 
+        // A head whose anchors the document does not reproduce is refused,
+        // even where an anchor change after the checkpoint exempts the
+        // checkpoint from the check.
+        engine.database.prepare(
+          `UPDATE op_field_epoch
+           SET anchors = :anchors, anchors_seq = anchors_seq + 1000`,
+        ).run({
+          anchors: encodeMemoryBoundary([{ id: "all", from: 1, to: 2 }]),
+        });
+        expect(() =>
+          pruneOperationFieldHistory(engine, {
+            id: "of:checkpointed",
+            path: body,
+          })
+        ).toThrow("anchors document diverged");
         // A head whose anchors the checkpoint does not reproduce is refused.
         engine.database.prepare(
           `UPDATE op_field_epoch SET anchors = :anchors, anchors_seq = NULL`,
