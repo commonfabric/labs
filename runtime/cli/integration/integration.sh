@@ -60,11 +60,11 @@ cf() {
 }
 
 # Delegated scripts (verbs-over-the-cli, verb-session-gaps, and the drills)
-# run cf through $CF_BINARY, falling back to the checkout's deno task when it
-# is unset. Resolve and export it here once, from the same decision cf_impl
-# made, so a child tests the same artifact as the step that invoked it: the
-# external binary on PATH, or unset in local-source mode so the fallback
-# keeps parent and child on the checkout together.
+# run cf through cf-launcher.sh: $CF_BINARY, falling back to the checkout's
+# deno task when it is unset. Resolve and export it here once, from the same
+# decision cf_impl made, so a child tests the same artifact as the step that
+# invoked it: the external binary on PATH, or unset in local-source mode so
+# the fallback keeps parent and child on the checkout together.
 if [ -z "${CF_CLI_INTEGRATION_USE_LOCAL:-}" ] && [ -z "${CF_BINARY:-}" ]; then
   CF_BINARY="$(type -P cf || true)"
 fi
