@@ -148,10 +148,12 @@ const logger = getLogger("runner.source-reconcile", {
  *   is nothing to adopt until the origin serves other source.
  * - `mismatched`: the origin's source compiled to an identity other than the
  *   one the origin advertised, so what it serves is not the source it names.
- * - `unapplied`: the origin resolved and offered source the piece could take,
- *   and the write that adopts it did not land this time — it did not commit,
- *   or the piece changed underneath the attempt and the write it was going to
- *   make no longer describes it. The next reconciliation proposes it again.
+ * - `unapplied`: the origin resolved, and the write this reconciliation makes
+ *   — adopting the source the origin offered, or recording the origin itself
+ *   in its canonical spelling or on a piece that had none — did not land this
+ *   time: it did not commit, or the piece changed underneath the attempt and
+ *   the write it was going to make no longer describes it. The next
+ *   reconciliation makes it again.
  * - `unavailable`: the origin could not be reached, or the attempt ended
  *   before it had a candidate to weigh.
  */

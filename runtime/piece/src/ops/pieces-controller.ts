@@ -2643,11 +2643,14 @@ export class PiecesController<T = unknown> {
    *
    * An existing root follows its origin before it is started. A root that was
    * already running when its origin moved it has been re-instantiated on the
-   * incoming pattern by the time this resolves, as one started here has. The
-   * exception is a runtime that seals its writes into a serving wave: there
-   * the re-instantiation follows the wave's settlement, which a call made
-   * within the wave's cycle cannot wait for, and this resolves with the
-   * outgoing pattern's graph still running.
+   * incoming pattern by the time this resolves, as one started here has. Two
+   * runtimes are exceptions. One that seals its writes into a serving wave
+   * re-instantiates after the wave's settlement, which a call made within the
+   * wave's cycle cannot wait for, so this resolves with the outgoing pattern's
+   * graph still running. One that replicates views runs no piece: it enables
+   * the view and syncs the root through it, and the serving runtime follows
+   * the origin and starts the root on its own cycles, so this resolves before
+   * either has happened.
    *
    * With `reconcile: false`, an existing root starts on the pattern it holds,
    * and its origin is consulted only if that pattern cannot load: then the

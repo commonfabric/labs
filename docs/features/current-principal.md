@@ -104,11 +104,12 @@ They part in two places.
   declares an `ownerPrincipal`, that includes a write which would bind the
   serving runtime as the field's owner or match it against one, so such a run
   can neither claim an unowned field nor write a field a user owns. A value it
-  initializes on nobody's behalf mints no claim, binds no owner, and is
-  admitted, except under a literal owner DID, which every write must come
-  from; where the piece records its creator, such a value at a placeholder
-  owner binds the recorded creator instead, a claim the record vouches for
-  rather than the run's snapshot
+  initializes on nobody's behalf is admitted, except under a literal owner
+  DID, which every write must come from, and mints no claim of the run's and
+  binds no owner, with one exception: where the piece records its creator,
+  which it does while the `pieceCreatorRecord` experimental option is on,
+  such a value at a placeholder owner binds the recorded creator, a claim the
+  record vouches for rather than the run's snapshot
   ([`cfc-protected-initialization.md`](../specs/cfc-protected-initialization.md),
   "Attribution of an initialized value"). A reference the runtime stages at
   an owner position, the result document's binding to an argument field,

@@ -17,12 +17,15 @@ import { cfcSchemaEntries } from "./schema-label-view.ts";
  * A field whose schema declares a placeholder `ownerPrincipal` is bound to
  * the principal its stored label represents, by the setup that created the
  * piece on their behalf or by the first write through its writer. Where every
- * such field across `documents`, the piece's argument and internal documents,
- * names the same principal, that principal is recorded as the piece's creator
- * at its next source transition, so the field the transition installs binds
- * them (`docs/plans/piece-creator-owns-update-added-fields.md`). A piece whose
- * fields name two principals, or none, offers no evidence and stays without a
- * record; so does one whose stored envelope this build cannot read.
+ * representation claim stored at such a field across `documents`, the piece's
+ * argument and internal documents, names the same principal, that principal
+ * is recorded as the piece's creator at its next source transition, so the
+ * field the transition installs binds them
+ * (`docs/plans/piece-creator-owns-update-added-fields.md`). A field holding no
+ * claim, one a release added that nobody has written, is evidence of nothing
+ * and rules nobody out. A piece whose claims name two principals, or none,
+ * offers no evidence and stays without a record; so does one whose stored
+ * envelope this build cannot read.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/87
 export const legacyPieceCreatorEvidence = (

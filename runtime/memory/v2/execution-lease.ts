@@ -173,8 +173,10 @@ export const acquireExecutionLease = (
  * What a renewal found: `extended`, a live row of the caller's, now
  * extended; `recovered`, the caller's row expired with no successor, now
  * extended, after a lapse that refused the caller's commits and admitted no
- * one else's; `lost`, a row naming another holder or none, which is the
- * moment the caller MUST stop committing.
+ * one else's; `lost`, a row naming another holder or none, or a lapse the
+ * caller declined to recover (`ExecutionLeaseCycle.renew`), whose extended
+ * row the reacquire takes. `lost` is the moment the caller MUST stop
+ * committing.
  */
 export type ExecutionLeaseRenewal = "extended" | "recovered" | "lost";
 

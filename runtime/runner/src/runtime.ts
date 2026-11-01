@@ -457,7 +457,10 @@ export interface ExperimentalOptions {
 
   /**
    * Record the principal a piece was created for on its result document, in
-   * the `creator` meta field, when a setup brings the piece into being
+   * the `creator` meta field, when a setup brings the piece into being, and
+   * give a piece from before the record one at its next source transition,
+   * from the owner its space's access list names for a space root and from
+   * the principal its owner-protected fields represent for any other piece
    * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
    * what binds a field a later release adds to the piece's creator. Defaults
    * to off; off, no record is written and a stored one is left as it is.
