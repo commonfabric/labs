@@ -295,8 +295,12 @@ describe("share intake across runtimes", () => {
 
     // The sender's manager joined the owner to the room beside its creator
     // when it offered it, and the acceptance joined the owner's profile
-    // again, which the roster holds once.
-    await harness.settle();
+    // again, which the roster holds once. The join is an event the serving
+    // runtime sends into the room's space, which `settle()` does not wait
+    // for, so this waits on the roster itself.
+    await harness.settleUntil(async () =>
+      (await sender.read(["participants", "length"], { piece: room })) === 2
+    );
     expect(await sender.read(["participants", "length"], { piece: room }))
       .toBe(2);
     expect(await sender.read(["participants", 0, "name"], { piece: room }))

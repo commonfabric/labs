@@ -5070,8 +5070,11 @@ export class SpaceServer implements TransactionSealDestination {
               streamEntry,
               {
                 kind: "needs-attention",
-                message: "This event could not be delivered. Retry it after " +
-                  "restoring access.",
+                message: attention.failureClass === "program-unavailable"
+                  ? "This event could not be delivered: its program has " +
+                    "not reached this space. Retry it once it has."
+                  : "This event could not be delivered. Retry it after " +
+                    "restoring access.",
                 attention,
               },
             );

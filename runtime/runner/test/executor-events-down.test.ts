@@ -3678,6 +3678,9 @@ describe("Phase 3 events-down (serving side)", () => {
       }, { arg: "absent-closure-arg", result: "absent-closure-result" });
       await awaitAdmitted(server, () => entry()?.consequenced === true);
       expect(entry()?.status).toBe("needs-attention");
+      expect(entry()?.reason).toContain(
+        "its program has not reached this space",
+      );
       expect(entry()?.attention).toMatchObject({
         phase: "dispatch-load",
         failureClass: "program-unavailable",
