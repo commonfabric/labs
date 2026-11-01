@@ -104,6 +104,23 @@ const SOURCE_SCHEMA = {
   required: ["v"],
 } as const satisfies JSONSchema;
 
+/**
+ * A store that admits only public values. Nothing about it is labeled, so
+ * whatever clause it holds is one a write stamped there.
+ */
+const PUBLIC_SCHEMA = {
+  type: "object",
+  properties: {
+    v: { type: "string", ifc: { maxConfidentiality: [] } },
+  },
+} as const satisfies JSONSchema;
+
+/** The same store, declaring no ceiling. */
+const UNGATED_SCHEMA = {
+  type: "object",
+  properties: { v: { type: "string" } },
+} as const satisfies JSONSchema;
+
 type Doc = { secret: string; note: string };
 
 /** The clauses the stored `value`-class derived entry at `path` carries. */
@@ -685,6 +702,77 @@ describe("CFC write-destination reads", () => {
         const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
+      });
+    });
+  });
+
+  describe("a ceiling over a store whose stamp it does not admit", () => {
+    // A store can hold a clause its own ceiling does not admit: a release
+    // that an exchange rule opened at the write stamps the store with the
+    // clause it opened, since an exchanged label is not what persists. The
+    // write path's read of that store is not a read the program made, so a
+    // later write is gated on what the program read, not on that stamp.
+    // Here the stamp is left by a write that declared no ceiling, which
+    // stands in for the release. The dials are the pair a deployment ships
+    // with, under which that write lands and stamps what it read.
+
+    const withStampedStore = async (
+      name: string,
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-explicit",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        const seed = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, seed)
+          .set({ v: "x" });
+        runtime.getCell(space, name, UNGATED_SCHEMA, seed).set({ v: "seed" });
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tainted = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, tainted)
+          .key("v").get();
+        const store = runtime.getCell(space, name, UNGATED_SCHEMA, tainted);
+        store.set({ v: "released" });
+        tainted.prepareCfc();
+        expect(refusalOf(await tainted.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+        expect(
+          derivedValueClauses(runtime, store.getAsNormalizedFullLink().id, "v"),
+        ).toContain(SOURCE_ATOM);
+
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+      }
+    };
+
+    it("commits a write that reads nothing over the stamped store", async () => {
+      await withStampedStore("ceiling-rewrite", async (runtime) => {
+        const tx = runtime.edit();
+        runtime.getCell(space, "ceiling-rewrite", PUBLIC_SCHEMA, tx)
+          .set({ v: "public" });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+      });
+    });
+
+    it("refuses a write after the program read the stamped store", async () => {
+      await withStampedStore("ceiling-read", async (runtime) => {
+        const tx = runtime.edit();
+        const store = runtime.getCell(space, "ceiling-read", PUBLIC_SCHEMA, tx);
+        store.key("v").get();
+        store.set({ v: "public" });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toContain(
+          "maxConfidentiality failed at /v",
+        );
       });
     });
   });

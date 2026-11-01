@@ -274,17 +274,26 @@ marker, so it is in neither of those logs, and it was in neither before this
 marker existed. What it has always been is a read the journal records for
 label purposes and the reactivity log does not.
 
-The exclusion is also scoped to the flow join among the three consumed sets
-CFC derives. The transaction-global consumed set the egress and sink ceilings
-read (`collectConsumedLabel`), and the per-write read-prefix gate of
-[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), both
-still count these reads: a destination read precedes the write it is about,
-which is exactly the position the prefix gate quantifies over. Those two can
-therefore gate a write or a release on a label this one does not, which
-over-gates and never under-gates. Widening the exclusion to reach them is a
-separate change with its own measurements to take, and SC-23 in
-[`cfc-spec-changes.md`](./cfc-spec-changes.md) is the precedent for stating
-such a boundary rather than leaving it to be discovered.
+Of the three consumed sets CFC derives, the exclusion reaches two. The flow
+join is one. The per-write read-prefix gate of
+[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), which
+checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
+against the reads before the write, is the other: a destination read precedes
+the write it is about, which is the position that gate quantifies over, but
+it is not an input to the write, so it is no input the gate checks. Counting
+it gated a write on whatever label the destination already held, so a store
+whose ceiling admits only public values, once stamped with a clause an
+exchange rule had opened for the value written there, refused every later
+writer, even one writing a constant. A read the program makes of its
+destination carries no marker and still gates.
+
+The transaction-global consumed set the egress and sink ceilings read
+(`collectConsumedLabel`) still counts these reads. It can therefore gate a
+release on a label the other two do not, which over-gates and never
+under-gates. Widening the exclusion to reach it is a separate change with its
+own consumers to check, the custody seal's consent reads among them, and
+SC-23 in [`cfc-spec-changes.md`](./cfc-spec-changes.md) is the precedent for
+stating such a boundary rather than leaving it to be discovered.
 
 That SC-23 boundary is worth naming precisely, because it names the flow join
 as the one place it declined to narrow. It declined to narrow it *by journal

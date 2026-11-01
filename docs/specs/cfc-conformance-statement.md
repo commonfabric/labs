@@ -115,7 +115,10 @@ verifier-internal and scheduler-dependency reads, reads of `cid:` documents,
 reads of a document's own `cfc` and `source` members (which
 `canonicalizeDocumentPath` in `cfc/canonical.ts` maps to no payload path),
 link probes carrying `machineryRead`, probes a dereference trace covers other
-than the probe of the followed slot, and write-destination reads.
+than the probe of the followed slot, and write-destination reads. The
+per-write input gate in `verifyInputRequirements` in `cfc/prepare.ts`,
+which checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
+over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
@@ -135,7 +138,8 @@ class.
 
 **Non-conformances, with direction.**
 
-- The conditional exclusions apply to the flow join. The egress and sink
+- The conditional exclusions apply to the flow join, and write-destination
+  reads are excluded from the per-write input gate as well. The egress and sink
   consumed set (`collectConsumedLabel` in `cfc/prepare.ts`) excludes only
   verifier-internal reads, so it still counts write-destination and wiring
   reads: an over-taint, stated in
