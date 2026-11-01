@@ -1521,21 +1521,10 @@ export default pattern<Record<string, never>>(() => {
 
       button.dispatchEvent({ type: "click", target: button });
 
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<string>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("timed out waiting for navigaterequest")),
-          5000,
-        );
-      });
-      const navigatedPieceId = await Promise.race([
-        navigation,
-        timeoutPromise,
-      ]).finally(() => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-      });
+      // The handler runs on the serving runtime under server execution, which
+      // takes as long as the machine makes it; a navigation that never comes
+      // fails at the runner's safety net rather than at a fixed deadline.
+      const navigatedPieceId = await navigation;
       assertExists(navigatedPieceId);
 
       cancel();
