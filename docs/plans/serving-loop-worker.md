@@ -133,9 +133,11 @@ which the port cannot clone.
 **Stats cross on every cycle, and ahead of every commit.** The worker posts
 the host's `ServingLoopStats` at the end of each wave cycle, at each activation
 and park, on request, and immediately before each wave commit it sends, on the
-same port as the commit: a client that observes a commit's consequence and then
-reads the health route finds the counters that count that wave already posted.
-The main thread registers a stats provider that returns the latest copy, so
+same port as the commit. A counter the cycle advanced before the commit, such
+as the event counters, is in the posted copy by the time a client observes the
+commit's consequence; a counter the commit's own finish advances, such as
+`waves` and `derivedCommits`, follows with the cycle's end. The main thread
+registers a stats provider that returns the latest copy, so
 `/api/health/stats` keeps its shape and waits on nothing. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
 request (`ServingLoopHandle.diagnostics()`), and a request waits for the

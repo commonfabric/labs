@@ -204,8 +204,8 @@ type WaveCommitSinkReads = Required<
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it. The
  * host's counters cross ahead of each commit, on the same port, so a reader
- * the commit's consequence reaches finds the counters that count it already
- * posted (`ServingPlane.reportStats`).
+ * the commit's consequence reaches finds every counter advanced before the
+ * commit already posted (`ServingPlane.reportStats`).
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
@@ -664,8 +664,10 @@ export class ServingPlane {
   /**
    * Posts the host's counters for the server's thread to keep. The health
    * route answers with the copy posted last, so the counters are posted on
-   * the loop's own edges and ahead of each commit the loop sends: a commit's
-   * consequence never reaches a reader before the counters that count it.
+   * the loop's own edges and ahead of each commit the loop sends: a counter
+   * advanced before a commit reaches the server's thread before the commit's
+   * consequence does. A counter the commit's finish advances, `waves` among
+   * them, arrives with the cycle's end.
    */
   reportStats(stats: ServingLoopStats): void {
     this.#endpoint.notify("host.stats", { stats });
