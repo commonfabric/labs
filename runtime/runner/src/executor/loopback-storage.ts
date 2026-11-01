@@ -25,7 +25,11 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../storage/v2.ts";
-import { createSignedSessionOpenAuth } from "../storage/v2-remote-session.ts";
+import {
+  createSignedSessionOpenAuth,
+  MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+} from "../storage/v2-remote-session.ts";
+import type { RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 
 /**
@@ -37,28 +41,61 @@ export type LoopbackPlane =
   | LoopbackMemoryServer
   | { createTransport(): MemoryClient.Transport };
 
+/**
+ * The options of a loopback storage manager: a storage manager's, and the
+ * deployment's route to each space's owner
+ * (`serving-loop-owner-routing.md`), over which a session signed by a key
+ * other than the manager's own, the genesis of a space the serving runtime
+ * creates signed by that space's key, reaches the space's owner instead of
+ * the plane.
+ */
+export type LoopbackOptions = Omit<Options, "memoryHost" | "spaceHostMap"> & {
+  route?: Pick<RouteOptions, "createTransport">;
+};
+
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
   readonly #plane: LoopbackPlane;
+  readonly #route: Pick<RouteOptions, "createTransport"> | undefined;
+
+  /** The manager's own signer, which every session but a genesis is signed by. */
+  readonly #as: Signer;
 
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
   constructor(
     plane: LoopbackPlane,
+    route: Pick<RouteOptions, "createTransport"> | undefined,
+    as: Signer,
     onServerFrame?: (frame: string) => void,
     clientBuild?: ClientBuild,
   ) {
     this.#plane = plane;
+    this.#route = route;
+    this.#as = as;
     this.#onServerFrame = onServerFrame;
     this.#clientInfo = createClientInfo(clientBuild);
   }
 
-  /** The loopback transport, with each server frame taken in the serving
-   * context and reported AFTER the session has taken it. */
-  #transport(): MemoryClient.Transport {
-    const inner = "createTransport" in this.#plane
+  /** The route a session signed by `signer` takes to its owner, if any. */
+  #routeFor(signer: Signer): Pick<RouteOptions, "createTransport"> | undefined {
+    return signer.did() === this.#as.did() ? undefined : this.#route;
+  }
+
+  /**
+   * The transport of a session on `space` signed by `signer`: the route's to
+   * the space's owner for a session signed by a key other than the manager's
+   * own, the genesis of a space this runtime creates; the plane's for every
+   * other. Each server frame is taken in the serving context and reported
+   * AFTER the session has taken it.
+   */
+  #transport(space: MemorySpace, signer: Signer): MemoryClient.Transport {
+    const route = this.#routeFor(signer);
+    const inner = route !== undefined
+      ? route.createTransport(space)
+      : "createTransport" in this.#plane
       ? this.#plane.createTransport()
       : MemoryClient.loopback(this.#plane);
     const report = this.#onServerFrame;
@@ -84,9 +121,14 @@ class LoopbackSessionFactory implements SessionFactory {
         "loopback serving sessions require the service identity signer",
       );
     }
+    // A routed session dials the owner over the network, with the handshake
+    // attempts the routed plane gives its own sessions.
     const client = await MemoryClient.connect({
-      transport: this.#transport(),
+      transport: this.#transport(space, signer),
       client: this.#clientInfo,
+      ...(this.#routeFor(signer) === undefined
+        ? {}
+        : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
     try {
       const session = await client.mount(
@@ -124,21 +166,28 @@ class LoopbackSessionFactory implements SessionFactory {
 export class LoopbackStorageManager extends StorageManager {
   static connect(
     plane: LoopbackPlane,
-    options: Omit<Options, "memoryHost" | "spaceHostMap">,
+    options: LoopbackOptions,
     /** DIAGNOSTIC (tests): each frame the server sends to this manager's
      * sessions, reported once the session has taken it. A session's own
      * termination arrives this way and nothing else reports it, so a test
      * that has to act after one waits on this. */
     onServerFrame?: (frame: string) => void,
   ): LoopbackStorageManager {
+    const { route, ...rest } = options;
     return new LoopbackStorageManager(
       {
-        ...options,
+        ...rest,
         // Placeholder: the loopback session factory never resolves a
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(plane, onServerFrame, options.clientBuild),
+      new LoopbackSessionFactory(
+        plane,
+        route,
+        rest.as,
+        onServerFrame,
+        rest.clientBuild,
+      ),
     );
   }
 

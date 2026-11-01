@@ -15,9 +15,8 @@ import {
 } from "@commonfabric/memory/v2";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import { releaseExecutionLease } from "@commonfabric/memory/v2/execution-lease";
-import type { ServedAclChange, Server } from "@commonfabric/memory/v2/server";
+import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
-import { applyAccessListChanges, validateStoredAcl } from "../acl-manager.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { LoopbackConnection } from "./host-memory-server.ts";
@@ -31,10 +30,10 @@ import {
   type PlaneRequests,
   PortEndpoint,
   type PortLike,
-  type ServedAclChangeData,
   type ServingLoopDiagnostics,
   type ServingWorkerInit,
 } from "./serving-port-protocol.ts";
+import { servedAclChangeOf } from "./served-acl-change.ts";
 import {
   emptyServingLoopStats,
   registerServingLoopStatsProvider,
@@ -45,17 +44,6 @@ import type { WaveSpaceCommit } from "./wave.ts";
 const logger = getLogger("serving-port-bridge", {
   enabled: true,
   level: "warn",
-});
-
-/** The served access-list change `data` stands for, its function rebuilt. */
-const servedAclChangeOf = (data: ServedAclChangeData): ServedAclChange => ({
-  ...data,
-  change: (stored) =>
-    applyAccessListChanges(
-      data.space as MemorySpace,
-      validateStoredAcl(stored),
-      data.changes,
-    ),
 });
 
 /** The sink the bridge keeps for one worker-side session. */

@@ -17,6 +17,7 @@ import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 import {
   type ACL,
   aclDocId,
+  aclOwner,
   ANYONE_USER,
   type Capability,
   hasConcreteOwner,
@@ -764,15 +765,7 @@ export const resolveSpaceOwnerOf = (
   space: string,
 ): string | undefined => {
   const state = readAclState(engine, space);
-  if (state.kind !== "valid") return undefined;
-  if (state.acl[space] === "OWNER") return space;
-  const owners = Object.entries(state.acl)
-    .filter(([principal, capability]) =>
-      principal !== ANYONE_USER && capability === "OWNER"
-    )
-    .map(([principal]) => principal)
-    .sort();
-  return owners[0];
+  return state.kind === "valid" ? aclOwner(state.acl, space) : undefined;
 };
 
 const commitTouchesAclDoc = (

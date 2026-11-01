@@ -13,7 +13,6 @@ import {
 } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
-import type { RoutedScope } from "@commonfabric/runner/executor/routed-plane";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   createAclServer,
@@ -28,6 +27,7 @@ import {
   processLifecycleCall,
   processSetSource,
   processUpload,
+  type RegistrationDeliveryScope,
   registrationDeliveryTransport,
 } from "./pattern-lifecycle.utils.ts";
 
@@ -936,7 +936,7 @@ describe("registrationDeliveryTransport()", () => {
     },
   });
 
-  const fakeScope = (calls: Call[]): RoutedScope => ({
+  const fakeScope = (calls: Call[]): RegistrationDeliveryScope => ({
     append: (space, sent) => {
       calls.push({ kind: "routed append", args: [space, sent] });
       return Promise.resolve({ deduped: false });

@@ -67,7 +67,8 @@ import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
-import type { RoutedPlane } from "./routed-plane.ts";
+import type { RoutedPlane, RouteOptions } from "./routed-plane.ts";
+import { routedWaveCommitSink } from "./routed-wave-sink.ts";
 import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
@@ -92,7 +93,7 @@ import {
   markRuntimeInjectedEventKeys,
   sanitizeRuntimeInjectedEventKeys,
 } from "../cell.ts";
-import type { NormalizedFullLink } from "../link-types.ts";
+import { addressKey, type NormalizedFullLink } from "../link-types.ts";
 import {
   EXECUTION_LEASE_RENEW_INTERVAL_MS,
   EXECUTION_LEASE_TTL_MS,
@@ -422,6 +423,15 @@ export type RuntimeFactoryContext = {
    * runtime's manager either way; a factory run with none builds a manager
    * that refuses every foreign scoped read until one is installed. */
   foreignScopedReadGrant?: ForeignScopedReadGrant;
+
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop-owner-routing.md`), present while the host has one, for
+   * a factory to hand its storage manager: a session the manager opens as a
+   * space's own key, the genesis of a space the serving runtime creates,
+   * then dials that space's owner instead of this process's server.
+   */
+  route?: RouteOptions;
 };
 
 export type SpaceServerOptions = {
@@ -781,6 +791,15 @@ type StreamEntryAddress = {
 };
 
 /**
+ * The key an origin follow is remembered by: the result document's address,
+ * scope included, since a scoped instance of a piece is a document of its
+ * own, with its own pattern pointer and origin where it carries them.
+ */
+function originFollowKey(root: OwningRootAddress): string {
+  return addressKey({ ...root, path: [] });
+}
+
+/**
  * One space's serving loop. The SpaceServer IS the seal destination — a
  * stable dispatcher over rotating wave accumulators, so an action tx
  * that commits between waves opens the next wave rather than erroring
@@ -951,6 +970,57 @@ export class SpaceServer implements TransactionSealDestination {
    * `of:` ids, which id classes cannot split. */
   readonly #terminalStructureLoads = new Map<string, ReadonlySet<string>>();
 
+  /**
+   * Result doc ids of the pieces whose last start's commit failed after the
+   * start resolved. The demand pass declines to start one again, since a
+   * start for another of its demanded documents would fail the same way,
+   * and parks its keys as terminal ones watching the piece. A commit to the
+   * piece's result doc clears it here and re-arms the keys.
+   */
+  readonly #failedStartRoots = new Set<string>();
+
+  /**
+   * The result documents, by `originFollowKey()`, of the pieces whose origin
+   * this tenure has followed. A piece's origin is followed once per tenure,
+   * before the tenure's first start of it (§3e); a start asked for before
+   * that is declined, and the follow queued below.
+   */
+  readonly #followedOrigins = new Set<string>();
+
+  /**
+   * The pieces whose origin this tenure is following, by `originFollowKey()`,
+   * each with the follow's completion: the roots of the starts this tenure
+   * declined for the follow. A follow runs beside the loop's cycles, and its
+   * completion wakes the loop for the start it declined.
+   */
+  readonly #originFollowsInFlight = new Map<string, Promise<void>>();
+
+  /**
+   * The result documents, by `originFollowKey()`, of the pieces whose follow
+   * completed since the cycle began. They count as followed from the next
+   * cycle on, so every start a cycle asks about gets the same answer: a
+   * served event a wave deferred for the follow is not overtaken by a later
+   * one on its stream whose start the same wave admits.
+   */
+  readonly #originFollowsSettled = new Set<string>();
+
+  /**
+   * Every wave a seal has opened and no commit has finished: what a
+   * `sealsCommitted` barrier waits on. A wave leaves when its post-commit
+   * step has run, whatever its outcome, when it is discarded empty, or at
+   * park.
+   */
+  readonly #uncommittedWaves = new Set<WaveAccumulator>();
+
+  /**
+   * The `sealsCommitted` barriers not yet resolved, each with the waves it
+   * still waits on (`Runtime.sealsCommitted`).
+   */
+  readonly #sealBarriers: Array<{
+    waves: Set<WaveAccumulator>;
+    resolve: () => void;
+  }> = [];
+
   /** Consecutive deferral streak per demanded root (keyed by demand
    * key), feeding `stats.structureLoadStuck` and the
    * `structure-load-stuck` WARN once a streak crosses
@@ -992,6 +1062,15 @@ export class SpaceServer implements TransactionSealDestination {
    * as idle.
    */
   readonly #rearmedAwaitingSettle = new Map<string, number>();
+
+  /**
+   * The re-armed roots whose retry the settle has started and the pass has
+   * not resolved, each with the seq `#rearmedAwaitingSettle` held for it. A
+   * retry the pass declines for a follow of the piece's origin goes back to
+   * holding W below that seq: the piece has not started, so the input that
+   * re-armed it is not derived through.
+   */
+  readonly #rearmSeqsUnderRetry = new Map<string, number>();
 
   /** A structure retry that must wake a cycle after an asynchronous load. */
   #pendingStructureRetryWake = false;
@@ -1631,9 +1710,11 @@ export class SpaceServer implements TransactionSealDestination {
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
       // A lapse the renewal drivers have not reached yet shows first as the
-      // memory server refusing a derived commit (serving-loop.md §2).
+      // memory server refusing a derived commit (serving-loop.md §2). The
+      // refused wave's work is withdrawn, so the lapse is not recovered: the
+      // tenure ends, and the loop parks on the abort.
       onHomeRefused: () => {
-        this.#confirmLease(engine);
+        this.#confirmLease(engine, { recoverLapse: false });
       },
     };
     const sink = this.#options.createWaveCommitSink?.(sinkDeps) ??
@@ -1668,7 +1749,17 @@ export class SpaceServer implements TransactionSealDestination {
             ...envelope,
           }),
       });
-    this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
+    // With a route, the tenure's crossings into other spaces go through
+    // that scope, from the sink and the outbox alike; the outbox disposes
+    // it when the tenure ends, and a batch still in flight at a park then
+    // fails foreign, since a disposed scope refuses every call, and the
+    // event replays on the next tenure.
+    const routeScope = this.#options.route?.scope();
+    const routed = routeScope === undefined
+      ? sink
+      : routedWaveCommitSink(sink, routeScope, space);
+    this.#sink = this.#options.decorateWaveCommitSink?.(routed, space) ??
+      routed;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
     // threads the per-space egress budgets (§5's outstanding-effect cap
     // + egress rate) from the policy.
@@ -1679,9 +1770,7 @@ export class SpaceServer implements TransactionSealDestination {
       engine,
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
-      ...(this.#options.route === undefined
-        ? {}
-        : { route: this.#options.route.scope() }),
+      ...(routeScope === undefined ? {} : { route: routeScope }),
       ...(this.#options.onEffectRetired !== undefined
         ? { onEffectRetired: this.#options.onEffectRetired }
         : {}),
@@ -1727,15 +1816,23 @@ export class SpaceServer implements TransactionSealDestination {
         // A refusal of a piece whose state moved, on a retry of its start's
         // commit; the runner has logged what moved.
         this.#options.stats.structureLoadRefused += 1;
-        return;
+      } else {
+        this.#options.stats.structureLoadFailures += 1;
+        logger.warn("piece-start-commit-failed", () => [
+          `piece-start commit ${actionId} failed on the serving runtime; ` +
+          "counted structureLoadFailures (stage P2-F, F1)",
+          error,
+        ]);
       }
-      this.#options.stats.structureLoadFailures += 1;
-      logger.warn("piece-start-commit-failed", () => [
-        `piece-start commit ${actionId} failed on the serving runtime; ` +
-        "counted structureLoadFailures (stage P2-F, F1)",
-        error,
-      ]);
+      if (this.#runtime === runtime) {
+        this.#parkKeysOfFailedStart(runtime, actionId);
+      }
     };
+    // The serving runtime is the opener of every piece it serves: a start it
+    // makes on its own, for a served event, has the piece's origin followed
+    // first, as the demand pass's starts do (§3e).
+    runtime.pieceOriginFollowed = this.#originFollowed;
+    runtime.sealsCommitted = this.#sealsCommitted;
     // The shadow-flip WAKE (Phase 2's settle input barrier): a clamped
     // wave's floor lifts when the replica's parked promotion flips the
     // shadowed foreign value visible — a dirtiness with NO admitted
@@ -2525,7 +2622,7 @@ export class SpaceServer implements TransactionSealDestination {
     if (this.#currentWave === undefined) {
       const { engine, space } = this.#options;
       const runtime = this.#runtime!;
-      this.#currentWave = new WaveAccumulator({
+      const wave = new WaveAccumulator({
         space,
         basisSeq: Engine.serverSeq(engine),
         // The wave-level identity fallback: the serving session's own.
@@ -2590,6 +2687,8 @@ export class SpaceServer implements TransactionSealDestination {
         spaceAccessAuthority: (change) =>
           this.#options.server.checkServedAclChange(change),
       });
+      this.#currentWave = wave;
+      this.#uncommittedWaves.add(wave);
     }
     return this.#currentWave;
   }
@@ -3257,7 +3356,15 @@ export class SpaceServer implements TransactionSealDestination {
     if (reads.pending.length > 0) {
       return refuse(
         `direct commit of ${direct.actionId} read state the wave has not ` +
-          "committed; stage that state in an earlier cycle",
+          `committed (${
+            reads.pending.map((read) =>
+              `${read.id} at ${
+                Array.isArray(read.localSeq)
+                  ? read.localSeq.join("/")
+                  : read.localSeq
+              }`
+            ).join(", ")
+          }); stage that state in an earlier cycle`,
       );
     }
     const confirmedReads: ConfirmedRead[] = [...reads.confirmed];
@@ -3364,16 +3471,21 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Whether the space's lease row names this holder live. A row that does
-   * not runs the renew arm, which ends the tenure and then reacquires or
-   * parks, and the row is read again after it. A closed engine confirms
-   * nothing.
+   * not runs the renew arm, which recovers a lapse nobody claimed, or ends
+   * the tenure and then reacquires or parks, and the row is read again
+   * after it. `recoverLapse: false` has a lapse end the tenure, for a
+   * caller whose commit the store refused inside it. A closed engine
+   * confirms nothing.
    */
-  #confirmLease(engine: Engine.Engine): boolean {
+  #confirmLease(
+    engine: Engine.Engine,
+    options: { recoverLapse?: boolean } = {},
+  ): boolean {
     if (!engine.database.open) return false;
     const holds = () =>
       liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
     if (holds()) return true;
-    this.#renew();
+    this.#renew(options);
     return holds();
   }
 
@@ -3390,7 +3502,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#renew();
   }
 
-  #renew(): void {
+  #renew(options: { recoverLapse?: boolean } = {}): void {
     const lease = this.#lease;
     if (
       lease === undefined || (!this.#active && !this.#initializing) ||
@@ -3401,8 +3513,15 @@ export class SpaceServer implements TransactionSealDestination {
     // tenure start.
     this.#lastRenewAt = Date.now();
     let renewed: boolean;
+    // A renewal that found the row expired recovered a lapse: synchronous
+    // work (a compile) held both renewal drivers past the TTL. The store
+    // refused every derived commit meanwhile and admitted no one else's,
+    // so the tenure continues.
+    let lapsed = false;
     try {
-      renewed = lease.renew();
+      const renewal = lease.renew(options);
+      renewed = renewal !== "lost";
+      lapsed = renewal === "recovered";
     } catch (error) {
       if (!this.#initializing || this.#active) throw error;
       // A failed lease-store operation leaves initialization without an
@@ -3421,6 +3540,21 @@ export class SpaceServer implements TransactionSealDestination {
         error,
       ]);
       renewed = false;
+    }
+    if (renewed && lapsed && this.#active) {
+      // A push pass that ran inside the lapse judged this runtime's
+      // loopback session a former holder; the row is live again, so the
+      // memory server re-arms the session's exemption now, as it does
+      // after the reacquire below.
+      this.#options.stats.lease.lapsesRecovered += 1;
+      logger.warn("lease-lapse-recovered", () => [
+        `space ${this.#options.space}: the lease lapsed with no successor ` +
+        "and its renewal extended it; the tenure continues (serving-loop.md §2)",
+      ]);
+      this.#options.server.noteLeaseReacquired({
+        space: this.#options.space,
+        principal: this.#options.serviceIdentity,
+      });
     }
     if (!renewed) {
       // Stop committing immediately (serving-loop.md §2's MUST): the
@@ -3626,6 +3760,7 @@ export class SpaceServer implements TransactionSealDestination {
       return;
     }
     this.#currentWave = undefined;
+    this.#retireWave(wave);
   }
 
   /** Re-arm the event scan for DEFERRED (transient) drain outcomes —
@@ -4151,6 +4286,11 @@ export class SpaceServer implements TransactionSealDestination {
       // safe for the creation race: a not-yet-created piece's
       // instantiation commit writes the demanded doc, re-arms it here,
       // and the retry then finds the meta (not-yet vs never).
+      if (this.#failedStartRoots.size > 0) {
+        for (const write of record.writes) {
+          this.#failedStartRoots.delete(write.id);
+        }
+      }
       if (this.#terminalStructureLoads.size > 0 && record.writes.length > 0) {
         for (const [key, observed] of this.#terminalStructureLoads) {
           if (!record.writes.some((write) => observed.has(write.id))) continue;
@@ -4924,9 +5064,19 @@ export class SpaceServer implements TransactionSealDestination {
                     if (arrivalHeld) {
                       this.#options.stats.events.arrivalHeldDeferrals += 1;
                     }
+                    // A start declined for the loop's own follow of the
+                    // piece's origin (§3e) is the loop waiting on itself:
+                    // it spends no budget, and the follow's completion
+                    // owes the re-scan, so no backstop is armed for it.
+                    const originPending = "cause" in outcome &&
+                      outcome.cause === "origin-pending";
+                    if (originPending) {
+                      this.#options.stats.events.originPendingDeferrals += 1;
+                      this.#options.onEventDeferred?.();
+                    }
                     const deferrals =
                       (this.#eventDeferrals.get(entry.eventId) ?? 0) +
-                      (arrivalHeld ? 0 : 1);
+                      (arrivalHeld || originPending ? 0 : 1);
                     this.#eventDeferrals.set(entry.eventId, deferrals);
                     if (deferrals < EVENT_DEFERRAL_DROP_THRESHOLD) {
                       if (
@@ -4957,7 +5107,9 @@ export class SpaceServer implements TransactionSealDestination {
                       // release the guard so the rescan can queue it
                       // again.
                       this.#drainInFlight.delete(eventId);
-                      if (!arrivalHeld) this.#armDeferredRescan();
+                      if (!arrivalHeld && !originPending) {
+                        this.#armDeferredRescan();
+                      }
                       return;
                     }
                     // The race window is long past — events.md §5's
@@ -5591,6 +5743,8 @@ export class SpaceServer implements TransactionSealDestination {
               this.#indexResolvedRoot(key, rootId);
               runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
             };
+            const rearmedAt = this.#rearmSeqsUnderRetry.get(key);
+            this.#rearmSeqsUnderRetry.delete(key);
             const attempt = await this.#attemptStructureLoad(
               runtime,
               root,
@@ -5657,6 +5811,46 @@ export class SpaceServer implements TransactionSealDestination {
                   stats,
                 );
               }
+            } else if (verdict.reason === "start-declined") {
+              // The piece's last start's commit failed, and a start for this
+              // key would fail the same way: park the key as the failed
+              // start parked the piece's other keys, watching the piece,
+              // unless a commit to it landed while this pass ran.
+              this.#pendingStructureLoads.delete(key);
+              this.#structureLoadDeferralStreaks.delete(key);
+              const watched = [...verdict.observedDocIds];
+              if (
+                verdict.root !== undefined && !watched.includes(verdict.root.id)
+              ) {
+                watched.push(verdict.root.id);
+              }
+              const invalidatedAt = this.#lowestMissedInput(
+                runtime,
+                changedDocs,
+                watched,
+              );
+              if (invalidatedAt !== Infinity) {
+                this.#noteRearmed(key, invalidatedAt);
+                this.#pendingStructureRetryWake = true;
+                continue;
+              }
+              this.#terminalStructureLoads.set(key, new Set(watched));
+              logger.info?.("structure-load-start-declined", () => [
+                `demanded root ${root.id} resolves to a piece whose last ` +
+                "start's commit failed; parked until a commit touches it",
+              ]);
+            } else if (verdict.reason === "origin-pending") {
+              // The piece's origin is being followed (§3e); the follow's
+              // completion wakes the cycle that retries this key. Counted
+              // as deferred, like the arm below, but outside the stuck
+              // streak: the loop is waiting on its own follow, and a cold
+              // space's every demanded root waits so while a release
+              // compiles. A key a commit re-armed goes back to holding W
+              // below that commit: the retry has not run until the piece
+              // starts.
+              this.#pendingStructureLoads.add(key);
+              stats.structureLoadDeferred += 1;
+              if (rearmedAt !== undefined) this.#noteRearmed(key, rearmedAt);
             } else {
               // Not loadable YET for a non-terminal reason (a chain
               // cycle mid-write, an unloadable pattern awaiting its
@@ -5996,6 +6190,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#pendingStructureLoads.delete(key);
     this.#terminalStructureLoads.delete(key);
     this.#rearmedAwaitingSettle.delete(key);
+    this.#rearmSeqsUnderRetry.delete(key);
     // The stuck-streak entry retires with the rest of the per-key load
     // state: a departed root's streak would otherwise linger for the space's
     // whole life, and a later re-demand of the same key would resume an
@@ -6071,7 +6266,11 @@ export class SpaceServer implements TransactionSealDestination {
    * falls back to the SPACE instance — piece structure is shared (one
    * graph; instances are data slots, scopes.md §2), so a scoped demand
    * on a shared-structure piece must load through the broad slot
-   * rather than churn forever on its meta-less instance doc. */
+   * rather than churn forever on its meta-less instance doc. The owning
+   * piece's origin is followed before its first start in this tenure
+   * (§3e): the serving runtime is the opener of every piece it serves. A
+   * start the follow is still owed is declined (`origin-pending`), left
+   * pending for the cycle after the follow runs. */
   async #attemptStructureLoad(
     runtime: Runtime,
     root: { id: string; scope?: string },
@@ -6079,6 +6278,8 @@ export class SpaceServer implements TransactionSealDestination {
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
+    const admitStart = (owning: OwningRootAddress) =>
+      !this.#failedStartRoots.has(owning.id);
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
       id: root.id as never,
@@ -6088,6 +6289,8 @@ export class SpaceServer implements TransactionSealDestination {
       propagateErrors: true,
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
+      admitStart,
+      originFollowed: this.#originFollowed,
     });
     if (verdict.root !== undefined) termini.push(verdict.root);
     if (
@@ -6105,6 +6308,8 @@ export class SpaceServer implements TransactionSealDestination {
       propagateErrors: true,
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
+      admitStart,
+      originFollowed: this.#originFollowed,
     });
     if (spaceVerdict.root !== undefined) termini.push(spaceVerdict.root);
     // Merge observed docs: the re-arm must watch both instances' reads.
@@ -6280,6 +6485,48 @@ export class SpaceServer implements TransactionSealDestination {
       runtime.storageManager.open(this.#options.space).replica
         .unappliedForeignSeqFloor?.() ?? Infinity,
     );
+  }
+
+  /**
+   * Helper for the piece-start commit failure observer, which parks every
+   * demand key of the piece `actionId` names once its start's commit has
+   * failed. The start resolved before the commit settled, so the pass took
+   * the keys as started; each parks as a terminal one watching its own
+   * document and the piece's result doc, and the piece joins
+   * `#failedStartRoots` so a later key does not start it again. A commit to
+   * the piece that a wave drained while a pass ran finds no parked key to
+   * re-arm, so such a key is re-armed here instead of parked.
+   */
+  #parkKeysOfFailedStart(runtime: Runtime, actionId: string): void {
+    const rootId = actionId.slice(actionId.indexOf("/") + 1);
+    const keys = new Set<string>([
+      ...(this.#keysByRootId.get(rootId) ?? []),
+      ...(this.#keysByResolvedRoot.get(rootId) ?? []),
+    ]);
+    let parked = false;
+    for (const key of keys) {
+      this.#pendingStructureLoads.delete(key);
+      this.#structureLoadDeferralStreaks.delete(key);
+      const watched = [key.slice(key.indexOf("\0") + 1), rootId];
+      const changedDocs = this.#structureLoadChangedDocs;
+      const invalidatedAt = changedDocs === undefined
+        ? Infinity
+        : this.#lowestMissedInput(runtime, changedDocs, watched);
+      if (invalidatedAt !== Infinity) {
+        this.#noteRearmed(key, invalidatedAt);
+        this.#pendingStructureRetryWake = true;
+        continue;
+      }
+      this.#terminalStructureLoads.set(key, new Set(watched));
+      parked = true;
+    }
+    if (parked) {
+      this.#failedStartRoots.add(rootId);
+      logger.info?.("structure-load-start-failed", () => [
+        `piece ${rootId}'s start commit failed; its ${keys.size} demanded ` +
+        "document(s) parked until a commit touches the piece",
+      ]);
+    }
   }
 
   /**
@@ -6485,6 +6732,10 @@ export class SpaceServer implements TransactionSealDestination {
     if (runtime === undefined || !this.#active) return;
     this.#cycleCounter += 1;
     this.#discardEmptyWave();
+    for (const key of this.#originFollowsSettled) {
+      this.#followedOrigins.add(key);
+    }
+    this.#originFollowsSettled.clear();
     // The tenure's owed space-root ensure (OW45 arm-B stage 1) runs
     // single-flight BEFORE the tenure's ordinary steps: the event drain
     // may dispatch into the root's addPiece stream, and the demand
@@ -6543,6 +6794,109 @@ export class SpaceServer implements TransactionSealDestination {
       await this.#finishCommitInFlight(runtime);
     }
     await this.#settleLifecycleVerbs(runtime, verbs);
+  }
+
+  /**
+   * `EnsurePieceOptions.originFollowed` for every start this tenure makes:
+   * `true` once the piece's origin has been followed this tenure; otherwise
+   * the follow is started and the start declined. The declined start is
+   * asked for again by the cycle the follow's completion wakes, whether a
+   * demand key the pass left pending or a served event the drain deferred.
+   */
+  readonly #originFollowed = (root: OwningRootAddress): boolean => {
+    const key = originFollowKey(root);
+    if (this.#followedOrigins.has(key)) return true;
+    // A follow that completed during this cycle counts from the next one, so
+    // every start the cycle asks about gets the same answer; a second key
+    // resolving to the same root owes no second follow.
+    if (this.#originFollowsSettled.has(key)) return false;
+    const runtime = this.#runtime;
+    if (runtime !== undefined && !this.#originFollowsInFlight.has(key)) {
+      this.#startOriginFollow(runtime, root);
+    }
+    return false;
+  };
+
+  /**
+   * Follow the origin of a piece this tenure is about to start for the first
+   * time (§3e), beside the loop's cycles rather than inside one: the
+   * reconciler's compile seals the candidate's closure into the wave open
+   * when it finishes, and its adopting direct commit waits for that wave to
+   * commit (`Runtime.sealsCommitted`), so a cycle awaiting the follow would
+   * wait on its own commit. A piece whose origin cannot be reached, or whose
+   * follow throws, starts on its stored source, as a client's open runs it;
+   * either way the piece counts as followed for the tenure once the follow
+   * completes.
+   */
+  #startOriginFollow(runtime: Runtime, root: OwningRootAddress): void {
+    const start = performance.now();
+    const key = originFollowKey(root);
+    const cell = runtime.getCellFromLink({ ...root, path: [] });
+    // The reconciler reads the piece's pattern pointer and origin off the
+    // loaded document; a piece the start walk reached through its chain may
+    // not be loaded on this runtime yet.
+    const follow = cell.sync().then(() => {
+      return runtime.sourceReconciler.reconcile(cell);
+    }).then(
+      (outcome) => {
+        logger.debug("origin-followed", () => [
+          `space ${this.#options.space}: followed the origin of ${root.id} ` +
+          `before its first start (${outcome})`,
+        ]);
+      },
+      (error) => {
+        logger.warn("origin-follow-failed", () => [
+          `space ${this.#options.space}: following the origin of ${root.id} ` +
+          "before its first start threw; the piece starts on its stored " +
+          "source",
+          error,
+        ]);
+      },
+    ).finally(() => {
+      if (!this.#active || this.#runtime !== runtime) return;
+      this.#originFollowsInFlight.delete(key);
+      this.#originFollowsSettled.add(key);
+      this.#options.stats.originFollows += 1;
+      timing.time(start, "executor", "wave", "origin-follow");
+      // The starts declined for this follow are a structure retry and an
+      // event scan the next cycle owes.
+      this.#pendingStructureRetryWake = true;
+      this.#eventScanOwed = true;
+      this.#feedArrived?.resolve();
+    });
+    this.#originFollowsInFlight.set(key, follow);
+  }
+
+  /**
+   * `Runtime.sealsCommitted` for the serving runtime: resolves once every
+   * wave open at the call has finished committing, so the state sealed so
+   * far is the store's or withdrawn, and a direct commit may read it.
+   */
+  readonly #sealsCommitted = (): Promise<void> => {
+    if (this.#uncommittedWaves.size === 0) return Promise.resolve();
+    const barrier = Promise.withResolvers<void>();
+    this.#sealBarriers.push({
+      waves: new Set(this.#uncommittedWaves),
+      resolve: barrier.resolve,
+    });
+    return barrier.promise;
+  };
+
+  /**
+   * Take `wave` out of the uncommitted set, resolving each barrier that
+   * waited on nothing else: its commit's post-commit step has run, or it
+   * was discarded empty.
+   */
+  #retireWave(wave: WaveAccumulator): void {
+    this.#uncommittedWaves.delete(wave);
+    for (let index = this.#sealBarriers.length - 1; index >= 0; index--) {
+      const barrier = this.#sealBarriers[index];
+      barrier.waves.delete(wave);
+      if (barrier.waves.size === 0) {
+        this.#sealBarriers.splice(index, 1);
+        barrier.resolve();
+      }
+    }
   }
 
   /**
@@ -6965,8 +7319,9 @@ export class SpaceServer implements TransactionSealDestination {
           // that is all the retry waits for, so it starts here on either
           // side of the deadline. On a host where every barrier completes
           // behind the deadline, this is the only place it starts.
-          for (const key of this.#rearmedAwaitingSettle.keys()) {
+          for (const [key, seq] of this.#rearmedAwaitingSettle) {
             this.#pendingStructureLoads.add(key);
+            this.#rearmSeqsUnderRetry.set(key, seq);
           }
           this.#rearmedAwaitingSettle.clear();
           loadPass = joinLoadPass();
@@ -7266,7 +7621,11 @@ export class SpaceServer implements TransactionSealDestination {
     const outcome = await pending;
     timing.time(commitStart, "executor", "wave", "commit");
     this.#servedWave = { wave: closing, outcome };
-    await this.#finishWave(runtime, closing, outcome, finish, true);
+    try {
+      await this.#finishWave(runtime, closing, outcome, finish, true);
+    } finally {
+      this.#retireWave(closing);
+    }
   }
 
   /**
@@ -7296,13 +7655,17 @@ export class SpaceServer implements TransactionSealDestination {
     if (this.#commitInFlight !== pending) return;
     this.#commitInFlight = undefined;
     if (!this.#active || this.#runtime !== runtime) return;
-    await this.#finishWave(
-      runtime,
-      pending.closing,
-      outcome,
-      pending.finish,
-      false,
-    );
+    try {
+      await this.#finishWave(
+        runtime,
+        pending.closing,
+        outcome,
+        pending.finish,
+        false,
+      );
+    } finally {
+      this.#retireWave(pending.closing);
+    }
   }
 
   /**
@@ -7311,12 +7674,19 @@ export class SpaceServer implements TransactionSealDestination {
    * rolls a landed foreign commit back, and the host activates a parked,
    * sessionless target on the notice so the staged setup derives
    * (serving-loop.md §1's third activation trigger). A sink that reports
-   * its commits itself has reported them.
+   * its commits itself has reported them, and so has the owner of a batch
+   * that went through the route: it reported the commit to its own server,
+   * and a notice here would activate the space on this host as well.
    */
   #reportForeignCommits(outcome: WaveCommitOutcome): void {
     for (const foreign of outcome.foreignCommits) {
       this.#options.stats.warmRequests += 1;
-      if (this.#sink?.reportsCommits === true) continue;
+      if (
+        this.#sink?.reportsCommits === true ||
+        this.#options.route !== undefined
+      ) {
+        continue;
+      }
       this.#options.server.noteExecutorCommit({
         space: foreign.space,
         seq: foreign.seq,
@@ -7870,7 +8240,12 @@ export class SpaceServer implements TransactionSealDestination {
     this.#structureLoadPass = undefined;
     this.#structureLoadChangedDocs = undefined;
     this.#terminalStructureLoads.clear();
+    this.#failedStartRoots.clear();
+    this.#followedOrigins.clear();
+    this.#originFollowsInFlight.clear();
+    this.#originFollowsSettled.clear();
     this.#rearmedAwaitingSettle.clear();
+    this.#rearmSeqsUnderRetry.clear();
     this.#pendingStructureRetryWake = false;
     // Phase 5: foreign engine resolutions die with the tenure (a
     // re-activation re-resolves; the map must not outlive engines the
@@ -7890,6 +8265,10 @@ export class SpaceServer implements TransactionSealDestination {
     this.#currentWave = undefined;
     await this.#sealChain;
     wave?.abandon(`parked: ${reason}`);
+    // Nothing sealed into this tenure's waves commits now: a barrier
+    // waiting on one has nothing left to wait for.
+    this.#uncommittedWaves.clear();
+    for (const barrier of this.#sealBarriers.splice(0)) barrier.resolve();
     // An effect this tenure admitted and has not retired is tied to the
     // outbox closed below. A held dispatch is dropped there, and only a
     // fresh runtime's memo re-miss fires it again; a dispatched one
@@ -7924,6 +8303,8 @@ export class SpaceServer implements TransactionSealDestination {
         this.#runtime.connectedSessionProbe = undefined;
         this.#runtime.notifyServedIntentSealFailure = undefined;
         this.#runtime.pieceStartCommitFailureObserver = undefined;
+        this.#runtime.pieceOriginFollowed = undefined;
+        this.#runtime.sealsCommitted = undefined;
         this.#runtime.servingYieldObserver = undefined;
         this.#runtime.storageManager.loadRecoveryObserver = undefined;
         // The shadow-flip wake dies with the tenure (a late flip on a

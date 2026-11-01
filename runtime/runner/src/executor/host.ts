@@ -655,7 +655,12 @@ export class ExecutorHost {
           const parked = this.#takeParkedRuntime(space, engine);
           return parked !== undefined
             ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, context);
+            : this.#options.createRuntime(space, {
+              ...context,
+              ...(this.#options.route === undefined
+                ? {}
+                : { route: this.#options.route }),
+            });
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
