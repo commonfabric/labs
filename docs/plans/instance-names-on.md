@@ -1,6 +1,6 @@
 # Turning instance names on
 
-Stage 4 of this plan is built, and so is part of stage 3; nothing else is.
+Stages 3 and 4 of this plan are done; nothing else is.
 The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
@@ -258,7 +258,7 @@ router has restarted after that: a router's public offer is fixed for its
 process's lifetime, so one taken while an endpoint lacked `instanceNameMark`
 omits it, and every routed naming client then fails its connection.
 
-### 3. Tests that pass with the flag forced on — **part landed**
+### 3. Tests that pass with the flag forced on — **landed**
 
 What this stage requires: before the flip, the runner and piece suites are run
 with the runtime's default forced on, and so are the patterns, shell and CLI
@@ -266,17 +266,18 @@ suites, the integration tests, and `cf test` over the pattern unit tests. The
 failures such a run finds are made to pass in either mode, so the flip is a
 change to the default and to nothing else.
 
-The failures a forced-on run of the runner and piece suites found are test
-assumptions rather than product bugs: compile-cache tests that read the
-positional cache variant's key, and a `stored-setup-build-repair.test.ts`
-helper that takes a positional descriptor that is now named. Those tests pass
-in either mode. The two tests in `experimental-options.test.ts` that assert the
-default fail when it is forced on, and change with the default at the flip.
+The failures a forced-on run found are test assumptions rather than product
+bugs: compile-cache tests that read the positional cache variant's key, and a
+`stored-setup-build-repair.test.ts` helper that takes a positional descriptor
+that is now named. Those tests pass in either mode. The two tests in
+`experimental-options.test.ts` that assert the default fail when it is forced
+on, and change with the default at the flip.
 
-Still to run with the default forced on: the full runner and piece suites,
-of which only the test files changed to pass in either mode have been run that
-way in their current form; and the patterns, shell and CLI suites, the
-integration tests, and `cf test`, none of which has been run that way at all.
+Apart from those two, no test in a suite this stage names fails with the
+default forced on that does not fail the same way with it off: the runner,
+piece, shell, CLI and patterns unit suites; the runner, runtime-client, shell,
+CLI, generated-patterns and patterns integration suites; and `cf test` over
+every pattern unit test. The flip itself runs them all with the default on.
 
 ### 4. The cause-assignment gate sees the flip — **landed**
 
