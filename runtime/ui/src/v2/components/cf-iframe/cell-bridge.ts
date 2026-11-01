@@ -112,6 +112,43 @@ function sqliteInput(value: FabricValue | undefined): {
 
 type SqliteOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 
+/**
+ * Resolves once `source`, a SQLite resource, reaches the database its producer
+ * makes. A pull alone does not promise that: under server execution the
+ * producer runs on the serving runtime, and a client's pull settles on the
+ * client's own loads, so it can find the producer's output still empty. The
+ * source then resolves to that output rather than to the database, and a grant
+ * of it would refuse the database as a retarget once it arrives. Read as a
+ * cell, the source holds its link to the output either way, so the wait reads
+ * its value, which follows that link and holds nothing until the database is
+ * written.
+ */
+async function sqliteSourceProduced(
+  source: CellHandle<unknown>,
+): Promise<void> {
+  // Held only to keep the producer demanded, as an operation's is.
+  const cancelDemand = source.asSchema({ asCell: ["sqlite"] }).subscribe(
+    () => {},
+    { onRefused: () => {} },
+  );
+  const database = source.asSchema({
+    type: "object",
+    additionalProperties: true,
+  });
+  const produced = Promise.withResolvers<void>();
+  // A refused read ends the wait, since nothing produced would lift it, and
+  // each operation answers for the refusal on its own.
+  const cancel = database.subscribe((value) => {
+    if (value !== undefined) produced.resolve();
+  }, { onRefused: () => produced.resolve() });
+  try {
+    if (await database.pull() === undefined) await produced.promise;
+  } finally {
+    cancel();
+    cancelDemand();
+  }
+}
+
 async function demandSqliteSource<T>(
   source: CellHandle<unknown>,
   authority: CellHandle<unknown>,
@@ -536,7 +573,7 @@ export async function resolveCellContextBridge(
       : undefined;
     const declaredKind = kindHint ?? cellKind(properties[name]);
     if (declaredKind === "sqlite") {
-      await source.pull();
+      await sqliteSourceProduced(source);
     }
     const cell = await source.resolveAsCell();
     // An absent name resolves to the context's own path for it, which for a

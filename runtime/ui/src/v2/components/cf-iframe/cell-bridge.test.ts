@@ -661,7 +661,8 @@ describe("cf-iframe cell bridge", () => {
               await idle.promise;
             }
             return {
-              value: request.cell.id === "of:user-database" && materialized
+              value: (request.cell.id === "of:user-database" ||
+                  request.cell.path[0] === "database") && materialized
                 ? databaseValue
                 : undefined,
             };
@@ -750,6 +751,108 @@ describe("cf-iframe cell bridge", () => {
       bridge.resources.database.methods!.query({ sql: "SELECT 2" }),
     ).rejects.toThrow("resolved outside its granted capability");
     expect(sqliteQueries).toBe(1);
+  });
+
+  it("grants a SQLite source the database its producer writes after the source's pull found nothing", async () => {
+    // Under server execution the producer runs on the serving runtime, so a
+    // client's pull can settle before it has written anything, and the
+    // source then resolves to the producer's empty output. The source's link
+    // to that output is already there, so a pull reading the source as a
+    // cell finds something either way.
+
+    const databaseValue = {
+      id: "fid1:space-database",
+      scope: "space",
+      tables: {},
+    };
+    const watched = Promise.withResolvers<void>();
+    const valuePulled = Promise.withResolvers<void>();
+    let produced = false;
+    let watching: CellHandle<unknown> | undefined;
+    const queried: string[] = [];
+    const databaseTarget = () =>
+      produced ? "of:database" : "computed:database-producer";
+    const asCellSchema = (schema: CellRef["schema"]) =>
+      typeof schema === "object" && schema !== null && "asCell" in schema;
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          if (request.type === RequestType.CellPull) {
+            if (request.cell.path[0] !== "database") {
+              return Promise.resolve({ value: undefined });
+            }
+            if (asCellSchema(request.cell.schema)) {
+              return Promise.resolve({ value: { id: databaseTarget() } });
+            }
+            const value = produced ? databaseValue : undefined;
+            valuePulled.resolve();
+            return Promise.resolve({ value });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            return Promise.resolve({
+              cell: request.cell.path.length === 0
+                ? {
+                  ...request.cell,
+                  id: "of:resolved-context",
+                  schema: {
+                    type: "object",
+                    properties: {
+                      database: { type: "object", asCell: ["sqlite"] },
+                    },
+                  },
+                }
+                : {
+                  ...request.cell,
+                  id: databaseTarget(),
+                  path: [],
+                  schema: { type: "object", properties: {} },
+                },
+            });
+          }
+          if (request.type === RequestType.SqliteQuery) {
+            queried.push(request.cell.id);
+            return Promise.resolve({ rows: [] });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: (cell: CellHandle<unknown>) => {
+          if (
+            cell.ref().path[0] === "database" &&
+            !asCellSchema(cell.ref().schema)
+          ) {
+            watching = cell;
+            watched.resolve();
+          }
+          return Promise.resolve();
+        },
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+
+    const resolving = resolveCellContextBridge(context, {
+      database: "sqlite",
+    });
+    // The database appears once the bridge watches the source's value and
+    // has been told it holds nothing, or once the bridge is resolved,
+    // whichever comes first.
+    await Promise.race([
+      resolving,
+      Promise.all([watched.promise, valuePulled.promise]),
+    ]);
+    produced = true;
+    watching?.[$onCellUpdate](databaseValue);
+    const bridge = await resolving;
+
+    await expect(
+      bridge.resources.database.methods!.query({ sql: "SELECT 1" }),
+    ).resolves.toEqual({ rows: [] });
+    expect(queried).toEqual(["of:database"]);
   });
 
   it("ignores inherited resource-kind hints", async () => {
