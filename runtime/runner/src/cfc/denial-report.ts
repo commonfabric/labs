@@ -29,7 +29,7 @@
  * per-kind totals.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 const logger = getLogger("cfc");
 const announced = new Set<string>();

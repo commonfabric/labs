@@ -36,9 +36,9 @@
  * refused transition, a dropped stored slot or a failed start of a nested
  * piece, that every stored slot and per-user outcome reads as it did, that the
  * updated room can edit and react to a seeded message, that the manager lists
- * its rooms and its outgoing notices and the group room its participants'
- * principals, before and after a room is started, and that starting a direct
- * chat with the same person again finds the room the manager holds.
+ * its rooms and its outgoing notices and the group room its members and that
+ * its reader can send, before and after a room is started, and that starting a
+ * direct chat with the same person again finds the room the manager holds.
  *
  * The whole rehearsal runs twice: once with the manager's and the group room's
  * views never read before the update, and once with a client showing Home and
@@ -65,7 +65,7 @@ import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   type Cell,
   currentPatternKey,
@@ -261,6 +261,21 @@ const kindsOf = (rooms: unknown): string[] | undefined =>
     ? rooms.map((entry) => (entry as { kind?: string }).kind ?? "none").sort()
     : undefined;
 
+/**
+ * A room's members, each as its principal and how many profiles it holds, in
+ * the order the room lists them.
+ */
+const membersOf = (members: unknown): string[] | undefined =>
+  Array.isArray(members)
+    ? members.map((member) => {
+      const { principal, profiles } = member as {
+        principal?: string;
+        profiles?: unknown[];
+      };
+      return `${principal ?? "none"}:${profiles?.length ?? "none"}`;
+    })
+    : undefined;
+
 const recipientsOf = (notices: unknown): string[] | undefined =>
   Array.isArray(notices)
     ? notices.map((notice) =>
@@ -355,10 +370,11 @@ const rehearse = (title: string, readBefore: boolean): void => {
     type Snapshot = Awaited<ReturnType<typeof snapshot>>;
 
     /**
-     * What a client reads of the manager's rooms and of the group room's
-     * participants, each directly and through the views a client that draws
-     * natively reads. Rooms are listed by kind, sorted, since two rooms started
-     * in the same instant may list in either order.
+     * What a client reads of the manager's rooms, of the group room's
+     * members, and of whether the group room's reader can send, each
+     * directly and through the views a client that draws natively reads. Rooms
+     * are listed by kind, sorted, since two rooms started in the same instant
+     * may list in either order.
      */
     const views = async () => ({
       rooms: kindsOf(await manager.key("rooms").pull()),
@@ -371,10 +387,16 @@ const rehearse = (title: string, readBefore: boolean): void => {
       entries: ((await room.key("participantEntries").pull()) as
         | { principal?: string }[]
         | undefined)?.map((entry) => entry.principal ?? "none"),
+      members: membersOf(await room.key("members").pull()),
+      viewedMembers: membersOf(
+        await room.key("$VIEWS").key("room").key("members").pull(),
+      ),
       notices: recipientsOf(await manager.key("outgoingNotices").pull()),
       viewedNotices: recipientsOf(
         await manager.key("$VIEWS").key("chats").key("outgoingNotices").pull(),
       ),
+      canSend: await room.key("canSend").pull(),
+      viewedCanSend: await room.key("$VIEWS").key("room").key("canSend").pull(),
     });
     type Views = Awaited<ReturnType<typeof views>>;
     let viewsBefore: Views | undefined;
@@ -701,19 +723,48 @@ const rehearse = (title: string, readBefore: boolean): void => {
       expect(emoji.map((reaction) => reaction.emoji)).toEqual(["🎉"]);
     });
 
-    it("lists the manager's rooms and outgoing notices and the group room's participants after the update, and a room started since", async () => {
+    it("lists the manager's rooms and outgoing notices and the group room's members after the update, and a room started since", async () => {
+      const groupPrincipals = [owner.did(), member, added].sort();
+      const groupMembers = groupPrincipals.map((did) =>
+        `${did}:${did === owner.did() ? 1 : 0}`
+      );
       const listed = {
         rooms: ["direct", "group"],
         viewedRooms: ["direct", "group"],
-        principals: [owner.did()],
-        viewedPrincipals: [owner.did()],
+        // Everyone the group room's space admits, of whom only the owner has
+        // joined, so has a profile to pair with their principal.
+        principals: groupPrincipals,
+        viewedPrincipals: groupPrincipals,
         entries: [owner.did()],
+        members: groupMembers,
+        viewedMembers: groupMembers,
         // No room's roster attests anyone but the owner, so every notice is
         // still to be delivered.
         notices: [added, counterpart, member].sort(),
         viewedNotices: [added, counterpart, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       };
-      if (readBefore) expect(viewsBefore).toEqual(listed);
+      // What the group room reports of its members is derived from its
+      // space's access list in this tree and may be derived otherwise in the
+      // deployed release, so what was read of it before the update is not
+      // held to what is read after.
+      const membership = [
+        "principals",
+        "viewedPrincipals",
+        "entries",
+        "members",
+        "viewedMembers",
+      ];
+      const withoutMembers = (views: object | undefined) =>
+        Object.fromEntries(
+          Object.entries(views ?? {}).filter(([key]) =>
+            !membership.includes(key)
+          ),
+        );
+      if (readBefore) {
+        expect(withoutMembers(viewsBefore)).toEqual(withoutMembers(listed));
+      }
       expect(await views()).toEqual(listed);
 
       await send(
@@ -733,6 +784,8 @@ const rehearse = (title: string, readBefore: boolean): void => {
         viewedRooms: ["direct", "group", "group"],
         notices: [added, counterpart, member, member].sort(),
         viewedNotices: [added, counterpart, member, member].sort(),
+        canSend: true,
+        viewedCanSend: true,
       });
     });
 

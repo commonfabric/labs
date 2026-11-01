@@ -88,7 +88,7 @@ import {
   resetTimingMeasureBudget,
   setTimingMeasuresEnabled,
   TIMING_MEASURE_PREFIX,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 
 import { assertionOutcome } from "./assert-record.ts";
 import { ActionReadReport } from "./action-read-report.ts";
@@ -126,7 +126,7 @@ import {
 } from "./runtime-error-expectation.ts";
 import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
 import { servedConsequences, settleServed } from "./served-settle.ts";
-import { buildActionEvent } from "./trusted-action-event.ts";
+import { pullActionEvent } from "./test-action-event.ts";
 
 /**
  * How many idle-then-sync rounds a step's settle performs before it gives up
@@ -230,7 +230,6 @@ type HarnessTestStepMeta = {
   readBudget?: unknown;
   action?: unknown;
   assertion?: unknown;
-  event?: unknown;
   trustedUi?: unknown;
   render?: unknown;
   skip?: boolean;
@@ -253,13 +252,6 @@ const testStepPeekSchema = internSchema(
     properties: {
       action: { type: "unknown" },
       assertion: { type: "unknown" },
-      // The payload is what the step sends, so it is read as authored: an
-      // object arrives as an object, reaching the handler as a reference into
-      // this step rather than a snapshot of it. `type: "unknown"` marks a
-      // value the traversal must not descend into, which is right for the
-      // fields this schema only tests for presence and wrong here, where it
-      // drops an object payload to `undefined`.
-      event: true,
       trustedUi: {
         type: "object",
         properties: {
@@ -1986,10 +1978,12 @@ export async function runTestPattern(
           // with renderer-trusted provenance when the step declares `trustedUi`.
           await withPhase(
             ["runTestPattern", "step", actionName, "send"],
-            () => {
-              actionStream.send(
-                buildActionEvent(stepValue.event, stepValue.trustedUi),
+            async () => {
+              const event = await pullActionEvent(
+                stepCell.key("event"),
+                stepValue.trustedUi,
               );
+              actionStream.send(event);
             },
           );
 

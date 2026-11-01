@@ -1,5 +1,8 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseDecodeAct, ProblematicStateError } from "@/codec-common";

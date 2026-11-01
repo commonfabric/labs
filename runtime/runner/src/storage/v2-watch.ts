@@ -14,7 +14,7 @@ import {
   containsExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { hashStringOf } from "@commonfabric/data-model";
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 import type { MIME } from "@commonfabric/memory/interface";
 import type {
   CellScope,

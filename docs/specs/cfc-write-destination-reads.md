@@ -63,6 +63,24 @@ labels. Object anchoring's ancestry reads retain their ordinary classification.
 Value-dependent operations such as `addUnique()` still observe the destination
 and require its read ceiling.
 
+**The served event append.** Under server execution, a handler run's send to a
+stream in the same space appends the event's entry to that stream's entries
+document within the run's own transaction (the serving arm of the event path
+`CellImpl.set()` takes for a stream, in
+[`cell.ts`](../../runtime/runner/src/cell.ts)). It reads the document's
+`entries` to build that append, which it records as a mergeable append of one
+entry, as `Cell.pushAll()` does. The read carries `writeDestinationRead`: the
+entries already there stay where they are, and the only value written is the
+run's own entry, built from the event it sends. Nothing returns to the sending
+code either: the document sits at an id derived from the stream's link
+(`STREAM_ENTRIES_DOC_PREFIX` in
+[`memory/v2.ts`](../../runtime/memory/v2.ts)), which no pattern names, and a
+pattern reaches a stream only by sending to it or handling its events. So a
+label an earlier entry carries, such as the one its `consequenced` mark took
+from the run that handled it, is not an input of the sending run. What the
+sending run itself read still joins, and still labels the entry it appends,
+and the entries document's own write policy still applies.
+
 **The SQLite publication comparison.** A query snapshots its raw destination
 record before staging a request and compares that snapshot with the destination
 when an abandoned publication settles. Both reads carry `writeDestinationRead`:

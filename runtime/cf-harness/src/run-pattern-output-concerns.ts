@@ -49,8 +49,8 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 /** What an output says about itself. */
 export type OutputConcernKind = "error-branch" | "no-rows" | "pending";

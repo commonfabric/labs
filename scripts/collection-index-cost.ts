@@ -1,6 +1,6 @@
 /** Measures completed index action bodies across separate maintenance phases. */
 import { Identity } from "@commonfabric/identity";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { expect } from "@std/expect";
 
 import { listElementKeys } from "../runtime/runner/src/builtins/list-element-keys.ts";

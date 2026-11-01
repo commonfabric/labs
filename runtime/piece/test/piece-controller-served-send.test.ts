@@ -154,4 +154,57 @@ describe("piece-controller", () => {
     await name.sync();
     expect(name.get()).toBe("served:alice");
   });
+
+  it("writes a result field once a speculation layer of this client over the result has settled", async () => {
+    // A client under server execution previews server-owned derivations in
+    // layers that exist only in its own process, and a commit whose read
+    // basis names one is refused for good. The write reads the result, so it
+    // waits for the layer over it to settle and then writes.
+
+    const receipt = await instantiate();
+    const writer = await clientPieces();
+    const piece = await writer.get(receipt.pieceId);
+    const result = writer.getResult(piece.getCell());
+    await result.sync();
+    const { id, scope } = result.getAsNormalizedFullLink();
+    const replica = writer.runtime.storageManager.open(space).replica;
+    // The layer settles by being withdrawn, as the overlay retires it.
+    const verdict = Promise.withResolvers<
+      { withdrawn: { message: string; superseded: true } }
+    >();
+    const layer = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id,
+          type: "application/json",
+          value: { ...replica.getDocument(id, scope) },
+        }],
+      },
+      undefined,
+      verdict.promise,
+      { speculative: true },
+    );
+    // Resolves once the write asks when the speculation it read settles.
+    const waiting = Promise.withResolvers<"waiting">();
+    const whenSpeculationSettled = replica.whenSpeculationSettled!.bind(
+      replica,
+    );
+    replica.whenSpeculationSettled = (...args) => {
+      waiting.resolve("waiting");
+      return whenSpeculationSettled(...args);
+    };
+
+    const writing = piece.result.set("bob", ["name"]);
+    const first = await Promise.race([
+      writing.then(() => "written", (error) => `refused: ${error}`),
+      waiting.promise,
+    ]);
+    verdict.resolve({ withdrawn: { message: "retired", superseded: true } });
+    await layer.settled;
+    await writing;
+
+    expect(first).toBe("waiting");
+    expect(await piece.result.get(["name"])).toBe("bob");
+  });
 });

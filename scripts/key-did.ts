@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-read
 
 import { Identity } from "@commonfabric/identity";
-import { encode } from "@commonfabric/utils/encoding";
+import { encode } from "@commonfabric/text/utf8";
 
 /**
  * Usage:

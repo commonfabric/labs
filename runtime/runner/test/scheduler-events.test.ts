@@ -3,7 +3,7 @@
 import {
   getLoggerCountsBreakdown,
   resetAllLoggerCounts,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import {
   afterEach,
   beforeEach,

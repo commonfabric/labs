@@ -187,12 +187,14 @@ describe("rendered vote rows across replicas", () => {
           await cc.runtime.settled(Infinity);
           await cc.synced();
           await controlNetwork("resume");
+          // The tally attribute can arrive before the nested swatch. Wait for
+          // the rendered color too; browser idle does not settle remote work.
           await waitForSettledText(
             page,
             variant === "mapped"
               ? `[data-row="one"][title="${coldName}"][data-tally-colors="${color}"]`
               : `[data-row="one"][title="${coldName}"]`,
-            variant === "mapped" ? "one:" : `one: ${color}`,
+            `one: ${color}`,
           );
           if (variant === "mapped") {
             await settleView(page);

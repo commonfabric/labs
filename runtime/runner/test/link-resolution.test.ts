@@ -11,8 +11,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   type ActiveLogLevel,
   setLoggerCountObserver,
-} from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+} from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { type JSONSchema } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";

@@ -8,7 +8,9 @@ a room it lists is one they belong to. The implementation is
 `runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did).
+same space, described [below](#the-spaces-own-did). `spaceDeleted(target)`,
+whether that space is deleted, is planned beside them and not implemented yet;
+[below](#a-deleted-space) says what it will return.
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -212,6 +214,83 @@ the space, whoever asked for the retry that decided it. The shell drops the
 loads of that space it remembered as failed, a piece's or the space root's, and
 runs again each one a view is showing, so a refused space's home or piece
 appears once access is granted, without a reload.
+
+## A deleted space
+
+A deleted space
+([random space identities](../specs/random-space-identities.md#deleting-a-space))
+has a tombstone where its access list was. A memory server that checks access,
+in `observe` or `enforce` mode, refuses it to every principal for good, with a
+refusal marked `deleted`; in `off` mode it checks nothing, tombstones included,
+and serves a deleted space like any other
+([INV-15](../specs/memory-v2/09-invariants.md#inv-15--space-deletion)), so
+there `spaceDeleted(target)` never returns `true`. To the access
+calls that is a refusal like any other permanent one: `spaceAccess(target)`
+returns `"none"`, `spaceMembers(target)` returns `undefined`, and
+`retrySpaceAccess(space)` is refused again. A tombstone is not a list, so
+`spaceReaderRole()` finds no role in it for anyone.
+
+`spaceDeleted(target)` is what tells a deleted space apart from one the
+principal has merely lost. Its `target` is a cell, as `spaceAccess(target)`
+takes, or a well-formed DID string naming the space itself
+(`isWellFormedDID()`), since deletion is a fact about a space rather than about
+any value in it, and a list of spaces holds their DIDs. Any other string throws.
+
+| Answer | When |
+| --- | --- |
+| `true` | the memory server has refused this runtime the space with the `deleted` marker |
+| `false` | the server has admitted the runtime to the space, or has refused it without the marker |
+| `undefined` | in a computation, the server has not yet answered for the space; anywhere, the runtime has no memory server it can ask about the space, or `target` was passed as `undefined` |
+
+A call about a space the runtime has not opened opens it, by reading the space's
+access-list document through the call's transaction as `spaceAccess(target)`
+does, so the memory server answers for it. The run waits for that answer
+through machinery the runtime already has, not a retry or a poll of its own:
+
+- A reactive computation gets `undefined` at once, and is run again when the
+  answer arrives: an admission delivers the access list it read, and a refusal
+  reaches it through the storage manager's access-change observer
+  (`subscribeSpaceAccessChange()`), which runs it again through
+  `Scheduler.invalidateAction()`, as it does for `spaceAccess(target)`.
+- A handler does not see `undefined` for a space it is waiting on. The call
+  records the space as pending, as a run records an `inSpace()` name it cannot
+  resolve yet, and the run's transaction is dropped. Once the run has ended,
+  the runtime waits for the server's answer for each pending space, and only
+  then ends the run with `RetryImmediately`, so the handler runs again with the
+  answer in place. `RetryImmediately` re-queues at once, so the wait has to
+  come first: raised before the answer arrives, it would run the handler again
+  against a space still unanswered. If the space's load fails instead, with no
+  answer coming, the event fails as an event whose required load failed does
+  (`finalize()` in `runtime/runner/src/scheduler/events.ts`), and is not run
+  again.
+
+A runtime with no memory server it can ask about the space, such as one whose
+routing gives the space's host no route, returns `undefined` from both, and a
+handler is not run again: there is no answer to wait for.
+
+It can be called where `spaceAccess(target)` can: in a handler or a reactive
+computation, and a call in a pattern body throws. Deletion is the same for every
+principal, and the server refuses a deleted space to a serving runtime as it
+refuses it to a client, so the answer does not depend on who asks, and a call in
+a computation leaves its read scope as it is. Once `true` it stays `true`. A
+space deleted after the server refused the runtime for another reason reads
+`false` until a `retrySpaceAccess(space)` brings back the server's new answer.
+It tells a principal who names a space nothing the server's refusal of that
+space does not already tell them.
+
+`spaceaccesslost`, the runtime's notice of a refused space across the worker
+boundary, carries `deleted: true` for a deleted space. The renderer's
+placeholder for content of a deleted space reads "Deleted" and has no Retry
+button, since no retry can admit anyone, and the shell asks again neither when
+the person navigates into a deleted space nor when the page regains focus.
+
+A consumer that keeps a list of spaces, Home's shared-space catalog among
+them, uses `spaceDeleted(target)` to put away an entry whose space is gone
+([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
+
+Deleting a space is not implemented yet; until it is, the memory server
+refuses the commit that would delete one, and `spaceDeleted(target)` and the
+`deleted` marker on `spaceaccesslost` do not exist.
 
 ## Changing the level
 

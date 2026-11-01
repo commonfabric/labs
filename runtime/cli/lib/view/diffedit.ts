@@ -13,8 +13,8 @@
 
 import { basename, dirname } from "@std/path";
 
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { maxOf } from "@commonfabric/utils/math";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { maxOf } from "@commonfabric/collections/math";
 
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";

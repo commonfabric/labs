@@ -9,7 +9,7 @@ import {
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { cliCommand } from "./cli-name.ts";
 // A value import back to callable.ts, whose own import of this module is
 // type-only and therefore erased — so this creates no runtime cycle.

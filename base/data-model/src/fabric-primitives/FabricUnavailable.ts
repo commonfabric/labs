@@ -15,8 +15,8 @@ import type {
   UnavailableErrorKind,
   UnavailableReason,
 } from "@/api.ts";
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
-import { isPlainObject } from "@commonfabric/utils/types";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";

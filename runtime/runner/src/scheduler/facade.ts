@@ -1,8 +1,8 @@
 import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { BoundedKeyMap } from "@commonfabric/utils/cache";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { BoundedKeyMap } from "@commonfabric/collections/cache";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";

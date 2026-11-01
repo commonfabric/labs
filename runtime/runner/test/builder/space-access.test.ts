@@ -14,8 +14,8 @@ import { connect, loopback } from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { defer } from "@commonfabric/utils/defer";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { defer } from "@commonfabric/async/defer";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import {

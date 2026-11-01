@@ -1,5 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolContext } from "./types.ts";
 
 export const STRUCTURED_FILE_TOOL_ERROR_CODES = [

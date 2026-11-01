@@ -329,6 +329,13 @@ export const EnvSchema = z.object({
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See runtime/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
+  // Whether a `session.open` may present a UCAN proof chain, resolving the
+  // session's capability from the chain's root issuer; on unless set to
+  // "false" or "0", and any other spelling refuses startup rather than
+  // enable it. See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `sessionOpenProofs`.
+  MEMORY_ACL_DELEGATIONS: z.enum(["true", "1", "false", "0"]).default("true")
+    .transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
     error:

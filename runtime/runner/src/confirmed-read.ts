@@ -1,7 +1,10 @@
+import type { ClientCommit, PendingRead } from "@commonfabric/memory/v2";
+
 import type { Runtime } from "./runtime.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
+  URI,
 } from "./storage/interface.ts";
 import { markDurableReadTx } from "./storage/reactivity-log.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
@@ -130,6 +133,55 @@ export function readDurable<R>(
   } finally {
     closeReadTx(tx);
   }
+}
+
+/**
+ * Returns a promise that resolves once the client speculation layers over the
+ * documents a refused commit read have settled, for a commit the replica of
+ * `space` refused because its read basis named one of those layers (a
+ * `SpeculativeBasisError`, `speculation.md` §6). Returns `undefined` for any
+ * other rejection, and when none of those layers stands any longer.
+ *
+ * Such a commit read a value this runtime previews and the server has not
+ * settled, so it can never be accepted as it is. A writer that may read such
+ * values waits on this and writes again, reading what the server settled.
+ */
+export function speculationSettledFor(
+  runtime: Runtime,
+  space: MemorySpace,
+  rejection: unknown,
+): Promise<void> | undefined {
+  const pending = speculativeBasisReads(rejection);
+  if (pending === undefined) return undefined;
+  const { replica } = runtime.storageManager.open(space);
+  const standing = new Map<string, Promise<void>>();
+  for (const { id, scope } of pending) {
+    const key = `${id}\0${scope}`;
+    if (standing.has(key)) continue;
+    // A read names its document by the URI the replica keys it by.
+    const settled = replica.whenSpeculationSettled?.(id as URI, scope);
+    if (settled !== undefined) standing.set(key, settled);
+  }
+  return standing.size === 0
+    ? undefined
+    : Promise.all(standing.values()).then(() => {});
+}
+
+/**
+ * Helper for {@link speculationSettledFor}, which returns the pending reads of
+ * the commit a speculative-basis refusal carries, or `undefined` for any other
+ * rejection.
+ */
+function speculativeBasisReads(
+  rejection: unknown,
+): readonly Pick<PendingRead, "id" | "scope">[] | undefined {
+  if (
+    typeof rejection !== "object" || rejection === null ||
+    (rejection as { name?: unknown }).name !== "SpeculativeBasisError"
+  ) return undefined;
+  const commit = (rejection as { transaction?: Partial<ClientCommit> })
+    .transaction;
+  return commit?.reads?.pending;
 }
 
 /**

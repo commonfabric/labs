@@ -9,7 +9,10 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
   ensureSpaceRootsFromEnv,
+  ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
+  serverExecutionRoute,
+  serverExecutionWorkerFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
@@ -18,9 +21,26 @@ import {
   publishExperimentalPosture,
 } from "@/lib/experimental-posture.ts";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import type {
+  ServedInstantiateReceipt,
+  ServedRegistrationPreparation,
+} from "@commonfabric/piece/ops";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];
+
+/** A pattern with one output and no inputs, for a served creation. */
+const LABEL_PROGRAM = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { pattern } from 'commonfabric';",
+      "export default pattern<{}, { label: string }>(() => ({ label: 'x' }));",
+      "",
+    ].join("\n"),
+  }],
+};
 
 describe("serverExecutionPolicyFromEnv", () => {
   // The Phase-6 env knobs (serving-loop.md §5) are the production
@@ -35,13 +55,19 @@ describe("serverExecutionPolicyFromEnv", () => {
   it("defaults the outstanding cap ON when the knob is unset or empty", () => {
     const warnings: string[] = [];
     expect(serverExecutionPolicyFromEnv(envOf({}), (m) => warnings.push(m)))
-      .toEqual({ maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS });
+      .toEqual({
+        maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS,
+        storeReadThrough: true,
+      });
     expect(
       serverExecutionPolicyFromEnv(
         envOf({ SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "" }),
         (m) => warnings.push(m),
       ),
-    ).toEqual({ maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS });
+    ).toEqual({
+      maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS,
+      storeReadThrough: true,
+    });
     expect(warnings).toEqual([]);
   });
 
@@ -52,7 +78,7 @@ describe("serverExecutionPolicyFromEnv", () => {
         envOf({ SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "8" }),
         (m) => warnings.push(m),
       ),
-    ).toEqual({ maxOutstandingEffects: 8 });
+    ).toEqual({ maxOutstandingEffects: 8, storeReadThrough: true });
     // The operator's deliberate opt-out: the key is ABSENT from the
     // policy (the outbox reads absent as unbounded).
     expect(
@@ -60,7 +86,7 @@ describe("serverExecutionPolicyFromEnv", () => {
         envOf({ SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
         (m) => warnings.push(m),
       ),
-    ).toEqual({});
+    ).toEqual({ storeReadThrough: true });
     expect(warnings).toEqual([]);
   });
 
@@ -73,6 +99,7 @@ describe("serverExecutionPolicyFromEnv", () => {
       );
       expect(policy).toEqual({
         maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS,
+        storeReadThrough: true,
       });
       expect(warnings.length).toBe(1);
       expect(warnings[0]).toContain("SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS");
@@ -96,6 +123,7 @@ describe("serverExecutionPolicyFromEnv", () => {
       flushDeadlineMs: 250,
       flushDeadlineMaxMs: 1000,
       egressRatePerSecond: 5,
+      storeReadThrough: true,
     });
     expect(warnings).toEqual([]);
     expect(
@@ -106,42 +134,32 @@ describe("serverExecutionPolicyFromEnv", () => {
         }),
         (m) => warnings.push(m),
       ),
-    ).toEqual({ maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS });
+    ).toEqual({
+      maxOutstandingEffects: DEFAULT_MAX_OUTSTANDING_EFFECTS,
+      storeReadThrough: true,
+    });
     expect(warnings.length).toBe(2);
     expect(warnings[0]).toContain("SERVER_EXECUTION_FLUSH_DEADLINE_MS");
     expect(warnings[1]).toContain("SERVER_EXECUTION_EGRESS_RATE_PER_S");
   });
 
-  it("turns the store read-through on for the literal true only; garbage leaves it off with a warning", () => {
+  it("turns the store read-through off for the literal false only; garbage leaves it on with a warning", () => {
     const warnings: string[] = [];
-    expect(
+    const policyWith = (value: string | undefined) =>
       serverExecutionPolicyFromEnv(
         envOf({
-          SERVER_EXECUTION_STORE_READ_THROUGH: "true",
+          ...(value === undefined
+            ? {}
+            : { SERVER_EXECUTION_STORE_READ_THROUGH: value }),
           SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
         }),
         (m) => warnings.push(m),
-      ),
-    ).toEqual({ storeReadThrough: true });
-    expect(
-      serverExecutionPolicyFromEnv(
-        envOf({
-          SERVER_EXECUTION_STORE_READ_THROUGH: "false",
-          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
-        }),
-        (m) => warnings.push(m),
-      ),
-    ).toEqual({});
+      );
+    expect(policyWith(undefined)).toEqual({ storeReadThrough: true });
+    expect(policyWith("true")).toEqual({ storeReadThrough: true });
+    expect(policyWith("false")).toEqual({});
     expect(warnings).toEqual([]);
-    expect(
-      serverExecutionPolicyFromEnv(
-        envOf({
-          SERVER_EXECUTION_STORE_READ_THROUGH: "yes",
-          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
-        }),
-        (m) => warnings.push(m),
-      ),
-    ).toEqual({});
+    expect(policyWith("yes")).toEqual({ storeReadThrough: true });
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("SERVER_EXECUTION_STORE_READ_THROUGH");
   });
@@ -156,10 +174,13 @@ describe("serverExecutionPolicyFromEnv", () => {
         }),
         (m) => warnings.push(m),
       );
-    expect(policyWith("true")).toEqual({ overlapWaveCommit: true });
-    expect(policyWith("false")).toEqual({});
+    expect(policyWith("true")).toEqual({
+      overlapWaveCommit: true,
+      storeReadThrough: true,
+    });
+    expect(policyWith("false")).toEqual({ storeReadThrough: true });
     expect(warnings).toEqual([]);
-    expect(policyWith("on")).toEqual({});
+    expect(policyWith("on")).toEqual({ storeReadThrough: true });
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("SERVER_EXECUTION_OVERLAP_COMMIT");
   });
@@ -180,7 +201,7 @@ describe("serverExecutionPolicyFromEnv", () => {
           }),
           (m) => warnings.push(m),
         ),
-      ).toEqual({ parkedRuntimeRetentionMs });
+      ).toEqual({ parkedRuntimeRetentionMs, storeReadThrough: true });
     }
     expect(warnings).toEqual([]);
     // One past the longest delay a timer honors reads as unset too.
@@ -193,7 +214,7 @@ describe("serverExecutionPolicyFromEnv", () => {
           }),
           (m) => warnings.push(m),
         ),
-      ).toEqual({});
+      ).toEqual({ storeReadThrough: true });
     }
     expect(warnings.length).toBe(2);
     for (const warning of warnings) {
@@ -201,6 +222,42 @@ describe("serverExecutionPolicyFromEnv", () => {
         "SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS",
       );
     }
+  });
+});
+
+describe("serverExecutionWorkerFromEnv()", () => {
+  it("returns whether the store is a file when the knob is unset or empty", () => {
+    const warnings: string[] = [];
+    for (const env of [{}, { SERVER_EXECUTION_WORKER: "" }]) {
+      expect(
+        serverExecutionWorkerFromEnv(envOf(env), true, (m) => warnings.push(m)),
+      ).toBe(true);
+      expect(
+        serverExecutionWorkerFromEnv(
+          envOf(env),
+          false,
+          (m) => warnings.push(m),
+        ),
+      ).toBe(false);
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("returns the literal true or false whatever the store, and the default with a warning for anything else", () => {
+    const warnings: string[] = [];
+    const workerWith = (value: string, fileStore: boolean) =>
+      serverExecutionWorkerFromEnv(
+        envOf({ SERVER_EXECUTION_WORKER: value }),
+        fileStore,
+        (m) => warnings.push(m),
+      );
+    expect(workerWith("true", false)).toBe(true);
+    expect(workerWith("false", true)).toBe(false);
+    expect(warnings).toEqual([]);
+    expect(workerWith("on", true)).toBe(true);
+    expect(workerWith("on", false)).toBe(false);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_WORKER");
   });
 });
 
@@ -487,6 +544,140 @@ describe("startServerExecutionHost with the store read-through on", () => {
   });
 });
 
+describe("ownerRoutingFromEnv()", () => {
+  it("is off when the knob is unset, empty or the literal false", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, { SERVER_EXECUTION_OWNER_ROUTING: "" }, {
+        SERVER_EXECUTION_OWNER_ROUTING: "false",
+      }]
+    ) {
+      expect(ownerRoutingFromEnv(envOf(env), (m) => warnings.push(m))).toBe(
+        false,
+      );
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("is on for the literal true alone, and off with a warning for anything else", () => {
+    const warnings: string[] = [];
+    const routingWith = (value: string) =>
+      ownerRoutingFromEnv(
+        envOf({ SERVER_EXECUTION_OWNER_ROUTING: value }),
+        (m) => warnings.push(m),
+      );
+    expect(routingWith("true")).toBe(true);
+    expect(warnings).toEqual([]);
+    expect(routingWith("on")).toBe(false);
+    expect(routingWith("1")).toBe(false);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_OWNER_ROUTING");
+  });
+});
+
+describe("startServerExecutionHost with owner routing", () => {
+  const startWith = async (knobs: Record<string, string>) => {
+    const server = new MemoryServer({
+      store: new URL(`memory://owner-routing-${crypto.randomUUID()}`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-owner-routing" },
+    });
+    const loop = startServerExecutionHost({
+      server,
+      identity: await Identity.fromPassphrase("owner routing service"),
+      apiUrl: new URL("http://toolshed.test"),
+      memoryUrl: new URL("http://memory.test"),
+      envGet: (name) =>
+        ({
+          EXPERIMENTAL_SERVER_EXECUTION: "true",
+          SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+          ...knobs,
+        })[name],
+    });
+    expect(loop).toBeDefined();
+    return server;
+  };
+
+  it("keeps a routed plane for the lifecycle delivery while the loop runs, on either thread", async () => {
+    for (const worker of ["false", "true"]) {
+      const server = await startWith({
+        SERVER_EXECUTION_OWNER_ROUTING: "true",
+        SERVER_EXECUTION_WORKER: worker,
+      });
+      try {
+        // Opened lazily: no session dials the route until a delivery needs
+        // one, so the plane exists with no sessions.
+        expect(serverExecutionRoute()?.accessForTestingOnly.sessionSpaces)
+          .toEqual([]);
+      } finally {
+        await stopServerExecutionHost();
+        await server.close();
+      }
+      expect(serverExecutionRoute()).toBeUndefined();
+    }
+  });
+
+  it("keeps no routed plane with the knob off", async () => {
+    const server = await startWith({});
+    try {
+      expect(serverExecutionRoute()).toBeUndefined();
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+    }
+  });
+});
+
+describe("startServerExecutionHost with the worker knob unset", () => {
+  const startWith = async (store: URL) => {
+    const server = new MemoryServer({
+      store,
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-serving-default" },
+    });
+    const knobs: Record<string, string> = {
+      EXPERIMENTAL_SERVER_EXECUTION: "true",
+      SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+    };
+    const loop = startServerExecutionHost({
+      server,
+      identity: await Identity.fromPassphrase("serving default service"),
+      apiUrl: new URL("http://toolshed.test"),
+      store,
+      envGet: (name) => knobs[name],
+    });
+    return { server, loop };
+  };
+
+  it("runs the loop in a Worker over a file store", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "serving-default-" });
+    const { server, loop } = await startWith(toFileUrl(`${directory}/`));
+    try {
+      expect(loop).toBeDefined();
+      expect(loop!.host).toBeUndefined();
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("runs the loop on the main thread over a store that is not a file", async () => {
+    const { server, loop } = await startWith(
+      new URL("memory://serving-default"),
+    );
+    try {
+      expect(loop).toBeDefined();
+      expect(loop!.host).toBeDefined();
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+    }
+  });
+});
+
 describe("startServerExecutionHost with the worker on", () => {
   it("serves a space from a Worker under SERVER_EXECUTION_WORKER=true, relaying the loop's counters", async () => {
     // The bootstrap starts the worker over the file store the memory server
@@ -514,6 +705,10 @@ describe("startServerExecutionHost with the worker on", () => {
       EXPERIMENTAL_SERVER_EXECUTION: "true",
       SERVER_EXECUTION_WORKER: "true",
       SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+      // The attribution under test is the serving runtime's own session
+      // open, which a runtime reading its home space through the store does
+      // not make.
+      SERVER_EXECUTION_STORE_READ_THROUGH: "false",
     };
     const loop = startServerExecutionHost({
       server,
@@ -558,6 +753,66 @@ describe("startServerExecutionHost with the worker on", () => {
       });
     } finally {
       await connection.close();
+      await stopServerExecutionHost();
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("answers a registration's preparation from a Worker with the receipt the creation retained", async () => {
+    // The preparation hands back the receipt it read from the creation's
+    // record, and the worker posts it to this thread as a structured clone,
+    // which a value read as a proxy over the store cannot be. The space has
+    // no default pattern, so the preparation carries an error rather than a
+    // delivery.
+
+    const identity = await Identity.fromPassphrase("serving verb service");
+    const actingUser = (await Identity.fromPassphrase("serving verb user"))
+      .did();
+    const space = (await Identity.fromPassphrase("serving verb space"))
+      .did();
+    const directory = await Deno.makeTempDir({ prefix: "serving-verb-" });
+    const server = new MemoryServer({
+      store: toFileUrl(`${directory}/`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-serving-verb" },
+    });
+    const knobs: Record<string, string> = {
+      EXPERIMENTAL_SERVER_EXECUTION: "true",
+      SERVER_EXECUTION_WORKER: "true",
+      SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+    };
+    const loop = startServerExecutionHost({
+      server,
+      identity,
+      apiUrl: new URL(import.meta.url),
+      envGet: (name) => knobs[name],
+    });
+    try {
+      const created = (await loop!.runLifecycleVerb(space, {
+        name: "instantiate",
+        request: {
+          source: { program: LABEL_PROGRAM },
+          register: true,
+          actingUser,
+          start: false,
+        },
+      })).receipt as ServedInstantiateReceipt;
+      const prepared = (await loop!.runLifecycleVerb(space, {
+        name: "registration-prepare",
+        request: { receipt: created, actingUser },
+      })).receipt as ServedRegistrationPreparation;
+
+      expect(prepared).toEqual({
+        receipt: {
+          ...created,
+          registration: { status: "pending", attempt: 0 },
+        },
+        error:
+          "The space has no default pattern; install its root and retry this request key",
+      });
+    } finally {
       await stopServerExecutionHost();
       await server.close();
       await Deno.remove(directory, { recursive: true });

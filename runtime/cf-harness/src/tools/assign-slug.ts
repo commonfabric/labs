@@ -18,7 +18,7 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
 import { pieceUrl } from "../piece-url.ts";
@@ -39,6 +39,9 @@ export interface AssignSlugToolSuccessOutput {
    * reads the address it got from here rather than from what it asked for.
    */
   slug: string;
+
+  /** Whole-piece reference, usable directly as a Loom component ref. */
+  ref: string;
 
   /**
    * The slug's target, joining this artifact to the `run_pattern` attempt
@@ -94,7 +97,7 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
   toolId: "assign_slug",
   title: "Assign Slug",
   description:
-    "List the piece behind a handle token in the space's piece list under a named address a person can open; returns a receipt with the address it got.",
+    "List the piece behind a handle token in the space's piece list under a named address a person can open; returns the assigned slug and ref, usable directly as a Loom component reference.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -118,6 +121,10 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
       outputId: { type: "string" },
       status: { enum: ["ok", "error"] },
       slug: { type: "string" },
+      ref: {
+        type: "string",
+        description: "Composition-ready whole-piece reference.",
+      },
       pieceId: { type: "string" },
       space: { type: "string" },
       url: { type: "string" },
@@ -368,6 +375,7 @@ export const assignSlugTool: HarnessToolDefinition<
         outputId,
         status: "ok",
         slug,
+        ref: createLLMFriendlyLink(cell.getAsNormalizedFullLink()),
         pieceId: targetId,
         space,
         ...(url !== undefined ? { url } : {}),

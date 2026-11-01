@@ -13,7 +13,7 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { GenerationContext, IndexKeys } from "./interface.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";

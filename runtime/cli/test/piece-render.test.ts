@@ -25,7 +25,7 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { parsePieceOptions } from "../commands/piece.ts";
 import { renderPiece, renderVDomToHtml } from "../lib/piece-render.ts";

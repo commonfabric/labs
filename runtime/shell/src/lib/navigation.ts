@@ -7,7 +7,7 @@ import {
   UPDATE_PAGE_TITLE_EVENT,
   urlToAppView,
 } from "@commonfabric/navigation";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { ShellApp } from "./app-state.ts";
 

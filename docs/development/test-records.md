@@ -53,7 +53,10 @@ so test files of one name share one, and a test file that moves keeps the
 one it has. A line mapping a whole scope, for a package rename, goes in
 `whole-scope.jsonl`. A line mapping a moved directory or file to its new path
 goes in `moved-paths.jsonl`. It renames every identity whose name holds that
-path, such as a pattern test's file or an item that `deno task cfcheck` reports:
+path, such as a pattern test's file or an item that `deno task cfcheck` reports.
+It also moves the file a record names, so a unit test whose name holds no path
+is still found in the file it moved to. Date a path line later than the day the
+move lands, so that it applies to every record made before the move:
 
 ```json
 {"date": "2026-12-01", "from": {"p": "packages/runner"}, "to": {"p": "runtime/runner"}}

@@ -4,8 +4,8 @@ import { type DIDKey, isDIDKey } from "@commonfabric/identity/did";
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { isLoopbackHostname } from "@commonfabric/utils/loopback";
+} from "@commonfabric/bytes/base64url";
+import { isLoopbackHostname } from "@commonfabric/platform/loopback";
 import type { Capability } from "./acl.ts";
 
 /**
@@ -45,16 +45,16 @@ export function isInviteAccess(value: unknown): value is InviteAccess {
 }
 
 /** Issuance parameters, signed by a current explicit space owner. */
-export interface CreateInvite {
+export type CreateInvite = {
   inviteId: string;
   codeVerifier: string;
   ttlSeconds: number;
   access: InviteAccess;
   maxUses?: number;
-}
+};
 
 /** Public, owner-visible metadata while an invitation remains active. */
-export interface InviteMetadata {
+export type InviteMetadata = {
   inviteId: string;
   issuedBy: string;
   createdAt: number;
@@ -63,20 +63,20 @@ export interface InviteMetadata {
   maxUses: number;
   usedCount: number;
   remainingUses: number;
-}
+};
 
 /** The only durable redemption history. */
-export interface InviteRedemption {
+export type InviteRedemption = {
   inviteId: string;
   did: string;
-}
+};
 
 /** A successful admission decision and current ACL observation. */
-export interface RedeemReceipt {
+export type RedeemReceipt = {
   outcome: "redeemed" | "already-redeemed";
   redemption: InviteRedemption;
   currentAccess: Capability | null;
-}
+};
 
 /**
  * The non-secret destination and fragment secret in an invitation link.

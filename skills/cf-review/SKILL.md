@@ -145,7 +145,7 @@ author's classification: host arrangement, conforming implementation, or
 semantic gap. A semantic gap with no linked specs pull request, a kernel
 function given an input the pseudocode lacks, or a rule stated with MUST force
 in a labs document is Blocking. Count the `SPEC-PENDING` markers the diff adds:
-each names a specs pull request, the tree holds at most three, and marked code
+each names a specs pull request, the tree holds at most forty, and marked code
 runs at the strict default only when it is fail-closed. Reviewing a specs ruling
 pull request instead, check that its body says whether the entry was already
 answered at specs `main`, states the runtime's conformance under the current and
@@ -172,7 +172,7 @@ names drift, so confirm against the package's actual exports when you rely on it
 | Concern                                      | Canonical home                                                                                                | Do not                                                                                                                                            |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | stringifying `FabricValue`s for debug/log    | `@commonfabric/data-model`                                                                                    | `JSON.stringify()` on a `FabricValue`; it stringifies most non-plain objects as literally `{}`                                                    |
-| sorting strings for cross-platform           | `@commonfabric/utils/utf8`                                                                                    | use JavaScript `string1 < string2` (incorrect given UTF-16 surrogate code points), hand-roll or import a different sorting function               |
+| sorting strings for cross-platform           | `@commonfabric/text/utf8`                                                                                     | use JavaScript `string1 < string2` (incorrect given UTF-16 surrogate code points), hand-roll or import a different sorting function               |
 | SHA-256 / content addressing                 | `@commonfabric/content-hash`                                                                                  | hand-roll, call `crypto.subtle.digest("SHA-256", …)` directly, or import `@noble/hashes` / `hash-wasm` / `node:crypto` / `@std/crypto`            |
 | hashing a `FabricValue` or schema            | `@commonfabric/data-model`, `@commonfabric/data-model-schema`                                                 | re-derive value / schema hashing, or use `JSON.stringify()` to "simulate" a hash — it erases type identity and most contents of non-plain objects |
 | cloning a `FabricValue`                      | `@commonfabric/data-model`                                                                                    | `structuredClone()` or `JSON.parse(JSON.stringify(...))` on `FabricValue` / cell data — drops cell links, dies on circular `$UI` trees            |
@@ -180,7 +180,7 @@ names drift, so confirm against the package's actual exports when you rely on it
 | (de)serializing `FabricValue`s / wire format | `@commonfabric/data-model/codec-json`                                                                         | invent a parallel serializer / `toJSON` for `FabricValue`s                                                                                        |
 | cell ↔ link conversion                       | `convertCellsToLinks` (`runtime/runner/src/cell.ts`)                                                          | re-implement link conversion (don't copy the internal `traverse*` helpers in `llm-dialog.ts`)                                                     |
 | identity / DID / keypairs                    | `@commonfabric/identity`                                                                                      | mint DIDs or keys ad hoc                                                                                                                          |
-| variable-length integer encoding             | `@commonfabric/leb128` (LEB128 or similar)                                                                    | hand-roll varint encode / decode                                                                                                                  |
+| variable-length integer encoding             | `@commonfabric/bytes/leb128` (LEB128 or similar)                                                              | hand-roll varint encode / decode                                                                                                                  |
 | Merkle-tree hashing                          | **N/A — we don't do Merkle-tree hashing** (we have content hashes in `data-model`, not a classic Merkle tree) | invent or import a Merkle-tree library unless specifically asked                                                                                  |
 
 `hash`, `serialize`, and `clone` are the three we re-fork most — the tree

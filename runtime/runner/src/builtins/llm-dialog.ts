@@ -42,12 +42,12 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   isBoolean,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import type {
   BuiltInLLMMessage,
   BuiltInLLMParams,

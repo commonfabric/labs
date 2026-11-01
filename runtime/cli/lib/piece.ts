@@ -12,12 +12,7 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import {
-  createSession,
-  type Identity,
-  legacySpaceDid,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, legacySpaceDid, Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -110,12 +105,12 @@ import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentia
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
   isPlainObject,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -145,6 +140,7 @@ import {
   deriveSelectedValue,
 } from "./cell-selection.ts";
 import { cliCommand } from "./cli-name.ts";
+import { holdDelegationChainFiles } from "./delegation.ts";
 import {
   type ExecCommandSpec,
   type ParsedExecArgs,
@@ -157,6 +153,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  type LifecycleClientConfig,
   ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
@@ -194,6 +191,13 @@ export interface SpaceConfig {
   space: string;
   identity: string;
   jsonOutput?: boolean;
+
+  /**
+   * Delegation chain files the identity holds, as absolute paths, each what
+   * `cf delegation issue` writes. `loadPieces` holds every chain in them
+   * before it returns, so a session on a space one is over presents it.
+   */
+  delegations?: string[];
 
   /**
    * Whether opening the connection defers reading the space cell until an
@@ -607,7 +611,8 @@ async function makeSession(config: SpaceConfig): Promise<Session> {
 export interface ConnectionOutput {
   /**
    * Takes each line the connection writes for itself: the navigate callback's
-   * three, and the two warnings a failed connect's own cleanup writes.
+   * three, the two warnings a failed connect's own cleanup writes, and the
+   * warning that the profile delegations Home records could not be loaded.
    */
   readonly report?: (message: string) => void;
 
@@ -753,7 +758,37 @@ export async function loadPieces(
           memoryHostNote(memoryHost, new URL(config.apiUrl)),
       );
     }
+    // The chains the caller named are held before anything opens a space,
+    // Home included, and a file that holds none the identity can present
+    // fails the connection: the caller named it, so it is not best effort.
+    if (config.delegations !== undefined && config.delegations.length > 0) {
+      const paths = config.delegations;
+      await timeCliPhase(
+        "loadPieces.delegationFiles",
+        () =>
+          holdDelegationChainFiles(
+            runtime.storageManager,
+            paths,
+            session.as.did(),
+          ),
+      );
+    }
 
+    // The delegations Home records for the user's profiles, so a profile
+    // space that owns itself opens under its own grant. Best effort: a
+    // runtime that cannot read them opens the space on its key's own grant.
+    try {
+      await timeCliPhase(
+        "loadPieces.profileDelegations",
+        () => runtime.loadProfileDelegations(),
+      );
+    } catch (error) {
+      (output.report ?? console.warn)(
+        `Could not load the profile delegations: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
     const pieces = await timeCliPhase(
       "loadPieces.controller",
@@ -1696,13 +1731,27 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
     .serverExecution === true;
 }
 
+/**
+ * The client a served verb is sent with: signed as the configured identity,
+ * and sent on `pieces`' memory session for its space where the storage
+ * manager has one, so the verb reaches the process serving that space.
+ */
 async function lifecycleClient(
   config: SpaceConfig,
+  pieces: PiecesController,
   deps: PieceOperationDependencies,
-): Promise<{ apiUrl: URL; identity: Identity }> {
+): Promise<LifecycleClientConfig> {
+  const storageManager = (pieces.runtime as Runtime | undefined)
+    ?.storageManager;
+  const runOnSession = storageManager?.runPatternLifecycle?.bind(
+    storageManager,
+  );
   return {
     apiUrl: new URL(config.apiUrl),
     identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
+    ...(runOnSession === undefined ? {} : {
+      session: (space, verb, body) => runOnSession(space, verb, body),
+    }),
   };
 }
 
@@ -1736,7 +1785,7 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, deps);
+      const client = await lifecycleClient(config, pieces, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1786,8 +1835,7 @@ async function createWithReceipt(
     } catch (error) {
       if (
         error instanceof ServedLifecycleRefusal ||
-        (error instanceof ServedLifecycleError && error.status >= 400 &&
-          error.status < 500 && error.status !== 408)
+        (error instanceof ServedLifecycleError && error.refused)
       ) {
         throw error;
       }
@@ -2130,7 +2178,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, deps), {
+    setPieceSourceOnServer)(await lifecycleClient(config, pieces, deps), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,
@@ -5021,8 +5069,10 @@ const confidentialityToKeep = (
  * With `lowerConfidentiality`, the update is instead an owner's release
  * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
  * path that `input.confidentiality` does not name is removed from every label
- * there, which rewrites the stored metadata. The input then holds
- * `confidentiality` alone, naming only clauses the path already stores.
+ * there, which rewrites the stored metadata. A `*` segment of the path names
+ * every stored position it matches at its depth, the wildcard entry there
+ * among them. The input then holds `confidentiality` alone, naming only
+ * clauses the path already stores.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
@@ -5058,7 +5108,12 @@ export async function setCellCfcLabel(
   // the update silently REPLACED a value-class entry with a class-less one,
   // and the command returned null while having written a label.
   const currentView = cfcLabelViewForCommand(targetCell, path);
-  const value = targetCell.getRaw();
+  // A lowering's `*` segment names the stored positions it matches rather
+  // than a value, so what has to be present is the value it sits in.
+  const wildcard = keep === undefined ? -1 : path.indexOf("*");
+  const value = wildcard < 0
+    ? targetCell.getRaw()
+    : rootCell.key(...path.slice(0, wildcard)).getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);

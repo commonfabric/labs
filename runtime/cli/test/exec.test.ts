@@ -5,7 +5,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { CF_RUNTIME_ERROR_LOG } from "../lib/callable.ts";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import { undeclaredVerbFieldError } from "@commonfabric/piece/verb-input";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type ExecCommandSpec,
   normalizeCallableInputForExecution,

@@ -6,7 +6,7 @@
  * points without exposing the GitHub request or response.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   defaultHarnessFetch,
   type HarnessFetch,

@@ -2,7 +2,7 @@ import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { type Cell, type Runtime, UI } from "@commonfabric/runner";
 import { uiSchema } from "@commonfabric/runner/schemas";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { loadPieces, resolveAddressedPieceConfig } from "./piece.ts";
 import type { PieceConfig, PieceResolutionDeps } from "./piece.ts";

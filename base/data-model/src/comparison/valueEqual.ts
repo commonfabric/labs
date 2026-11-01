@@ -1,4 +1,4 @@
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { codecOf } from "@/codec-common";
 import { isDeepFrozen } from "@/deep-freeze.ts";

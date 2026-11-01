@@ -12,20 +12,15 @@ import type {
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 import {
   compiledDocKey,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   setCompileCacheRuntimeVersionForTesting,
   sourceDocKey,
 } from "../src/compilation-cache/cell-cache.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 const signer = await Identity.fromPassphrase("module byte cache test");
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 // Minimal in-memory cache implementing the injection interface — enough to
 // exercise the runtime's consult/populate behavior. The real implementation
@@ -186,7 +181,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         rtB,
         spaceB,
         entryIdentity,
-        { runtimeVersion },
+        { runtimeVersion: await compileCacheVersionOf(rtB) },
         readTx,
       );
       readTx.abort?.();
@@ -241,6 +236,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
     };
 
     try {
+      const runtimeVersion = await compileCacheVersionOf(rt);
       const entryIdentity = await compile();
       expect(persistenceWrites).toBe(1);
 

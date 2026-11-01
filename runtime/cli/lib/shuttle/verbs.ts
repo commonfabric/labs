@@ -48,7 +48,7 @@ import {
 } from "@commonfabric/piece";
 import { LINK_MARKER_KEY } from "@commonfabric/piece/verb-input";
 import type { PieceCallableListing } from "@commonfabric/piece/verb-listing";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   callFromCommand,

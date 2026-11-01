@@ -19,7 +19,7 @@
  */
 
 import { membersWritten } from "@commonfabric/data-model/codec-json";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import type {
   ResponseMessage,

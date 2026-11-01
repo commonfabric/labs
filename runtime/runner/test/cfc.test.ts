@@ -26,7 +26,7 @@ import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema"
 import {
   formatExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { cfcAtom, ContextualFlowControl } from "../src/cfc.ts";

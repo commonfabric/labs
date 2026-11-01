@@ -19,8 +19,8 @@ import {
   MalformedSchemaMetaError,
   SCHEMA_META_MEMBER,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { Cell } from "./cell.ts";
 import { externalizeSchema } from "./link-utils.ts";
 import { rawMetaWriteAuthorization } from "./meta-seam.ts";

@@ -5,7 +5,7 @@
  * material, is docs/specs/test-records.md.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Schema version carried by every context line and object path. */
 export const RECORD_SCHEMA_VERSION = 1;

@@ -166,7 +166,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     composer: Writable.of({}),
     places: {},
     cannotWrite: false,
-    isOwner: true,
+    rowFacts: {},
     messages: groupMessages,
   } as RowArg);
 

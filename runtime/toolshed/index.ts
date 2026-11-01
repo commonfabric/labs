@@ -1,4 +1,5 @@
 import type { Runtime } from "@commonfabric/runner";
+import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import app from "@/app.ts";
@@ -21,12 +22,18 @@ import {
   verifyInternalApiOrigin,
 } from "@/lib/internal-api-origin.ts";
 import { createToolshedRuntime } from "@/runtime-options.ts";
-import { memory, memoryServer } from "@/routes/storage/memory.ts";
+import {
+  memory,
+  memoryEngineStoreUrl,
+  memoryServer,
+} from "@/routes/storage/memory.ts";
 import {
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
+import { lifecycleRequestHandler } from "@/routes/pattern-lifecycle/pattern-lifecycle.handlers.ts";
+
 // Create a global runtime instance for the server
 let runtime: Runtime;
 
@@ -70,12 +77,24 @@ function startRuntimes() {
   // this process hosts the serving loop; OFF (the default) this is a
   // no-op and toolshed is byte-identical to today.
   const fetch = selfDirectedFetch(env);
-  startServerExecutionHost({
+  const loop = startServerExecutionHost({
     server: memoryServer,
     identity,
     apiUrl: new URL(env.API_URL),
+    store: memoryEngineStoreUrl,
+    memoryUrl: new URL(env.MEMORY_URL),
     ...(fetch !== undefined ? { fetch } : {}),
   });
+  // The verbs run on the loop, so a memory session takes them while it runs,
+  // and so does a crossing another process sends this one as the owner of
+  // its target space. The memory package imports no runner code, which is
+  // why the handler is installed here.
+  if (loop !== undefined) {
+    memoryServer.setPatternLifecycleHandler(lifecycleRequestHandler);
+    memoryServer.setServedRequestHandler(
+      servedRequestHandler({ server: memoryServer }),
+    );
+  }
 }
 
 export type AppType = typeof app;
@@ -110,6 +129,8 @@ const handleShutdown = async () => {
         ac.abort();
 
         console.log("Closing memory system...");
+        memoryServer.setPatternLifecycleHandler(undefined);
+        memoryServer.setServedRequestHandler(undefined);
         await stopServerExecutionHost();
         const result = await memory.close();
         if ("error" in result) {

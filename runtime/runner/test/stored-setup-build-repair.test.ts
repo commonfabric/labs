@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   convertibleJsFromFabricValue,
   fabricFromConvertibleJsValue,
@@ -21,6 +21,7 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../src/storage/v2.ts";
+import { instanceNameOfPartialCause } from "../src/builder/instance-name.ts";
 import type {
   DerivedInternalCellDescriptor,
   Pattern,
@@ -352,6 +353,22 @@ describe("stored-setup-build-repair", () => {
 
   const positionalDescriptors = (pattern: Pattern): PositionalDescriptor[] =>
     (pattern.derivedInternalCells ?? []).filter(isPositional);
+
+  // The cell of `parent` that holds its sub-pattern instance `name`: the one
+  // under that instance name where the runtime names instances, else the
+  // parent's single positional cell.
+  const childSpotDescriptor = (
+    parent: Pattern,
+    name: string,
+  ): DerivedInternalCellDescriptor => {
+    const named = (parent.derivedInternalCells ?? []).find((descriptor) =>
+      instanceNameOfPartialCause(descriptor.partialCause) === name
+    );
+    if (named !== undefined) return named;
+    const positional = positionalDescriptors(parent);
+    expect(positional.length).toBe(1);
+    return positional[0];
+  };
 
   // The number of the positional cell `spot` is, among `pattern`'s.
   const childSpotNumber = (
@@ -797,7 +814,7 @@ describe("stored-setup-build-repair", () => {
       const { cell, pattern } = await setUpAndStop(name, WITH_STATEFUL_CHILD);
       const spot = getDerivedInternalCell(
         cell as Cell,
-        positionalDescriptors(pattern)[0],
+        childSpotDescriptor(pattern, "child"),
       );
       const child = rt.getCellFromLink<Result>(
         parseLink(spot.getRaw(), spot)!,

@@ -17,6 +17,8 @@ import { join } from "@std/path";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
+import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
+import { createToolOutputId } from "@commonfabric/cf-harness/contracts/tool-result";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   createHarnessHandleTable,
@@ -1629,10 +1631,15 @@ describe("agent runner", () => {
         resultPath: string;
         signal?: AbortSignal;
         emit: () => Promise<void>;
+        loomCommands?: unknown;
       }) => Promise<HarnessPromptLoopResult>,
       options: {
         report?: (message: string) => void;
         omitHarnessArgs?: boolean;
+
+        /** The command endpoint the runner hands its runs, and the tools it offers. */
+        commands?: { url: string; actor: string };
+        runnerTools?: string[];
 
         /**
          * The platform the harness runs as and the home it finds, for a run
@@ -1666,6 +1673,9 @@ describe("agent runner", () => {
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
         ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
+        ...(options.commands !== undefined
+          ? { commands: options.commands }
+          : {}),
         harnessDeps: {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
@@ -1705,6 +1715,9 @@ describe("agent runner", () => {
                 resultPath:
                   options.engine!.getRunState().structuredResult!.path,
                 signal: prompt.signal,
+                ...(options.loomCommands !== undefined
+                  ? { loomCommands: options.loomCommands }
+                  : {}),
                 emit: async () => {
                   const message = {
                     role: "assistant" as const,
@@ -1721,7 +1734,9 @@ describe("agent runner", () => {
           }),
         },
       });
-      await startRunner(execute, { tools: ["describe_handle", "web_fetch"] });
+      await startRunner(execute, {
+        tools: options.runnerTools ?? ["describe_handle", "web_fetch"],
+      });
       return () => seen;
     };
 
@@ -1760,6 +1775,60 @@ describe("agent runner", () => {
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
+    });
+
+    it("hands a run the command endpoint, with an id of its own, so its list_commands reads the host's commands", async () => {
+      const received: (string | null)[] = [];
+      await using host = (() => {
+        const server = Deno.serve(
+          { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+          (request) => {
+            received.push(request.headers.get("X-Loom-Agent-Run-Id"));
+            return Response.json({
+              commands: [{ id: "wants.recent", inputs: { type: "object" } }],
+            });
+          },
+        );
+        return {
+          url: `http://127.0.0.1:${server.addr.port}`,
+          [Symbol.asyncDispose]: () => server.shutdown(),
+        };
+      })();
+      let listing: unknown;
+      const seen = await startHarnessRunner(
+        async ({ resultPath, loomCommands }) => {
+          let outputs = 0;
+          listing = await getBuiltinTool("list_commands")!.invoke(
+            {
+              nextOutputId: (toolId: string) =>
+                createToolOutputId("fabric-commands", toolId, ++outputs),
+              loomCommands,
+            } as never,
+            {},
+          );
+          await Deno.writeTextFile(
+            resultPath,
+            JSON.stringify({ answer: "Listed." }),
+          );
+          return loopResult("run-commands");
+        },
+        {
+          commands: { url: host.url, actor: "agent:agent-runner" },
+          runnerTools: ["describe_handle", "list_commands", "run_command"],
+        },
+      );
+      const result = await submit({ tools: ["list_commands"] });
+
+      await waitForState(result, "completed");
+
+      expect(seen().slotRole).toBe("context");
+      expect(seen().allowedTools).toContain("list_commands");
+      expect(listing).toMatchObject({
+        status: "ok",
+        entries: [{ name: "wants.recent" }],
+      });
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatch(/^agent-run-/);
     });
 
     it("reports the harness's refusal, naming the variable alone, for a run on macOS with no native runtime", async () => {

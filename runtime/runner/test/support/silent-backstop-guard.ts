@@ -50,8 +50,8 @@ const wrappedLoggers = new WeakSet<object>();
 type CountingLogger = { warn: (key: string, ...rest: unknown[]) => void };
 
 /**
- * The process-global logger registry the utils logger writes into, keyed by
- * the module name a backstop names. Undefined before any logger is created.
+ * The process-global logger registry that `@commonfabric/logger` writes into,
+ * keyed by the module name a backstop names. Undefined before any logger is created.
  */
 function loggerRegistry(): Record<string, CountingLogger> | undefined {
   return (globalThis as {

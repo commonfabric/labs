@@ -170,19 +170,11 @@ export const linuxRunscRootfs = (
 export type { RunscNetworkMode };
 
 /**
- * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
- * a network namespace of its own, whose one interface pasta translates to
- * the host's sockets, so the container has egress and reaches the host at
- * the gateway address, and sees none of the host's interfaces. The
- * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
- * gets can name the host by a constant. No port of the container's is
- * forwarded to the host, and none of the host's into the container: the host
- * is reached at the gateway alone. Pasta's own messages go to a log file the
- * runtime names, not into a call's output, but for two warnings about user
- * mappings that root's pasta writes to its stderr, which the call shares,
- * whatever its flags say.
+ * Helper for {@link PASTA_ARGS} and {@link pastaArgs}: what pasta is given,
+ * with `toHost` the ports `-T` forwards from a container's loopback to the
+ * host's, `none` for none.
  */
-export const PASTA_ARGS: readonly string[] = [
+const pastaNetworkArgs = (toHost: string): readonly string[] => [
   "--config-net",
   "--quiet",
   "-4",
@@ -197,10 +189,26 @@ export const PASTA_ARGS: readonly string[] = [
   "-u",
   "none",
   "-T",
-  "none",
+  toHost,
   "-U",
   "none",
 ];
+
+/**
+ * How `pasta` (from passt) gives a container on Linux the `sandbox` network:
+ * a network namespace of its own, whose one interface pasta translates to
+ * the host's sockets, so the container has egress and reaches the host at
+ * the gateway address, and sees none of the host's interfaces. The
+ * addresses are fixed, slirp's, IPv4 alone, so the hosts file the container
+ * gets can name the host by a constant. No port of the container's is
+ * forwarded to the host, and none of the host's into the container: the host
+ * is reached at the gateway alone, on every port its loopback serves. A run
+ * that forwards host ports is given {@link pastaArgs} instead. Pasta's own
+ * messages go to a log file the runtime names, not into a call's output, but
+ * for the few it writes to its stderr before the call's command starts, which
+ * the call shares, and which the driver drops ({@link afterPastaStart}).
+ */
+export const PASTA_ARGS: readonly string[] = pastaNetworkArgs("none");
 
 /**
  * What pasta is given beside {@link PASTA_ARGS} for root: no user namespace
@@ -234,16 +242,90 @@ export const UNSHARE_ARGS: readonly string[] = [
  */
 export const SETPRIV_ARGS: readonly string[] = ["--pdeathsig", "KILL"];
 
-/** The address a container under pasta reaches the host at. */
+/**
+ * The gateway of a container under pasta, where it reaches the host unless
+ * the run forwards host ports, and where DNS is answered either way.
+ */
 export const PASTA_HOST_ADDRESS = "10.0.2.2";
 
-/** Where a container under pasta gets {@link PASTA_HOSTS_FILE}. */
+/**
+ * The line the driver's shell writes to a call's stderr under pasta before it
+ * starts runsc, for the call `callId`. Pasta shares its stderr with the
+ * command it runs, and writes to it before that command starts whatever its
+ * flags say: root's two warnings about user mappings, and, under
+ * `--no-map-gw` on a host whose nameservers are all on its loopback, that it
+ * finds no nameserver address to hand the container, although the gateway
+ * still answers DNS ({@link pastaArgs}). None of that is the call's output,
+ * and what comes before this line is all of it.
+ */
+export const pastaStartMark = (callId: string): string =>
+  `cf-harness-call:${callId}`;
+
+/**
+ * `stderr` from after the {@link pastaStartMark} line `mark`, and all of it
+ * where there is none: pasta stopped before it started the command, and what
+ * it wrote says why.
+ */
+export const afterPastaStart = (stderr: string, mark: string): string => {
+  const at = stderr.indexOf(`${mark}\n`);
+  return at === -1 ? stderr : stderr.slice(at + mark.length + 1);
+};
+
+/** Where a container under pasta gets its hosts file. */
 export const PASTA_HOSTS_PATH = "/etc/hosts";
 
-/** The hosts file a container under pasta gets, naming the host. */
-export const PASTA_HOSTS_FILE = "127.0.0.1\tlocalhost\n" +
+/** Where a container under pasta gets its resolver configuration. */
+export const PASTA_RESOLV_PATH = "/etc/resolv.conf";
+
+/**
+ * The resolver configuration a container under pasta gets: the gateway,
+ * where pasta answers DNS with the host's resolver. A rootfs need not hold
+ * one, and one that does may name a resolver the container cannot reach.
+ */
+export const PASTA_RESOLV_FILE = `nameserver ${PASTA_HOST_ADDRESS}\n`;
+
+/** A hosts file naming `host.docker.internal` at `hostAddress`. */
+const pastaHostsFile = (hostAddress: string): string =>
+  "127.0.0.1\tlocalhost\n" +
   "::1\tlocalhost ip6-localhost ip6-loopback\n" +
-  `${PASTA_HOST_ADDRESS}\thost.docker.internal\n`;
+  `${hostAddress}\thost.docker.internal\n`;
+
+/**
+ * The hosts file a container under pasta gets where the run forwards no host
+ * ports: `host.docker.internal` is the gateway.
+ */
+export const PASTA_HOSTS_FILE = pastaHostsFile(PASTA_HOST_ADDRESS);
+
+/**
+ * The hosts file a container under pasta gets where the run forwards host
+ * ports: `host.docker.internal` is the container's own loopback, where pasta
+ * takes each forwarded port to the host's. For an empty list nothing listens
+ * there, so the name reaches no port of the host.
+ */
+export const PASTA_FORWARDING_HOSTS_FILE = pastaHostsFile("127.0.0.1");
+
+/**
+ * What pasta is given for a container: {@link PASTA_ARGS} where `ports` is
+ * `undefined`. Given `ports`, the container reaches those ports of the host's
+ * loopback and no other port of it, and none at all for an empty list: the
+ * gateway does not lead to the host (`--no-map-gw`), and pasta forwards each
+ * port from the container's loopback to the host's (`-T`), listening on it
+ * there, so that a command in the container cannot listen on a forwarded
+ * port itself. The gateway answers DNS, as it does for {@link PASTA_ARGS}.
+ * Egress is kept, and with it the host's own addresses on its other
+ * interfaces, as for any destination.
+ */
+export const pastaArgs = (ports?: readonly number[]): readonly string[] =>
+  ports === undefined ? PASTA_ARGS : [
+    ...pastaNetworkArgs(ports.length > 0 ? ports.join(",") : "none"),
+    "--no-map-gw",
+    // No `--dns` beside it: with one, pasta (passt 2024-02, Ubuntu 24.04's)
+    // forwards queries to the address `--dns` names rather than to the
+    // host's resolver, and none would be answered. Without it pasta warns
+    // that it finds no nameserver to hand the container (pastaStartMark).
+    "--dns-forward",
+    PASTA_HOST_ADDRESS,
+  ];
 
 export interface RunscSandboxConfig {
   /**
@@ -293,6 +375,13 @@ export interface RunscSandboxConfig {
    */
   setpriv?: string;
   /**
+   * The ports of the host's loopback a container under pasta reaches, and
+   * the only ones, as {@link pastaArgs} says; absent where it reaches every
+   * port the host's loopback serves. Given only with `networkHelper` under
+   * the `sandbox` network mode.
+   */
+  forwardedHostPorts?: readonly number[];
+  /**
    * CFC policy file, as a canonical absolute path; `--cfc` is passed exactly
    * when this is set.
    */
@@ -335,6 +424,10 @@ export interface ResolveRunscSandboxConfigOptions {
   unshare?: string;
   /** The `setpriv` binary; see {@link RunscSandboxConfig}. */
   setpriv?: string;
+
+  /** The host ports a container reaches; see {@link RunscSandboxConfig}. */
+  forwardedHostPorts?: readonly number[];
+
   cfcPolicyPath?: string;
   scratchDir?: string;
   runId?: string;
@@ -725,10 +818,28 @@ export const resolveRunscSandboxConfig = (
   // may cover it or sit in it.
   const underPasta = options.networkHelper !== undefined &&
     (options.networkMode ?? DEFAULT_RUNSC_NETWORK_MODE) === "sandbox";
+  if (options.forwardedHostPorts !== undefined) {
+    // Forwarded by pasta alone: anywhere else the ports would be dropped,
+    // and the container would reach what the run said it should not.
+    if (!underPasta) {
+      throw new Error(
+        "forwarded host ports are forwarded by pasta, which this " +
+          "configuration does not run: it names no `networkHelper`, or a " +
+          "network mode other than `sandbox`",
+      );
+    }
+    for (const port of options.forwardedHostPorts) {
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error(
+          `forwarded host port must be a port number from 1 to 65535: \`${port}\``,
+        );
+      }
+    }
+  }
   const roots = [
     workspaceMountPath,
     ...additionalMounts.map((m) => m.sandboxPath),
-    ...(underPasta ? [PASTA_HOSTS_PATH] : []),
+    ...(underPasta ? [PASTA_HOSTS_PATH, PASTA_RESOLV_PATH] : []),
   ];
   // By index, so two mounts at the very same path are an overlap too: the
   // later bind would shadow the earlier one while the description still
@@ -740,9 +851,9 @@ export const resolveRunscSandboxConfig = (
       if (isWithinRoot(a, b) || isWithinRoot(b, a)) {
         throw new Error(
           `sandbox roots overlap: ${a} and ${b}${
-            underPasta && j === roots.length - 1
+            underPasta && j >= roots.length - 2
               ? ", where pasta's network binds the hosts file naming " +
-                "`host.docker.internal`"
+                "`host.docker.internal` and the resolver configuration"
               : ""
           }`,
         );
@@ -972,6 +1083,13 @@ export const resolveRunscSandboxConfig = (
           options.setpriv,
           canonicalHostPath("setpriv binary", options.setpriv),
         ),
+      }
+      : {}),
+    ...(options.forwardedHostPorts !== undefined
+      ? {
+        forwardedHostPorts: Object.freeze([
+          ...new Set(options.forwardedHostPorts),
+        ]),
       }
       : {}),
     ...(cfcPolicyPath !== undefined ? { cfcPolicyPath } : {}),
@@ -1372,6 +1490,11 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           type: "bind",
           source: this.#hostsFile(),
           options: ["rbind", "ro"],
+        }, {
+          destination: PASTA_RESOLV_PATH,
+          type: "bind",
+          source: this.#resolvFile(),
+          options: ["rbind", "ro"],
         }]
         : []),
     ];
@@ -1462,11 +1585,23 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
     if (this.#pasta() !== undefined) {
-      // Written aside and renamed into place, so a container that binds the
-      // file as it is rewritten never finds it empty.
-      const aside = `${this.#hostsFile()}.${crypto.randomUUID()}`;
-      await Deno.writeTextFile(aside, PASTA_HOSTS_FILE, { mode: 0o644 });
-      await Deno.rename(aside, this.#hostsFile());
+      // Each written aside and renamed into place, so a container that binds
+      // the file as it is rewritten never finds it empty.
+      for (
+        const [path, text] of [
+          [
+            this.#hostsFile(),
+            this.config.forwardedHostPorts !== undefined
+              ? PASTA_FORWARDING_HOSTS_FILE
+              : PASTA_HOSTS_FILE,
+          ],
+          [this.#resolvFile(), PASTA_RESOLV_FILE],
+        ]
+      ) {
+        const aside = `${path}.${crypto.randomUUID()}`;
+        await Deno.writeTextFile(aside, text, { mode: 0o644 });
+        await Deno.rename(aside, path);
+      }
     }
     return dir;
   }
@@ -1481,6 +1616,14 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   /** The hosts file a container under pasta gets, in the scratch directory. */
   #hostsFile(): string {
     return joinHostPath(this.config.scratchDir, "hosts");
+  }
+
+  /**
+   * The resolver configuration a container under pasta gets, in the scratch
+   * directory.
+   */
+  #resolvFile(): string {
+    return joinHostPath(this.config.scratchDir, "resolv.conf");
   }
 
   /**
@@ -1501,7 +1644,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       );
     }
     const underPasta = [
-      ...PASTA_ARGS,
+      ...pastaArgs(this.config.forwardedHostPorts),
       ...(this.config.unshare !== undefined ? PASTA_ROOT_ARGS : []),
       "--log-file",
       joinHostPath(this.config.scratchDir, "pasta.log"),
@@ -1590,11 +1733,15 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     ];
     // `exec 3<ctx 4>result` then exec runsc: the descriptors are inherited
     // at the numbers runsc was told, and nothing else about the environment
-    // changes.
+    // changes. Under pasta the shell's name is the call's start mark, which
+    // it writes to stderr first (pastaStartMark).
+    const startMark = underPasta ? pastaStartMark(callId) : undefined;
     const shellArgs = [
       "-c",
-      'exec 3<"$1" 4>"$2"; shift 2; exec "$@"',
-      "sh",
+      `${
+        startMark !== undefined ? `printf '%s\\n' "$0" >&2; ` : ""
+      }exec 3<"$1" 4>"$2"; shift 2; exec "$@"`,
+      startMark ?? "sh",
       withContext ? contextPath : "/dev/null",
       withResult ? resultPath : "/dev/null",
       this.config.runscBinary,
@@ -1641,7 +1788,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       }
       const commandResult: SandboxCommandResult = {
         stdout: result.stdout,
-        stderr: result.stderr,
+        stderr: startMark !== undefined
+          ? afterPastaStart(result.stderr, startMark)
+          : result.stderr,
         exitCode: result.exitCode,
       };
       if (!withResult) {
@@ -2051,8 +2200,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
     }
     // The scratch tree is this run's; take it down when nothing is left in
     // it (non-recursive on purpose: anything still there is evidence). The
-    // hosts file and pasta's log are the runtime's own, not evidence.
-    for (const file of ["hosts", "pasta.log"]) {
+    // hosts file, the resolver configuration and pasta's log are the
+    // runtime's own, not evidence.
+    for (const file of ["hosts", "resolv.conf", "pasta.log"]) {
       await Deno.remove(joinHostPath(this.config.scratchDir, file)).catch(() =>
         undefined
       );

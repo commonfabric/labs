@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import "@commonfabric/utils/equal-ignoring-symbols";
+import "@commonfabric/test-support/equal-ignoring-symbols";
 
 // Bring lift's schema-bearing, type-materializing overloads into scope. They live
 // in `@commonfabric/api/schema` — the facade module that augments

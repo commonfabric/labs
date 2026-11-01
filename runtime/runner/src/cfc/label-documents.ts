@@ -8,7 +8,7 @@
  */
 
 import { deepFreeze, taggedHashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { canonicalizeCfcLabel } from "./canonical.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 import { onSchemaRegistryClear } from "../schema-registry.ts";

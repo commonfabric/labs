@@ -1,4 +1,4 @@
-import { type Primitive } from "@commonfabric/utils/types";
+import { type Primitive } from "@commonfabric/js-values/types";
 
 import {
   FabricBytes,

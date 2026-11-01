@@ -1,0 +1,114 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "iframe-verb-list/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddItemEvent": {
+        "properties": {
+          "id": {
+            "description": "Id for the new item. An id the list already holds adds nothing.",
+            "type": "string"
+          },
+          "text": {
+            "description": "Text of the new item. Whitespace around it is dropped.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "hideChecked": {
+            "description": "Whether the list hides the items that are checked off.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "hideChecked"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "checked": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "Whether each item is checked off, by item id.",
+            "properties": {},
+            "type": "object"
+          },
+          "items": {
+            "description": "Every item on the list, in the order they were added.",
+            "items": {
+              "$ref": "#/$defs/ListItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items",
+          "checked"
+        ],
+        "type": "object"
+      },
+      "ListItem": {
+        "properties": {
+          "id": {
+            "description": "Stable id, minted by whoever asked for the item.",
+            "type": "string"
+          },
+          "text": {
+            "description": "What the entry says.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A list of items, each of which can be checked off. Read `state.items` for\nwhat is on it, and add to it with `addItem`.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addItem": {
+        "$ref": "#/$defs/AddItemEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Add one item. Mint a fresh `id` for each item; sending an id the list\nholds already adds nothing, so sending the same event again is safe."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "Whether the frame hides checked-off items, for everyone on the piece."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "The items, and which of them are checked off, by item id."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "addItem",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

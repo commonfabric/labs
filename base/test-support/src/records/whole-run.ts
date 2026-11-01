@@ -13,7 +13,7 @@
  */
 
 import { join } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { type Environment, recordsDir } from "./paths.ts";
 import { writableSpool } from "./registration.ts";
 

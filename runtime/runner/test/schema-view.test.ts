@@ -11,7 +11,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { Runtime } from "../src/runtime.ts";
 import { isSchemaMismatchError } from "../src/schema-view.ts";
 import { type JSONSchema } from "../src/builder/types.ts";

@@ -14,8 +14,11 @@ import {
   type ScopeKeyIdentity,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { LRUCache } from "@commonfabric/collections/cache";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";

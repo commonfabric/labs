@@ -3,7 +3,7 @@ import {
   SchemaGenerator,
 } from "@commonfabric/schema-generator";
 import { numberFromExpression } from "@commonfabric/schema-generator/numeric-expression";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import ts from "typescript";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 

@@ -5,7 +5,7 @@
  * be structurally flat).
  */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import type { FabricInstance } from "@/interface.ts";
 import type { LiveEnvironment } from "./interface.ts";
 import { BaseLiveEnvironment } from "./BaseLiveEnvironment.ts";

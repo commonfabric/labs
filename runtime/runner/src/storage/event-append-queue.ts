@@ -48,8 +48,8 @@
 // session by construction, no leader election, no shared persisted
 // session.
 
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { getLogger } from "@commonfabric/logger";
 import {
   type ClientCommit,
   type EventAppendDecl,

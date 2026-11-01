@@ -6,7 +6,7 @@ import {
   type CfcReadOnExceed,
   isCfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   normalizePromptSlotBinding,
   type PromptSlotBinding,

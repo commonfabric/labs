@@ -1,10 +1,10 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   BINDING_IDENTITY_HELPER_NAME,
   createBindingIdentityHelperSource,
   createFunctionHardeningHelperSource,
   RESERVED_FACTORY_BINDINGS,
-} from "@commonfabric/utils/sandbox-contract";
+} from "@commonfabric/pattern-contract/sandbox-contract";
 
 import {
   isIdentifierStartCode,

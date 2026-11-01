@@ -485,6 +485,15 @@ describe("mirror", () => {
       ).toBe(2);
     });
 
+    it("matches a global pattern in each Topic alike, as a term and in `exclude`", () => {
+      const fryer = topic({ number: "1", title: "Oil fryer" });
+      const glaze = topic({ number: "2", title: "Oil glaze" });
+
+      expect(searchTopics([fryer, glaze], [/oil/gi]).length).toBe(2);
+      expect(searchTopics([fryer, glaze], [], { exclude: [/oil/gi] }))
+        .toEqual([]);
+    });
+
     it("returns at most three lines per Topic", () => {
       const busy = topic({ body: "oil\noil\noil\noil" });
 

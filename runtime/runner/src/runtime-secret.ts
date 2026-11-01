@@ -36,7 +36,7 @@
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "./builder/types.ts";
 import { ContextualFlowControl } from "./cfc.ts";

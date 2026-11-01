@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   refreshTrackedGraph,

@@ -6,8 +6,8 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { defer } from "@commonfabric/utils/defer";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { defer } from "@commonfabric/async/defer";
 
 import { ACLManager } from "../src/acl-manager.ts";
 import { readConfirmed } from "../src/confirmed-read.ts";

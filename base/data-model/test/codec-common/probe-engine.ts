@@ -22,7 +22,7 @@ import {
   ProblematicValue,
   type WireFormat,
 } from "@/codec-common";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * This format's tagged form. A class, so that it cannot be mistaken for a

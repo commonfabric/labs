@@ -315,6 +315,17 @@ nowhere else fails the build with `Cell not found in pattern aliases`.
 
 `cf test --cfc-denials` prints a setup refusal like this one with its reason.
 
+Before dispatching an action step, both test runners demand the reads needed
+to construct its event. A trusted UI wrapper copies the payload's top-level
+fields, so links supplied there by another pattern or a computation are ready
+without an earlier assertion or render. Nested objects and arrays keep their
+references for event serialization and the handler's reads.
+
+Copying a field can read the immediate linked record's shape or value. The
+runner does not recursively read the records reachable from that field; those
+reads belong to the handler. An action step can therefore exercise cold linked
+descendants, but does not guarantee that every immediate target is unread.
+
 ## Writing Assertions
 
 Use `assert()` to state each condition a test checks:

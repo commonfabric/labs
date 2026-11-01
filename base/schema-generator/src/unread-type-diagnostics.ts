@@ -3,8 +3,8 @@
  * discard policies, and recursive aliases read in place of `any`.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { getLogger } from "@commonfabric/logger";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import ts from "typescript";
 
 import type {

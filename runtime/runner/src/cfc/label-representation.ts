@@ -5,7 +5,10 @@ import {
   isFabricPlainObject,
   valueEqual,
 } from "@commonfabric/data-model";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { CfcConfClause } from "./clause.ts";
 import {

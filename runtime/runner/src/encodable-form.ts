@@ -12,7 +12,7 @@
  */
 
 import type { FabricExecPlainObject, FabricExecValue } from "@commonfabric/api";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 /**
  * Reads the method by which a value produces its encodable form -- the form it

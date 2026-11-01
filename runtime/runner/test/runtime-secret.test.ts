@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";

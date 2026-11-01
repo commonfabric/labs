@@ -216,9 +216,8 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     name: "check-test-shuffle",
     kind: "gate",
     run: ["task", "check-test-shuffle"],
-    // Reads every manifest, workflow and shell script in the tree, so a
-    // command that starts a test runner is reached wherever it is
-    // written.
+    // Reads every manifest, workflow and shell script in the tree, and
+    // the `deno` commands TypeScript sources write as array literals.
     reachedBy: [],
   },
   {
@@ -380,7 +379,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [
       "base/static/assets/types/",
       "base/static/scripts/",
-      "base/utils/",
+      "base/pattern-contract/",
     ],
   },
 ];
@@ -412,7 +411,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     kind: "gate",
     run: ["task", "check-cause-assignments"],
     args: ({ baseRef }) => [baseRef],
-    // The trees a pattern's numbering is built by, and the gate's own
+    // The paths a pattern's numbering is built by, and the gate's own
     // modules. The task passes a change touching none of them without
     // compiling anything, so the two lists are one.
     reachedBy: [...COMPILER_PATHS, ...GATE_PATHS],

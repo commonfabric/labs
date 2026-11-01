@@ -35,7 +35,7 @@
 // placed inside the fan-out loop (see run.ts's note): a macrotask there
 // let a run's own async seal refusal re-enter the pass.
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 const logger = getLogger("cooperative-yield", {
   enabled: true,

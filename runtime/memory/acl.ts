@@ -1,4 +1,4 @@
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import { ACL, ACLUser, ANYONE, Capability, DID, DIDKey } from "./interface.ts";
 import { isDID } from "@commonfabric/identity/did";
 
@@ -44,6 +44,23 @@ export function hasConcreteOwner(acl: ACL): boolean {
   return Object.entries(acl).some(([principal, capability]) =>
     principal !== ANYONE_USER && capability === "OWNER"
   );
+}
+
+/**
+ * The principal that owns `space` under `acl`: the space itself where the
+ * list names it `OWNER`, a self-owned space such as a home; else the first of
+ * its concrete `OWNER` principals in DID order; `undefined` where the list
+ * names none.
+ */
+export function aclOwner(acl: ACL, space: string): string | undefined {
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (byPrincipal[space] === "OWNER") return space;
+  return Object.entries(byPrincipal)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort()[0];
 }
 
 /** Whether a stored ACL document is exactly `expected`: same principals,

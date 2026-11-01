@@ -1,4 +1,4 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 type ProtocolResponse = {
   id: number;
   result?: unknown;

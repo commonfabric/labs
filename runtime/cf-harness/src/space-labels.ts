@@ -24,7 +24,7 @@ import {
   type SpaceDb,
 } from "@commonfabric/state-inspector";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HARNESS_CELL_LABELS_TYPE,
   type HarnessCellLabelEntry,

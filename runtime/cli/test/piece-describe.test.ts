@@ -15,7 +15,7 @@ import {
   pieceDescribeJson,
   pieceDescribeLines,
 } from "../commands/piece.ts";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 /** A result schema shaped as the generator emits a board-like pattern's: an
  * inline root carrying its interface's doc comment, a stream-marked verb

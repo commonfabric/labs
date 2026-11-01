@@ -7,8 +7,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import { sha256 } from "@commonfabric/content-hash";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import {
   instantiatePieceOnServer,
   type LifecycleClientConfig,
@@ -19,7 +20,8 @@ import {
 } from "../lib/pattern-lifecycle.ts";
 
 const API_URL = new URL("http://pattern-lifecycle-test.invalid:9999/fabric/");
-const SPACE_DID = "did:key:z6MkPatternLifecycleTestSpaceAAAAAAAAAAAAAAAAAAA";
+const SPACE_DID: MemorySpace =
+  "did:key:z6MkPatternLifecycleTestSpaceAAAAAAAAAAAAAAAAAAA";
 
 const AUTH_HEADER = "CF-Request-Auth";
 const PROOF_HEADER = "CF-Request-Proof";
@@ -281,6 +283,141 @@ describe("pattern-lifecycle client", () => {
           expect(failure.status).toBe(409);
         },
       );
+    });
+  });
+  describe("on a memory session", () => {
+    /** An error shaped as the memory client raises a lifecycle refusal. */
+    const refusal = (code: string, message = `refused: ${code}`) =>
+      Object.assign(new Error(message), {
+        name: "PatternLifecycleRefusal",
+        code,
+      });
+
+    /** A config whose session records each call and answers with `answer`. */
+    const sessionConfig = async (
+      answer: () => Promise<Record<string, unknown>>,
+    ) => {
+      const sent: { verb: string; body: unknown }[] = [];
+      const cfg: LifecycleClientConfig = {
+        apiUrl: API_URL,
+        identity: await Identity.generate(),
+        session: (_space, verb, body) => {
+          sent.push({ verb, body });
+          return answer() as never;
+        },
+      };
+      return { cfg, sent };
+    };
+
+    it("sends the verb on the session without its space, and makes no HTTP call", async () => {
+      const receipt = {
+        pieceId: "p1",
+        pattern: { identity: "i", symbol: "s" },
+      };
+      const { cfg, sent } = await sessionConfig(() => Promise.resolve(receipt));
+      await withStubbedFetch({ status: 500 }, async (calls) => {
+        const result = await instantiatePieceOnServer(cfg, {
+          space: SPACE_DID,
+          program: PROGRAM,
+          requestKey: "k",
+          register: true,
+        });
+        expect(result).toEqual(receipt);
+        expect(calls).toEqual([]);
+      });
+      expect(sent).toEqual([{
+        verb: "instantiate",
+        body: { requestKey: "k", program: PROGRAM, register: true },
+      }]);
+    });
+
+    it("posts over HTTP when the session's server does not take the request", async () => {
+      const { cfg, sent } = await sessionConfig(() =>
+        Promise.reject(refusal("lifecycle-unsupported"))
+      );
+      await withStubbedFetch(
+        { body: { pieceId: "p1", pattern: { identity: "i", symbol: "s" } } },
+        async (calls) => {
+          await setPieceSourceOnServer(cfg, {
+            space: SPACE_DID,
+            piece: "p1",
+            program: PROGRAM,
+          });
+          expect(calls.map((call) => JSON.parse(call.body).space)).toEqual([
+            SPACE_DID,
+          ]);
+        },
+      );
+      expect(sent.map(({ verb }) => verb)).toEqual(["setsrc"]);
+    });
+
+    it("throws a settled refusal with the server's code and no status", async () => {
+      const { cfg } = await sessionConfig(() =>
+        Promise.reject(refusal("slug-taken", "the slug names a piece"))
+      );
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.code).toBe("slug-taken");
+      expect(failure.status).toBeUndefined();
+      expect(failure.refused).toBe(true);
+      expect(failure.message).toBe("the slug names a piece");
+    });
+
+    it("throws a settled refusal from a memory server that runs no verbs", async () => {
+      const { cfg } = await sessionConfig(() =>
+        Promise.reject(refusal("server-execution-off"))
+      );
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.refused).toBe(true);
+    });
+
+    it("throws an unsettled refusal for a code that leaves the outcome unknown", async () => {
+      const { cfg } = await sessionConfig(() =>
+        Promise.reject(refusal("internal"))
+      );
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.refused).toBe(false);
+    });
+
+    it("throws a lost connection as it came", async () => {
+      const lost = Object.assign(new Error("socket closed"), {
+        name: "ConnectionError",
+      });
+      const { cfg } = await sessionConfig(() => Promise.reject(lost));
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBe(lost);
+    });
+  });
+
+  describe("ServedLifecycleError", () => {
+    describe("instance members", () => {
+      describe("refused", () => {
+        it("returns `true` for a 4xx other than 408, and `false` for a 408 and a 5xx", () => {
+          expect(new ServedLifecycleError("forbidden", 403, "").refused).toBe(
+            true,
+          );
+          expect(new ServedLifecycleError("http-408", 408, "").refused).toBe(
+            false,
+          );
+          expect(new ServedLifecycleError("internal", 500, "").refused).toBe(
+            false,
+          );
+        });
+      });
     });
   });
 });

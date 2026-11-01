@@ -8,7 +8,7 @@ import {
   type BlobRecord,
   isBlobFileName,
 } from "@commonfabric/runner/blob-record";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { Context } from "@hono/hono";
 
 // Blob routes are intentionally unauthenticated for the MVP. Anyone can POST a

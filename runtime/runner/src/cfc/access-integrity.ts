@@ -16,7 +16,7 @@
  */
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { atomPropagationClass } from "./atom-classes.ts";
 import { uniqueCfcAtoms } from "./atoms.ts";

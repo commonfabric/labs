@@ -405,7 +405,7 @@ export const inputCellsContextMessage = (
   inputCells: readonly HarnessInputCell[],
 ): string => {
   if (inputCells.length === 0) {
-    return "No input cells are attached for this run. A piece unambiguously selected in the conversation can still be the target; granted registry or connector references are not attachments.";
+    return "No input cells are attached for this run. Granted registry or connector references are not attachments.";
   }
   return [
     "Input cells for this run:",

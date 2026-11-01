@@ -14,7 +14,7 @@
 
 import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { fromBase64url } from "@commonfabric/utils/base64url";
+import { fromBase64url } from "@commonfabric/bytes/base64url";
 import {
   createHasher,
   type IncrementalHasher,

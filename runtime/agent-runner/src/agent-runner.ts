@@ -27,7 +27,7 @@ import {
 } from "@commonfabric/runner/agent-run";
 import type { MemorySpace } from "@commonfabric/runner/storage/cache.deno";
 import { addressKey } from "@commonfabric/runner/shared";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 
 import type { LaneTransition } from "./local-jobs/readiness.ts";
 

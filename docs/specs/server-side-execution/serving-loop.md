@@ -392,7 +392,8 @@ processes* (deploy overlap, partition) it holds via the lease:
   worker-generation succession as well as every CROSS-process succession (deploy overlap, a successor host) for
   free. The one residue — a same-process reacquire after a pause
   that outlived the TTL (a runtime GC pause is the canonical cause;
-  nothing to do with the deferred session-data GC of scopes.md §8) —
+  nothing to do with the deferred session-data GC of scopes.md §8)
+  during which a rival took the row —
   is covered by the stop-committing-immediately MUST below,
   enforced IN-PROCESS before reacquiring (an in-memory generation
   counter suffices; co-hosting makes the abort-before-reacquire
@@ -433,7 +434,19 @@ processes* (deploy overlap, partition) it holds via the lease:
   receives the not-served error; the request alone is not a persistent
   reactivation criterion. These boundaries are covered by
   `test/executor/activation-lease.test.ts`.
-- On renewal failure or expiry: the SpaceServer MUST stop committing
+- A renewal extends the row that still names the holder, live or lapsed: a
+  lapse nobody claimed (synchronous work, a compile, holding both renewal
+  drivers past the TTL) refused the holder's commits while it lasted and
+  admitted no one else's, so the next renewal extends the row and the tenure
+  continues; the SpaceServer reports the recovery to the memory server as it
+  reports a reacquire, since a push pass inside the lapse judged its loopback
+  session a former holder (`lease.lapsesRecovered` in §7). A lapse the
+  memory server reveals by refusing a derived commit is not recovered: the
+  refused wave's work is withdrawn, so the renew arm the refusal runs ends
+  the tenure as a loss, and the loop parks on the abort as below. A rival's
+  acquire during the lapse names the rival, and its release deletes the row,
+  so the holder's renewal then matches nothing: that is renewal failure.
+- On renewal failure: the SpaceServer MUST stop committing
   immediately (in-flight transaction aborts), then re-acquire or park.
   A wave aborted this way parks the tenure even when the re-acquire
   succeeds. §1's re-evaluation after a park then starts a new tenure for
@@ -1173,7 +1186,18 @@ fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
 runtime via the installed observer — never be swallowed: a
 swallowed refusal leaves the piece silently running against setup
-writes that never landed. Its conflict class: bookkeeping writes
+writes that never landed. The runner stops the piece whose start
+failed, and the demand pass had already taken each of its demanded
+documents as started, so the observer also PARKS them: every demand
+key that resolves to the piece parks as a terminal one watching its
+own document and the piece's result doc, and the piece is held as
+one whose last start failed, so a key demanded later declines to
+start it (`ensurePieceRunning`'s `start-declined` verdict parks that
+key the same way) rather than fail the same way once per key. A
+commit to the piece's result doc releases the hold and re-arms the
+parked keys, as it re-arms a refused root (§7); one that a wave
+drained while the pass ran re-arms the key at once instead of
+parking it. Its conflict class: bookkeeping writes
 are advances that commute, so they REBASE like other
 non-re-derivable writes; a rebase that conflicts semantically DROPS
 the contribution whole — there is no event to requeue, and the loop
@@ -1326,9 +1350,13 @@ first does so for free. The classes:
   taken the head of holds a value the derivation that wrote it never saw,
   so committing that write would be the blind derived write this section
   forbids — even where the head sits at or below the wave's basis.
-  Recovery is the same as for any other drop, and needs no addition: a
-  derivation that read the doc carries it in its basis rows, so the
-  arrival of the commit it missed re-runs it.
+  Recovery is the same as for any other drop: a derivation that read the
+  doc carries it in its basis rows, so the arrival of the commit it
+  missed re-runs it. A derivation that only writes the doc depends on it
+  the same way when its replica held no instance of the doc: such a
+  write records a read at the document's root, not recursive, so the
+  instance's arrival re-runs the derivation while its own later writes
+  beneath the root do not.
 
   An INTRUSION is what makes that second basis a conflict. A serving
   tenure's own derived commits advance a document under runs still in
@@ -1663,7 +1691,8 @@ that wrote it, as it does a row-label refusal; a foreign batch's
 refusal takes the ordinary foreign-failure path (home withheld, every
 event requeued). A served `.inSpace()` target's genesis is untouched by
 all of this: `Runtime.createSpace` signs it as the new space's own key
-over an ordinary session of its own, never through a wave.
+over an ordinary session of its own, which reaches the space's owner
+where the host has a route (protocol.md §2b), never through a wave.
 
 **A handler changes an access list through the memory server.** The
 one sanctioned path from a served run to an access list is
@@ -1686,7 +1715,9 @@ batch, so the outbox rows the home batch writes are delivered after
 the change. Each is an authored commit of the list alone under the
 run's delegated carriage, enveloped by the holder session and checked
 again by the memory server (`commitServedAclChange()`, through the
-sink's `commitSpaceAccessChange()`). A change refused there, for a
+sink's `commitSpaceAccessChange()`): the host's own, or, with a route
+and a space other than the home, the owner of that space, as a
+`served` `acl` (04-protocol.md §4.3.12). A change refused there, for a
 list changed since the seal, requeues its event, and the replay's seal
 decides it afresh. A change that landed stands whatever the wave does
 next, as a landed foreign provisioning commit does; the replay finds
@@ -1698,13 +1729,41 @@ commits only the event).
 
 The SpaceServer owns the pattern-source watcher and the hot-swap. The
 two halves have different owners. FOLLOWING a piece's source origin
-belongs to whoever explicitly OPENS the piece (piece-source-lifecycle.md).
+belongs to whoever STARTS the piece (piece-source-lifecycle.md): a client
+that runs the piece follows the origin when it opens it, and the serving
+runtime follows it before its first start of the piece in a tenure — the
+demand pass's structure load and a served event's auto-start alike. Both
+start through `ensurePieceRunning`, whose `originFollowed` option the loop
+answers: a piece that records an origin the tenure has not followed is not
+started, its demand key stays pending and its served event defers, and the
+loop runs the follow BESIDE its cycles rather than inside one. The pieces
+an event's piece takes its inputs from, which its auto-start starts first
+(runtime-mapping.md), are answered the same way, and a follow still owed
+for one of them defers the event as the piece's own would. The
+reconciler's compile seals the candidate's closure into whatever wave is
+open when it finishes, and its adopting write is a direct commit (below)
+that would read that closure, so the reconciler waits for every wave open
+at that point to commit (`Runtime.sealsCommitted`, which the SpaceServer
+installs) before it commits; a cycle awaiting the follow would wait on its
+own commit. A follow that completes counts from the next cycle's head, so
+every start a cycle asks about gets the same answer, and that cycle starts
+the piece on the adopted source: a first start is deferred by at least one
+cycle, and by the compile when the origin moved. A served event deferred for
+the follow spends none of the drain's deferral budget and arms no backstop;
+the follow's completion owes the re-scan. A follow that fails, or an origin
+that cannot be reached, leaves the piece to start on its stored source, as a
+client's open does. The tenure follows each piece once; a release the
+deployment serves during a tenure reaches a piece the tenure already started
+only as it reaches a client's running pieces, and a deployment restarts the
+process, so a release's tenures begin after it. A client that replicates
+views under server execution runs no piece and follows nothing, the space
+root included; the serving runtime is the opener of every piece it serves.
 Tenure activation owes its space the EXISTENCE of a root, without following
-that root's source. A served wish explicitly opens the runtime-supplied
+that root's source; the root's origin is followed on the first start of the
+root, as any piece's is. A served wish explicitly opens the runtime-supplied
 sidecars it needs through `openSidecarSurface` and `SourceReconciler.open`;
-existing sidecars follow their origins on that open. The ON client only
-references those sidecars, leaving the serving runtime as their opener. The
-SWAP is the server's: a pattern-pointer
+existing sidecars follow their origins on that open. The SWAP is the
+server's: a pattern-pointer
 write is an ordinary authored input that dirties the piece, the swap is
 the server reacting to it, and the swap's setup write stamps the
 `bookkeeping` kind and enters the wave
@@ -1728,7 +1787,8 @@ under the new pattern lands in the same cycle. Root creation and explicit wish-s
 fetch system source through the serving runtime's API URL, the deployment's
 public origin, over the runtime's fetch, which a toolshed with
 `API_INTERNAL_URL` set points at its own listener (verification-coverage.md
-OW55); root ensuring adds no source-following probe for an existing root.
+OW55); root ensuring adds no source-following probe for an existing root,
+whose origin the first start of the root follows.
 
 ## 4. Effectful nodes: memoization contract
 
@@ -1830,11 +1890,30 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's `eventId` horizon keeps processing exactly-once.
   This closes the crash window between wave commit and delivery
   that a process-local append queue could not survive.
+  **Delivery path.** Without a route, a row is delivered as a
+  delegated append on the host's own memory server. With the host
+  given a route to each space's owner
+  (`SERVER_EXECUTION_OWNER_ROUTING`,
+  [owner routing](../../plans/serving-loop-owner-routing.md)), a
+  row is delivered as a `served` `append` on the target's routed
+  session (04-protocol.md §4.3.12), which the owner admits exactly
+  as its own host's delegated append; the host keeps one such
+  session per target space for as long as a tenure uses it. The
+  owner's `refused` answer is LT4's deterministic rejection, which
+  writes the failure notice in the source; `unavailable`,
+  `internal` and a transport failure are transient, and the row is
+  kept for the next attempt. The pattern-lifecycle handler's
+  registration delivery into a space the verb did not run in takes
+  the same path, and watches the stream document on that session
+  for the event's outcome where it watched its own server's
+  admitted commits.
 - `.inSpace` provisioning rides NEITHER queue today: its foreign
   commits are SEQUENCED at the wave commit step — foreign-first,
   home-after-success, stop-at-first-failure (protocol.md §2b) — so
   a crash between the halves leaves the event unconsequenced and
-  the deterministic replay converges. Outbox carriage is its
+  the deterministic replay converges. With a route, each foreign
+  commit is a `served` `commit` the target's owner applies and
+  reports (§2b), awaited at that same step. Outbox carriage is its
   sharded-future form only (§2b's closing note).
 - At-least-once; for effects, idempotence comes from the builtins'
   request-hash guards — the claim-time completed-request check (a
@@ -1969,7 +2048,8 @@ Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
 `servingLoop: { activeSpaces, waves, wavesBudgetExhausted, exhaustedAdvances,
 supersededWrites, authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
 structureLoadRefused, structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
-structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
+structureLoadConfirmationsSkipped, structureLoadRearmed, originFollows,
+watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
 foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
@@ -1983,13 +2063,13 @@ drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
 handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
-loadParkDeferrals,
+originPendingDeferrals, loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
-budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
+budgetDeferrals}, lease: {held, lost, lapsesRecovered}, parkedRuntimes: {retained, reused,
 discarded, held}, push: {prioritizedSessions, followerSessions,
 mixedFlushes} }`
 (`parkedRuntimes` counts the runtimes idle parks kept, those a successor
@@ -2000,7 +2080,10 @@ the number kept now; §1's Parking;
 that threw / could not land yet — never-a-piece id classes are EXCLUDED from
 piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
 counts a piece-start commit that failed AFTER its start resolved (the §3d
-piece-start site's surfaced fire-and-forget failure, stage P2-F);
+piece-start site's surfaced fire-and-forget failure, stage P2-F), whose
+demanded documents then park until a commit to the piece re-arms them, each
+counted in `structureLoadRearmed`, and no start of it is tried for another
+demanded document meanwhile;
 `structureLoadRefused` counts the loads a start refused because the piece's
 stored setup is a record of another build that numbered its cells holding state
 differently (`PieceStateMovedError`, `docs/specs/computed-cell-identity.md`), on
@@ -2014,6 +2097,12 @@ forever-parked root (a demanded piece whose program docs never materialized,
 verification-coverage.md OW46) is a health-stats fact instead of an
 undifferentiated share of the per-attempt `structureLoadDeferred` aggregate; the
 streak clears when the root starts or terminalizes;
+`originFollows` counts the origins the tenure followed before a first start
+(§3e), completed follows whatever their outcome, so a demanded root whose
+`structureLoadDeferred` grows while this does not is waiting on a follow that
+has not completed; a deferral for the follow adds nothing to the root's stuck
+streak, since every demanded root of a cold space waits so while a release
+compiles;
 `structureLoadTerminal`/`structureLoadRearmed` carry the demand-cycle terminal
 state. A root with no pattern metadata is confirmed before it parks, and the
 co-hosted engine — the authority the serving replica syncs from — answers first.
@@ -2223,6 +2312,11 @@ The `events` block's DISPOSITION counters:
   pending (events.md §5). Growing while `processed` does not, it names
   an earlier event that is not completing and the events held behind
   it.
+- `originPendingDeferrals` counts the drain deferrals that spent none of
+  the deferral budget because the event's piece waited on the loop's own
+  follow of its origin (§3e), once per scan the follow outlasts. Growing
+  while `originFollows` does not, it names a follow that is not
+  completing.
 - `deliveryDeferralsActive`, `deliveryFailuresActive`, and
   `maxAccumulatedDeliveryFailureMs` expose the current durable
   checkpoint population without treating settlement as failure.

@@ -31,8 +31,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { JsTypeTagIncludingNull, Same } from "@commonfabric/utils/types";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import type {
+  JsTypeTagIncludingNull,
+  Same,
+} from "@commonfabric/js-values/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   type ConvertibleJsValueTag,

@@ -4,7 +4,7 @@
  * primitives, and an identity cache for deep-frozen objects.
  */
 
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 
 import { isDeepFrozen } from "@/deep-freeze.ts";
 import type { FabricHash } from "@/fabric-primitives";

@@ -4,7 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import {
   decodeMemoryBoundary,

@@ -32,7 +32,7 @@ import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { resultSchemaMetaSpelling } from "../src/result-schema-meta.ts";
 import {
   decodeMemoryBoundary,
@@ -45,6 +45,8 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import type { ReconcileOutcome } from "../src/source-reconciler.ts";
 import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
 import { handlingCommittedBy } from "../src/handling-commit.ts";
 import type {
@@ -640,6 +642,12 @@ describe("Phase 3 events-down (serving side)", () => {
    * host comes up. */
   let servingLoadPieceForEvent: LoadPieceForEvent | undefined;
 
+  /** What the serving runtime's follow of a piece's origin answers, in place
+   * of its source reconciler, when set before the host comes up. */
+  let servingReconcile:
+    | ((cell: Cell<unknown>) => Promise<ReconcileOutcome>)
+    | undefined;
+
   const decorateWaveCommitSink = (sink: WaveCommitSink): WaveCommitSink => ({
     currentHeads: (space, docs) => sink.currentHeads(space, docs),
     concurrentWritePaths: (space, doc, sinceSeq) =>
@@ -742,6 +750,9 @@ describe("Phase 3 events-down (serving side)", () => {
             loadPieceForEvent?: LoadPieceForEvent;
           }).loadPieceForEvent = servingLoadPieceForEvent;
         }
+        if (servingReconcile !== undefined) {
+          runtime.sourceReconciler.reconcile = servingReconcile;
+        }
         servingRuntime = runtime;
         servingManager = manager;
         return {
@@ -788,6 +799,7 @@ describe("Phase 3 events-down (serving side)", () => {
     failServingCommitSequence = [];
     failServingCommitActionPrefix = undefined;
     servingLoadPieceForEvent = undefined;
+    servingReconcile = undefined;
   });
 
   afterEach(async () => {
@@ -3463,6 +3475,83 @@ describe("Phase 3 events-down (serving side)", () => {
       });
       return ((doc?.value as { value?: number })?.value ?? 0) === 2;
     });
+    cancelDemand();
+  });
+
+  it("defers a served event while the loop follows its piece's origin, spending none of the deferral budget, and delivers it once the follow completes", async () => {
+    // The piece records a `system:` origin, so the tenure's first start of
+    // it waits on the loop's follow (serving-loop.md §3e). The follow is
+    // held open here, as a compile of a new release holds it: the deferral
+    // it causes is the loop waiting on itself, so it arms no backstop and
+    // counts toward no drop; the follow's completion is what re-drains the
+    // entry.
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "followed-arg",
+      result: "followed-result",
+    });
+    {
+      const tx = clientRuntime.edit();
+      result.withTx(tx).setMetaRaw(
+        "patternSource",
+        "system:system/probe/probe.tsx",
+        rawMetaWriteAuthorization,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const follow = Promise.withResolvers<ReconcileOutcome>();
+    const followed: string[] = [];
+    servingReconcile = (cell) => {
+      followed.push(cell.getAsNormalizedFullLink().id);
+      return follow.promise;
+    };
+
+    host = newHost();
+    sendEvent(result.key("bump"), {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entry = () =>
+      (Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries?.[0];
+    // Every scan that reaches the entry defers it for the follow — other
+    // input re-scans it, the backstop never does — and the entry stays
+    // pending through them all.
+    await awaitActive();
+    await eventDeferrals.reached(1);
+    expect(followed).toEqual([result.getAsNormalizedFullLink().id]);
+    {
+      const { events } = host.stats();
+      expect(events.originPendingDeferrals).toBeGreaterThanOrEqual(1);
+      expect(events.processed).toBe(events.originPendingDeferrals);
+      expect(events.deferredRescansArmed).toBe(0);
+      expect(events.dropped).toBe(0);
+    }
+    expect(entry()?.consequenced).not.toBe(true);
+
+    follow.resolve("current");
+    await awaitAdmitted(server, () => entry()?.consequenced === true);
+    expect(entry()?.status).toBeUndefined();
+    expect(entry()?.error).toBeUndefined();
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 1;
+    });
+    const stats = host.stats();
+    expect(stats.events.processed).toBe(
+      stats.events.originPendingDeferrals + 1,
+    );
+    expect(stats.events.deferredRescansFired).toBe(0);
+    expect(stats.events.dropped).toBe(0);
+    expect(stats.originFollows).toBe(1);
     cancelDemand();
   });
 

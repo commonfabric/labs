@@ -6,7 +6,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { removeDirectory } from "@commonfabric/utils/remove-directory";
+import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { Browser, PROFILE_DIRECTORY_PREFIX } from "../browser.ts";
 import type { Page } from "../page.ts";

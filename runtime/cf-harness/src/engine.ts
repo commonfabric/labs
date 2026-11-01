@@ -46,9 +46,9 @@ import {
   mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -382,7 +382,6 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
-  run_read_command: RunCommandInput;
   submit_result: SubmitResultInput;
 }
 
@@ -425,7 +424,6 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
-  run_read_command: RunCommandOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -478,6 +476,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscUnshare?: string;
   /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** runsc runtime: the host ports a container under pasta reaches. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -1027,6 +1027,7 @@ export class CfHarnessEngine {
         ...(options.sandboxRunscSetpriv !== undefined
           ? { setpriv: options.sandboxRunscSetpriv }
           : {}),
+        forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined
@@ -2585,6 +2586,18 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /** Resolves a call's effect from its inputs and host metadata. */
+  async builtinToolEffectClass(
+    toolId: BuiltinToolId,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    const tool = getBuiltinTool(toolId);
+    if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
+    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+      tool.descriptor.effectClass;
+  }
+
   /**
    * Runs one builtin tool and records its output on the run. A tool call is
    * one step of a run, not the run: the run's status is the driver's to
@@ -3123,10 +3136,7 @@ export class CfHarnessEngine {
       ...(this.config.loomCommands !== undefined
         ? {
           loomCommandCatalog: this.#loomCommandCatalog ??=
-            createLoomCommandCatalogSource(
-              this.config.loomCommands,
-              this.hostProcessRunner,
-            ),
+            createLoomCommandCatalogSource(this.config.loomCommands),
         }
         : {}),
       mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>

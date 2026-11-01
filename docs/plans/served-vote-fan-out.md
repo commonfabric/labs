@@ -39,16 +39,18 @@ Read, in this order, before changing anything:
    `SERVER_EXECUTION_WORKER` and `SERVER_EXECUTION_OVERLAP_COMMIT` in
    `docs/development/EXPERIMENTAL_OPTIONS.md`, and
    [the serving loop off the request thread](serving-loop-worker.md), whose
-   stage 6, the worker's default flip, is still pending.
+   stage 6 leaves the in-process path's removal still to do.
 
 What is on by default and what is not:
 
 - The serving loop itself (`EXPERIMENTAL_SERVER_EXECUTION`) is off by default;
   every served-arm measurement here sets it on, and the loop-off arm leaves it
   off.
-- The worker (`SERVER_EXECUTION_WORKER`), the store read-through
-  (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped commit
-  (`SERVER_EXECUTION_OVERLAP_COMMIT`) are all off by default. The arm the
+- The worker (`SERVER_EXECUTION_WORKER`) and the store read-through
+  (`SERVER_EXECUTION_STORE_READ_THROUGH`) are on by default in a toolshed that
+  serves, the worker wherever its memory store is a file, and off in the test
+  harnesses, which the bench below runs under. The overlapped commit
+  (`SERVER_EXECUTION_OVERLAP_COMMIT`) is off by default everywhere. The arm the
   records call "worker, read-through" sets the first two; the overlap is a
   worker-arm lever that stays off until the fan-out floor moves, for the
   reason the served-vote record gives: it halves the cycle and does not move
@@ -239,7 +241,7 @@ Before a push: repo-wide `deno fmt --check`, `deno lint`, `deno task check`,
 - The watermark under the worker ends the seed 116 to 144 commits behind
   the head where the main thread's ends one behind, as the worker record
   notes; it is unaddressed and it is the known difference between the two
-  arms, ahead of the worker's default flip.
+  arms.
 - The seed still reads the view interests 34 times over 81 cycles, once per
   watch set that carried views, which is the server's `viewsChanged`
   doing what it says; a seed that registers no views would read once.

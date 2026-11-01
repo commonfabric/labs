@@ -6,6 +6,7 @@
 // established.
 
 import { createRoute } from "@hono/zod-openapi";
+import { PATTERN_LIFECYCLE_MAX_BYTES } from "@commonfabric/memory/v2";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 
@@ -13,8 +14,11 @@ const tags = ["Pattern Lifecycle"];
 
 export const BASE = "/api/pattern-lifecycle";
 
-/** The largest request body a verb accepts; a program's files ride inline. */
-export const MAX_BODY_BYTES = 8 * 1024 * 1024;
+/**
+ * The largest request body a verb accepts; a program's files ride inline. The
+ * bound a `pattern.lifecycle` request on a memory session is held to as well.
+ */
+export const MAX_BODY_BYTES = PATTERN_LIFECYCLE_MAX_BYTES;
 
 const spaceField = z.string().describe(
   "The did:key of the space to act in. You must hold a WRITE or OWNER grant " +
@@ -48,6 +52,82 @@ const patternRefSchema = z.object({
 const sourceFields = {
   program: programSchema.optional(),
   pattern: patternRefSchema.optional(),
+};
+
+/** Whether a body names exactly one of `program` and `pattern`. */
+const oneSource = (body: { program?: unknown; pattern?: unknown }): boolean =>
+  (body.program === undefined) !== (body.pattern === undefined);
+
+const oneSourceMessage = {
+  message: "Supply exactly one of `program` and `pattern`.",
+};
+
+/** The `upload` verb's arguments, besides the space it acts in. */
+const uploadFields = { program: programSchema };
+
+/** The `instantiate` verb's arguments, besides the space it acts in. */
+const instantiateFields = {
+  ...sourceFields,
+  requestKey: z.string().min(1).max(256).optional().describe(
+    "Stable caller-scoped creation key. Retry this key after an uncertain outcome or failed registration.",
+  ),
+  argument: z.record(z.string(), z.unknown()).optional().describe(
+    "The new piece's argument; the pattern's defaults when absent.",
+  ),
+  repository: z.string().optional().describe(
+    "Repository locator stored with the piece's source.",
+  ),
+  slug: z.string().optional().describe(
+    "A name for the piece, claimed in the creation transaction; " +
+      "a name already taken refuses the whole creation.",
+  ),
+  force: z.boolean().optional().describe(
+    "Take `slug` even when it already names something.",
+  ),
+  register: z.boolean().optional().describe(
+    "Add the piece to the space root's registry.",
+  ),
+  start: z.boolean().optional().describe(
+    "Have the serving loop derive the piece once the creation " +
+      "commits (the default); `false` leaves it set up and not " +
+      "run until something demands it.",
+  ),
+};
+
+/** The `setsrc` verb's arguments, besides the space it acts in. */
+const setsrcFields = {
+  piece: z.string().describe(
+    "The id of the piece whose source is replaced.",
+  ),
+  ...sourceFields,
+  repository: z.string().optional().describe(
+    "Repository locator stored with the piece's source.",
+  ),
+  dangerouslyAllowIncompatibleSchema: z.boolean().optional()
+    .describe(
+      "Replace the source even when pattern or retained-link " +
+        "schema compatibility cannot be proven, or when the " +
+        "current pattern cannot be loaded at all.",
+    ),
+  expectedPattern: patternRefSchema.optional().describe(
+    "The pattern the update was proved against; a piece on " +
+      "another pattern refuses the update.",
+  ),
+  start: z.boolean().optional().describe(
+    "Have the serving loop derive the updated piece once the " +
+      "update commits (the default); `false` leaves it to the " +
+      "first demand.",
+  ),
+};
+
+/**
+ * Each verb's arguments as a `pattern.lifecycle` request carries them: the
+ * HTTP bodies without `space`, which the request's session supplies.
+ */
+export const lifecycleBodies = {
+  upload: z.object(uploadFields),
+  instantiate: z.object(instantiateFields).refine(oneSource, oneSourceMessage),
+  setsrc: z.object(setsrcFields).refine(oneSource, oneSourceMessage),
 };
 
 const jsonError = {
@@ -115,7 +195,7 @@ export const upload = createRoute({
     body: {
       content: {
         "application/json": {
-          schema: z.object({ space: spaceField, program: programSchema }),
+          schema: z.object({ space: spaceField, ...uploadFields }),
         },
       },
     },
@@ -139,38 +219,8 @@ export const instantiate = createRoute({
     body: {
       content: {
         "application/json": {
-          schema: z.object({
-            space: spaceField,
-            ...sourceFields,
-            requestKey: z.string().min(1).max(256).optional().describe(
-              "Stable caller-scoped creation key. Retry this key after an uncertain outcome or failed registration.",
-            ),
-            argument: z.record(z.string(), z.unknown()).optional().describe(
-              "The new piece's argument; the pattern's defaults when absent.",
-            ),
-            repository: z.string().optional().describe(
-              "Repository locator stored with the piece's source.",
-            ),
-            slug: z.string().optional().describe(
-              "A name for the piece, claimed in the creation transaction; " +
-                "a name already taken refuses the whole creation.",
-            ),
-            force: z.boolean().optional().describe(
-              "Take `slug` even when it already names something.",
-            ),
-            register: z.boolean().optional().describe(
-              "Add the piece to the space root's registry.",
-            ),
-            start: z.boolean().optional().describe(
-              "Have the serving loop derive the piece once the creation " +
-                "commits (the default); `false` leaves it set up and not " +
-                "run until something demands it.",
-            ),
-          }).refine(
-            (body) =>
-              (body.program === undefined) !== (body.pattern === undefined),
-            { message: "Supply exactly one of `program` and `pattern`." },
-          ),
+          schema: z.object({ space: spaceField, ...instantiateFields })
+            .refine(oneSource, oneSourceMessage),
         },
       },
     },
@@ -213,34 +263,9 @@ export const setsrc = createRoute({
     body: {
       content: {
         "application/json": {
-          schema: z.object({
-            space: spaceField,
-            piece: z.string().describe(
-              "The id of the piece whose source is replaced.",
-            ),
-            ...sourceFields,
-            repository: z.string().optional().describe(
-              "Repository locator stored with the piece's source.",
-            ),
-            dangerouslyAllowIncompatibleSchema: z.boolean().optional()
-              .describe(
-                "Replace the source even when pattern or retained-link " +
-                  "schema compatibility cannot be proven, or when the " +
-                  "current pattern cannot be loaded at all.",
-              ),
-            expectedPattern: patternRefSchema.optional().describe(
-              "The pattern the update was proved against; a piece on " +
-                "another pattern refuses the update.",
-            ),
-            start: z.boolean().optional().describe(
-              "Have the serving loop derive the updated piece once the " +
-                "update commits (the default); `false` leaves it to the " +
-                "first demand.",
-            ),
-          }).refine(
-            (body) =>
-              (body.program === undefined) !== (body.pattern === undefined),
-            { message: "Supply exactly one of `program` and `pattern`." },
+          schema: z.object({ space: spaceField, ...setsrcFields }).refine(
+            oneSource,
+            oneSourceMessage,
           ),
         },
       },

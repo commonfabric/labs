@@ -3,7 +3,7 @@
  * tiles that cover every repository in it rather than a fixed few.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubCredential } from "./github-auth.ts";
 import { github, GITHUB_ORGANIZATION } from "./lib.ts";
 

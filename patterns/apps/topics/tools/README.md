@@ -2,9 +2,9 @@
 
 `topics.ts` is a command-line client for the team's Topics board, run from a
 labs checkout as `deno task -q topics`. It searches, reads, and writes Topics
-with one command each: `search`, `show`, `sync`, `new`, `comment`, `body`,
-`title`, `link`, `mention`, and `unmention`; `watch` shows the board live for a
-person to watch. `deno task -q topics --help` lists them, and
+with one command each: `search`, `similar`, `show`, `sync`, `new`, `comment`,
+`body`, `title`, `link`, `mention`, and `unmention`; `watch` shows the board
+live for a person to watch. `deno task -q topics --help` lists them, and
 `skills/topics/SKILL.md` is the guide to using it; this file is how it works. It
 is team tooling for this pattern, not part of the product's `cf`.
 
@@ -41,6 +41,33 @@ is named in a warning, since it reads as blank, and so is a board entry that
 leads to no Topic the copy has read. `pattern-layout.test.ts` runs this
 checkout's board and reads what its own verbs wrote through the copy, which is
 what fails when the pattern changes where it stores a Topic.
+
+## `similar` ranks Topics by the words they share with a text
+
+`search` lists a Topic only when every term matches it, so it needs the right
+few words. `similar` takes a whole text instead, such as an issue filed
+elsewhere or the body of a Topic about to be filed, and lists the Topics most
+like it, most similar first. `similar.ts` does the ranking on the machine, from
+the Topics a read assembles, and the text is sent nowhere.
+
+A Topic is compared by its title and body, which state its problem, and not by
+its thread of updates; the title's words are counted twice, since it names the
+problem in the fewest words. Words are runs of letters, their marks, and digits,
+compared without case or Unicode compatibility differences. A word used `n`
+times in a text weighs `1 + ln(n)` times `ln((T + 1) / (t + 1))`, where `T`
+Topics are on the board and `t` of them use the word, so a word every Topic uses
+weighs nothing. The similarity is the cosine of the angle between the text's
+weights and the Topic's (TF-IDF), from 0 to 1, and Topics equally similar are
+listed most recently active first. A Topic that states the same problem with the
+same distinctive words ranks near the top even when the sentences differ. One
+that uses none of the same words, or only other forms of them (`fails` against
+`failure`), does not, since words are not reduced to their stems; nor is a name
+such as `readTopics` split into its words. The listing names the shared words
+that weigh most, so a reader can see why a Topic ranks where it does.
+
+Each run ranks the whole board afresh. Matching many texts in a row is one
+`sync` and then one `similar --offline` per text, which reads the copy without
+asking the server anything.
 
 ## `watch` follows the board as it changes
 

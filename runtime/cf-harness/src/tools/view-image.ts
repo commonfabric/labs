@@ -1,5 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessImageAttachment } from "../contracts/image.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { createHarnessImageAttachment } from "../image-attachments.ts";

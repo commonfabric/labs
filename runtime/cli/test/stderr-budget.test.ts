@@ -15,8 +15,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { decode } from "@commonfabric/utils/encoding";
-import { getLogger } from "@commonfabric/utils/logger";
+import { decode } from "@commonfabric/text/utf8";
+import { getLogger } from "@commonfabric/logger";
 import { captureStderr, checkStderr, relevantStderr } from "./utils.ts";
 
 // The line `deno task` echoes before it runs the CLI. Every command the tests

@@ -7,7 +7,7 @@
 // the on-disk source with the server, and link it into the target field.
 
 import { createRef } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 const SQLITE_SCHEME = "sqlite:";
 

@@ -20,7 +20,7 @@ import type {
   CfcRefusalAttribution,
   CfcRefusalGate,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * What a boundary refused, in terms the caller can act on: the boundary that

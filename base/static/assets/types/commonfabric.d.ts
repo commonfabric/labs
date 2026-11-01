@@ -25,7 +25,7 @@ import type { Cfc, CurrentPrincipal, WriteAuthorizedBy } from "./cfc.ts";
 /**
  * Recursively removes `readonly` from all properties of `T`.
  *
- * Copy of `Mutable` from `@commonfabric/utils/types`. These two definitions
+ * Copy of `Mutable` from `@commonfabric/js-values/types`. These two definitions
  * should be unified; see that module for the canonical version.
  */
 type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
@@ -2647,7 +2647,9 @@ export type NodeFactory<T, R> =
  * Access a space created by `PatternFactory.inSpace()` grants beyond its
  * creator, by principal DID, or `"*"` for anyone. A principal DID may be
  * granted `OWNER`, and `"*"` may not. The identity the run acts for is an
- * OWNER of the space whatever the grants name it. The grants
+ * OWNER of the space whatever the grants name it, unless the space is
+ * `selfOwned`, in which case the space is its own owner, that identity holds
+ * a delegation instead, and the grants may name no OWNER. The grants
  * apply when the space is created, and the first call to name a space in a
  * run is the one that creates it; a space that already exists keeps its own
  * access-control document.
@@ -2683,6 +2685,17 @@ export interface InSpaceOptions {
    * any other form.
    */
   spaceKind?: string;
+
+  /**
+   * Whether the space the call creates owns itself: its access list grants
+   * its own DID OWNER and the creator nothing, and the creator holds instead
+   * a delegation the space's key issued over it before that key was
+   * destroyed, which the calling space records and the creator's runtime
+   * presents when it opens the space. A profile space is one. A DID or a
+   * cell names a space that already exists, so `inSpace()` refuses
+   * `selfOwned` with either.
+   */
+  selfOwned?: boolean;
 }
 
 export type PatternFactory<T, R> =
@@ -4309,6 +4322,37 @@ export type DID = `did:${string}`;
  * like a call to any other function.
  */
 export declare function isWellFormedDID(value: unknown): value is DID;
+
+/** A DID split into the parts that follow its `did:` prefix. */
+export interface ParsedDID {
+  /** The whole DID, as it was given. */
+  did: DID;
+
+  /**
+   * The method name: the text between the `did:` prefix and the next colon,
+   * or the whole remainder when no colon follows the prefix.
+   */
+  method: string;
+
+  /**
+   * The method-specific identifier: the text after the method's colon, and the
+   * empty string when no colon follows the method.
+   */
+  id: string;
+}
+
+/**
+ * Splits `value` into its method and its method-specific identifier, or
+ * returns `undefined` when `value` is not a DID. A DID here is any string that
+ * starts with `did:`, compared exactly, so `did:web:example.com:8080` parses
+ * to method `web` and id `example.com:8080`, and `did:key` to method `key` and
+ * the empty id. It checks no syntax beyond the prefix: ask `isWellFormedDID()`
+ * of a DID that is to be shown to a person or read as a principal.
+ *
+ * The runtime takes DIDs apart with this same function. It reads nothing but
+ * its argument, so it can be called anywhere a call to `isWellFormedDID()` can.
+ */
+export declare function parseDID(value: unknown): ParsedDID | undefined;
 
 /**
  * Returns the principal the running handler acts for: the authenticated actor

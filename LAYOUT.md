@@ -24,14 +24,17 @@ the other way. The section of `AGENTS.md` titled "Pace Layers" says more.
 - `base/` holds code that the runtime is built on and that does not itself use
   the runtime. It starts with the data model, which defines the values Common
   Fabric stores and how those values are encoded, hashed, and compared
-  (`data-model`), and the libraries the data model is built on (`utils`,
-  `content-hash`, and `leb128`). Other examples are the interface that patterns
-  are written against (`api`), the schemas of the data model's values
-  (`data-model-schema`), the compiler that turns a pattern's TypeScript into
-  code the runtime can run (`js-compiler`, `ts-transformers`, and
-  `schema-generator`), the client for language-model services (`llm`), a
-  front-end build tool (`felt`), and the code that records test results
-  (`test-support`).
+  (`data-model`), and the libraries the data model is built on: plain JavaScript
+  values (`js-values`), data structures (`collections`), byte and text encodings
+  (`bytes` and `text`), and hashing (`content-hash`). Other examples are JSON
+  (`json`), promises and timers (`async`), the host the code runs on
+  (`platform`), logging (`logger`), what the pattern compiler and the runner
+  agree on (`pattern-contract`), the interface that patterns are written against
+  (`api`), the schemas of the data model's values (`data-model-schema`), the
+  compiler that turns a pattern's TypeScript into code the runtime can run
+  (`js-compiler`, `ts-transformers`, and `schema-generator`), the client for
+  language-model services (`llm`), a front-end build tool (`felt`), and the code
+  that records test results (`test-support`).
 - `runtime/` holds the program that runs patterns (`runner`) and everything
   built on it. Examples are the storage service (`memory`), the server that
   hosts storage and serves patterns (`toolshed`), the web front end (`shell`),

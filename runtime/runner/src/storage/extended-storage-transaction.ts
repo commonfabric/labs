@@ -24,11 +24,11 @@ import {
   type SqliteOperation,
   toDocumentPath,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope } from "../builder/types.ts";
 import {
@@ -53,6 +53,8 @@ import {
   type CfcDenialCode,
   type CfcDereferenceTrace,
   cfcDereferenceTracesEqual,
+  type CfcDocumentAddress,
+  cfcDocumentKey,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
   type CfcExternalContentObservation,
@@ -737,6 +739,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
     attributedInitialization: false,
+    attributedPieces: [],
+    pieceCreators: [],
+    creatorRecordWrites: [],
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -1592,6 +1597,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // refuse: every arm below is keyed by target id, and one that recorded
     // and returned ahead of this would leave the seam open on the documents
     // its prefix names.
+    //
+    // A write reaching the `creator` field is judged at commit preparation
+    // whatever authorization it carries (`pieceCreatorRecordReasons` in
+    // cfc/prepare.ts), which reads the documents recorded here rather than
+    // the write log, so it makes the transaction CFC-relevant on its own: a
+    // transaction writing nothing else would otherwise never be prepared.
+    if (metaFieldsWritten(address.path, value).includes("creator")) {
+      this.markCfcRelevant("creator-record-write");
+      this.#cfcState.creatorRecordWrites = [
+        ...this.#cfcState.creatorRecordWrites,
+        {
+          space: address.space,
+          id: address.id,
+          ...(address.scope !== undefined && { scope: address.scope }),
+        },
+      ];
+    }
     if (!rawMetaWriteAuthorized(options)) {
       // Three shapes reach a meta field: an address naming the field, a
       // document-root envelope carrying it as a key, and a document-root
@@ -1722,11 +1744,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           },
         }).ok?.value;
         if (slot === undefined) {
+          // A serving runtime's handler waits for the Home's own server to
+          // link the root (`bringUpHomeRootForRefusedWrite()`).
           // TODO(danfuzz): On a serving runtime, bring the demanding user's
           // Home root up ahead of the write instead, stamped as the
           // SpaceServer's root ensure stamps it, so that an app layered on a
           // serving runtime can create a profile before its user has ever
-          // opened Home.
+          // opened Home, whose space no server then serves.
           throw new SpaceRootMissingError(address.space);
         }
       }
@@ -2294,15 +2318,59 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
     // The mark is what lets an initialization claim the acting principal, so
     // a call without the runtime's authorization changes nothing.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A transaction marked whole attributes every piece's initializations
+    // already.
     if (this.#cfcState.attributedInitialization) return;
+    if (piece === undefined) {
+      this.#cfcState.attributedInitialization = true;
+    } else {
+      const key = cfcDocumentKey(piece);
+      if (
+        this.#cfcState.attributedPieces.some((listed) =>
+          cfcDocumentKey(listed) === key
+        )
+      ) {
+        return;
+      }
+      this.#cfcState.attributedPieces = [
+        ...this.#cfcState.attributedPieces,
+        piece,
+      ];
+    }
     this.#noteCfcActivity();
-    this.#cfcState.attributedInitialization = true;
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("attributed-initialization-marked");
+    }
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    // The mark is what admits the record's write, so a call without the
+    // runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    const key = cfcDocumentKey(piece);
+    if (
+      this.#cfcState.pieceCreators.some((record) =>
+        cfcDocumentKey(record.piece) === key && record.creator === creator
+      )
+    ) {
+      return;
+    }
+    this.#cfcState.pieceCreators = [
+      ...this.#cfcState.pieceCreators,
+      { piece, creator },
+    ];
+    this.#noteCfcActivity();
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("piece-creator-marked");
     }
   }
 
@@ -2716,6 +2784,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       return {
         actor,
         released: [],
+        paths: [],
         releasedDigests: [],
         priorEnvelopeDigest,
         envelopeDigest: priorEnvelopeDigest,
@@ -2747,6 +2816,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return {
       actor,
       released: plan.released,
+      paths: plan.paths,
       releasedDigests: plan.released.map(cfcCanonicalClauseDigest),
       priorEnvelopeDigest,
       envelopeDigest: hashStringOf(canonicalizeCfcMetadata(metadata)),
@@ -3580,8 +3650,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       const message = error instanceof Error ? error.message : String(error);
       this.#commitPreparationCrash = message;
       // Reported UNCONDITIONALLY, not through this module's opt-in logger
-      // (disabled by default — utils/logger.ts early-returns): a crash here
-      // is a bug in prep itself, and before this catch existed the class
+      // (disabled by default — `@commonfabric/logger` early-returns): a crash
+      // here is a bug in prep itself, and before this catch existed the class
       // escaped as an unhandled rejection, the loudest signal in the system.
       // Converting it to a modeled refusal must not also convert it to
       // silence — the same labs#4772 shape `reportDroppedCfcRejectedWrite`
@@ -4929,8 +4999,17 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
-    this.#wrapped.markCfcAttributedInitialization(authorization);
+    this.#wrapped.markCfcAttributedInitialization(authorization, piece);
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    this.#wrapped.markCfcPieceCreator(authorization, piece, creator);
   }
 
   recordCfcWritePolicyInput(
