@@ -48,6 +48,7 @@ import {
   writeSourceDocs,
 } from "./compilation-cache/cell-cache.ts";
 import { createRef } from "./create-ref.ts";
+import { waveSettlementOf } from "./executor/wave.ts";
 import { interleaveCompileYield } from "./harness/compile-interleave.ts";
 import {
   deterministicCompileError,
@@ -432,6 +433,12 @@ type ClosureReplication = {
   copyForLoad: boolean;
 };
 
+/** What a serving wave decides about a transaction it accepted
+ * (`waveSettlementOf()`). */
+type WaveSettlement = Awaited<
+  NonNullable<ReturnType<typeof waveSettlementOf>>
+>;
+
 /** A shared compilation and the spaces requesting its durable closure. */
 type ProgramCompilation = {
   /** Compile and initial persistence completion shared by all callers. */
@@ -786,13 +793,15 @@ export class PatternManager {
 
   /**
    * Spaces this manager _durably_ persisted an entry's closure into (recorded
-   * at the two tracked persists' success; session-lifetime, record-only — a
-   * later slot invalidation forces a re-verify on read, and the fallback read
-   * re-verifies fail-closed anyway, so a stale record costs one failed read,
-   * never a wrong copy). These are `#replicateClosures()`' _fallback origins_:
-   * the caller-named origin is a provenance heuristic — the in-memory artifact
-   * index serves patterns with no per-space persist, so a running piece's space
-   * can lack the closure entirely — while the closure is content-addressed, so
+   * at the two tracked persists' success, and forgotten when a serving wave
+   * withdraws a write it had accepted — `#watchCacheWriteDurability()`;
+   * session-lifetime otherwise — a later slot invalidation forces a re-verify
+   * on read, and the fallback read re-verifies fail-closed anyway, so a stale
+   * record costs one failed read, never a wrong copy). These are
+   * `#replicateClosures()`' _fallback origins_: the caller-named origin is a
+   * provenance heuristic — the in-memory artifact index serves patterns with
+   * no per-space persist, so a running piece's space can lack the closure
+   * entirely — while the closure is content-addressed, so
    * any recorded persist target holds a complete, integrity-gated closure
    * under each variant recorded for it.
    * A load served from memory consults it too, with
@@ -803,8 +812,8 @@ export class PatternManager {
    * closure was written there under, so that a replication reads an origin
    * under a variant the origin holds; a persist of the source closure alone
    * adds none.
-   * Growth: monotonic for the session, bounded by the module identities ×
-   * spaces this manager actually persisted × the variants it wrote there.
+   * Growth: bounded by the module identities × spaces this manager actually
+   * persisted × the variants it wrote there.
    */
   #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
 
@@ -904,6 +913,74 @@ export class PatternManager {
       }
       if (parked.size === 0) this.#parkedFailedReplications.delete(identity);
     }
+  }
+
+  /**
+   * Forgets that `space` holds the closure modules `identities` name, as
+   * `#recordPersistedClosureSpaces()` recorded it. A module another persist
+   * wrote there durably is forgotten with them, which costs a later write of
+   * it that changes nothing.
+   */
+  #forgetPersistedClosureSpace(
+    identities: Iterable<string>,
+    space: MemorySpace,
+  ): void {
+    for (const identity of identities) {
+      const spaces = this.#persistedClosureSpaces.get(identity);
+      if (spaces === undefined) continue;
+      spaces.delete(space);
+      if (spaces.size === 0) this.#persistedClosureSpaces.delete(identity);
+    }
+  }
+
+  /**
+   * Helper for the tracked persists, which watches what the serving waves do
+   * with the transactions a write-back of `identities` into `space` committed
+   * (`settlements`). A serving runtime's commit resolves once a wave accepts
+   * the transaction, and the wave can still withdraw it when it commits, so
+   * the persist recorded a write that may not land. A withdrawn write is a
+   * failed one: the space is forgotten as a holder of the closure, and, for
+   * a write the runtime made as itself (`retained`), the space is owed the
+   * repair a failed write-back is owed, paid from the retained compile by the
+   * next load in the space (`#owedRepair()`). Tracked in `#compileCacheWrites`
+   * until the waves have decided.
+   */
+  #watchCacheWriteDurability(
+    space: MemorySpace,
+    entryIdentity: string,
+    identities: readonly string[],
+    settlements: readonly Promise<WaveSettlement>[],
+    retained: RetainedCompile | undefined,
+  ): void {
+    if (settlements.length === 0) return;
+    const watch = Promise.all(settlements).then((outcomes) => {
+      const withdrawal = outcomes.find((outcome) => outcome.error !== undefined)
+        ?.error;
+      if (withdrawal === undefined) return;
+      this.#forgetPersistedClosureSpace(identities, space);
+      if (retained !== undefined) {
+        this.#persistedCompileCacheClosures.delete(
+          compileCachePersistenceSlotKey(
+            space,
+            entryIdentity,
+            retained.cacheOpts,
+          ),
+        );
+        this.#retainCompile(entryIdentity, retained);
+        const recoveryKey = compileCacheRecoveryKey(space, entryIdentity);
+        this.#failedCompileCacheRecoveries.set(
+          recoveryKey,
+          (this.#failedCompileCacheRecoveries.get(recoveryKey) ?? 0) + 1,
+        );
+      }
+      logger.warn("compile-cache-writeback-withdrawn", () => [
+        `entry=${entryIdentity}`,
+        `space=${space}`,
+        withdrawal.message,
+      ]);
+    });
+    this.#compileCacheWrites.add(watch);
+    watch.finally(() => this.#compileCacheWrites.delete(watch));
   }
 
   /**
@@ -3702,8 +3779,9 @@ export class PatternManager {
       }
 
       // A writer a test supplied stands in for the write-back.
+      const settlements: Promise<WaveSettlement>[] = [];
       const write: CompileCacheWriter = this.#compileCacheWriter ??
-        ((...args) => this.#writeBackCompileCache(...args));
+        ((...args) => this.#writeBackCompileCache(settlements, ...args));
       await write(
         space,
         modules,
@@ -3723,6 +3801,22 @@ export class PatternManager {
         identities,
         space,
         opts.runtimeVersion,
+      );
+      // A repair writes as the runtime itself, so only a write made that way
+      // is owed one.
+      this.#watchCacheWriteDurability(
+        space,
+        entryIdentity,
+        identities,
+        settlements,
+        delegated === undefined
+          ? {
+            modules,
+            moduleDelegations,
+            delegationsSpace: space,
+            cacheOpts: opts,
+          }
+          : undefined,
       );
     })();
     this.#inProgressCompileCacheWrites.set(persistenceSlotKey, {
@@ -3870,7 +3964,9 @@ export class PatternManager {
       entryIdentity,
       ...modules.map((module) => module.identity),
     ];
+    const settlements: Promise<WaveSettlement>[] = [];
     const writeBack = this.#writeBackSourceCache(
+      settlements,
       space,
       modules,
       entryIdentity,
@@ -3881,12 +3977,46 @@ export class PatternManager {
     try {
       await writeBack;
       this.#recordPersistedClosureSpaces(identities, space, undefined);
+      // No compile to retain: a source closure is written back by the cold
+      // load that compiles it.
+      this.#watchCacheWriteDurability(
+        space,
+        entryIdentity,
+        identities,
+        settlements,
+        undefined,
+      );
     } finally {
       this.#untrackCacheWriteBack(space, entryIdentity, identities, writeBack);
     }
   }
 
+  /**
+   * Helper for the write-backs, which runs `fn` through `editWithRetry()` and,
+   * once a transaction commits, adds its wave settlement to `settlements`: a
+   * serving runtime's commit resolves when its wave accepts the transaction,
+   * which the wave can still withdraw (`#watchCacheWriteDurability()`). A
+   * transaction committed outside a wave adds nothing.
+   */
+  async #editCacheWrite(
+    settlements: Promise<WaveSettlement>[],
+    fn: (tx: IExtendedStorageTransaction) => void,
+    maxRetries?: number,
+  ): Promise<{ error?: CommitError }> {
+    let attempt: IExtendedStorageTransaction | undefined;
+    const result = await this.#runtime.editWithRetry((tx) => {
+      attempt = tx;
+      fn(tx);
+    }, maxRetries);
+    const settlement = result.error === undefined && attempt !== undefined
+      ? waveSettlementOf(attempt)
+      : undefined;
+    if (settlement !== undefined) settlements.push(settlement);
+    return result;
+  }
+
   async #writeBackSourceCache(
+    settlements: Promise<WaveSettlement>[],
     space: MemorySpace,
     modules: CacheableModule[],
     entryIdentity: string,
@@ -3896,7 +4026,7 @@ export class PatternManager {
     const writebackStart = performance.now();
     await this.#syncSourceCacheWriteTargets(space, modules);
     let committedModuleDelegations = moduleDelegations;
-    const { error } = await this.#runtime.editWithRetry((tx) => {
+    const { error } = await this.#editCacheWrite(settlements, (tx) => {
       // Compile-cache writeback is runtime-internal bookkeeping
       // (serving-loop.md §3d): it runs from async compile flows with no
       // scheduler run around it, and a SERVING runtime's wave refuses unstamped
@@ -3948,6 +4078,7 @@ export class PatternManager {
    * error level unless the space refused it for want of a grant.
    */
   async #writeBackCompileCache(
+    settlements: Promise<WaveSettlement>[],
     space: MemorySpace,
     modules: CacheableModule[],
     entryIdentity: string,
@@ -4001,7 +4132,7 @@ export class PatternManager {
         ? Math.max(16, 2 * importEdges + 8)
         : 2 * importEdges + 8;
       let chunkDelegations: ModuleDelegationMap = new Map();
-      const { error } = await this.#runtime.editWithRetry((tx) => {
+      const { error } = await this.#editCacheWrite(settlements, (tx) => {
         // Bookkeeping stamp, same §3d reason as writeBackSourceCache
         // above (the triage-confirmed second offender: this writeback
         // refused unstamped on the serving runtime).
