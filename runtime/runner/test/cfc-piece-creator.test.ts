@@ -15,9 +15,9 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { Cell } from "../src/cell.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { getMetaLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { RunnerRunOptions } from "../src/runner.ts";
-import { getMetaLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -77,18 +77,9 @@ describe("cfc-piece-creator", () => {
 
   /**
    * Creates a piece of `PIECE_SOURCE` on `runtime` in `space`, in `tx` when
-   * given, and returns its result cell. The transaction a caller does not own
-   * is committed here and must land.
+   * given, and returns its result cell and the compiled pattern. The
+   * transaction a caller does not own is committed here and must land.
    */
-  const createPiece = async (
-    runtime: Runtime,
-    space: MemorySpace,
-    options: { tx?: IExtendedStorageTransaction; run?: RunnerRunOptions } = {},
-  ): Promise<Cell<Piece>> =>
-    (await createPieceOf(runtime, space, options))
-      .result;
-
-  /** {@link createPiece}, returning the compiled pattern as well. */
   const createPieceOf = async (
     runtime: Runtime,
     space: MemorySpace,
@@ -117,6 +108,15 @@ describe("cfc-piece-creator", () => {
     }
     return { result, compiled };
   };
+
+  /** Like `createPieceOf()`, except it returns the result cell alone. */
+  const createPiece = async (
+    runtime: Runtime,
+    space: MemorySpace,
+    options: { tx?: IExtendedStorageTransaction; run?: RunnerRunOptions } = {},
+  ): Promise<Cell<Piece>> =>
+    (await createPieceOf(runtime, space, options))
+      .result;
 
   /** The creator the stored result document of `result` names, read afresh. */
   const storedCreator = async (
@@ -289,10 +289,10 @@ describe("cfc-piece-creator", () => {
 
     // A runtime that loads the document afresh finds the pointer absent, as
     // the store holds it, so its write installs the pointer.
-    const attacker = connect(alice);
-    const reloaded = attacker.getCellFromLink<Piece>(link);
+    const forger = connect(alice);
+    const reloaded = forger.getCellFromLink<Piece>(link);
     await reloaded.sync();
-    const attack = edit(attacker);
+    const attack = edit(forger);
     reloaded.withTx(attack).setMetaRaw(
       "patternIdentity",
       identity,
@@ -309,7 +309,7 @@ describe("cfc-piece-creator", () => {
       bob.did(),
     );
     expect((await attack.commit().settled).error?.message).toContain(
-      "creator record",
+      "records its creator once",
     );
     expect(await storedCreator(result)).toBe(alice.did());
   });
