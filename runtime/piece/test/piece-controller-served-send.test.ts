@@ -154,4 +154,45 @@ describe("piece-controller", () => {
     await name.sync();
     expect(name.get()).toBe("served:alice");
   });
+
+  it("writes a result field while a speculation layer of this client stands over the result", async () => {
+    // A client under server execution previews server-owned derivations in
+    // layers that exist only in its own process, and a commit whose read
+    // basis names one is refused for good. The write reads the result, so it
+    // reads beneath those layers.
+
+    const receipt = await instantiate();
+    const writer = await clientPieces();
+    const piece = await writer.get(receipt.pieceId);
+    const result = writer.getResult(piece.getCell());
+    await result.sync();
+    const { id, scope } = result.getAsNormalizedFullLink();
+    const replica = writer.runtime.storageManager.open(space).replica;
+    // The layer settles by being withdrawn, as the overlay retires it.
+    const verdict = Promise.withResolvers<
+      { withdrawn: { message: string; superseded: true } }
+    >();
+    const layer = replica.sealNative!(
+      {
+        operations: [{
+          op: "set",
+          id,
+          type: "application/json",
+          value: { ...replica.getDocument(id, scope) },
+        }],
+      },
+      undefined,
+      verdict.promise,
+      { speculative: true },
+    );
+
+    try {
+      await piece.result.set("bob", ["name"]);
+    } finally {
+      verdict.resolve({ withdrawn: { message: "retired", superseded: true } });
+      await layer.settled;
+    }
+
+    expect(await piece.result.get(["name"])).toBe("bob");
+  });
 });
