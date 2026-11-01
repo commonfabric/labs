@@ -114,10 +114,17 @@ export function validatePanel(panel: Panel): void {
       "A panel's addedBy must be a DID of at most 195 characters",
     );
   }
+}
+
+/**
+ * Validate the name an event gives a copy's admission. Only a new name is held
+ * to this: a panel's schema is open, so a source may hold anything at this key,
+ * and a copy takes its event's name in its place.
+ */
+function validateAdmissionName(name: unknown): void {
   if (
-    panel.admission !== undefined &&
-    (typeof panel.admission !== "string" || panel.admission.length === 0 ||
-      panel.admission.length > 200)
+    name !== undefined &&
+    (typeof name !== "string" || name.length === 0 || name.length > 200)
   ) {
     throw new Error("A panel's admission must be 1 to 200 characters");
   }
@@ -271,6 +278,7 @@ function admitCopy(
   source: Panel,
   event: PanelAdmission,
 ): void {
+  validateAdmissionName(event.admission);
   const copy = copyOf(source, event);
   validatePanel(copy);
   const occurrence = new Writable<Panel>();

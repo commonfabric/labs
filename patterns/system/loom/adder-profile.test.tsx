@@ -7,6 +7,7 @@ import {
   type AddIntegrity,
   assert,
   handler,
+  type JSONSchema,
   pattern,
   type RepresentsCurrentUser,
   TESTS,
@@ -67,6 +68,40 @@ type UnclaimedProfile = AddIntegrity<
 /** The address a URL panel shows, or `undefined` for another kind. */
 const urlOf = (panel: Panel): string | undefined =>
   panel.kind === "url" ? panel.url : undefined;
+
+// The panel schema doesn't declare `admission`, so this reads it under its own,
+// as a caller looking for its copy does.
+const readAdmission = handler<
+  { panel: Writable<Panel> },
+  { seen: Writable<string | number | null> }
+>(
+  {
+    type: "object",
+    properties: {
+      panel: {
+        type: "object",
+        properties: { admission: { type: ["string", "number"] } },
+        asCell: ["cell"],
+      },
+    },
+    required: ["panel"],
+  } as const satisfies JSONSchema,
+  {
+    type: "object",
+    properties: {
+      seen: { type: ["string", "number", "null"], asCell: ["cell"] },
+    },
+    required: ["seen"],
+  } as const satisfies JSONSchema,
+  ({ panel }, { seen }) => {
+    const { admission } = panel.get() as { admission?: unknown };
+    seen.set(
+      typeof admission === "string" || typeof admission === "number"
+        ? admission
+        : null,
+    );
+  },
+);
 
 export default pattern(() => {
   // Two profiles of the person running the test, and one that names nobody.
@@ -204,6 +239,17 @@ export default pattern(() => {
     url: "https://example.com/stamped",
   });
   const stampedLoom = Loom({});
+  const seenAdmission = new Writable<string | number | null>(null);
+  const readSeen = readAdmission({ seen: seenAdmission });
+  const readStampedCopy = action(() =>
+    readSeen.send({ panel: stampedLoom.panels[0] })
+  );
+  const readStampedSource = action(() =>
+    readSeen.send({ panel: stampedSource })
+  );
+  const readDuplicate = action(() =>
+    readSeen.send({ panel: stampedLoom.panels[1] })
+  );
   const addStamped = action(() =>
     stampedLoom.addPanel.send({
       panel: stampedSource,
@@ -230,13 +276,40 @@ export default pattern(() => {
       admission: "",
     })
   );
+  const addWithNonStringAdmission = action(() =>
+    stampedLoom.addPanel.send({
+      panel: stampedSource,
+      as: member,
+      admission: JSON.parse("42"),
+    })
+  );
+  // A panel's schema is open, so a source may hold anything at this key. The
+  // copy takes its event's name in its place, and the source stays as it was.
+  const legacyFields = { admission: JSON.parse("42") };
+  const legacySource = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/legacy",
+    ...legacyFields,
+  });
+  const legacyLoom = Loom({});
+  const readLegacyCopy = action(() =>
+    readSeen.send({ panel: legacyLoom.panels[0] })
+  );
+  const readLegacySource = action(() => readSeen.send({ panel: legacySource }));
+  const addFromLegacySource = action(() =>
+    legacyLoom.addPanel.send({
+      panel: legacySource,
+      as: member,
+      admission: "over-a-legacy-value",
+    })
+  );
 
   return {
     // Each refused write is reported as a CFC policy warning, and each
     // refused event as a runtime error.
     allowConsoleWarnings: true,
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 8,
+    expectRuntimeErrors: 9,
     [TESTS]: [
       { action: writeMember, event: {}, trustedUi: profileGesture },
       { action: writeOther, event: {}, trustedUi: profileGesture },
@@ -391,32 +464,42 @@ export default pattern(() => {
       },
       { action: addStamped },
       {
-        assertion: assert(() =>
-          stampedLoom.panels.length === 1 &&
-          stampedLoom.panels[0].get().admission === "first-insert" &&
-          stampedSource.get().admission === undefined
-        ),
+        assertion: assert(() => stampedLoom.panels.length === 1),
       },
+      { action: readStampedCopy },
+      { assertion: assert(() => seenAdmission.get() === "first-insert") },
+      { action: readStampedSource },
+      { assertion: assert(() => seenAdmission.get() === null) },
       { action: retargetStamped },
       {
         assertion: assert(() => {
           const panel = stampedLoom.panels[0].get();
           return panel.kind === "url" &&
-            panel.url === "https://example.com/retargeted" &&
-            panel.admission === "first-insert";
+            panel.url === "https://example.com/retargeted";
         }),
       },
+      { action: readStampedCopy },
+      { assertion: assert(() => seenAdmission.get() === "first-insert") },
       { action: duplicateStamped },
       {
-        assertion: assert(() =>
-          stampedLoom.panels.length === 2 &&
-          stampedLoom.panels.filter((panel) =>
-              panel.get().admission === "first-insert"
-            ).length === 1
-        ),
+        assertion: assert(() => stampedLoom.panels.length === 2),
       },
+      { action: readDuplicate },
+      { assertion: assert(() => seenAdmission.get() === null) },
       { action: addWithEmptyAdmission },
       { assertion: assert(() => stampedLoom.panels.length === 2) },
+      { action: addWithNonStringAdmission },
+      { assertion: assert(() => stampedLoom.panels.length === 2) },
+      { action: addFromLegacySource },
+      {
+        assertion: assert(() => legacyLoom.panels.length === 1),
+      },
+      { action: readLegacyCopy },
+      {
+        assertion: assert(() => seenAdmission.get() === "over-a-legacy-value"),
+      },
+      { action: readLegacySource },
+      { assertion: assert(() => seenAdmission.get() === 42) },
     ],
   };
 });

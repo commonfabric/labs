@@ -41,7 +41,6 @@
               "addedByProfile": {
                 "$ref": "#/$defs/PanelAdderProfile"
               },
-              "admission": true,
               "kind": {
                 "enum": [
                   "piece"
@@ -69,7 +68,6 @@
               "addedByProfile": {
                 "$ref": "#/$defs/PanelAdderProfile"
               },
-              "admission": true,
               "content": {
                 "$ref": "#/$defs/PublishedDocument"
               },
@@ -97,7 +95,6 @@
               "addedByProfile": {
                 "$ref": "#/$defs/PanelAdderProfile"
               },
-              "admission": true,
               "kind": {
                 "enum": [
                   "url"
@@ -132,7 +129,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "LwwUsBz9fygqXLkeUTTOwNxIU1Dz6iIdwdilyEzMBUw",
+              "moduleIdentity": "A5XQMTWS7jymp_aFUUT7D-ctslFzRqf3hf7D1IDbgoI",
               "path": [
                 "admitPanel"
               ]
@@ -157,7 +154,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/loom/admission.tsx",
-              "moduleIdentity": "LwwUsBz9fygqXLkeUTTOwNxIU1Dz6iIdwdilyEzMBUw",
+              "moduleIdentity": "A5XQMTWS7jymp_aFUUT7D-ctslFzRqf3hf7D1IDbgoI",
               "path": [
                 "admitPanel"
               ]
@@ -176,9 +173,7 @@
       },
       "PanelAdmission": {
         "properties": {
-          "admission": {
-            "type": "string"
-          },
+          "admission": true,
           "as": {
             "properties": {
               "avatar": {
