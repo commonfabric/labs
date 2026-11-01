@@ -627,6 +627,127 @@ describe("cf-iframe cell bridge", () => {
     expect(Object.keys(bridge.resources)).toEqual(["glaze"]);
   });
 
+  it("grants nothing, and waits for nothing, for a SQLite kind whose name a context bound as a link does not hold", async () => {
+    // A name the record lacks holds nothing, and nothing will produce a
+    // database under it.
+
+    const record: CellRef = {
+      ...ref,
+      id: "of:record" as CellRef["id"],
+      schema: { type: "object", properties: {} },
+    };
+    const glaze: CellRef = {
+      ...ref,
+      id: "of:glaze" as CellRef["id"],
+      schema: { type: "string" },
+    };
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          if (
+            request.type === RequestType.CellGet ||
+            request.type === RequestType.CellPull
+          ) {
+            return Promise.resolve({
+              value: request.cell.path[0] === "frosting" ? undefined : {},
+            });
+          }
+          if (request.type === RequestType.CellFields) {
+            return Promise.resolve({ fields: { glaze } });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            const [name] = request.cell.path;
+            return Promise.resolve({
+              cell: name === undefined
+                ? record
+                : name === "glaze"
+                ? glaze
+                : { ...record, path: [name], schema: {} },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, {
+      ...ref,
+      schema: true,
+    });
+
+    const bridge = await resolveCellContextBridge(context, {
+      frosting: "sqlite",
+    });
+
+    expect(Object.keys(bridge.resources)).toEqual(["glaze"]);
+  });
+
+  it("grants a SQLite source whose database's read is refused, as a database already written", async () => {
+    // The producer's empty output holds nothing to refuse, so a refused read
+    // of the source's value reached the database.
+
+    const runtime = runtimeStub({
+      [$conn]: () => ({
+        request: (request: { type: RequestType; cell: CellRef }) => {
+          if (
+            request.type === RequestType.CellGet ||
+            request.type === RequestType.CellPull
+          ) {
+            if (request.cell.path[0] !== "database") {
+              return Promise.resolve({ value: { database: { id: "x" } } });
+            }
+            const schema = request.cell.schema;
+            return Promise.resolve(
+              typeof schema === "object" && schema !== null &&
+                "asCell" in schema
+                ? { value: { id: "x" } }
+                : { refused: { refusedBy: "display-ceiling" } },
+            );
+          }
+          if (request.type === RequestType.CellFields) {
+            return Promise.resolve({ fields: {} });
+          }
+          if (request.type === RequestType.CellResolveAsCell) {
+            return Promise.resolve({
+              cell: request.cell.path.length === 0
+                ? {
+                  ...request.cell,
+                  id: "of:resolved-context",
+                  schema: {
+                    type: "object",
+                    properties: {
+                      database: { type: "object", asCell: ["sqlite"] },
+                    },
+                  },
+                }
+                : {
+                  ...request.cell,
+                  id: "of:database",
+                  path: [],
+                  schema: { type: "object", properties: {} },
+                },
+            });
+          }
+          return Promise.resolve({});
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    });
+    const context = new CellHandle<Record<string, unknown>>(runtime, ref);
+
+    const bridge = await resolveCellContextBridge(context, {
+      database: "sqlite",
+    });
+
+    expect(bridge.resources.database.kind).toBe("sqlite");
+  });
+
   it("holds lazy scoped SQLite demand through backend readiness", async () => {
     const subscriptions: CellRef[] = [];
     const idle = Promise.withResolvers<void>();
