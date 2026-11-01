@@ -456,6 +456,15 @@ export interface ExperimentalOptions {
   localFold?: boolean | undefined;
 
   /**
+   * Record the principal a piece was created for on its result document, in
+   * the `creator` meta field, when a setup brings the piece into being
+   * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
+   * what binds a field a later release adds to the piece's creator. Defaults
+   * to off; off, no record is written and a stored one is left as it is.
+   */
+  pieceCreatorRecord?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots

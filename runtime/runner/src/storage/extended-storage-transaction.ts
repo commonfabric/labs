@@ -740,6 +740,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writeIdentity: { sawWrite: false, multiple: false },
     attributedInitialization: false,
     attributedPieces: [],
+    pieceCreators: [],
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -1595,6 +1596,14 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // refuse: every arm below is keyed by target id, and one that recorded
     // and returned ahead of this would leave the seam open on the documents
     // its prefix names.
+    //
+    // A write reaching the `creator` field is judged at commit preparation
+    // whatever authorization it carries (`pieceCreatorRecordReasons` in
+    // cfc/prepare.ts), so it makes the transaction CFC-relevant on its own:
+    // a transaction writing nothing else would otherwise never be prepared.
+    if (metaFieldsWritten(address.path, value).includes("creator")) {
+      this.markCfcRelevant("creator-record-write");
+    }
     if (!rawMetaWriteAuthorized(options)) {
       // Three shapes reach a meta field: an address naming the field, a
       // document-root envelope carrying it as a key, and a document-root
@@ -2326,6 +2335,32 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#noteCfcActivity();
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("attributed-initialization-marked");
+    }
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    // The mark is what admits the record's write, so a call without the
+    // runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    const key = cfcDocumentKey(piece);
+    if (
+      this.#cfcState.pieceCreators.some((record) =>
+        cfcDocumentKey(record.piece) === key && record.creator === creator
+      )
+    ) {
+      return;
+    }
+    this.#cfcState.pieceCreators = [
+      ...this.#cfcState.pieceCreators,
+      { piece, creator },
+    ];
+    this.#noteCfcActivity();
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("piece-creator-marked");
     }
   }
 
@@ -4957,6 +4992,14 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     piece?: CfcDocumentAddress,
   ): void {
     this.#wrapped.markCfcAttributedInitialization(authorization, piece);
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    this.#wrapped.markCfcPieceCreator(authorization, piece, creator);
   }
 
   recordCfcWritePolicyInput(

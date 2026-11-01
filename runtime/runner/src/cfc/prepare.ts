@@ -91,6 +91,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
+import { metaFieldsWritten } from "../meta-seam.ts";
 import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
@@ -5990,7 +5991,7 @@ const storedRepresentedPrincipalsAt = (
  * no one under the ambient snapshot. Off the serving posture every run acts
  * for the runtime's own user.
  */
-const servedRunActsForNoOne = (
+export const servedRunActsForNoOne = (
   tx: IExtendedStorageTransaction,
   trustSnapshot: TrustSnapshot,
 ): boolean => {
@@ -6162,6 +6163,80 @@ const currentPrincipalIntegrityReason = (
     }`;
   }
   return undefined;
+};
+
+/**
+ * Why each write of the `creator` meta field this transaction makes is
+ * refused: nothing for a write the runtime's record of a new piece admits,
+ * and one reason per write refused.
+ *
+ * The field names the principal a piece was created for, and it is worth
+ * more than a space grant only if a write to it is admitted once, by the
+ * runtime, in the transaction that brings the piece into being, and refused
+ * afterward. A write is admitted when it lands the whole field; when the
+ * transaction installs the document's first pattern pointer, writing
+ * `patternIdentity` where none was present; when the runtime recorded the
+ * same principal for the document (`CfcTxState.pieceCreators`), which is what
+ * carries its authorization; when the value is a well-formed DID; and when it
+ * is not the serving runtime's own identity, since a piece the service
+ * creates for no one has no creator to record.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
+const pieceCreatorRecordReasons = (
+  tx: IExtendedStorageTransaction,
+): string[] => {
+  const state = tx.getCfcState();
+  const reasons: string[] = [];
+  for (const space of getTransactionWrittenSpaces(tx)) {
+    const details = [...(tx.getWriteDetails?.(space) ?? [])];
+    for (const detail of details) {
+      const { path, id, scope } = detail.address;
+      if (!metaFieldsWritten(path, detail.value).includes("creator")) continue;
+      const refuse = (why: string) =>
+        reasons.push(`creator record for ${id}: ${why}`);
+      if (path.length > 1) {
+        refuse("the field is written whole or not at all");
+        continue;
+      }
+      const creator = path.length === 0
+        ? (detail.value as { creator?: unknown } | undefined)?.creator
+        : detail.value;
+      if (typeof creator !== "string" || !isWellFormedDID(creator)) {
+        refuse("the creator must be a DID");
+        continue;
+      }
+      if (creator === state.servingIdentity) {
+        refuse("the serving runtime creates a piece for no one");
+        continue;
+      }
+      const target = { space, id, scope: normalizeCellScope(scope) };
+      const key = cfcDocumentKey(target);
+      const installsPointer = details.some((other) =>
+        other.address.id === id &&
+        normalizeCellScope(other.address.scope) === target.scope &&
+        other.previousPresent === false &&
+        (other.address.path.length === 0
+          ? (other.value as { patternIdentity?: unknown } | undefined)
+            ?.patternIdentity !== undefined
+          : other.address.path.length === 1 &&
+            other.address.path[0] === "patternIdentity")
+      );
+      if (!installsPointer) {
+        refuse(
+          "only the transaction that brings the piece into being records one",
+        );
+        continue;
+      }
+      if (
+        !state.pieceCreators.some((record) =>
+          cfcDocumentKey(record.piece) === key && record.creator === creator
+        )
+      ) {
+        refuse("the runtime recorded no such creator");
+      }
+    }
+  }
+  return reasons;
 };
 
 // Exported for unit testing of write-detail reconstruction (the granularity
@@ -11947,6 +12022,9 @@ export function* prepareBoundaryCommitSteps(
         `unprivileged write to protected runtime surface ${target}`,
       ),
     );
+  }
+  for (const reason of pieceCreatorRecordReasons(tx)) {
+    reasons.push(verdictReason(reason));
   }
   const identityForInput = (
     input: WritePolicyInput,

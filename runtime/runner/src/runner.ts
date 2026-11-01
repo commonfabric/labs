@@ -118,6 +118,7 @@ import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
+import { servedRunActsForNoOne } from "./cfc/prepare.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -1959,6 +1960,9 @@ type SetupValidationOptions = {
 
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
+
+  /** See `RunnerRunOptions.parentPieceRootId`. */
+  parentPieceRootId?: string;
 
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
@@ -4913,6 +4917,45 @@ export class Runner {
   }
 
   /** Internal setup that returns whether scheduling is required. */
+  /**
+   * The principal a piece set up in `tx` records as its creator, or none.
+   *
+   * A child a piece instantiates names its parent's creator, read from the
+   * parent's record: the actor whose run instantiated it is not the creator
+   * of what the parent's code made, and a parent without a record leaves the
+   * child without one. A piece a builtin instantiates from a continuation of
+   * its action, which declines attribution and names no parent, records
+   * nothing. Any other piece names the acting principal of the transaction's
+   * trust snapshot, which is the principal every attributed claim in the same
+   * transaction names, unless the run acts for no one
+   * (`servedRunActsForNoOne`): a served run with no actor, or one under the
+   * serving runtime's own snapshot.
+   */
+  #pieceCreatorFor(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<unknown>,
+    options: SetupValidationOptions,
+  ): string | undefined {
+    if (options.parentPieceRootId !== undefined) {
+      const { space } = resultCell.getAsNormalizedFullLink();
+      const recorded = this.#runtime.getCellFromLink(
+        { id: options.parentPieceRootId as URI, space, path: [] },
+        undefined,
+        tx,
+      ).getMetaRaw("creator", { meta: ignoreReadForScheduling });
+      return typeof recorded === "string" ? recorded : undefined;
+    }
+    if (options.attributeInitialization === false) return undefined;
+    const snapshot = tx.getCfcState().trustSnapshot;
+    if (
+      snapshot === undefined || !snapshot.actingPrincipal ||
+      servedRunActsForNoOne(tx, snapshot)
+    ) {
+      return undefined;
+    }
+    return snapshot.actingPrincipal;
+  }
+
   #setupInternal<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
@@ -5122,6 +5165,31 @@ export class Runner {
     // `#applySetupState` below, which stages the matching projection in the same
     // transaction, so the schema and the projection cannot disagree.
     this.#updateResultSchemaMeta(tx, resultCell, pattern.resultSchema);
+
+    // A piece this setup brings into being records the principal it was
+    // created for, in the one transaction that may: commit preparation admits
+    // the record where `#applySetupState` installs the piece's first durable
+    // pattern pointer and the runtime vouches for it, and refuses every later
+    // write to it. A keyless pattern gets no durable pointer, so no record.
+    if (
+      previousIdentityRef === undefined &&
+      !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
+      this.#runtime.experimental.pieceCreatorRecord === true
+    ) {
+      const creator = this.#pieceCreatorFor(tx, resultCell, validationOptions);
+      if (creator !== undefined) {
+        resultCell.withTx(tx).setMetaRaw(
+          "creator",
+          creator,
+          rawMetaWriteAuthorization,
+        );
+        tx.markCfcPieceCreator(
+          runtimeWritePolicyAuthorization,
+          pieceAttributionScope(resultCell),
+          creator,
+        );
+      }
+    }
 
     this.#applySetupState(
       tx,
@@ -9460,6 +9528,7 @@ export class Runner {
         capturedArgumentFields: options.capturedArgumentFields,
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
+        parentPieceRootId: options.parentPieceRootId,
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,

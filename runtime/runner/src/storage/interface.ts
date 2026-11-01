@@ -2776,6 +2776,19 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): void;
 
   /**
+   * Records that the runtime names `creator` as the creator of the piece
+   * whose result document is `piece` (`CfcTxState.pieceCreators`), so that
+   * preparation admits the transaction's write of the `creator` meta field
+   * there. The mark takes the runtime's authorization, and a call without it
+   * does nothing.
+   */
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void;
+
+  /**
    * Records a write-policy input that will participate in the CFC
    * commit-boundary digest. See ownership note above; the argument is
    * `deepFreeze()`d on entry, both to honor the ownership-transfer

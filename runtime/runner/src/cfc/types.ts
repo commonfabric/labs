@@ -517,6 +517,12 @@ export type CfcDocumentAddress = Immutable<{
   scope?: CellScope;
 }>;
 
+/** A piece's result document and the principal recorded as its creator. */
+export type CfcPieceCreatorRecord = Immutable<{
+  piece: CfcDocumentAddress;
+  creator: string;
+}>;
+
 /** The key under which two addresses of one document compare equal. */
 export const cfcDocumentKey = (address: CfcDocumentAddress): string =>
   `${address.space}\0${address.id}\0${normalizeCellScope(address.scope)}`;
@@ -1215,6 +1221,12 @@ export type CfcTxState = {
   // the piece's result document; `attributedInitialization` covers every
   // piece.
   attributedPieces: readonly CfcDocumentAddress[];
+  // The creator records this transaction writes, by the result document each
+  // names: the runtime records one where its setup brings a piece into being,
+  // and preparation admits a write to the `creator` meta field only where a
+  // record here names the document and the same principal. Set only through
+  // `markCfcPieceCreator` (runtime authorization).
+  pieceCreators: readonly CfcPieceCreatorRecord[];
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.

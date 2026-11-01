@@ -75,6 +75,9 @@ export const SHELL_FLAG_SOURCES = {
   webViewScopedReplication: "deployment",
   readerSchemaPrecedence: "build",
   localFold: "build",
+  // Whether a new piece records its creator is the deployment's decision,
+  // since its serving side is what binds an update-added field to the record.
+  pieceCreatorRecord: "deployment",
   // Whether a connection may carry several spaces is how the deployment
   // routes connections: a deployment whose router terminates client
   // connections turns it on, and one that routes each connection by the
