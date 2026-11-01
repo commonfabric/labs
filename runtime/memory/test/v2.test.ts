@@ -969,6 +969,15 @@ describe("parseMemoryProtocolFlags", () => {
     assertEquals(parseMemoryProtocolFlags({ sessionReportV1: "true" }), null);
   });
 
+  it("accepts the servedRequests capability key", () => {
+    assertEquals(
+      parseMemoryProtocolFlags({ servedRequests: true })?.servedRequests,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({})?.servedRequests, false);
+    assertEquals(parseMemoryProtocolFlags({ servedRequests: "true" }), null);
+  });
+
   it("rejects values that are not a recognizable flags shape", () => {
     assertEquals(parseMemoryProtocolFlags(null), null);
     assertEquals(
