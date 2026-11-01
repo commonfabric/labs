@@ -19,7 +19,7 @@ import {
   EmulatedStorageManager,
   type Options,
 } from "@commonfabric/runner/storage/cache.deno";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { fromFileUrl } from "@std/path";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import type { RawDataProvenance } from "../../debug-view/main.tsx";

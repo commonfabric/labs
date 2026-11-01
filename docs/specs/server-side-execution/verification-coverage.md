@@ -8632,7 +8632,7 @@ supply; OW29/OW32/OW34 closed):
     `closure-replication-await-inflight` lines in the whole log** — that
     warn prints whenever EITHER compile registry is non-empty at a dry
     consult (the pattern-manager logger's default level is "info",
-    the `Logger` constructor's fallback in `base/utils/src/logger.ts`
+    the `Logger` constructor's fallback in `base/logger/src/logger.ts`
     — warn is admitted; the same logger's ERROR printed in
     this very log), so its absence is real: BOTH registries were EMPTY
     at consult — the supplier compile had NOT STARTED. That is 3b's

@@ -11,7 +11,7 @@
  * run, and a score, and a change runs it when the score chooses it.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { memberScope } from "./unit.ts";
 import {
   claimsIdentity,

@@ -25,8 +25,8 @@ import {
   validateRowLabelSpec,
 } from "@commonfabric/memory/sqlite/row-label";
 import { renderCellReference } from "@commonfabric/runner/shared";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef } from "../src/handle-table.ts";
 import type { HarnessConnectorGrantSpec } from "../src/contracts/well-known-grants.ts";

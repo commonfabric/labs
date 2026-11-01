@@ -19,7 +19,7 @@
  * than fixed.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 /** Names the seed to use, in place of the commit's. */
 export const SHUFFLE_SEED_VARIABLE = "CF_TEST_SHUFFLE_SEED";

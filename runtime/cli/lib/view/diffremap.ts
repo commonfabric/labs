@@ -9,8 +9,7 @@
 
 import type { Definition, StructureNode } from "./model.ts";
 import type { HunkStructureContext } from "./languages/language.ts";
-import { lineIndexOf } from "./lines.ts";
-import { cpLen } from "./ansi.ts";
+import { type ColumnOf, lineIndexOf } from "./lines.ts";
 
 /**
  * Project every root of a hunk's structure tree into diff coordinates. The
@@ -24,6 +23,7 @@ export function remapStructure(ctx: HunkStructureContext): StructureNode[] {
   const remapCtx: RemapCtx = {
     newToDiff: ctx.lineToDiff,
     diffLineStarts: ctx.diffLineStarts,
+    diffColumnOf: ctx.diffColumnOf,
     rawLines: ctx.rawLines,
     sourceLineStarts: ctx.sourceLineStarts,
     sourceOmitsUtf8Bom: ctx.sourceOmitsUtf8Bom,
@@ -41,6 +41,7 @@ export interface RemapCtx {
   newToDiff: Map<number, number>;
 
   diffLineStarts: number[];
+  diffColumnOf: ColumnOf;
   rawLines: string[];
 
   /** Line starts of the source text the nodes were parsed from. */
@@ -117,20 +118,15 @@ export function remapNode(
 
   const startDiffLine = ctx.newToDiff.get(firstVisible)!;
   const endDiffLine = ctx.newToDiff.get(lastVisible)!;
-  // Columns begin past the diff marker and any decoded BOM. A clamped boundary
-  // covers the whole source portion of the shown line.
-  const startCodeCol = codeStartCol(firstVisible, ctx);
-  const endCodeCol = codeStartCol(lastVisible, ctx);
-  const startCol = firstVisible === node.startLine
-    ? node.startCol + startCodeCol
-    : startCodeCol;
-  const endCol = lastVisible === node.endLine
-    ? node.endCol + endCodeCol
-    : cpLen(ctx.rawLines[endDiffLine]);
-  const startOffset = ctx.diffLineStarts[startDiffLine] +
-    cpToUtf16(ctx.rawLines[startDiffLine], startCol);
-  const endOffset = ctx.diffLineStarts[endDiffLine] +
-    cpToUtf16(ctx.rawLines[endDiffLine], endCol);
+  // A clamped boundary covers the whole source portion of the shown line.
+  const startOffset = diffOffsetOf(
+    firstVisible,
+    Math.max(node.startOffset, ctx.sourceLineStarts[firstVisible]),
+    ctx,
+  );
+  const endOffset = diffOffsetOf(lastVisible, node.endOffset, ctx);
+  const startCol = ctx.diffColumnOf(startDiffLine, startOffset);
+  const endCol = ctx.diffColumnOf(endDiffLine, endOffset);
 
   // Coincidence fold: a node filling its parent's visible range IS the parent
   // as far as the diff shows. Hoist its mapped children in its place (same
@@ -225,20 +221,21 @@ function remapNameOffset(
 ): number | undefined {
   if (node.nameOffset === undefined) return undefined;
   const n = lineIndexOf(ctx.sourceLineStarts, node.nameOffset);
-  const diffLine = ctx.newToDiff.get(n);
-  if (diffLine === undefined) return undefined;
-  const col = node.nameOffset - ctx.sourceLineStarts[n]; // UTF-16 in the line
-  return ctx.diffLineStarts[diffLine] + codeStartCol(n, ctx) + col;
+  if (!ctx.newToDiff.has(n)) return undefined;
+  return diffOffsetOf(n, node.nameOffset, ctx);
 }
 
-/** UTF-16 index of code-point column `col` within `text`. */
-function cpToUtf16(text: string, col: number): number {
-  let cp = 0;
-  let i = 0;
-  for (const ch of text) {
-    if (cp >= col) break;
-    cp++;
-    i += ch.length;
-  }
-  return i;
+/**
+ * The diff offset of source `offset`, which is on or after the start of the
+ * shown source line `line`. The source portion of the diff line begins past
+ * the diff marker and any decoded BOM, and an offset beyond its end is clamped
+ * to the end of the diff line.
+ */
+function diffOffsetOf(line: number, offset: number, ctx: RemapCtx): number {
+  const diffLine = ctx.newToDiff.get(line)!;
+  return ctx.diffLineStarts[diffLine] +
+    Math.min(
+      codeStartCol(line, ctx) + offset - ctx.sourceLineStarts[line],
+      ctx.rawLines[diffLine].length,
+    );
 }

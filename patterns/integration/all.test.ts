@@ -4,27 +4,53 @@ import { join } from "@std/path";
 import { assert } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { PATTERN_CATEGORIES } from "../../tasks/package-layout.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 
 const { API_URL } = env;
 
+/**
+ * Every pattern whose entry is the file named for its directory, as a path
+ * relative to `root`: `<category>/<pattern>/<pattern>.tsx`. A pattern entered
+ * through some other file, such as `main.tsx`, is not among them.
+ */
+function selfNamedPatterns(root: string): string[] {
+  const found: string[] = [];
+  for (const category of PATTERN_CATEGORIES) {
+    for (const dir of Deno.readDirSync(join(root, category))) {
+      if (!dir.isDirectory) continue;
+      const entryName = `${dir.name}.tsx`;
+      const files = Deno.readDirSync(join(root, category, dir.name));
+      for (const file of files) {
+        if (file.isFile && file.name === entryName) {
+          found.push(`${category}/${dir.name}/${entryName}`);
+        }
+      }
+    }
+  }
+  return found.sort();
+}
+
 describe("Compile all patterns", () => {
   const skippedPatterns = [
-    "system/link-tool/link-tool.tsx", // Utility handlers, not a standalone pattern
+    // Utility handlers, not a standalone pattern.
+    "system/link-tool/link-tool.tsx",
+    // The router library; the pattern built on it is `examples/router/main.tsx`.
+    "examples/router/router.tsx",
   ];
 
-  const patterns = [...Deno.readDirSync(join(import.meta.dirname!, ".."))]
-    .filter((file) => file.name.endsWith(".tsx"))
-    .map((file) => file.name)
-    // `.test.tsx` files are pattern tests, not authored patterns: they wrap a
-    // pattern in a test harness and are compiled and executed by the separate
-    // pattern unit-test job (`cf test`). Compiling them here too repeats that
-    // work — and recompiles the real pattern they import — on the pattern
-    // integration critical path. Match the pattern-source definition in
-    // tasks/cfcheck.ts, which already excludes `.test.tsx`/`.test.ts`.
-    .filter((name) => !name.endsWith(".test.tsx") && !name.endsWith(".test.ts"))
-    .filter((name) => !skippedPatterns.includes(name))
-    .sort();
+  const patterns = selfNamedPatterns(join(import.meta.dirname!, ".."))
+    .filter((name) => !skippedPatterns.includes(name));
+
+  // A walk that finds nothing registers no test, and a describe with no tests
+  // passes, so a layout this walk no longer matches would pass silently.
+  if (patterns.length === 0) {
+    throw new Error(
+      "Found no pattern to compile: no `<category>/<pattern>/<pattern>.tsx` " +
+        "under the patterns root.",
+    );
+  }
+
   for (const name of patterns) {
     it(`Executes: ${name}`, async () => {
       // Heap monitoring for bisection experiments (CT-1148)

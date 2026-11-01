@@ -111,6 +111,7 @@ export const childSandboxOptions = (
   sandboxRunscNetworkHelper?: string;
   sandboxRunscUnshare?: string;
   sandboxRunscSetpriv?: string;
+  sandboxRunscForwardedHostPorts?: readonly number[];
   additionalMounts?: readonly SandboxAdditionalMountConfig[];
 } => {
   if (parent.ownedRunscSandboxConfig === undefined) {
@@ -151,6 +152,9 @@ export const childSandboxOptions = (
       : {}),
     ...(runsc.setpriv !== undefined
       ? { sandboxRunscSetpriv: runsc.setpriv }
+      : {}),
+    ...(runsc.forwardedHostPorts !== undefined
+      ? { sandboxRunscForwardedHostPorts: runsc.forwardedHostPorts }
       : {}),
     additionalMounts: mounts,
   };

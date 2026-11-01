@@ -4,7 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { resolvePolicyFacingImplementationIdentity } from "../src/cfc/implementation-identity.ts";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { getVerifiedProvenance } from "../src/harness/verified-provenance.ts";
 import { lift } from "../src/builder/module.ts";
 import { moduleToEncodableForm } from "../src/builder/to-encodable-form.ts";

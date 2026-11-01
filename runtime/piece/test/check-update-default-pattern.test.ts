@@ -35,7 +35,7 @@ import {
 } from "../src/ops/piece-origin.ts";
 import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 // The routes those refs resolve to. A system pattern is still SERVED at, and
 // its modules still NAMED by, the route path; the `system:` ref is what a
@@ -693,7 +693,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -782,7 +782,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -2018,7 +2018,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
@@ -2050,7 +2050,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
@@ -2487,7 +2487,7 @@ describe("opening a space root", () => {
     await controller.stopPiece(root);
 
     stub.setSource(SOURCE_INCOMPATIBLE);
-    expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+    expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     await runtime.idle();
     const after = (await controller.getDefaultPattern(true))!;
     await runtime.idle();

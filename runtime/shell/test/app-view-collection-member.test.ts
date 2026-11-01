@@ -23,7 +23,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { type AppView, urlToAppView } from "@commonfabric/navigation";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 // The reader `cf cell get` takes an address through, which is what a citation
 // the view offers has to satisfy. The CLI's package exports only its command

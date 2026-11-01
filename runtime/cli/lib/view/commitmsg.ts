@@ -7,7 +7,7 @@
 
 import { basename, dirname, isAbsolute, join, relative } from "@std/path";
 
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 
 import {
   decodeLanguageInput,

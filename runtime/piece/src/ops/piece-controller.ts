@@ -5,7 +5,7 @@ import {
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   applyPieceSourceTransition,
   Cell,
@@ -64,6 +64,7 @@ import {
   schemaPathSelection,
   setCell,
   setPieceReconciliation,
+  speculationSettledFor,
 } from "@commonfabric/runner";
 import { storedArgumentRefusalDetail } from "@commonfabric/runner/shared";
 import {
@@ -77,7 +78,7 @@ import {
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { pieceId } from "../piece-id.ts";
 import {
@@ -3278,7 +3279,7 @@ class PiecePropIo implements PieceCellIo {
       | { eventId: string; session: string }
       | undefined;
 
-    const { ok, error } = await pieces.runtime.editWithRetry((tx) => {
+    const attempt = (tx: IExtendedStorageTransaction) => {
       // Each attempt decides afresh what it wrote: a retry can resolve the
       // same path to a durable destination where the attempt before it found
       // a stream.
@@ -3835,7 +3836,28 @@ class PiecePropIo implements PieceCellIo {
         setTerminalValue(value);
       }
       return { wrote: true };
-    });
+    };
+    let { ok, error } = await pieces.runtime.editWithRetry(attempt);
+    // Under server execution this runtime previews server-owned derivations
+    // in speculation layers that exist only in its own process, and a commit
+    // whose read basis names one is refused for good (speculation.md §6). The
+    // write's reads can reach such a value: validating a supplied link reads
+    // its source's producer metadata, and write-destination validation reads
+    // the destination's whole root, derived outputs included. So a write
+    // refused for that waits until those values settle and writes again,
+    // reading what the server settled.
+    for (
+      let settled = speculationSettledFor(
+        pieces.runtime,
+        pieces.getSpace(),
+        error,
+      );
+      settled !== undefined;
+      settled = speculationSettledFor(pieces.runtime, pieces.getSpace(), error)
+    ) {
+      await settled;
+      ({ ok, error } = await pieces.runtime.editWithRetry(attempt));
+    }
     if (error) throw commitFailure(error);
     // A committed decision not to write leaves nothing to pull.
     if (ok !== undefined && !ok.wrote) return { wrote: false };

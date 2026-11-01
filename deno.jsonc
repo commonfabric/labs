@@ -3,9 +3,16 @@
     "./base/content-hash",
     "./dashboard",
     "./base/felt",
-    "./base/leb128",
     "./base/test-support",
-    "./base/utils",
+    "./base/async",
+    "./base/bytes",
+    "./base/collections",
+    "./base/js-values",
+    "./base/json",
+    "./base/logger",
+    "./base/pattern-contract",
+    "./base/platform",
+    "./base/text",
     "./base/data-model",
     "./base/api",
     "./base/data-model-schema",
@@ -14,7 +21,6 @@
     "./base/iframe-sandbox",
     "./base/js-compiler",
     "./base/llm",
-    "./base/pure-json",
     "./base/schema-generator",
     "./base/spec-model",
     "./base/static",
@@ -53,7 +59,7 @@
     "check-docs": "deno run --allow-read --allow-write --allow-run --allow-env ./docs/check.ts",
     "check-no-waitfor": "deno run --allow-read ./tasks/check-no-waitfor.ts",
     "check-conflict-markers": "deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts",
-    "check-test-shuffle": "deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts",
+    "check-test-shuffle": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-test-shuffle.ts",
     "check-control-characters": "deno run --allow-read --allow-run=git ./tasks/check-control-characters.ts",
     "check-local-program": "deno run --allow-read --allow-env --allow-run=git ./tasks/check-local-program.ts",
     "compile-cache-version": "deno run --allow-read --allow-write=runtime/runner/src/compilation-cache --allow-env --allow-ffi --allow-net=127.0.0.1 ./tasks/compile-cache-version.ts",
@@ -140,7 +146,11 @@
     "**/.cache/",
     "**/coverage/",
     "./docs/history/",
-    "**/.doccheck*"
+    "**/.doccheck*",
+    // An iframe pattern's guest bundle, which `deno bundle` writes from the
+    // `guest.ts` or `guest.tsx` beside it and the pattern reads as a data
+    // file. The source is what gets formatted, linted and type-checked.
+    "patterns/*/iframe-*/**/guest.js"
   ],
   "lint": {
     "exclude": [

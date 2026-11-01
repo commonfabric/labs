@@ -34,7 +34,7 @@ import {
   storageAddressForHost,
 } from "@commonfabric/runner/storage/v2";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   assembleTopic,

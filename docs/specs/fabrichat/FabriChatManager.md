@@ -28,6 +28,16 @@ membership choices and the user's shared-space catalog, Home's, which Home
 hands the manager
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)).
 
+The manager wishes for `#profile` twice. The user's wish, stored per user,
+supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
+which are the user's. A second wish, declared `PerSession`, supplies the profile
+each session finds for itself: whether the start controls are disabled, the chat
+address the rendering shows, and the profile each act is taken as are derived
+from it, each per session. A session whose wish finds no profile, or fails,
+writes that into its own instance of the second wish, never over the one
+another session of the user reads (see
+[`ChatManagerOutput`](ChatManagerOutput.md#scopes)).
+
 For each saved catalog entry, the manager resolves the space's root with
 `wish({ query: "#default", scope: [space] })`. A `fabrichat-room` entry names
 a standalone room at that root. Every other kind uses the root's explicit
@@ -152,7 +162,10 @@ create a space for the conversation, with the room as its root, in four steps:
    the first profile it is offered through. Add a notice to
    `outgoingNotices`, for a client to deliver, for each other member offered
    nothing: one the request names only by principal, or one whose profile
-   points at no inbox.
+   points at no inbox. Offers and notices alike are made by an event of their
+   own that follows the room's creation, since a notice is added to the
+   manager's own records, which can carry their owner's `PersonalSpace` label
+   as the catalog can.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
    registration, like adding this user to the room's participants, is an

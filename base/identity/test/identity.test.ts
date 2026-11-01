@@ -2,7 +2,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 

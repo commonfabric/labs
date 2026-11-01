@@ -43,7 +43,7 @@ import {
   collectSchemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
 import { taggedHashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { mapLinkSchemas } from "../v2/schema-table-links.ts";
 import { Server } from "../v2/server.ts";
 import {

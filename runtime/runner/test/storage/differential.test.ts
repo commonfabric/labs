@@ -23,6 +23,35 @@ const changedPaths = (before: unknown, after: unknown): string[][] => {
   ]);
 };
 
+/**
+ * {@link changedPaths} for whole documents, so a case can set the reserved
+ * members beside `value`.
+ */
+const changedDocumentPaths = (
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): string[][] => {
+  let held: State = { the: TYPE, of: ENTITY, is: before } as State;
+  const memory = { get: (_address: IMemoryAddress) => held };
+  const checkout = Differential.checkout(memory, [held], IDENTITY);
+  held = { the: TYPE, of: ENTITY, is: after } as State;
+  return [...checkout.compare(memory)].map((change) => [
+    ...change.address.path,
+  ]);
+};
+
+/** A label map holding one entry per index in `slots`, in that order. */
+const labelMap = (slots: number[]) => ({
+  version: 1,
+  labelMap: {
+    version: 1,
+    entries: slots.map((slot) => ({
+      path: [String(slot)],
+      label: { confidentiality: [`el-${slot}`] },
+    })),
+  },
+});
+
 describe("differential", () => {
   describe("compare()", () => {
     it("records no change for an equal copy that shares nothing with the original", () => {
@@ -102,6 +131,28 @@ describe("differential", () => {
         ["value", "key-3", "index"],
         ["value", "key-7", "added"],
       ]);
+    });
+
+    it("records a changed label map once, at the document's `cfc` member", () => {
+      // Every entry moves one index, and the value changes at two leaves.
+      expect(changedDocumentPaths(
+        { value: { a: 1, b: 1 }, cfc: labelMap([1, 2, 3, 4]) },
+        { value: { a: 2, b: 2 }, cfc: labelMap([0, 1, 2, 3, 4]) },
+      )).toEqual([["cfc"], ["value", "a"], ["value", "b"]]);
+    });
+
+    it("records nothing at an equal label map that shares nothing with the original", () => {
+      expect(changedDocumentPaths(
+        { value: { a: 1 }, cfc: labelMap([1, 2]) },
+        { value: { a: 2 }, cfc: labelMap([1, 2]) },
+      )).toEqual([["value", "a"]]);
+    });
+
+    it("records a `cfc` key inside the value per leaf, like any other", () => {
+      expect(changedDocumentPaths(
+        { value: { cfc: { a: 1, b: 1 } } },
+        { value: { cfc: { a: 2, b: 1 } } },
+      )).toEqual([["value", "cfc", "a"]]);
     });
   });
 });

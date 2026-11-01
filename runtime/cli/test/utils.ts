@@ -2,8 +2,8 @@ import { expect } from "@std/expect/expect";
 import { join } from "@std/path";
 
 import type { sendEvent } from "@commonfabric/runner";
-import { decode, encode } from "@commonfabric/utils/encoding";
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { decode, encode } from "@commonfabric/text/utf8";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import { isPerfDiagnosticWarnKey } from "../lib/perf-diagnostic-logs.ts";
 
 /**

@@ -12,7 +12,10 @@ import {
   type LoomAuthoredObservation,
 } from "../src/loom-authoring.ts";
 import { join } from "@std/path";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   type HarnessChatEventEnvelope,

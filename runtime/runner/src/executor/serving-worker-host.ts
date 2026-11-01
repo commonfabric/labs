@@ -12,8 +12,8 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import { getLogger } from "@commonfabric/logger";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import {
@@ -87,6 +87,13 @@ export type ServingWorkerOptions = {
 
   /** The serving runtimes' experimental options. */
   experimental?: ExperimentalOptions;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`). The worker
+   * dials it itself, signing its sessions with the key that crosses.
+   */
+  route?: URL;
 
   /** DIAGNOSTIC (tests): the worker's activation outcomes. */
   onActivationSettled?: (
@@ -275,6 +282,7 @@ export class ServingWorker {
       policy: this.#options.policy,
       ensureSpaceRoots: this.#options.ensureSpaceRoots,
       experimental: this.#options.experimental,
+      route: this.#options.route?.href,
     };
     generation.ready = bridge.init(init).then(({ lifetimeLock }) => {
       generation.lifetimeLock = lifetimeLock;

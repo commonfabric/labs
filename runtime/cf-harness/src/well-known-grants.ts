@@ -20,7 +20,7 @@
  */
 
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import { createHarnessHandleTable, mintAddressHandle } from "./handle-table.ts";
@@ -47,7 +47,7 @@ export type {
  */
 const GRANT_DESCRIPTIONS: Record<HarnessWellKnownGrantName, string> = {
   "piece-registry":
-    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so a refused name read leaves the name unknown. For an explicit reference-listing task, a pattern can return entry references without reading values; that is not a fallback for identifying an unspecified target.",
+    "the space's piece registry: an array of references to every registered piece. Wire it into run_pattern `inputs` to compute over what the space holds — each entry's `$NAME` field is its display name. A name computed from protected data taints a result that reads it, so a refused name read leaves the name unknown. A pattern can return entry references without reading values.",
 };
 
 const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
@@ -150,6 +150,7 @@ const connectorObservationDescription = (
  */
 const connectorGrantDescription = (
   grant: HarnessConnectorGrantSpec,
+  describeHandleAvailable: boolean,
 ): string => {
   const classes = connectorGrantClasses(grant);
   return `${connectorGrantLabel(grant)}: a read-only connector database ${
@@ -162,7 +163,11 @@ const connectorGrantDescription = (
     grant.rowCount ?? "unknown"
   } (including metadata and history). Newest observed at: ${
     connectorObservationDescription(grant.observation)
-  } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
+  } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`${
+    describeHandleAvailable
+      ? "; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing"
+      : ""
+  }. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
 };
 
 /**
@@ -413,10 +418,13 @@ export const mintWellKnownGrants = async (
  *
  * @throws Error naming the grant whose description is missing.
  */
-const grantDescription = (grant: HarnessWellKnownGrant): string => {
+const grantDescription = (
+  grant: HarnessWellKnownGrant,
+  describeHandleAvailable: boolean,
+): string => {
   if (grant.source !== undefined) {
     checkConnectorGrantSpec(grant);
-    return connectorGrantDescription(grant);
+    return connectorGrantDescription(grant, describeHandleAvailable);
   }
   // Read through `Object.hasOwn` rather than indexed directly: run state is
   // JSON this process may not have written, so a resumed record can carry a
@@ -435,13 +443,21 @@ const grantDescription = (grant: HarnessWellKnownGrant): string => {
  */
 export const wellKnownGrantsContextMessage = (
   grants: readonly HarnessWellKnownGrant[],
+  { describeHandleAvailable = true }: { describeHandleAvailable?: boolean } =
+    {},
 ): string | undefined => {
   if (grants.length === 0) {
     return undefined;
   }
   return [
     "Granted references for this run's Fabric space:",
-    ...grants.map((grant) => `- ${grant.token} — ${grantDescription(grant)}`),
-    "Use describe_handle on a granted token to see its shape before authoring against it.",
+    ...grants.map((grant) =>
+      `- ${grant.token} — ${grantDescription(grant, describeHandleAvailable)}`
+    ),
+    ...(describeHandleAvailable
+      ? [
+        "Use describe_handle on a granted token to see its shape before authoring against it.",
+      ]
+      : []),
   ].join("\n");
 };

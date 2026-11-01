@@ -24,6 +24,7 @@ import type {
 } from "@commonfabric/memory/interface";
 
 import type { SpaceAccessChange } from "./builder/types.ts";
+import type { Cancel } from "./cancel.ts";
 import type { Cell } from "./cell.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import type { Runtime } from "./runtime.ts";
@@ -55,6 +56,15 @@ export class ACLManager {
     const aclData = aclCell.get();
     await this.#runtime.storageManager.synced();
     return aclData;
+  }
+
+  /**
+   * Calls `changed` with the access list as stored whenever it changes, once
+   * at once with what it starts from, as a cell's sink does, until the
+   * returned function is called.
+   */
+  sink(changed: (stored: unknown) => void): Cancel {
+    return this.#getCell().sink((stored) => changed(stored));
   }
 
   async set(user: ACLUser, capability: Capability): Promise<ACL> {

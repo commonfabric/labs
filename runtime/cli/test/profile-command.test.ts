@@ -9,7 +9,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 import {
   dataUrlByteLength,

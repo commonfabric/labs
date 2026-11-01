@@ -1,9 +1,11 @@
 import type {
   CellScope,
+  FabricPlainObject,
   FabricValue,
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
+import type { DIDKey } from "@commonfabric/identity/did";
 import {
   type ACL,
   type AuthorizationError as IAuthorizationError,
@@ -22,6 +24,7 @@ import {
   type URI,
   type Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -39,6 +42,7 @@ import type {
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
+  PatternLifecycleVerb,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
@@ -55,11 +59,12 @@ import type {
   ViewPlan,
 } from "@commonfabric/memory/v2";
 import type {
+  InviteAdministration,
   PresenceEvent,
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import type { Immutable } from "@commonfabric/utils/types";
+import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
 import { Cell } from "../cell.ts";
@@ -74,6 +79,7 @@ import type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
@@ -460,6 +466,52 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<MemorySpace>;
 
   /**
+   * Creates a space that owns itself, and returns its DID with the
+   * delegation its key issued to `delegateTo` before being dropped
+   * (`docs/specs/profile-delegation.md`). Like `createSpace`, except that
+   * the access list is `grants` plus the space's own DID as OWNER, no other
+   * principal being made owner, and that between the genesis commit and the
+   * key's end the key signs one delegation over the space to `delegateTo`,
+   * covering every memory command and never expiring. This manager holds
+   * that delegation from then on, so a session it opens as `delegateTo`
+   * presents it; the caller records it where the space's holder will find
+   * it again.
+   *
+   * @throws If `grants` makes any principal OWNER, if the memory server
+   *   does not advertise `sessionOpenProofs`, since a space nobody could
+   *   open is not created, or if it refuses the genesis commit. No DID is
+   *   returned then, and the space that was being created is abandoned.
+   */
+  createSelfOwnedSpace?(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }>;
+
+  /**
+   * Holds the delegation chain `chain` encodes, root first and the
+   * delegation granting the opening key last, so that a session this manager
+   * opens from here on, on the space the chain is over and as that key,
+   * presents it and acts under the root issuer's grant
+   * (`docs/specs/profile-delegation.md`). Throws a `DelegationError` for a
+   * chain whose delegations do not decode, verify, or link, and an `Error`
+   * where the manager's sessions cannot present a chain.
+   */
+  addDelegationChain?(chain: readonly Uint8Array[]): Promise<void>;
+
+  /**
+   * The chain a session this manager opens on `space` presents now, root
+   * first, as copies of the delegations' bytes, or `undefined` where it
+   * holds none it could present: the delegation granting this manager's
+   * identity last, every link within its validity window. A caller
+   * delegating the space onward puts its own delegation after this chain.
+   */
+  delegationChainFor?(space: MemorySpace): readonly Uint8Array[] | undefined;
+
+  /**
    * The kind `space` declares in its genesis commit, or `undefined` when it
    * declares none (`docs/features/space-kinds.md`). Opens the space, so it
    * resolves once the memory server has admitted this manager's signer to
@@ -483,6 +535,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   serverFlags?(
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined>;
+
+  /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -863,6 +932,31 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /**
+   * Runs pattern-lifecycle verb `verb` with `body` in `space`, on this
+   * manager's memory session there and as its principal, and returns the
+   * verb's receipt. The memory server behind that session owns the space, so
+   * the verb runs where the space is served. Absent from a manager with no
+   * memory sessions; errors are the memory client's
+   * `runPatternLifecycle()`'s.
+   */
+  runPatternLifecycle?(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /**
+   * Administers `space`'s invitations on this manager's memory session
+   * there, as its principal, and returns what the invitation service
+   * returns. Absent from a manager with no memory sessions; errors are the
+   * memory client's `administerInvites()`'s.
+   */
+  administerInvites?(
+    space: MemorySpace,
+    invite: InviteAdministration,
+  ): Promise<FabricValue>;
 
   /**
    * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
@@ -2670,11 +2764,28 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. The mark takes the runtime's authorization,
-   * and a call without it does nothing.
+   * and a start deferred from one. With `piece`, the result document of a
+   * piece the transaction brings into being on the principal's behalf, the
+   * mark covers that piece's own documents alone
+   * (`CfcTxState.attributedPieces`). The mark takes the runtime's
+   * authorization, and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
+  ): void;
+
+  /**
+   * Records that the runtime names `creator` as the creator of the piece
+   * whose result document is `piece` (`CfcTxState.pieceCreators`), so that
+   * preparation admits the transaction's write of the `creator` meta field
+   * there. The mark takes the runtime's authorization, and a call without it
+   * does nothing.
+   */
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
   ): void;
 
   /**
@@ -2899,8 +3010,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * authenticated, and the document to sit in that principal's own space.
    * Removes every stored clause at the path that `input.keep` does not name,
    * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. Writes
-   * nothing when there is nothing to remove.
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
    *
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
@@ -3760,6 +3872,15 @@ export interface ISpaceReplica extends ISpace {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /** Like `IStorageManager.runPatternLifecycle()`, for this replica's space. */
+  runPatternLifecycle?(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /** Like `IStorageManager.administerInvites()`, for this replica's space. */
+  administerInvites?(invite: InviteAdministration): Promise<FabricValue>;
 
   /** Pending (undischarged) event intents — the offline event queue's
    * live content (speculation.md §5), bounded by pending-intent count. */

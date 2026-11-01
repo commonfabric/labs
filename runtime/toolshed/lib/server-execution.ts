@@ -18,6 +18,10 @@ import { toolshedClientBuild } from "./build-info.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  RoutedPlane,
+  webSocketRoute,
+} from "@commonfabric/runner/executor/routed-plane";
 import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
@@ -36,7 +40,7 @@ import {
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 /**
@@ -47,6 +51,15 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
 export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle;
 
 let loop: ServingLoop | undefined;
+
+/**
+ * The routed plane this thread's lifecycle delivery sends through while the
+ * loop runs with owner routing on. The loop's host keeps one of its own on
+ * whichever thread it runs, so on the main-thread arm two planes dial the
+ * same route; each numbers the appends on its own sessions, so the two never
+ * meet at the owner.
+ */
+let route: RoutedPlane | undefined;
 
 /** The production default for the per-space outstanding-network-effect
  * cap (serving-loop.md §5; README §3.8's multi-tenancy contract needs a
@@ -83,8 +96,9 @@ export type ServerExecutionEnvPolicy = {
  * - egress pacing defaults OFF (the cap alone bounds concurrency; a rate
  *   value is a deliberate operator choice);
  * - the store read-through (`SpaceServerPolicy.storeReadThrough`,
- *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults OFF; only the literal
- *   `true` turns it on;
+ *   SERVER_EXECUTION_STORE_READ_THROUGH) defaults ON; only the literal
+ *   `false` turns it off, and anything but `true` or `false` warns and
+ *   leaves it on;
  * - the overlapped wave commit (`SpaceServerPolicy.overlapWaveCommit`,
  *   SERVER_EXECUTION_OVERLAP_COMMIT) defaults OFF, on the same reading;
  * - how long an idle-parked space's runtime is kept for its next tenure
@@ -182,14 +196,14 @@ export function serverExecutionPolicyFromEnv(
     );
   }
   const readThroughRaw = readRaw("SERVER_EXECUTION_STORE_READ_THROUGH");
-  let storeReadThrough: boolean | undefined;
-  if (readThroughRaw === "true") {
-    storeReadThrough = true;
-  } else if (readThroughRaw !== undefined && readThroughRaw !== "false") {
+  let storeReadThrough: boolean | undefined = true;
+  if (readThroughRaw === "false") {
+    storeReadThrough = undefined;
+  } else if (readThroughRaw !== undefined && readThroughRaw !== "true") {
     warn(
       "Server-execution v2: ignoring SERVER_EXECUTION_STORE_READ_THROUGH=" +
         `${JSON.stringify(readThroughRaw)} (expected "true" or "false"); ` +
-        "the store read-through stays OFF",
+        "the store read-through stays ON",
     );
   }
   const overlapRaw = readRaw("SERVER_EXECUTION_OVERLAP_COMMIT");
@@ -244,21 +258,48 @@ export function ensureSpaceRootsFromEnv(
 
 /**
  * Whether the serving loop runs in a Worker of this process
- * (`SERVER_EXECUTION_WORKER`): the literal `true` selects the worker; `false`
- * and unset keep the loop on this thread, and anything else warns and keeps
- * it there.
+ * (`SERVER_EXECUTION_WORKER`): the literal `true` selects the worker and
+ * `false` keeps the loop on this thread. Unset or empty, it is `fileStore`:
+ * the worker opens the memory server's spaces through its own connections,
+ * which a store that is not a file does not allow. Anything else warns and
+ * takes that same default.
  */
 export function serverExecutionWorkerFromEnv(
   envGet: EnvReader,
+  fileStore: boolean,
   warn: (message: string) => void = (message) => console.warn(message),
 ): boolean {
   const raw = envGet("SERVER_EXECUTION_WORKER");
   if (raw === "true") return true;
-  if (raw !== undefined && raw !== "" && raw !== "false") {
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "") {
     warn(
       "Server-execution v2: ignoring SERVER_EXECUTION_WORKER=" +
         `${JSON.stringify(raw)} (expected "true" or "false"); the serving ` +
-        "loop stays on the main thread",
+        `loop runs ${fileStore ? "in a Worker" : "on the main thread"}`,
+    );
+  }
+  return fileStore;
+}
+
+/**
+ * Whether the serving loop reaches every space but the ones it serves through
+ * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
+ * docs/plans/serving-loop-owner-routing.md): the literal `true` turns the
+ * route on; `false`, unset or empty leaves every crossing on this process's
+ * own memory server. Anything else warns and leaves it off.
+ */
+export function ownerRoutingFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): boolean {
+  const raw = envGet("SERVER_EXECUTION_OWNER_ROUTING");
+  if (raw === "true") return true;
+  if (raw !== undefined && raw !== "" && raw !== "false") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_OWNER_ROUTING=" +
+        `${JSON.stringify(raw)} (expected "true" or "false"); crossings ` +
+        "stay on this process's memory server",
     );
   }
   return false;
@@ -266,8 +307,9 @@ export function serverExecutionWorkerFromEnv(
 
 /**
  * Start the serving loop when the flag is on: in a Worker of this process
- * under `SERVER_EXECUTION_WORKER`, on this thread otherwise. Called once from
- * toolshed startup, after the memory server exists. Returns the loop (or
+ * when {@link serverExecutionWorkerFromEnv} says so, which by default it does
+ * over a file store, and on this thread otherwise. Called once from toolshed
+ * startup, after the memory server exists. Returns the loop (or
  * undefined off the flag) so shutdown can close it.
  */
 export function startServerExecutionHost(options: {
@@ -284,6 +326,20 @@ export function startServerExecutionHost(options: {
    * it.
    */
   fetch?: RuntimeFetch;
+
+  /**
+   * Where the memory server keeps its spaces. The serving loop runs in a
+   * Worker by default only over a file store; unset counts as none.
+   */
+  store?: URL;
+
+  /**
+   * The deployment's memory endpoint as this process reaches it
+   * (`MEMORY_URL`), the one its proxy routes by space: the route to each
+   * space's owner while {@link ownerRoutingFromEnv} says so. Unset, the
+   * route stays off whatever the knob says.
+   */
+  memoryUrl?: URL;
 
   envGet?: EnvReader;
 }): ServingLoop | undefined {
@@ -309,11 +365,11 @@ export function startServerExecutionHost(options: {
     );
   }
   const policy = serverExecutionPolicyFromEnv(envGet);
-  if (policy.storeReadThrough === true) {
+  if (policy.storeReadThrough !== true) {
     console.log(
-      "Server-execution v2: store read-through ON by " +
-        "SERVER_EXECUTION_STORE_READ_THROUGH=true (serving runtimes read " +
-        "their home space from the engine; default is OFF)",
+      "Server-execution v2: store read-through OFF by " +
+        "SERVER_EXECUTION_STORE_READ_THROUGH=false (serving runtimes read " +
+        "their home space over their loopback sessions; default is ON)",
     );
   }
   if (policy.flushDeadlineMaxMs !== undefined) {
@@ -340,10 +396,33 @@ export function startServerExecutionHost(options: {
         "while the next cycle drains and settles; default is OFF)",
     );
   }
-  if (serverExecutionWorkerFromEnv(envGet)) {
+  const ownerRouting = ownerRoutingFromEnv(envGet);
+  if (ownerRouting && options.memoryUrl === undefined) {
+    console.warn(
+      "Server-execution v2: SERVER_EXECUTION_OWNER_ROUTING=true with no " +
+        "memory endpoint to route through; crossings stay on this process's " +
+        "memory server",
+    );
+  }
+  const memoryUrl = ownerRouting ? options.memoryUrl : undefined;
+  if (memoryUrl !== undefined) {
     console.log(
-      "Server-execution v2: serving loop in a Worker by " +
-        "SERVER_EXECUTION_WORKER=true (default is the main thread)",
+      "Server-execution v2: owner routing ON by " +
+        `SERVER_EXECUTION_OWNER_ROUTING=true (crossings reach each space's ` +
+        `owner through ${memoryUrl.href}; default is OFF)`,
+    );
+    route = new RoutedPlane(
+      webSocketRoute(memoryUrl, options.identity, toolshedClientBuild()),
+    );
+  }
+  const fileStore = options.store?.protocol === "file:";
+  if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
+    console.log(
+      "Server-execution v2: serving loop in a Worker " +
+        (envGet("SERVER_EXECUTION_WORKER") === "true"
+          ? "by SERVER_EXECUTION_WORKER=true"
+          : "(the default over a file store; SERVER_EXECUTION_WORKER=false " +
+            "keeps it on the main thread)"),
     );
     // The worker's entry adds the lifecycle verbs, the self-directed fetch
     // and the module cache itself (lib/serving-worker.ts).
@@ -355,6 +434,7 @@ export function startServerExecutionHost(options: {
       policy,
       ensureSpaceRoots,
       experimental,
+      ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
     });
     loop = {
       runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
@@ -364,11 +444,24 @@ export function startServerExecutionHost(options: {
       close: () => worker.close(),
     };
   } else {
+    console.log(
+      "Server-execution v2: serving loop on the main thread " +
+        (fileStore
+          ? "by SERVER_EXECUTION_WORKER=false (default is a Worker)"
+          : "(the memory store is not a file, which a Worker cannot open)"),
+    );
     const host = new ExecutorHost({
       policy,
       ensureSpaceRoots,
       server: options.server,
       serviceIdentity: options.identity.did(),
+      ...(memoryUrl === undefined ? {} : {
+        route: webSocketRoute(
+          memoryUrl,
+          options.identity,
+          toolshedClientBuild(),
+        ),
+      }),
       // The serving runtimes' own flags: the environment's, with the ones
       // every serving runtime forces on top. `/api/meta` publishes those same
       // forced flags below.
@@ -414,9 +507,20 @@ export function serverExecutionHost(): ServingLoop | undefined {
   return loop;
 }
 
+/**
+ * The routed plane to other spaces' owners while the loop runs with owner
+ * routing on, for a delivery this thread makes into a space it does not
+ * serve; `undefined` otherwise.
+ */
+export function serverExecutionRoute(): RoutedPlane | undefined {
+  return route;
+}
+
 export async function stopServerExecutionHost(): Promise<void> {
   await loop?.close();
   loop = undefined;
+  await route?.close();
+  route = undefined;
   // Nothing serves any more, so `/api/meta` reports the base posture again.
   publishServingExperimentalOverrides(null);
 }

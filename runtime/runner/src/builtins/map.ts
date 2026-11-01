@@ -1,6 +1,6 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import { type Pattern } from "../builder/types.ts";
 import { type AddCancel } from "../cancel.ts";
@@ -23,6 +23,7 @@ import {
   listContainerStoreWrites,
   listCoordinatorPlan,
   listElementResultCell,
+  listMembershipRead,
 } from "./list-coordinator-plan.ts";
 import {
   type ElementRun,
@@ -77,15 +78,17 @@ const logger = getLogger("runner.map", { enabled: true, level: "warn" });
  *
  * The goal is to keep the output array current without recomputing too much.
  *
- * Elements are tracked by the normalized link address of their cell (via
- * `getAsNormalizedFullLink()`). The `asSchema` traverse with
- * `asCell: ["cell"]` already resolves cell links to target entities, so:
+ * Elements are tracked by identity, not position: each slot's link is
+ * resolved without reading the element (`listSlotResolutions`), and the
+ * link it ends on, with how many times that link has already appeared in
+ * the list, is the element's key (`listElementKeys`). So:
  *
- * - Cell links: `list[i]` resolves to a cell pointing at the target entity.
- *   Its normalized link is stable across position changes, enabling reuse.
- * - Inline values: `list[i]` resolves to a cell pointing at the array position.
- *   Its normalized link includes the positional index, so identity = position.
- *   Shifted inline values get new runs (acceptable trade-off).
+ * - A slot holding a link keys by the entity the link resolves to. The key
+ *   survives a move to another position, and the child is reused there.
+ * - A slot holding an inline value keys by its place in the list, since the
+ *   value has no entity of its own. A value that shifts position gets a
+ *   new run (acceptable trade-off).
+ * - A slot whose links run in a cycle keys by its place as well.
  *
  * @param list - A doc containing an array of values to map over.
  * @param op - A pattern to apply to each value.
@@ -230,15 +233,21 @@ function createMapInstance(
               kind: resumeSettleRunKind(runtime),
               scopeKeyIdentity: identity,
             });
-            const raw = inputsCell.key("list").withTx(settleTx).resolveAsCell()
-              .withTx(settleTx).getRaw();
+            // The list is read as the reconcile reads it, its membership
+            // declared onward onto the container. Only the raw list is
+            // needed here, so the slots are not resolved.
+            const { rawList: raw } = listMembershipRead(
+              settleTx,
+              inputsCell,
+              "list",
+              result,
+            );
             if (raw === undefined || (Array.isArray(raw) && raw.length === 0)) {
               settleTx.runWithAmbientReadMeta(
                 { ...linkResolutionProbe, ...machineryRead },
                 () =>
-                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx).set(
-                    [],
-                  ),
+                  result!.asSchema(RESULT_PRESENCE_SCHEMA).withTx(settleTx)
+                    .set([]),
               );
             }
           }).then(({ error }) => {
@@ -318,7 +327,6 @@ function createMapInstance(
     // every element's taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
-
     const droppedArgumentFields = unusedListOpArgumentFields(argumentUsage);
     const createRunInput = (element: Cell<any>, index: number) => ({
       ...(argumentUsage.usesElement ? { element } : {}),

@@ -10,12 +10,12 @@ import {
   type IncrementalHasher,
   sha256,
 } from "@commonfabric/content-hash";
-import { encodeULEB128 } from "@commonfabric/leb128";
-import { bigintToMinimalTwosComplement } from "@commonfabric/utils/bigint";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
-import { encodeWtf8 } from "@commonfabric/utils/wtf8";
+import { encodeULEB128 } from "@commonfabric/bytes/leb128";
+import { bigintToMinimalTwosComplement } from "@commonfabric/bytes/bigint";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import { encodeWtf8 } from "@commonfabric/text/wtf8";
 
 import type {
   FabricArray,

@@ -17,7 +17,6 @@ import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
   DemandChangeReason,
-  ServedAclChange,
   ServedAclChangeVerdict,
   Server,
   SessionDemand,
@@ -27,10 +26,10 @@ import {
   getLogger,
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
-import type { SpaceAccessChange } from "../builder/types.ts";
+} from "@commonfabric/logger";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
@@ -60,15 +59,6 @@ export type PortLike = {
     listener: (event: MessageEvent) => void,
   ): void;
   start?(): void;
-};
-
-/**
- * A served access-list change as it crosses the port: the function that
- * applies it replaced by the list of changes it applies, from which the other
- * side rebuilds the function.
- */
-export type ServedAclChangeData = Omit<ServedAclChange, "change"> & {
-  readonly changes: readonly SpaceAccessChange[];
 };
 
 /** The entry `Server.commitDelegatedAppend()` takes. */
@@ -129,6 +119,13 @@ export type ServingWorkerInit = {
 
   /** The serving runtimes' experimental options. */
   readonly experimental: ExperimentalOptions | undefined;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`); absent, the
+   * host crosses through the process's own server.
+   */
+  readonly route: string | undefined;
 };
 
 /** What the worker asks of the thread that holds the memory server. */

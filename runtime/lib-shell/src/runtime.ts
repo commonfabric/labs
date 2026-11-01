@@ -27,7 +27,7 @@ import {
   type RuntimeTransport,
 } from "@commonfabric/runtime-client";
 import { WebWorkerRuntimeTransport } from "@commonfabric/runtime-client/transports/web-worker";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 const logger = getLogger("lib-shell.runtime", {
   enabled: false,

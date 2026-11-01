@@ -33,7 +33,7 @@
 
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl } from "@std/path";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { gitLsFiles, repositoryFiles } from "./repository-files.ts";
 

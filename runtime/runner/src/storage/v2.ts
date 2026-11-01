@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -13,7 +17,12 @@ import {
   walkSchemaDocumentClosure,
 } from "@commonfabric/data-model-schema/schema-closure";
 import { isSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { Identity } from "@commonfabric/identity";
+import {
+  decodeDelegation,
+  Identity,
+  issueDelegation,
+} from "@commonfabric/identity";
+import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import type { ACL, Entity } from "@commonfabric/memory/interface";
 import {
@@ -27,6 +36,7 @@ import {
   type TransactionError,
   type URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -52,6 +62,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -77,14 +88,14 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { validatePresencePublication } from "@commonfabric/memory/v2/presence";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
-import { BoundedKeyMap, LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   isObjectNotArray,
   isObjectOrArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   applyPatchToDocument,
@@ -203,6 +214,7 @@ import {
   type ViewInterestLease,
 } from "./interface.ts";
 import { endLocalReadValidationStretch } from "./local-read-policy.ts";
+import type { MemorySocketFactory } from "./memory-socket.ts";
 import {
   getBlindStructuralTarget,
   isDurableReadTx,
@@ -250,12 +262,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-// A cell's CFC write-policy label lives at ["cfc"]. A mergeable write reads it as
-// part of the write; that read is dropped from its conflict set unless the
-// transaction also writes the envelope (`#commitReadActivities`).
-const isCfcLabelPath = (path: readonly string[]): boolean =>
-  path.length === 1 && path[0] === "cfc";
 
 const isStrictPrefixPath = (
   prefix: readonly string[],
@@ -1145,6 +1151,13 @@ export interface Options {
    */
   spaceHostMap?: Record<string, string>;
 
+  /**
+   * Opens each memory connection. Absent, `createMemorySocket()` picks the
+   * backend for the platform the manager runs on. Tests inject their own to
+   * observe which addresses the manager dials.
+   */
+  createSocket?: MemorySocketFactory;
+
   id?: string;
   settings?: IRemoteStorageProviderSettings;
 
@@ -1903,6 +1916,25 @@ export class StorageManager implements IStorageManager {
     await this.#sessionFactory.setMessageCompressionEnabled?.(enabled);
   }
 
+  /** @inheritDoc */
+  async addDelegationChain(chain: readonly Uint8Array[]): Promise<void> {
+    if (this.#sessionFactory.addDelegationChain === undefined) {
+      throw new Error("This storage manager's sessions present no proof chain");
+    }
+    await this.#sessionFactory.addDelegationChain(chain);
+    // A session already open on the chain's space was opened without it,
+    // and acts under the key's own grant until it opens again; it is
+    // reopened now, so the chain reaches it rather than the next open.
+    const space = (await decodeDelegation(chain[0])).payload.sub;
+    if (space === null) return;
+    await this.#providers.get(space as MemorySpace)?.restoreSession();
+  }
+
+  /** @inheritDoc */
+  delegationChainFor(space: MemorySpace): readonly Uint8Array[] | undefined {
+    return this.#sessionFactory.delegationChainFor?.(space, this.as.did());
+  }
+
   protected constructor(
     options: Options,
     sessionFactory: SessionFactory,
@@ -2153,7 +2185,69 @@ export class StorageManager implements IStorageManager {
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
+    const { space } = await this.#createSpaceAs(
+      await Identity.generate(),
+      () => acl,
+      genesis,
+    );
+    return space;
+  }
+
+  /** @inheritDoc */
+  async createSelfOwnedSpace(
+    options: {
+      grants?: ACL;
+      delegateTo: DIDKey;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
+    for (
+      const [principal, capability] of Object.entries(options.grants ?? {})
+    ) {
+      if (capability === "OWNER") {
+        throw new Error(
+          `A space that owns itself grants OWNER to nobody else, and the ` +
+            `grants make ${principal} one`,
+        );
+      }
+    }
     const key = await Identity.generate();
+    const { space, delegation } = await this.#createSpaceAs(
+      key,
+      (space) => ({ ...options.grants, [space]: "OWNER" }),
+      options,
+      // The key signs the delegation after its genesis commit is confirmed
+      // and before it is dropped: the one other thing it ever signs.
+      () =>
+        issueDelegation(key, {
+          aud: options.delegateTo,
+          sub: key.did(),
+          cmd: "/memory",
+          pol: [],
+        }),
+    );
+    // This manager holds the delegation from here on, so its own sessions
+    // on the new space act under the space's grant.
+    await this.#sessionFactory.addDelegationChain?.([delegation.bytes]);
+    return { space, delegation: delegation.bytes };
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: creates the
+   * space `key` names, with `acl(space)` as its genesis access list and
+   * `genesis` as its declarations, and returns what `afterGenesis` signs
+   * with the key once the commit is confirmed, before the key is released.
+   */
+  async #createSpaceAs<T>(
+    key: Identity,
+    acl: (space: MemorySpace) => ACL,
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    },
+    afterGenesis?: () => Promise<T>,
+  ): Promise<{ space: MemorySpace; delegation: T }> {
     const space = key.did() as MemorySpace;
     const { spaceKind } = genesis;
     const root = typeof genesis.root === "function"
@@ -2169,12 +2263,24 @@ export class StorageManager implements IStorageManager {
       key,
       { sessionId: crypto.randomUUID(), ...declarations },
     );
+    let delegation: T | undefined;
     try {
       if (root !== undefined && client.serverFlags?.genesisRoot !== true) {
         throw new Error("Host does not support genesis root reservations");
       }
       if (spaceKind !== undefined && client.serverFlags?.spaceKind !== true) {
         throw new Error("Host does not support declared space kinds");
+      }
+      // A space whose authority is a delegation is one nobody can open on
+      // a host that admits no chain, so none is created there.
+      if (
+        afterGenesis !== undefined &&
+        client.serverFlags?.sessionOpenProofs !== true
+      ) {
+        throw new Error(
+          "Host does not admit a session.open proof chain, so a space that " +
+            "owns itself could not be opened",
+        );
       }
       const commit = session.transact({
         ...declarations,
@@ -2183,10 +2289,15 @@ export class StorageManager implements IStorageManager {
           confirmed: [{ id: aclId, path: toDocumentPath([]), seq: 0 }],
           pending: [],
         },
-        operations: [{ op: "set", id: aclId, value: { value: { ...acl } } }],
+        operations: [{
+          op: "set",
+          id: aclId,
+          value: { value: { ...acl(space) } },
+        }],
       });
       this.trackPendingCommit(commit);
       await commit;
+      if (afterGenesis !== undefined) delegation = await afterGenesis();
     } finally {
       try {
         await client.close();
@@ -2202,7 +2313,7 @@ export class StorageManager implements IStorageManager {
         );
       }
     }
-    return space;
+    return { space, delegation: delegation as T };
   }
 
   /**
@@ -2307,6 +2418,31 @@ export class StorageManager implements IStorageManager {
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
+  }
+
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
    * — the flag-ON client effects channel subscribes per space through
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
@@ -2384,6 +2520,20 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "This storage manager's sessions cannot carry an invitation",
+      );
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
@@ -4176,7 +4326,7 @@ export class StorageManager implements IStorageManager {
           dynamicHosts,
         ),
         options.as,
-        undefined,
+        options.createSocket,
         options.clientBuild,
       ),
     );
@@ -4837,6 +4987,11 @@ class Provider
 
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
+  }
+
+  /** See SpaceReplica.restoreSession. */
+  restoreSession(): Promise<void> {
+    return this.#followReplacement((replica) => replica.restoreSession());
   }
 
   /** See SpaceReplica.noteAclChanged (THE SESSION REMOUNT's latch). Only
@@ -6078,6 +6233,22 @@ export class SpaceReplica
   }
 
   /**
+   * Opens this replica's session again, as a lost connection would, and
+   * resolves once the server has admitted it: what carries a proof chain
+   * held since the session opened to the server, since each open presents
+   * the chain as it stands then (04-protocol.md §4.5.1). Opens a session
+   * first where none is open yet. On a host that does not record session
+   * holdings, a restore ends a session with a holdings provider instead of
+   * resuming it, so there the session is left standing, on the grant it
+   * opened with, until it opens again.
+   */
+  async restoreSession(): Promise<void> {
+    const { client, session } = await this.#activeSessionHandle();
+    if (client.serverFlags?.sessionHoldings !== true) return;
+    await session.restore();
+  }
+
+  /**
    * Resolves once the session open in flight, if there is one, has been
    * admitted or refused, and at once otherwise. Opens nothing.
    */
@@ -7065,6 +7236,27 @@ export class SpaceReplica
   ): Promise<EventAttentionResolveResult> {
     const { session } = await this.#activeSessionHandle();
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
+  }
+
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
+    return await session.administerInvites(invite);
   }
 
   /** Pending (undischarged) event intents — the offline queue's live
@@ -9832,7 +10024,10 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcLabelPath(write.path)) {
+        if (
+          write.space !== this.#space ||
+          !Differential.isCfcEnvelopePath(write.path)
+        ) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -9870,7 +10065,10 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcLabelPath(read.path)) {
+      if (
+        isInternalVerifierRead(read.meta) &&
+        Differential.isCfcEnvelopePath(read.path)
+      ) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -9883,7 +10081,10 @@ export class SpaceReplica
         !readsMergeableOpArrayLength &&
         (isMergeableOpRead(read.meta) ||
           isReadMarkedAsAttemptedWrite(read.meta) ||
-          isCfcLabelPath(read.path) ||
+          // A mergeable write reads the CFC envelope as part of the write;
+          // the read leaves the conflict set unless the transaction also
+          // writes the envelope (handled above).
+          Differential.isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
@@ -12270,9 +12471,14 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
+          // A connection that never completed a handshake, in every attempt
+          // its factory allows, ends the space's session as a denial does:
+          // its readers fail with that error instead of waiting for a session
+          // nothing is still opening.
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            MemoryV2Client.isClientUpdateRequiredError(error)
+            MemoryV2Client.isClientUpdateRequiredError(error) ||
+            MemoryV2Client.isFirstHandshakeFailure(error)
           );
           if (permanent && !this.#closed) {
             this.#sessionAdmissionError = error;

@@ -1,7 +1,7 @@
 /** Resolves and orders collection keys using runtime Cell identity. */
 
 import { hashStringOf } from "@commonfabric/data-model";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { type Cell, isCell } from "../cell.ts";
 import { resolveLink } from "../link-resolution.ts";

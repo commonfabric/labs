@@ -10,9 +10,12 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isInertPlainObject } from "@commonfabric/utils/objects";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isInertPlainObject } from "@commonfabric/js-values/objects";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   RECORD_SUBSCHEMA_KEYS,
@@ -442,7 +445,8 @@ function factoryFromPattern<T, R>(
   });
   // The positional cause each named instance takes the place of. It still
   // consumes its number, so every other anonymous root keeps the number it
-  // has without instance names.
+  // has without instance names; the runner maps a deployed instance found
+  // under this cause onto its name.
   const legacyPartialCauses = new Map<OpaqueCell<any>, JSONValue>();
   allCells.forEach((cell) => {
     const { cell: top, path, kind, name, external } = exportCell(cell);
@@ -869,10 +873,25 @@ function factoryFromPattern<T, R>(
           );
         }
       }
+      if (options?.selfOwned && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a space its own owner only when it creates it, " +
+            "and a DID or a cell names a space that exists",
+        );
+      }
+      if (
+        options?.selfOwned &&
+        Object.values(grants ?? {}).includes("OWNER")
+      ) {
+        throw new Error(
+          "inSpace() grants OWNER to nobody in a space that owns itself",
+        );
+      }
       const derived = makePatternFactory(defaultScope, space ?? "", {
         ...(grants !== undefined ? { grants } : {}),
         ...(options?.root ? { root: true } : {}),
         ...(spaceKind !== undefined ? { spaceKind } : {}),
+        ...(options?.selfOwned ? { selfOwned: true } : {}),
       });
       noteDerivedCopy(derived, factory);
       return derived;
@@ -1279,6 +1298,9 @@ type InSpaceRequest = {
 
   /** The kind the space's genesis commit declares. */
   spaceKind?: string;
+
+  /** Whether the created space owns itself; see `InSpaceCreationRequest`. */
+  selfOwned?: true;
 };
 
 /**

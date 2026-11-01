@@ -1,8 +1,8 @@
 import * as path from "@std/path";
 
 import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
-import { getLogger } from "@commonfabric/utils/logger";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { getLogger } from "@commonfabric/logger";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import type {
   CompilerHost,
   CompilerOptions,

@@ -1166,6 +1166,71 @@ describe("wish built-in", () => {
       expect(data?.type).toBe("favorite");
     });
 
+    it("resolves #suggestions to a favorite tagged #suggestions, not the space's suggestion history", async () => {
+      // `#suggestions` is an ordinary hashtag: the space's default pattern
+      // still carries a `suggestionHistory` list, and the wish passes it by.
+
+      const homeSpaceCell = runtime.getHomeSpaceCell(tx);
+      const homeDefaultPatternCell = runtime.getCell(
+        userIdentity.did(),
+        "default-pattern-suggestions",
+        undefined,
+        tx,
+      );
+      const favoriteItem = runtime.getCell(
+        userIdentity.did(),
+        "favorite-item-suggestions",
+        undefined,
+        tx,
+      );
+      favoriteItem.set({ type: "favorite" });
+      homeDefaultPatternCell.key("favorites").set([
+        { cell: favoriteItem, tags: ["suggestions"] },
+      ]);
+      (homeSpaceCell as any).key("defaultPattern").set(homeDefaultPatternCell);
+
+      await tx.commit().settled;
+      await runtime.idle();
+      tx = runtime.edit();
+
+      const spaceCell = runtime.getCell(
+        patternSpace.did(),
+        patternSpace.did(),
+      ).withTx(tx);
+      const spaceDefaultPatternCell = runtime.getCell(
+        patternSpace.did(),
+        "space-default-pattern-suggestions",
+        undefined,
+        tx,
+      );
+      spaceDefaultPatternCell.set({
+        suggestionHistory: [{ messages: [], timestamp: "history" }],
+      });
+      (spaceCell as any).key("defaultPattern").set(spaceDefaultPatternCell);
+
+      await tx.commit().settled;
+      await runtime.idle();
+      tx = runtime.edit();
+
+      const wishPattern = pattern(() => {
+        return { result: wish({ query: "#suggestions" }) };
+      });
+      const resultCell = runtime.getCell<{ result?: { result?: unknown } }>(
+        patternSpace.did(),
+        "suggestions-hashtag-result",
+        undefined,
+        tx,
+      );
+      const result = runtime.run(tx, wishPattern, {}, resultCell);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      await result.pull();
+
+      const r = result.key("result").get()?.result;
+      const data = (r as any)?.get?.() ?? r;
+      expect(data).toEqual({ type: "favorite" });
+    });
+
     it('searches both favorites and mentionables with scope: ["~", "."]', async () => {
       // Setup: Add favorites to home space
       const homeSpaceCell = runtime.getHomeSpaceCell(tx);

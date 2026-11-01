@@ -22,8 +22,8 @@ import {
   linkRefFrom,
   linkRefPayload,
 } from "@commonfabric/data-model/cell-rep";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { CellLinkRefPayload, SigilLink } from "../sigil-types.ts";
 import type { CfcLabelView } from "./label-view-core.ts";
 

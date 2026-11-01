@@ -20,6 +20,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../src/storage/cache.deno.ts";
+import type { MemorySpace } from "../src/storage/interface.ts";
 
 /** Builds a child whose output identifies both its code and stored input. */
 function childSource(marker: string): string {
@@ -48,8 +49,13 @@ describe("child-source-resume", () => {
 
         /** Connects an independent runtime and records serving demand roots. */
         const makeRuntime = (serving = false) => {
+          // A serving runtime serves the parent's space, as every serving
+          // runtime serves one space.
           const manager = EmulatedStorageManager.connectTo(server, {
             as: signer,
+            ...(serving
+              ? { servingHomeSpace: signer.did() as MemorySpace }
+              : {}),
           });
           managers.push(manager);
           const runtime = new Runtime({
@@ -149,10 +155,31 @@ export default pattern(() => ({ child: Child${
           await resumed.pull();
           await reader.scheduler.idleWithPendingCommits();
           const resumedChild = resumed.key("child").resolveAsCell();
-          if (mode === "serving-user") {
-            expect(resumedChild.getAsNormalizedFullLink().scope).toBe("user");
-            expect(reader.runner.accessForTestingOnly.scopedProgramCounts())
-              .toContainEqual({ piece: resumedChild.sourceURI, variants: 1 });
+          if (mode.startsWith("serving")) {
+            // A serving runtime runs no child placed in another space, so the
+            // restart runs nothing of this one, and its owner finds it as they
+            // left it.
+            const owned = runtime.getCellFromLink(
+              resumedChild.getAsNormalizedFullLink(),
+            );
+            await owned.sync();
+            expect(reader.runner.isRunning(resumedChild)).toBe(false);
+            expect(
+              reader.runner.accessForTestingOnly.scopedProgramCounts().map((
+                { piece },
+              ) => piece),
+            ).not.toContain(resumedChild.sourceURI);
+            const childDemands = seen.filter((roots) =>
+              roots.includes(resumedChild.sourceURI)
+            );
+            expect(childDemands).toHaveLength(0);
+            expect(getPatternIdentityRef(owned)).toEqual(ref);
+            expect(getPieceSourceRevisions(owned)).toEqual(history);
+            expect(getPatternSource(owned)).toBe(
+              detach ? undefined : "system:system/child.tsx",
+            );
+            expect(owned.key("marker").get()).toBe("updated owner");
+            return;
           }
           await resumedChild.pull();
           expect(getPatternIdentityRef(resumedChild)).toEqual(ref);
@@ -161,31 +188,6 @@ export default pattern(() => ({ child: Child${
             detach ? undefined : "system:system/child.tsx",
           );
           expect(resumedChild.key("marker").get()).toBe("updated owner");
-          if (mode.startsWith("serving")) {
-            const childDemands = seen.filter((roots) =>
-              roots.includes(resumedChild.sourceURI)
-            );
-            expect(childDemands.length).toBeGreaterThan(0);
-            for (const roots of childDemands) {
-              expect(roots).toContain(resumed.sourceURI);
-            }
-          }
-          if (mode === "serving-user") {
-            const stopReading = resumedChild.sink(() => {});
-            try {
-              const inputTx = reader.edit();
-              resumedChild.getArgumentCell()!.withTx(inputTx).key("value").set(
-                "after restart",
-              );
-              expect((await inputTx.commit().settled).error).toBeUndefined();
-              await reader.scheduler.idleWithPendingCommits();
-              expect(resumedChild.key("marker").get()).toBe(
-                "updated after restart",
-              );
-            } finally {
-              stopReading();
-            }
-          }
         } finally {
           for (const runtime of runtimes) {
             runtime.clearSealDestination();

@@ -96,9 +96,9 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
@@ -300,6 +300,7 @@ export class PiecesController<T = unknown> {
       cfcWriteFloor,
       cfcReadMaxConfidentiality,
       cfcReadOnExceed,
+      preferredProfileSpace,
       clientClass,
       clientBuild,
     }: {
@@ -380,6 +381,10 @@ export class PiecesController<T = unknown> {
       // space server, whose runtime reads under it for the session's runs.
       cfcReadMaxConfidentiality?: readonly CfcConfClause[];
       cfcReadOnExceed?: CfcReadOnExceed;
+      // The profile this controller's runtime answers `#profile` with, for a
+      // controller acting as one of the user's profiles (the remoteClient
+      // preset's `preferredProfileSpace`); unset means the home's order.
+      preferredProfileSpace?: MemorySpace;
       // The client class the runtime declares (the remoteClient preset's
       // `clientClass`): a controller standing in for a browser tab, as the
       // pattern integration harness's sessions do, declares `"web"`.
@@ -433,6 +438,9 @@ export class PiecesController<T = unknown> {
           ? { cfcReadMaxConfidentiality }
           : {}),
         ...(cfcReadOnExceed !== undefined ? { cfcReadOnExceed } : {}),
+        ...(preferredProfileSpace !== undefined
+          ? { preferredProfileSpace }
+          : {}),
         ...(clientClass !== undefined ? { clientClass } : {}),
         ...(navigateCallback !== undefined ? { navigateCallback } : {}),
         ...(onPatternInstantiated !== undefined
@@ -2635,11 +2643,14 @@ export class PiecesController<T = unknown> {
    *
    * An existing root follows its origin before it is started. A root that was
    * already running when its origin moved it has been re-instantiated on the
-   * incoming pattern by the time this resolves, as one started here has. The
-   * exception is a runtime that seals its writes into a serving wave: there
-   * the re-instantiation follows the wave's settlement, which a call made
-   * within the wave's cycle cannot wait for, and this resolves with the
-   * outgoing pattern's graph still running.
+   * incoming pattern by the time this resolves, as one started here has. Two
+   * runtimes are exceptions. One that seals its writes into a serving wave
+   * re-instantiates after the wave's settlement, which a call made within the
+   * wave's cycle cannot wait for, so this resolves with the outgoing pattern's
+   * graph still running. One that replicates views runs no piece: it enables
+   * the view and syncs the root through it, and the serving runtime follows
+   * the origin and starts the root on its own cycles, so this resolves before
+   * either has happened.
    *
    * With `reconcile: false`, an existing root starts on the pattern it holds,
    * and its origin is consulted only if that pattern cannot load: then the
@@ -2739,6 +2750,20 @@ export class PiecesController<T = unknown> {
     root: Cell<NameSchema>,
     reconcileBeforeStart: boolean,
   ): Promise<PieceController<NameSchema>> {
+    // A client that replicates views runs no piece, the root included: the
+    // serving runtime follows the root's origin before it starts it, and
+    // repairs what its start finds. The start here only enables the view and
+    // syncs the root through it, as it does for any piece.
+    if (
+      this.runtime.viewScopedReplicationRequested &&
+      await this.runtime.viewReplication.enable(root.space)
+    ) {
+      await timePiecePhase(
+        "ensureDefaultPattern.startPiece",
+        () => this.startPiece(root),
+      );
+      return new PieceController<NameSchema>(this, root);
+    }
     let rootToStart = root;
     if (reconcileBeforeStart) {
       const outcome = await timePiecePhase(

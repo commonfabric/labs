@@ -24,7 +24,7 @@ import {
   sendEvent,
   transactionFailureMessage,
 } from "@commonfabric/runner";
-import { isInstance, isObjectNotArray } from "@commonfabric/utils/types";
+import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { loadPiecePattern } from "./ops/piece-controller.ts";
 import { nearestName } from "./refusal.ts";
 import { verbEventForDispatch } from "./verb-input.ts";

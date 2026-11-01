@@ -11,7 +11,10 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 // By path rather than through `@commonfabric/runner`: the gate runs
 // `cause-assignments-dump.ts` against a checkout of the base revision, under
 // that checkout's configuration, where a package specifier would reach the

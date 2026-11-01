@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { Source } from "@commonfabric/js-compiler";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   injectCfHelpers,
@@ -11,7 +11,6 @@ import {
 } from "@commonfabric/ts-transformers";
 
 import {
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   setCompileCacheRuntimeVersionForTesting,
@@ -32,6 +31,7 @@ import {
   type CachedCompiledModule,
 } from "../src/sandbox/module-record-compiler.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { observeColdCompiles } from "./support/telemetry-observers.ts";
 
 const signer = await Identity.fromPassphrase("load-by-identity");
@@ -574,14 +574,13 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       storageManager,
     });
     try {
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      expect(runtimeVersion).toBeDefined();
+      const runtimeVersion = await compileCacheVersionOf(warmRuntime);
       const readTx = warmRuntime.edit();
       const closure = await loadCompiledClosure(
         warmRuntime,
         space,
         compiled.entryIdentity,
-        { runtimeVersion: runtimeVersion! },
+        { runtimeVersion },
         readTx,
       );
       readTx.abort?.("warm data-file read complete");
@@ -708,8 +707,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       const compiled = await engine.compileToRecordGraph(
         program("<p>warm</p>"),
       );
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       writeSourceAndCompiledDocs(
         runtime,
         space,
@@ -809,8 +807,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       // A fresh runtime, with the compiled closure in storage and nothing
       // live: its first load reads the closure, and its second is served
       // from memory.
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       const writeTx = runtime.edit();
       writeSourceAndCompiledDocs(
         runtime,
@@ -938,8 +935,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       target: MemorySpace,
       entryIdentity: string,
     ): Promise<boolean> => {
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       const readTx = runtime.edit();
       try {
         const closure = await loadCompiledClosure(
@@ -1110,8 +1106,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       if (child === undefined) throw new Error("No child module");
       await runtime.patternManager.compileOrGetPattern(program);
       const manager = runtime.patternManager.accessForTestingOnly;
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       const release = Promise.withResolvers<void>();
       let writes = 0;
       // The manager's write, with the parent's write into `spaceB` held open
@@ -1249,8 +1244,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       const { entryIdentity } = fixture;
       await runtime.patternManager.compileOrGetPattern(PROGRAM);
       const manager = runtime.patternManager.accessForTestingOnly;
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      if (runtimeVersion === undefined) throw new Error("No runtime version");
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       const release = Promise.withResolvers<void>();
       let writes = 0;
       // The manager's write: the first into `space` fails, the second into
@@ -1850,7 +1844,7 @@ describe("load by module identity (warm + version-bump recovery)", () => {
       // runtime loads warm.
       await runtime.patternManager.flushCompileCacheWrites();
       await runtime.storageManager.synced();
-      const runtimeVersion = (await getCompileCacheRuntimeVersion())!;
+      const runtimeVersion = await compileCacheVersionOf(runtime);
       const readTx = runtime.edit();
       try {
         for (const target of spaces) {
@@ -2229,9 +2223,7 @@ ${withData ? '  note: dataFile("./note.txt"),' : ""}
           },
         );
       await reader.patternManager.flushCompileCacheWrites();
-      const runtimeVersion = await getCompileCacheRuntimeVersion();
-      expect(runtimeVersion).toBeDefined();
-      if (!runtimeVersion) throw new Error("Missing runtime version");
+      const runtimeVersion = await compileCacheVersionOf(reader);
       const readTx = reader.edit();
       try {
         const repaired = await loadCompiledClosure(
@@ -2305,8 +2297,7 @@ ${withData ? '  note: dataFile("./note.txt"),' : ""}
     await rt2.patternManager.flushCompileCacheWrites();
     await rt2.storageManager.synced();
 
-    const runtimeVersion = await getCompileCacheRuntimeVersion();
-    expect(runtimeVersion).toBeDefined();
+    const runtimeVersion = await compileCacheVersionOf(rt2);
 
     // Compiled set exists under the CURRENT runtimeVersion, keyed by the
     // LEGACY identities.
@@ -2316,7 +2307,7 @@ ${withData ? '  note: dataFile("./note.txt"),' : ""}
         rt2,
         space,
         legacy.entryIdentity,
-        { runtimeVersion: runtimeVersion! },
+        { runtimeVersion },
         readTx,
       );
       expect(compiled.has(legacy.entryIdentity)).toBe(true);

@@ -50,11 +50,18 @@ treat the container as admitting others.
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `messages` and `canSend`, from the room (see
-    [`ChatRoomOutput`](ChatRoomOutput.md#facts)).
+    [`ChatRoomOutput`](ChatRoomOutput.md#facts)). `canSend` is the reader's own,
+    per session, as the room's is (see
+    [`ChatRoomOutput`](ChatRoomOutput.md#scopes)).
   - `about`, `participants`, and `reactionTallies` (per
     message in `messages.latest`: emoji, count,
     whether the viewer is among them, and the reactors' profiles), each read
     through the link. They're empty unless `state` is `"member"`.
+
+`reactionTallies.mine` reports profile membership: a reactor's profile equals
+the viewer's `#profile`, compared with `equals()`. It is not removal
+authorization. The rendered room's reaction controls use the author-attestation
+rule described in [`ChatReaction`](ChatReaction.md#uniqueness).
 
 A placement offers no stream that sends or reacts. A client sends to the room's
 own `sendMessage` and `sendReaction` streams, reached through `room`. If a

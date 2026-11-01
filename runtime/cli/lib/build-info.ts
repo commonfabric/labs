@@ -15,7 +15,7 @@ import { dirname, fromFileUrl, join } from "@std/path";
 import {
   type BuildInfo,
   readBuildInfoFrom,
-} from "@commonfabric/utils/build-info";
+} from "@commonfabric/platform/build-info";
 
 const COMPILED_PATH = new URL("../COMPILED", import.meta.url);
 

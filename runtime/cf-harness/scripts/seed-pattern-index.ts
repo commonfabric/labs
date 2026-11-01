@@ -41,7 +41,7 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { createHarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { createHarnessFabricSessionFactory } from "../src/fabric-session.ts";
 import { patternIndexDependencies } from "../src/pattern-index/composition.ts";

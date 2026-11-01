@@ -13,6 +13,7 @@ import {
 } from "../src/harness/module-identity.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { PATTERN_COVERAGE_CACHE_VARIANT } from "../src/compilation-cache/cache-variants.ts";
 
 import {
   buildSourceDocs,
@@ -21,7 +22,6 @@ import {
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   compiledDocWriteSchema,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadSourceClosure,
   loadVerifiedSourceClosure,
@@ -38,6 +38,7 @@ import type { URI } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { observeCacheWriteBacks } from "./support/telemetry-observers.ts";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
@@ -55,11 +56,6 @@ import { setCfcImplementationIdentity } from "../src/storage/extended-storage-tr
 await ensureCompilerStack();
 
 const signer = await Identity.fromPassphrase("cell-cache test");
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 // Step 4.3.1–4.3.3 — content-addressed cache document model. The cache operates
 // in identity space on the engine's `CacheableModule[]`; these tests synthesize
@@ -994,8 +990,11 @@ describe("cell-cache", () => {
     let runtime: Runtime;
     const spaceA = signer.did();
     const RTVER = "rt-test-1";
+    // The version `runtime` itself compiles under, for the cases whose
+    // closures the manager reads.
+    let runtimeVersion: string;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       storageManager = StorageManager.emulate({ as: signer });
       runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
@@ -1005,6 +1004,7 @@ describe("cell-cache", () => {
           actingPrincipal: signer.did(),
         }),
       });
+      runtimeVersion = await compileCacheVersionOf(runtime);
     });
     afterEach(async () => {
       await runtime?.dispose();
@@ -2266,7 +2266,10 @@ describe("cell-cache", () => {
       });
       const targetSpace = "did:key:z6MkCellCacheCoverageReplicationTarget";
       const { modules, entryIdentity } = toModules(PROGRAM);
-      const coverageRuntimeVersion = `${runtimeVersion}/pattern-coverage`;
+      const coverageRuntimeVersion = await compileCacheVersionOf(
+        coverageRuntime,
+        { patternCoverage: true },
+      );
 
       try {
         const writeTx = coverageRuntime.edit();
@@ -2342,7 +2345,10 @@ describe("cell-cache", () => {
         ),
       ).toBe(false);
 
-      const coverageRuntimeVersion = `${RTVER}/pattern-coverage`;
+      // No runtime reads this key: the check below decides coverage by the
+      // suffix it ends in alone.
+      const coverageRuntimeVersion =
+        `${RTVER}/${PATTERN_COVERAGE_CACHE_VARIANT}`;
       const uninstrumentedCoverageWrite = runtime.edit();
       writeCompiledDocs(
         runtime,
@@ -2657,7 +2663,7 @@ describe("cell-cache", () => {
     // The shared compile-cache space — owned by signerA (its DID is the
     // address).
     const sharedSpace = e2eSignerA.did();
-    const RTVER = runtimeVersion;
+    let RTVER: string;
 
     // Minimal two-file program for the e2e compile cycle.
     const E2E_PROGRAM: RuntimeProgram = {
@@ -2685,7 +2691,7 @@ describe("cell-cache", () => {
     let rtA: Runtime;
     let rtB: Runtime;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       server = newSharedServer();
       smA = EmulatedStorageManager.connectTo(server, { as: e2eSignerA });
       smB = EmulatedStorageManager.connectTo(server, { as: e2eSignerB });
@@ -2705,6 +2711,7 @@ describe("cell-cache", () => {
           actingPrincipal: e2eSignerB.did(),
         }),
       });
+      RTVER = await compileCacheVersionOf(rtA);
     });
 
     afterEach(async () => {

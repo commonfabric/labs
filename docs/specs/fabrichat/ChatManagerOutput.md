@@ -157,6 +157,15 @@ instance per user serves them all. A stream reads none of them, except
 `offerRoom`, which reads `people` for the user that sends it: every other
 request names a room's members by principal or by profile itself.
 
+What a manager says about its reader, rather than about the user's rooms, is
+`PerSession`: whether the reader can start a chat, and the chat address it shows
+them. Each session finds its reader's profile for itself. One whose profile
+hasn't resolved, or which finds none, as a runtime acting as a profile the
+user's home doesn't list does, would otherwise tell the user's other sessions,
+whose profile has resolved, that they can't start a chat. For the same reason a
+start is taken as the profile of the session that sends it, and a start from a
+session that has none is refused.
+
 ## Facts
 
 - **`rooms`** holds a [`ChatIndexEntry`](ChatIndexEntry.md) for every room this

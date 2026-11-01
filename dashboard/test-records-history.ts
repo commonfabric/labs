@@ -20,7 +20,7 @@ import {
   readObject,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
 export const TEST_RECORDS_BUCKET = "cf-ci-metadata";

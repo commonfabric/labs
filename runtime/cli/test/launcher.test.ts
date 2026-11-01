@@ -49,7 +49,7 @@ Deno.test("parseCfLauncherArgs defaults to the launcher labs checkout", () => {
   const parsed = parseCfLauncherArgs({
     argv: ["--", "--help"],
     cwd: "/workspace/labs",
-    initCwd: "/workspace/pattern-factory",
+    initCwd: "/workspace/consumer",
     denoPath: "/usr/local/bin/deno",
     modulePath: "/workspace/labs/runtime/cli/launcher.ts",
   });
@@ -59,7 +59,7 @@ Deno.test("parseCfLauncherArgs defaults to the launcher labs checkout", () => {
     labsRoot: "/workspace/labs",
     configPath: "/workspace/labs/deno.jsonc",
     cliEntrypoint: "/workspace/labs/runtime/cli/mod.ts",
-    cwd: "/workspace/pattern-factory",
+    cwd: "/workspace/consumer",
     cfArgs: ["--help"],
   });
 });
@@ -340,7 +340,7 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
       labsRoot: "/workspace/labs",
       configPath: "/workspace/labs/deno.json",
       cliEntrypoint: "/workspace/labs/runtime/cli/mod.ts",
-      cwd: "/workspace/pattern-factory",
+      cwd: "/workspace/consumer",
       cfArgs: ["check", "pattern.tsx", "--no-run"],
     }),
     {
@@ -362,7 +362,7 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
         "pattern.tsx",
         "--no-run",
       ],
-      cwd: "/workspace/pattern-factory",
+      cwd: "/workspace/consumer",
       env: {
         CF_CLI_NAME: "cf",
       },

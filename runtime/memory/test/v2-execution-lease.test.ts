@@ -180,7 +180,7 @@ Deno.test("acquire: conditional write — free and expired rows are taken, a liv
   }
 });
 
-Deno.test("renew: extends only a lease the caller still holds live — and is never a commit", async () => {
+Deno.test("renew: extends the row that still names the caller, lapsed or live, and fails once another holder took it — and is never a commit", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
@@ -193,22 +193,45 @@ Deno.test("renew: extends only a lease the caller still holds live — and is ne
 
     // A renewal on the holder's cadence extends the expiry.
     const t1 = t0 + EXECUTION_LEASE_RENEW_INTERVAL_MS;
-    assert(
+    assertEquals(
       renewExecutionLease(engine, { space: SPACE, holder: mine, now: t1 }),
+      "extended",
     );
     assertEquals(leaseRows(engine)[0].expires_at, t1 + EXECUTION_LEASE_TTL_MS);
 
     // A non-holder cannot renew.
-    assert(
-      !renewExecutionLease(engine, { space: SPACE, holder: other, now: t1 }),
+    assertEquals(
+      renewExecutionLease(engine, { space: SPACE, holder: other, now: t1 }),
+      "lost",
     );
 
-    // Once expired there is nothing live to renew — even for the holder
-    // itself. This failing renewal is the stop-committing signal.
+    // A lapse nobody claimed is the holder's to renew: the store refused
+    // its commits while the row was expired and admitted no one else's.
     const late = t1 + EXECUTION_LEASE_TTL_MS;
-    assert(
-      !renewExecutionLease(engine, { space: SPACE, holder: mine, now: late }),
+    assertEquals(
+      renewExecutionLease(engine, { space: SPACE, holder: mine, now: late }),
+      "recovered",
     );
+    assertEquals(
+      leaseRows(engine)[0].expires_at,
+      late + EXECUTION_LEASE_TTL_MS,
+    );
+
+    // A lapse a rival claimed is not: the row names the rival, and the
+    // holder's failing renewal is the stop-committing signal.
+    const taken = late + EXECUTION_LEASE_TTL_MS;
+    assert(
+      acquireExecutionLease(engine, {
+        space: SPACE,
+        holder: other,
+        now: taken,
+      }),
+    );
+    assertEquals(
+      renewExecutionLease(engine, { space: SPACE, holder: mine, now: taken }),
+      "lost",
+    );
+    assertEquals(leaseRows(engine).map((r) => r.holder), [other]);
 
     // serving-loop.md §2 (and the coverage register's OW2): a lease renewal
     // is NEVER a commit. The whole acquire/renew traffic above left the
@@ -441,7 +464,7 @@ Deno.test("admission: a holder smuggled into the client payload is inert", async
 // stop-committing MUST, enforced before any reacquire).
 //
 
-Deno.test("discipline (C7a): a probe sealed before an expiry never commits — renewal failure ends the tenure before the reacquire", async () => {
+Deno.test("discipline (C7a): a probe sealed before a lapse a rival claimed never commits — renewal failure ends the tenure before the reacquire", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -459,12 +482,22 @@ Deno.test("discipline (C7a): a probe sealed before an expiry never commits — r
     assert(cycle.acquire());
     const sealedTenure = cycle.tenure; // work seals under the first tenure
 
-    // A pause outlives the TTL (the canonical cause is a runtime GC pause).
+    // A pause outlives the TTL (the canonical cause is a runtime GC pause),
+    // and a rival takes the space meanwhile and leaves it again.
     clock += EXECUTION_LEASE_TTL_MS + 1;
+    const rival = executionLeaseHolder(SERVICE, "other-process");
+    assert(
+      acquireExecutionLease(engine, {
+        space: SPACE,
+        holder: rival,
+        now: clock,
+      }),
+    );
+    releaseExecutionLease(engine, { space: SPACE, holder: rival });
 
     // The renewal fails: the tenure ends HERE, before any reacquire is
     // possible — "stop committing immediately".
-    assert(!cycle.renew());
+    assertEquals(cycle.renew(), "lost");
     assert(!cycle.held);
     assert(!cycle.isCurrentTenure(sealedTenure));
 
@@ -518,7 +551,16 @@ Deno.test("discipline (C7b): without the in-process check the same-process stale
     });
     assert(cycle.acquire());
     clock += EXECUTION_LEASE_TTL_MS + 1;
-    assert(!cycle.renew());
+    const rival = executionLeaseHolder(SERVICE, "other-process");
+    assert(
+      acquireExecutionLease(engine, {
+        space: SPACE,
+        holder: rival,
+        now: clock,
+      }),
+    );
+    releaseExecutionLease(engine, { space: SPACE, holder: rival });
+    assertEquals(cycle.renew(), "lost");
     assert(cycle.acquire()); // same holder, new tenure, live again
 
     // Deliver the pre-expiry probe WITHOUT consulting the discipline: the

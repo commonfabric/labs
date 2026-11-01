@@ -36,7 +36,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   applyCommit,
   applyWaveCommit,

@@ -17,7 +17,7 @@ import {
 } from "@commonfabric/data-model-schema/schema-refs";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 
-import { getLogger } from "../../../base/utils/src/logger.ts";
+import { getLogger } from "../../../base/logger/src/logger.ts";
 import type { NormalizedFullLink } from "./link-utils.ts";
 import type {
   IExtendedStorageTransaction,

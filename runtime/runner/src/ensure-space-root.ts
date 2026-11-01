@@ -20,10 +20,11 @@
 //   until the repair pair moves (design §2; this stage's report records
 //   the gate);
 // - FRESHNESS. Following a root's origin is the ordinary piece
-//   reconciliation, and that runs when a USER opens the piece
-//   (`SourceReconciler.reconcile`, called from `PiecesController`). A
-//   serving tenure opens nothing, so it owes the space existence and
-//   nothing more;
+//   reconciliation, and that runs on the piece's START: a user's open on a
+//   client that runs the piece (`SourceReconciler.reconcile`, called from
+//   `PiecesController`), or the serving runtime's first start of it in a
+//   tenure (`ensurePieceRunning` with `originFollowed`). Ensuring the root
+//   starts nothing, so it owes the space existence and nothing more;
 // - the custom `defaultAppUrl` read — the opening user's home-config read
 //   is client identity through and through, and the server-side
 //   owner-scoped fetch is an UNRULED fork (design §3, open question 3):
@@ -37,7 +38,7 @@
 
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import type { GenesisRoot, SourcedGenesisRoot } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Cell } from "./cell.ts";
 import {

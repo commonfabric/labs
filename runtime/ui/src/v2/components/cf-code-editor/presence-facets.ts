@@ -8,7 +8,7 @@
 
 import type { FabricPlainObject } from "@commonfabric/data-model";
 import type { PresenceRecord } from "@commonfabric/runtime-client";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type {
   ParticipantPresence,

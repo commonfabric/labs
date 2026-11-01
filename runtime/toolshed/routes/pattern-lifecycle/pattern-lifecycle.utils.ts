@@ -14,7 +14,11 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
-import type { Server } from "@commonfabric/memory/v2/server";
+import type {
+  PatternLifecycleCall,
+  PatternLifecycleOutcome,
+  Server,
+} from "@commonfabric/memory/v2/server";
 import type {
   ServedInstantiateReceipt,
   ServedLifecycleReceipts,
@@ -32,10 +36,22 @@ import {
   type LifecyclePhaseTiming,
   LifecycleVerbFailure,
 } from "@commonfabric/runner/executor/lifecycle-verb";
+import type { RoutedScope } from "@commonfabric/runner/executor/routed-plane";
 import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
 } from "@/lib/space-authority.ts";
+import { lifecycleBodies } from "./pattern-lifecycle.routes.ts";
+
+/**
+ * The part of a routed scope a registration delivery uses: the append into
+ * the stream's space and the watch on its document, and the release of the
+ * session when the delivery is done.
+ */
+export type RegistrationDeliveryScope = Pick<
+  RoutedScope,
+  "append" | "watchDocument" | "dispose"
+>;
 
 export interface LifecycleDeps {
   /** What the writer check reads the space's ACL through. */
@@ -49,6 +65,14 @@ export interface LifecycleDeps {
    * bookkeeping under the lease.
    */
   host: () => ServedLifecycleVerbRunner | undefined;
+
+  /**
+   * The routed plane to other spaces' owners while the process routes its
+   * crossings (docs/plans/serving-loop-owner-routing.md), as the scope
+   * members a delivery uses; `undefined` while it does not, and then every
+   * delivery goes to this process's own server.
+   */
+  route?: () => { scope(): RegistrationDeliveryScope } | undefined;
 
   /** Trusted event ingress after this route authenticates and authorizes the caller. */
   append: Server["commitDelegatedAppend"];
@@ -370,6 +394,7 @@ async function instantiate(
     : await observeRegistrationDelivery(
       deps,
       callerDid,
+      input.space,
       prepared.body.delivery,
     );
   if (prepared.body.delivery !== undefined) {
@@ -387,10 +412,80 @@ async function instantiate(
     : incomplete(prepared.body.receipt, "completion", finished.body.code);
 }
 
+/**
+ * A registration event as the delivery's transport sends it: the entry
+ * without the session and position each transport numbers its own way.
+ */
+type DeliveryEntry = Omit<
+  Parameters<Server["commitDelegatedAppend"]>[0],
+  "sessionId" | "localSeq"
+>;
+
+/**
+ * How a registration's delivery reaches the stream's space: where it appends
+ * the event, and where it watches the stream's document for the event's
+ * outcome.
+ */
+export interface DeliveryTransport {
+  /** Sends the registration event into the stream's space, at least once. */
+  append: (entry: DeliveryEntry) => Promise<unknown>;
+
+  /**
+   * Calls `onChange` each time the document `id` in `space` changes, until
+   * the returned function is called.
+   */
+  watch: (
+    space: MemorySpace,
+    id: string,
+    onChange: () => void,
+  ) => Promise<() => void>;
+
+  /** Releases what the transport holds. */
+  dispose: () => void;
+}
+
+/**
+ * The transport for a registration into `streamSpace` from a verb that ran
+ * in `verbSpace`: the process's own server when the stream's space is the
+ * verb's, which this process serves, and otherwise the stream's owner
+ * through the route while the process has one. Without a route every
+ * delivery stays on this process's server.
+ */
+export function registrationDeliveryTransport(
+  deps: Pick<LifecycleDeps, "append" | "watchAdmittedCommits" | "route">,
+  verbSpace: string,
+  streamSpace: string,
+): DeliveryTransport {
+  const route = verbSpace === streamSpace ? undefined : deps.route?.();
+  if (route === undefined) {
+    return {
+      append: (entry) =>
+        deps.append({ ...entry, sessionId: crypto.randomUUID(), localSeq: 1 }),
+      watch: (space, id, onChange) =>
+        Promise.resolve(deps.watchAdmittedCommits((notice) => {
+          if (
+            notice.space === space &&
+            notice.writes.some((write) => write.id === id)
+          ) onChange();
+        })),
+      dispose: () => {},
+    };
+  }
+  // The owner's session names the target, and the plane numbers the entry.
+  const scope = route.scope();
+  return {
+    append: ({ targetSpace, ...entry }) =>
+      scope.append(targetSpace as MemorySpace, entry),
+    watch: (space, id, onChange) => scope.watchDocument(space, id, onChange),
+    dispose: () => scope.dispose(),
+  };
+}
+
 /** Observe only a server-prepared stream; no process-identity session reads private space data. */
 async function observeRegistrationDelivery(
   deps: LifecycleDeps,
   callerDid: string,
+  verbSpace: string,
   delivery: NonNullable<ServedRegistrationPreparation["delivery"]>,
 ): Promise<ServedRegistrationOutcome> {
   const { stream, eventId, piece } = delivery;
@@ -429,16 +524,17 @@ async function observeRegistrationDelivery(
       if (outcome !== undefined) consequence.resolve(outcome);
     }).catch((error) => consequence.reject(error));
   };
-  const cancel = deps.watchAdmittedCommits((notice) => {
-    if (
-      notice.space === stream.space &&
-      notice.writes.some((write) => write.id === targetStream)
-    ) observe();
-  });
-  observe();
+  const transport = registrationDeliveryTransport(
+    deps,
+    verbSpace,
+    stream.space,
+  );
+  let cancel: (() => void) | undefined;
   try {
+    cancel = await transport.watch(stream.space, targetStream, observe);
+    observe();
     const [, outcome] = await Promise.all([
-      deps.append({
+      transport.append({
         targetSpace: stream.space,
         targetStream,
         targetStreamLink: stream,
@@ -447,8 +543,6 @@ async function observeRegistrationDelivery(
         actingPrincipal: callerDid,
         actingSession: callerDid,
         capabilityRef: `stream-append:${targetStream}`,
-        sessionId: crypto.randomUUID(),
-        localSeq: 1,
       }),
       consequence.promise,
     ]);
@@ -464,7 +558,8 @@ async function observeRegistrationDelivery(
     return { error: error instanceof Error ? error.message : String(error) };
   } finally {
     finished = true;
-    cancel();
+    cancel?.();
+    transport.dispose();
   }
 }
 
@@ -528,4 +623,67 @@ export async function processSetSource(
       start: input.start !== false,
     },
   });
+}
+
+/**
+ * Runs one `pattern.lifecycle` request the memory server handed over: the
+ * verb's arguments are validated as the HTTP route validates its body, the
+ * verb runs as `call.principal`, and the result becomes the outcome the
+ * memory server answers with. A body that fails validation is refused as
+ * `invalid-request`.
+ */
+export async function processLifecycleCall(
+  deps: LifecycleDeps,
+  call: PatternLifecycleCall,
+): Promise<PatternLifecycleOutcome> {
+  const result = await lifecycleResult(deps, call);
+  if (result === undefined) {
+    return {
+      refusal: {
+        code: "invalid-request",
+        message:
+          `The \`${call.verb}\` arguments do not match the verb's schema`,
+      },
+    };
+  }
+  return result.status === 200
+    ? { ok: result.body }
+    : { refusal: { code: result.body.code, message: result.body.error } };
+}
+
+/**
+ * Helper for `processLifecycleCall()`, which validates the arguments and
+ * runs the verb, returning `undefined` for arguments that fail validation.
+ */
+async function lifecycleResult(
+  deps: LifecycleDeps,
+  { space, principal, verb, body }: PatternLifecycleCall,
+): Promise<
+  | LifecycleResult<
+    | { pattern: ServedPatternRef }
+    | InstantiateReceipt
+    | ServedSetSourceReceipt
+  >
+  | undefined
+> {
+  switch (verb) {
+    case "upload": {
+      const parsed = lifecycleBodies.upload.safeParse(body);
+      return parsed.success
+        ? await processUpload(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+    case "instantiate": {
+      const parsed = lifecycleBodies.instantiate.safeParse(body);
+      return parsed.success
+        ? await processInstantiate(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+    case "setsrc": {
+      const parsed = lifecycleBodies.setsrc.safeParse(body);
+      return parsed.success
+        ? await processSetSource(deps, principal, { space, ...parsed.data })
+        : undefined;
+    }
+  }
 }

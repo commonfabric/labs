@@ -59,7 +59,7 @@
 import { parse as parseJsonc } from "@std/jsonc";
 import { walk } from "@std/fs/walk";
 import { dirname, fromFileUrl, join, relative } from "@std/path";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 

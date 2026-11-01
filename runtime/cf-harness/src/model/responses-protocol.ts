@@ -1,7 +1,10 @@
 import { encodeHex } from "@std/encoding/hex";
 
 import { sha256 } from "@commonfabric/content-hash";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { OPENAI_WEB_SEARCH_NATIVE_MODEL_TOOL } from "../contracts/native-model-tool.ts";
 import type { HarnessModelToolDescriptor } from "../contracts/tool-descriptor.ts";

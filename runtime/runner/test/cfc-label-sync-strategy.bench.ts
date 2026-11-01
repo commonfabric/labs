@@ -27,7 +27,7 @@
  *   - pure-read        [new] — no sync at all (caller owns liveness).
  */
 
-import { sleep } from "@commonfabric/utils/sleep";
+import { sleep } from "@commonfabric/async/sleep";
 
 // Fan-out of a deeply-nested piece's root meta-graph (root + sub-pattern
 // surfaces + their argument/pattern docs).

@@ -22,7 +22,7 @@
  * these numbers reads them before it commits.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { IAttestation } from "../src/storage/interface.ts";
 
 /** One top-level write: a document, a path in it, and the value written. */

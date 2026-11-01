@@ -8,9 +8,11 @@
     "./clock-preload": "./test/clock-preload.ts",
     "./compile-byte-cache": "./src/compile-byte-cache.ts",
     "./coverage-profiles": "./src/coverage-profiles.ts",
+    "./equal-ignoring-symbols": "./src/equal-ignoring-symbols.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
     "./isolated-deno": "./src/isolated-deno.ts",
     "./records": "./src/records/mod.ts",
+    "./remove-directory": "./src/remove-directory.ts",
     "./shuffle": "./src/shuffle.ts",
     "./stuck-net": "./test/stuck-net.ts"
   },

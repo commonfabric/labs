@@ -267,11 +267,16 @@ For a stream a nested pattern defines, that structure is the enclosing
 piece's graph: the stream belongs to the nested instance, whose inputs
 the enclosing instance derives, so the auto-start starts the pieces
 those inputs come from first and leaves the nested instance to run as
-their child (`EnsurePieceOptions.startInputSources`). An argument whose
-links cannot be read fails the start rather than running the handler
-over what those pieces derived last. A client under server execution
-runs the handler only as its speculative echo, which the served run
-replaces, so its auto-start starts the nested instance alone.
+their child (`EnsurePieceOptions.startInputSources`). On a serving
+runtime each of those pieces has its origin followed before it starts,
+as the event's own piece does (serving-loop.md §3e), and a start one of
+them is still owed defers the event until the follow has run: a nested
+handler is not run against what the enclosing piece derived from the
+source it had. An argument whose links cannot be read fails the start
+rather than running the handler over what those pieces derived last. A
+client under server execution runs the handler only as its speculative
+echo, which the served run replaces, so its auto-start starts the nested
+instance alone.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

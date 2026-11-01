@@ -10,7 +10,7 @@
  * pair. Cursor moves step whole characters; edits splice whole characters.
  */
 
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 
 /** What a kill operation appends to: tracks consecutive kills for accretion. */
 type LastKill = "none" | "append" | "prepend";

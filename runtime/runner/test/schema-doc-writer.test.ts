@@ -10,7 +10,7 @@ import {
   newLoopbackServer,
 } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { createSigilLinkFromParsedLink } from "../src/link-utils.ts";
 import type { NormalizedLink } from "../src/link-types.ts";
 import { resetContentAddressedSchemasConfig } from "../src/schema-doc-config.ts";

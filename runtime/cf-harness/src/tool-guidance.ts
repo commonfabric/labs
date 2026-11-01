@@ -12,6 +12,9 @@
  * instead, which explains itself where it lands.
  */
 
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import type { BuiltinToolId } from "./contracts/tool-descriptor.ts";
+
 import { LOOM_COMMAND_UNTRUSTED_NOTICE } from "./tools/loom-commands.ts";
 import { RUNTIME_MODULE_IMPORT_LINE } from "./tools/run-pattern.ts";
 
@@ -72,17 +75,20 @@ export const PIECES_TOOL_GUIDANCE = [
 
 /** When to resolve a piece the user names, for any task that may name one. */
 export const RESOLVE_PIECE_TOOL_GUIDANCE =
-  "When the user names a piece by its slug, including in a question, call resolve_piece before author delegation or a registry lookup, and pass the resultRef it returns to the pattern-author child to read or revise the piece. A missing or refused address means asking for the exact slug or an attachment, not authoring a name matcher.";
+  "resolve_piece resolves a slug to a resultRef that can be passed to a pattern-author child to read or revise the piece. A missing or refused address does not establish the contents of a piece.";
 
 /** How to run the host's commands, for a task that finds or acts. */
 export const LOOM_COMMANDS_TOOL_GUIDANCE = [
   "Running the host's commands:",
   "- A listed command with target loom takes a loomId. Pass expectedVersion to refuse a stale write.",
   "- Batch independent calls into one run_command as {calls: [...]}; they run concurrently and answer in order.",
-  "- Under an enforcing mode, run_command runs only for a task bound as a direct command, and a context-bound task reads through run_read_command instead, which takes the same calls and sends only a command the fresh listing shows with effect read and readOnlyGranted.",
   "- not_granted means this run may not run the command: do not retry; if the person should, offer it in your result.",
   `- ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
 ].join("\n");
+
+/** The command-policy warning only an enforcing run needs. */
+export const COMMAND_ENFORCEMENT_GUIDANCE =
+  "Under enforce-explicit, CFS-declared reads may run from context or unbound prompt slots. Writes, external effects, unknown effects, and mixed batches need a direct command. Under enforce-strict, every call needs a direct command.";
 
 /** How the loom retrieval tools answer, for a task that finds or acts. */
 export const LOOM_RETRIEVAL_TOOL_GUIDANCE =
@@ -93,6 +99,8 @@ export interface ToolGuidanceBacking {
   fabricSessionAvailable: boolean;
   loomCommandsAvailable: boolean;
   loomRetrievalAvailable: boolean;
+  allowedToolIds?: readonly BuiltinToolId[];
+  cfcEnforcementMode?: CfcEnforcementMode;
 }
 
 /** The tool guidance a session with these backings opens with, every tag's. */
@@ -107,6 +115,23 @@ export const toolGuidanceContextMessages = (
       RESOLVE_PIECE_TOOL_GUIDANCE,
     ]
     : []),
-  ...(backing.loomCommandsAvailable ? [LOOM_COMMANDS_TOOL_GUIDANCE] : []),
-  ...(backing.loomRetrievalAvailable ? [LOOM_RETRIEVAL_TOOL_GUIDANCE] : []),
+  ...(backing.loomCommandsAvailable &&
+      (backing.allowedToolIds === undefined ||
+        backing.allowedToolIds.includes("run_command"))
+    ? [
+      LOOM_COMMANDS_TOOL_GUIDANCE,
+      ...(backing.cfcEnforcementMode === "enforce-explicit" ||
+          backing.cfcEnforcementMode === "enforce-strict"
+        ? [COMMAND_ENFORCEMENT_GUIDANCE]
+        : []),
+    ]
+    : []),
+  ...(backing.loomRetrievalAvailable &&
+      (backing.allowedToolIds === undefined ||
+        backing.allowedToolIds.some((tool) =>
+          tool.startsWith("loom_") && tool !== "loom_compose" &&
+          tool !== "loom_inspect" && tool !== "loom_authoring_context"
+        ))
+    ? [LOOM_RETRIEVAL_TOOL_GUIDANCE]
+    : []),
 ];

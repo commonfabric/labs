@@ -1,4 +1,4 @@
-import { BoundedKeyMap } from "@commonfabric/utils/cache";
+import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import type { ActionReadStats, ActionStats } from "../telemetry.ts";
 import type { Action } from "./types.ts";
 

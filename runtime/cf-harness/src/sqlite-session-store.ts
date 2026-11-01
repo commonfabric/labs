@@ -1,7 +1,7 @@
 import { fromFileUrl } from "@std/path";
 
 import { Database } from "@db/sqlite";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   type HarnessChatBrowserAccessLease,

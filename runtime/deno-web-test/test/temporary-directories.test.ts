@@ -17,7 +17,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 
-import { removeDirectory } from "@commonfabric/utils/remove-directory";
+import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { RUN_DIRECTORY_PREFIX } from "../manifest.ts";
 import { runDenoWebTest } from "./utils.ts";

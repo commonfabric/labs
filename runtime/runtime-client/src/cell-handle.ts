@@ -28,8 +28,11 @@ import {
   refuseFabricInstance,
   type SigilLink,
 } from "@commonfabric/runner/shared";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { InitializedRuntimeConnection } from "./client/connection.ts";
 import {

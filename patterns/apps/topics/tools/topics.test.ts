@@ -15,6 +15,7 @@ import {
   runProgram,
   searchAction,
   showAction,
+  similarAction,
   stdinText,
   syncAction,
   titleAction,
@@ -338,6 +339,47 @@ describe("topics command", () => {
       expect(printed()).toBe("0 of 2 Topics match.");
       await searchAction({}, ["Ada ("], deps);
       expect(printed()).toMatch(/^top\/1 .*\n1 of 2 Topics match\.$/);
+    });
+  });
+
+  describe("similarAction()", () => {
+    it("prints the Topics like the text, most similar first, with their similarity and shared words, and a count", async () => {
+      await similarAction({}, "Cold oil in a fryer, and a glaze.", deps);
+
+      expect(printed()).toMatch(
+        new RegExp(
+          "^top/1  1970-01-01  Flaky fryer test  \\[1 comment\\]\n" +
+            "    similarity 0\\.\\d\\d; shared words: fryer, cold, oil\n" +
+            "top/2  .*  Donut glaze\n" +
+            "    similarity 0\\.\\d\\d; shared words: glaze\n" +
+            "2 of 2 Topics share words with the text\\.$",
+        ),
+      );
+    });
+
+    it("lists the most similar Topics up to the limit, saying how many more share words", async () => {
+      await similarAction({ limit: 1 }, "glaze glaze fryer", deps);
+
+      expect(printed()).toBe([
+        "top/2  1970-01-01  Donut glaze",
+        "    similarity 0.63; shared words: glaze",
+        "2 Topics share words with the text; these are the 1 most like it " +
+        "(`--limit` lists more).",
+      ].join("\n"));
+    });
+
+    it("reads the text from stdin when it is not an argument, and refuses no text", async () => {
+      stdin = "Which Topic covers cold oil?";
+      await similarAction({}, undefined, deps);
+
+      expect(printed()).toMatch(/^top\/1 .*\n.*: cold, oil\n1 of 2 Topics/);
+      stdin = undefined;
+      await expect(similarAction({}, undefined, deps)).rejects.toThrow(
+        "Give the text as an argument or on stdin.",
+      );
+      await expect(similarAction({}, " \n", deps)).rejects.toThrow(
+        "Give the text as an argument or on stdin.",
+      );
     });
   });
 
@@ -1043,6 +1085,49 @@ describe("topics command", () => {
         "`--in` takes a comma-separated list of title, body, comments, " +
           "links, authors.",
       );
+    });
+
+    it("ranks for `similar` from the copy as it stands with `--offline`, leaving out Topics whose titles match `--exclude`", async () => {
+      await run("similar", "fryer glaze");
+      const both = printed();
+      await main(
+        ["similar", "fryer glaze", "--offline", "--exclude", "^Donut"],
+        { ...deps, openDocSource: () => Promise.reject(new Error("online")) },
+      );
+
+      expect(both).toMatch(/^top\/2 .*\n.*\ntop\/1 .*\n.*\n2 of 2 Topics/);
+      expect(printed()).toMatch(/^top\/1 .*\n.*: fryer\n1 of 2 Topics/);
+    });
+
+    it("throws for `similar` given two texts, an option it does not take, or a bad limit", async () => {
+      await expect(run("similar", "a", "b")).rejects.toThrow(
+        "`similar` takes 0 to 1 arguments",
+      );
+      await expect(run("similar", "a", "--in", "title")).rejects.toThrow(
+        "`similar` takes no `--in`.",
+      );
+      await expect(run("similar", "a", "-n", "1.5")).rejects.toThrow(
+        "`--limit` takes a positive whole number.",
+      );
+    });
+
+    it("prints JSON for `similar --json`", async () => {
+      await run("similar", "cold oil", "--json");
+
+      expect(JSON.parse(printed())).toEqual({
+        matching: 1,
+        topics: [{
+          number: "1",
+          address: "/of:fid1:topic-alias-1",
+          title: "Flaky fryer test",
+          createdAt: 1000,
+          createdBy: "Sol (agent)",
+          lastActivityAt: expect.any(Number),
+          comments: 1,
+          similarity: expect.any(Number),
+          shared: ["cold", "oil"],
+        }],
+      });
     });
 
     it("prints JSON for `search --json` and `show --json`", async () => {

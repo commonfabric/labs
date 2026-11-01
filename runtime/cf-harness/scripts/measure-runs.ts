@@ -24,7 +24,10 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { basename, join } from "@std/path";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   recordUndeclaredFlags,
   refuseFlagsWithoutValue,

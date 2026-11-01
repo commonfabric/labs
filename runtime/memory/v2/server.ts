@@ -1,7 +1,7 @@
 import * as FS from "@std/fs";
 import * as Path from "@std/path";
 
-import type { FabricValue } from "@commonfabric/api";
+import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import {
   cloneIfNecessary,
   isFabricPlainObject,
@@ -10,13 +10,14 @@ import {
 } from "@commonfabric/data-model";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
-import { getLogger } from "@commonfabric/utils/logger";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { getLogger } from "@commonfabric/logger";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
   type ACL,
   aclDocId,
+  aclOwner,
   ANYONE_USER,
   type Capability,
   hasConcreteOwner,
@@ -66,6 +67,9 @@ import {
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
   parseSessionReadCeiling,
+  PATTERN_LIFECYCLE_MAX_BYTES,
+  type PatternLifecycleRequest,
+  type PatternLifecycleVerb,
   type PresenceJoinRequest,
   type PresenceJoinResult,
   type PresenceLeaveRequest,
@@ -77,6 +81,9 @@ import {
   type ScopeKey,
   scopeKeyApplicableTo,
   type ScopeKeyIdentity,
+  SERVED_REQUEST_MAX_BYTES,
+  type ServedRequest,
+  type ServedRequestKind,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   type ServerMessage,
   type SessionAckRequest,
@@ -93,6 +100,7 @@ import {
   type SessionSync,
   type SessionViewHandle,
   type SessionViewInterest,
+  type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteNamedParamsWire,
   type SqliteNativeRow,
@@ -142,8 +150,9 @@ import {
   executeInvite,
   type InviteRequest,
   type InviteResult,
+  parseInviteOperation,
 } from "./invites.ts";
-import { SpaceInviteError } from "../space-invites.ts";
+import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -207,7 +216,10 @@ import {
   trackedIdsFromEntries,
   unionQuery,
 } from "./server-sync.ts";
-import { authorizationError } from "./session-open-auth.ts";
+import {
+  authorizationError,
+  verifySessionOpenProofs,
+} from "./session-open-auth.ts";
 import {
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -753,15 +765,7 @@ export const resolveSpaceOwnerOf = (
   space: string,
 ): string | undefined => {
   const state = readAclState(engine, space);
-  if (state.kind !== "valid") return undefined;
-  if (state.acl[space] === "OWNER") return space;
-  const owners = Object.entries(state.acl)
-    .filter(([principal, capability]) =>
-      principal !== ANYONE_USER && capability === "OWNER"
-    )
-    .map(([principal]) => principal)
-    .sort();
-  return owners[0];
+  return state.kind === "valid" ? aclOwner(state.acl, space) : undefined;
 };
 
 const commitTouchesAclDoc = (
@@ -896,6 +900,47 @@ const sessionKey = (space: string, sessionId: string): string =>
 const MAX_STAGED_WATCH_SET_PARTS = 64;
 const MAX_STAGED_WATCH_SET_CHARACTERS = 64 * 1024 * 1024;
 
+/** Whether an invitation service result is a redemption's receipt. */
+const isRedeemReceipt = (
+  result: InviteResult["result"],
+): result is RedeemReceipt => !Array.isArray(result) && "outcome" in result;
+
+/** The response refusing a `space.invite` request with the service's `code`. */
+const spaceInviteRefusal = (
+  requestId: string,
+  code: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: {
+    name: "SpaceInviteRefusal",
+    message: `The invitation service refused the request: ${code}`,
+    code,
+  },
+});
+
+/** The response refusing a `pattern.lifecycle` request for `code`. */
+const patternLifecycleRefusal = (
+  requestId: string,
+  code: string,
+  message: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: { name: "PatternLifecycleRefusal", message, code },
+});
+
+/** The response refusing a `served` request for `code`. */
+const servedRequestRefusal = (
+  requestId: string,
+  code: string,
+  message: string,
+): ResponseMessage<never> => ({
+  type: "response",
+  requestId,
+  error: { name: "ServedRequestRefusal", message, code },
+});
+
 /**
  * A transport's sender. `payload`, when given, is `message` already encoded,
  * which the transport sends instead of encoding it again.
@@ -945,6 +990,16 @@ type SessionHandle = {
    */
   principal?: string;
   leaseEnd?: number;
+
+  /**
+   * The unix second the proof chain the session's open presented stops
+   * holding (04-protocol.md §4.5.1, "Proof chains"); absent for a session
+   * opened without a chain, or with one that does not expire. Past it the
+   * session is refused every request and sent nothing, since the grant it
+   * acts under came from the chain and the chain is gone; unlike a lease,
+   * nothing renews it short of a new open with a fresh chain.
+   */
+  delegationEnd?: number;
 };
 
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
@@ -1471,9 +1526,23 @@ class Connection {
     this.#send(response, { space, sessionId });
   }
 
-  addSession(space: string, sessionId: string, principal?: string): void {
+  addSession(
+    space: string,
+    sessionId: string,
+    principal?: string,
+    delegationEnd?: number,
+  ): void {
     const key = sessionKey(space, sessionId);
-    if (this.#sessions.has(key)) {
+    const existing = this.#sessions.get(key);
+    if (existing !== undefined) {
+      // Every open re-derives the chain's deadline, as the registry
+      // re-derives the capability principal: a reopen with a later chain
+      // moves it, and a reopen presenting no chain clears it.
+      if (delegationEnd === undefined) {
+        delete existing.delegationEnd;
+      } else {
+        existing.delegationEnd = delegationEnd;
+      }
       return;
     }
     const lease = principal === undefined
@@ -1485,6 +1554,7 @@ class Connection {
       ...(principal === undefined || lease === undefined
         ? {}
         : { principal, leaseEnd: lease.leaseEnd }),
+      ...(delegationEnd === undefined ? {} : { delegationEnd }),
     });
   }
 
@@ -1553,6 +1623,12 @@ class Connection {
   #leaseExpired(handle: SessionHandle): boolean {
     return handle.leaseEnd !== undefined &&
       handle.leaseEnd <= this.#server.nowSeconds();
+  }
+
+  /** Whether the proof chain the session was opened with has expired. */
+  #delegationEnded(handle: SessionHandle): boolean {
+    return handle.delegationEnd !== undefined &&
+      handle.delegationEnd < this.#server.nowSeconds();
   }
 
   /** Ends the authentication of `principal`, if it has one. */
@@ -1766,6 +1842,13 @@ class Connection {
   /** Pushes one presence message to this connection's peer. */
   sendPresence(message: PresenceUpsertMessage | PresenceRemoveMessage): void {
     if (this.#closed) return;
+    // A recipient whose proof chain has expired is sent nothing, as in the
+    // delivery loop: the grant it joined under is gone, and its next request
+    // ends it and its membership.
+    const handle = this.#sessions.get(
+      sessionKey(message.space, message.sessionId),
+    );
+    if (handle !== undefined && this.#delegationEnded(handle)) return;
     this.#send(message);
   }
 
@@ -1804,7 +1887,7 @@ class Connection {
         const startedAt = performance.now();
         timing.time(arrivedAt, startedAt, "memory", "frame", "queue");
         try {
-          await this.#receiveOrdered(parsed, payload.length);
+          await this.#receiveOrdered(parsed, payload);
         } catch (error) {
           if (!this.#answerFailedRequest(parsed, error)) throw error;
         } finally {
@@ -1969,6 +2052,23 @@ class Connection {
       });
       return false;
     }
+    if (this.#delegationEnded(handle)) {
+      // Not renewable: the grant came from the chain, and only a new open
+      // with a fresh chain brings one. The session is ended so the client
+      // learns that rather than retrying into the same refusal.
+      this.revokeSession(space, sessionId, "unauthorized");
+      this.#server.detachSession(space, sessionId, this.id);
+      this.#send({
+        type: "response",
+        requestId,
+        error: toError(
+          "AuthorizationError",
+          "memory session.open proof chain has expired; open the session " +
+            "again with a current chain",
+        ),
+      });
+      return false;
+    }
     if (this.#leaseExpired(handle)) {
       // Renewable: a `connection.auth` for the principal restores the
       // session, so the refusal is marked as one a retry heals.
@@ -2060,8 +2160,9 @@ class Connection {
 
   async #receiveOrdered(
     parsed: ClientMessage | RejectedClientMessage | null,
-    characters: number,
+    payload: string,
   ): Promise<void> {
+    const characters = payload.length;
     if (this.#closed) {
       return;
     }
@@ -2553,6 +2654,145 @@ class Connection {
           );
         }
         return;
+      case "pattern.lifecycle": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        // A UTF-16 code unit takes at most three UTF-8 bytes, so only a
+        // message long enough to pass the bound pays for the encoding that
+        // measures it.
+        if (
+          characters > PATTERN_LIFECYCLE_MAX_BYTES / 3 &&
+          new TextEncoder().encode(payload).length >
+            PATTERN_LIFECYCLE_MAX_BYTES
+        ) {
+          this.#send(patternLifecycleRefusal(
+            parsed.requestId,
+            "payload-too-large",
+            `A \`pattern.lifecycle\` request takes at most ${PATTERN_LIFECYCLE_MAX_BYTES} bytes`,
+          ));
+          return;
+        }
+        // A verb runs for as long as a compile and a wave commit take, so it
+        // is not awaited: the frames behind it for this space go ahead, and
+        // a routed host returns the request's credit to the router once this
+        // handling returns. The answer goes out when the verb settles.
+        const { space, sessionId, requestId } = parsed;
+        void this.#server.runPatternLifecycle(parsed).then((response) => {
+          // A connection that closed while the verb ran has no one to tell.
+          if (this.#closed) return;
+          try {
+            this.#sendSessionResponse(space, sessionId, requestId, response);
+          } catch (error) {
+            // Nothing awaits this answer, so a transport that refuses it is
+            // reported here rather than left as an unhandled rejection, and
+            // the client is told what it can be told: that the outcome is
+            // unknown, or failing that, by losing the connection.
+            console.error(
+              `memory v2: the answer to a \`pattern.lifecycle\` ${parsed.verb} could not be sent`,
+              error,
+            );
+            try {
+              this.#send(patternLifecycleRefusal(
+                requestId,
+                "internal",
+                `The answer to the ${parsed.verb} could not be sent`,
+              ));
+            } catch {
+              this.close();
+            }
+          } finally {
+            this.#answered.delete(requestId);
+          }
+        }).catch((error: unknown) => {
+          console.error(
+            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
+            error,
+          );
+        });
+        return;
+      }
+      case "served": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        // Measured as a `pattern.lifecycle` request is: only a message long
+        // enough to pass the bound pays for the encoding that measures it.
+        if (
+          characters > SERVED_REQUEST_MAX_BYTES / 3 &&
+          new TextEncoder().encode(payload).length > SERVED_REQUEST_MAX_BYTES
+        ) {
+          this.#send(servedRequestRefusal(
+            parsed.requestId,
+            "payload-too-large",
+            `A \`served\` request takes at most ${SERVED_REQUEST_MAX_BYTES} bytes`,
+          ));
+          return;
+        }
+        // A crossing takes as long as its admission does, so the request is
+        // not awaited, as a lifecycle verb is not: the frames behind it go
+        // ahead, and the answer goes out when the crossing settles.
+        const { space, sessionId, requestId } = parsed;
+        void this.#server.runServedRequest(parsed).then((response) => {
+          if (this.#closed) return;
+          try {
+            this.#sendSessionResponse(space, sessionId, requestId, response);
+          } catch (error) {
+            console.error(
+              `memory v2: the answer to a \`served\` ${parsed.kind} could not be sent`,
+              error,
+            );
+            try {
+              this.#send(servedRequestRefusal(
+                requestId,
+                "internal",
+                `The answer to the ${parsed.kind} could not be sent`,
+              ));
+            } catch {
+              this.close();
+            }
+          } finally {
+            this.#answered.delete(requestId);
+          }
+        }).catch((error: unknown) => {
+          console.error(
+            `memory v2: answering a \`served\` ${parsed.kind} failed`,
+            error,
+          );
+        });
+        return;
+      }
+      case "space.invite": {
+        if (
+          !this.#requireSession(
+            parsed.requestId,
+            parsed.space,
+            parsed.sessionId,
+          )
+        ) {
+          return;
+        }
+        const response = await this.#server.administerInvites(parsed);
+        this.#sendSessionResponse(
+          parsed.space,
+          parsed.sessionId,
+          parsed.requestId,
+          response,
+        );
+        return;
+      }
     }
   }
 
@@ -2588,6 +2828,11 @@ class Connection {
       // A session under a lease that has run out is sent nothing until the
       // lease is renewed, which evaluates it again in full.
       if (this.#leaseExpired(handle)) {
+        continue;
+      }
+      // A session whose proof chain has expired is sent nothing: the grant
+      // it read under is gone, and its next request ends it.
+      if (this.#delegationEnded(handle)) {
         continue;
       }
       // A construction intentionally reuses one authenticated session id in
@@ -2742,6 +2987,74 @@ const isImmediateClientMessage = (
   message: ClientMessage | RejectedClientMessage,
 ): message is ImmediateClientMessage =>
   isPresenceClientMessage(message) || message.type === "session.report";
+
+/** One `pattern.lifecycle` request, as a `Server` hands it to its handler. */
+export type PatternLifecycleCall = {
+  /** The space the verb runs in. */
+  space: string;
+
+  /** The DID the request's session was opened as, which holds WRITE on `space`. */
+  principal: string;
+
+  verb: PatternLifecycleVerb;
+
+  /** The verb's arguments, as the client sent them and not yet validated. */
+  body: FabricPlainObject;
+};
+
+/**
+ * What a lifecycle handler returns: the verb's receipt, or a refusal with the
+ * stable code a client branches on.
+ */
+export type PatternLifecycleOutcome =
+  | { ok: FabricPlainObject }
+  | { refusal: { code: string; message: string } };
+
+/**
+ * Runs one pattern-lifecycle verb (`Server.setPatternLifecycleHandler()`).
+ * It is called once per request, concurrently with others, and may take as
+ * long as the verb does; a rejection is answered as an `internal` refusal.
+ */
+export type PatternLifecycleHandler = (
+  call: PatternLifecycleCall,
+) => Promise<PatternLifecycleOutcome>;
+
+/** One `served` request, as a `Server` hands it to its handler. */
+export type ServedRequestCall = {
+  /** The space the crossing lands in: the session's space. */
+  space: string;
+
+  /** The DID the session was opened as, which is in the delegating class. */
+  principal: string;
+
+  /** The session the request came on, which a commit it makes is keyed by. */
+  sessionId: string;
+
+  /** Which crossing the body carries. */
+  kind: ServedRequestKind;
+
+  /** The crossing, as the sender sent it and not yet validated. */
+  body: FabricPlainObject;
+};
+
+/**
+ * What a served request handler returns: the kind's result, or a refusal
+ * with the stable code the sender branches on. `refused` is a deterministic
+ * admission refusal, which the sender does not retry; `unavailable` says the
+ * owner cannot serve the crossing now, which the sender treats as transient.
+ */
+export type ServedRequestOutcome =
+  | { ok: FabricPlainObject }
+  | { refusal: { code: "refused" | "unavailable"; message: string } };
+
+/**
+ * Runs one `served` request (`Server.setServedRequestHandler()`). It is
+ * called once per request, concurrently with others, and may take as long
+ * as the crossing does; a rejection is answered as an `internal` refusal.
+ */
+export type ServedRequestHandler = (
+  call: ServedRequestCall,
+) => Promise<ServedRequestOutcome>;
 
 /**
  * The engine opener a test supplies in place of `Server`'s own step, which
@@ -2916,6 +3229,25 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
+   * What runs `pattern.lifecycle` requests: the deployment's serving side,
+   * installed with `setPatternLifecycleHandler()`. `undefined` until one is
+   * installed, and while it is the server refuses every such request.
+   */
+  #patternLifecycle: PatternLifecycleHandler | undefined;
+
+  /**
+   * What runs `served` requests; `undefined` while no handler is installed,
+   * and while it is the server refuses every such request as unavailable.
+   */
+  #servedRequests: ServedRequestHandler | undefined;
+
+  /**
+   * The `pattern.lifecycle` and `served` requests running now. Their frames'
+   * handling has returned, so `close()` waits for them here.
+   */
+  #lifecycleRuns = new Set<Promise<unknown>>();
+
+  /**
    * Additive watchers of the same admission hook, independent of the host's
    * observer above: any number attach, and each sees every notice.
    */
@@ -3076,6 +3408,15 @@ export class Server {
       ) => Promise<string | undefined> | string | undefined;
 
       /**
+       * The public origin that this server's invitation links name, as
+       * `normalizeInviteHost()` writes it. An invitation's code verifier is
+       * bound to it, so a server given one administers invitations through
+       * `space.invite` and advertises `spaceInvites`; a server given none
+       * refuses every `space.invite`.
+       */
+      inviteHost?: string;
+
+      /**
        * Authentication data advertised in `hello.ok` and enforced for
        * `session.open` on this server.
        */
@@ -3145,6 +3486,17 @@ export class Server {
          * empty.
          */
         delegatingDids?: readonly string[];
+
+        /**
+         * Whether a `session.open` may present a UCAN proof chain
+         * (04-protocol.md §4.5.1). When it may, the server verifies the
+         * chain and resolves the session's capability, READ, WRITE and
+         * OWNER alike, from the access list's grant to the chain's root
+         * issuer, while the session's principal stays the key that opened
+         * it. On unless set `false`; a server set `false` refuses an open
+         * presenting a chain and does not advertise `sessionOpenProofs`.
+         */
+        delegations?: boolean;
       };
     },
   ) {
@@ -3295,6 +3647,10 @@ export class Server {
       serverExecution: this.#serverExecutionObserver !== undefined,
       operationCodecs: this.#operationCodecs.ids(),
       connectionAuth: this.options.authorizeConnection !== undefined,
+      sessionOpenProofs: this.#admitsDelegations(),
+      patternLifecycle: this.#patternLifecycle !== undefined,
+      servedRequests: this.#servedRequests !== undefined,
+      spaceInvites: this.options.inviteHost !== undefined,
       routedAuthV1: false,
       routedCompressionV1: false,
     };
@@ -3384,6 +3740,11 @@ export class Server {
     return this.options.acl?.serviceDids?.includes(principal) ?? false;
   }
 
+  /** Whether a `session.open` may present a proof chain (`acl.delegations`). */
+  #admitsDelegations(): boolean {
+    return this.options.acl?.delegations !== false;
+  }
+
   #isDelegatingPrincipal(principal: string): boolean {
     return this.options.acl?.delegatingDids?.includes(principal) ?? false;
   }
@@ -3404,7 +3765,15 @@ export class Server {
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    return resolveSpaceOwnerOf(engine, space);
+    const owner = resolveSpaceOwnerOf(engine, space);
+    // A self-owned space with a declared kind is not a home: a profile owns
+    // itself (docs/specs/profile-delegation.md), and its DID is no user to
+    // act as. The binding then resolves nothing, and the envelope
+    // principal's own capability applies.
+    if (owner === space && this.#spaceKindOf(engine) !== undefined) {
+      return undefined;
+    }
+    return owner;
   }
 
   /**
@@ -3413,21 +3782,24 @@ export class Server {
    * #6209 §4 option (b)): the ensure's creation run carries an
    * owner-resolved per-run CFC trust snapshot — the follow-up OW59's
    * Q3 caveat pre-named — and derives its home-space predicate from
-   * the ACL (self-owned = home), because a serving runtime's
-   * `userIdentityDID` is the SERVICE DID. This is the same resolution
-   * the delegated READ binding uses ({@link #resolveSpaceOwnerBinding}),
-   * exposed as a first-class read: it IS the ruled "ACL can be read
-   * with service identity" (OW31, RULED 2026-08-19). `undefined` means
-   * no valid concrete-owner ACL resolves (missing, invalid, retracted,
-   * or ANYONE-only) — callers fail closed, never substitute the
-   * service DID (OW53's ruled shape; `homeSpacePrincipalFor`'s
-   * posture).
+   * the ACL and the declared kind (self-owned and declaring none =
+   * home), because a serving runtime's `userIdentityDID` is the SERVICE
+   * DID. This is the ACL read the
+   * delegated READ binding ({@link #resolveSpaceOwnerBinding}) starts
+   * from, exposed as a first-class read: it IS the ruled "ACL can be
+   * read with service identity" (OW31, RULED 2026-08-19). A self-owned
+   * space resolves to its own DID whatever kind it declares; only the
+   * binding reads the kind, and a caller deciding whether a space is a
+   * home reads it too. `undefined` means no valid concrete-owner ACL
+   * resolves (missing, invalid, retracted, or ANYONE-only) — callers
+   * fail closed, never substitute the service DID (OW53's ruled shape;
+   * `homeSpacePrincipalFor`'s posture).
    */
   resolveSpaceOwner(
     engine: Engine.Engine,
     space: string,
   ): string | undefined {
-    return this.#resolveSpaceOwnerBinding(engine, space);
+    return resolveSpaceOwnerOf(engine, space);
   }
 
   #invalidateAclCapabilities(space: string): void {
@@ -3635,9 +4007,13 @@ export class Server {
     // served writes ride the wave's §2b delegated carriage, and a
     // session-plane write by the serving identity stays refused (the
     // observe-mode canary's subject).
-    const principal = requirement === "READ"
-      ? session.actingPrincipal ?? session.principal
-      : session.principal;
+    // A proof chain's root issuer resolves every requirement: it is the
+    // principal whose grant the session acts under, OWNER included
+    // (04-protocol.md §4.5.1).
+    const principal = session.capabilityPrincipal ??
+      (requirement === "READ"
+        ? session.actingPrincipal ?? session.principal
+        : session.principal);
     return this.#authorizeMessageWithEngine(
       engine,
       space,
@@ -3893,7 +4269,8 @@ export class Server {
       const capability = this.#capabilityFor(
         engine,
         space,
-        session.actingPrincipal ?? session.principal,
+        session.capabilityPrincipal ?? session.actingPrincipal ??
+          session.principal,
       );
       if (capability !== null && isCapable(capability, "READ")) continue;
       if (session.actingPrincipal === undefined) {
@@ -4328,6 +4705,8 @@ export class Server {
     for (const connection of [...this.#connections.values()]) {
       connection.close();
     }
+    // A verb still running writes through the engines closed below.
+    await Promise.all(this.#lifecycleRuns);
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     for (const engine of this.#engines.values()) {
@@ -4351,6 +4730,11 @@ export class Server {
    * `flushSessions()` (called with no `spaces` argument) cancels any
    * pending timer, runs the refresh loop to completion, and intentionally
    * does not reschedule, so a single call is sufficient.
+   *
+   * A `pattern.lifecycle` verb still running is not waited for, though its
+   * frame counts as handled: the serving loop settles a wave by awaiting
+   * this method, and a verb waits for its wave to commit. `close()` waits for
+   * the verbs.
    */
   async idle(): Promise<void> {
     // A host hands frames over without waiting for them, so the frames in
@@ -5637,14 +6021,72 @@ export class Server {
             message.space,
           );
       }
+      // A proof chain (04-protocol.md §4.5.1) resolves the session's
+      // capability from the access list's grant to the chain's root issuer.
+      // The chain is verified whatever the ACL mode, so a malformed one is
+      // refused the same way everywhere; a server whose policy admits none
+      // refuses every chain, so no client learns anything from one it
+      // presents to the wrong server.
+      const presentsChain = (isFabricPlainObject(message.authorization) &&
+        message.authorization.proofs !== undefined) ||
+        (isFabricPlainObject(message.invocation) &&
+          message.invocation.prf !== undefined);
+      let capabilityPrincipal: string | undefined;
+      let delegationEnd: number | undefined;
+      if (presentsChain) {
+        if (!this.#admitsDelegations()) {
+          throw authorizationError(
+            "memory session.open proofs refused: this server admits no " +
+              "delegations",
+          );
+        }
+        if (actingAs !== undefined) {
+          throw authorizationError(
+            "memory session.open proofs refused: a chain and an actingAs " +
+              "binding cannot both be presented",
+          );
+        }
+        const chain = await verifySessionOpenProofs(message, {
+          space: message.space,
+          principal,
+          nowSeconds: this.nowSeconds(),
+        });
+        capabilityPrincipal = chain?.rootIssuer;
+        delegationEnd = chain?.expiresAt;
+      }
+      // An invitation the open carries is redeemed as the open's principal
+      // before its grant is checked, so the grant it confers admits this
+      // open. Redemption names the principal's own DID, so it is refused
+      // alongside a chain or a binding, which act under another's grant.
+      let redemption: RedeemReceipt | undefined;
+      const invite = message.session.invite;
+      if (invite !== undefined) {
+        if (
+          principal === undefined || presentsChain || actingAs !== undefined
+        ) {
+          return spaceInviteRefusal(message.requestId, "invalid-request");
+        }
+        const redeemed = await this.#redeemOnOpen(
+          message.space,
+          principal,
+          invite,
+        );
+        if ("refusal" in redeemed) {
+          return spaceInviteRefusal(message.requestId, redeemed.refusal);
+        }
+        redemption = redeemed.receipt;
+      }
       const deny = this.#authorizeMessageWithEngine(
         engine,
         message.space,
-        actingPrincipal ?? principal,
+        capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
       );
       if (deny) {
-        if (actingAs === undefined) {
+        // No admission wait for a chain, as for the binding: the grant it
+        // would need is the root issuer's, and the notice names the
+        // connection's principal (04-protocol.md §4.5.1, "Proof chains").
+        if (actingAs === undefined && !presentsChain) {
           this.#awaitAdmission(connection.id, message.space, principal);
         }
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
@@ -5702,6 +6144,7 @@ export class Server {
           actingPrincipal,
           connection.routed,
           connection.elidedVerdicts,
+          capabilityPrincipal,
         );
       } catch (error) {
         // Record the refused resume together with its session and connection.
@@ -5722,14 +6165,24 @@ export class Server {
         if (priorOwner !== connection.id) {
           this.#sessions.clearRoutedInterests(message.space, opened.sessionId);
         }
-        connection.addSession(message.space, opened.sessionId, principal);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          principal,
+          delegationEnd,
+        );
         const admitted = this.#sessions.get(message.space, opened.sessionId)!;
         admitted.routedAuthority = () =>
           connection.allowsRoutedSession(message.space, admitted.id);
       } else {
         // Catch-up awaits below. The connection must already track its
         // session so closing it detaches this owner during that wait.
-        connection.addSession(message.space, opened.sessionId, named);
+        connection.addSession(
+          message.space,
+          opened.sessionId,
+          named,
+          delegationEnd,
+        );
       }
       if (opened.revokedConnectionId !== undefined) {
         console.warn(
@@ -5846,6 +6299,7 @@ export class Server {
           ...(catchup ? { sync: catchup.effect } : {}),
           ...(spaceKind !== undefined ? { spaceKind } : {}),
           sessionOpen: nextSessionOpen,
+          ...(redemption === undefined ? {} : { invite: redemption }),
         },
       };
     } catch (error) {
@@ -6015,6 +6469,272 @@ export class Server {
         }
       }
     });
+  }
+
+  /**
+   * Runs a `pattern.lifecycle` request through the installed handler, as the
+   * DID its session was opened as, and returns the response to send. That
+   * DID itself must hold WRITE on the space: a grant reached through a
+   * session's proof chain does not carry over to a verb, which commits with
+   * the requester's own trust. Never rejects: a missing handler, a refusal,
+   * and a handler that throws each become an error response.
+   */
+  async runPatternLifecycle(
+    message: PatternLifecycleRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const run = this.#runPatternLifecycle(message);
+    this.#lifecycleRuns.add(run);
+    try {
+      return await run;
+    } finally {
+      this.#lifecycleRuns.delete(run);
+    }
+  }
+
+  /** Helper for `runPatternLifecycle()`, which does all its work. */
+  async #runPatternLifecycle(
+    message: PatternLifecycleRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const { requestId, space, sessionId } = message;
+    const handler = this.#patternLifecycle;
+    if (handler === undefined) {
+      return patternLifecycleRefusal(
+        requestId,
+        "server-execution-off",
+        "This deployment does not run the serving loop, so it runs no " +
+          "pattern-lifecycle verbs",
+      );
+    }
+    try {
+      const writer = await this.#sessionWriter(space, sessionId);
+      if ("error" in writer) {
+        return writer.error.name === "AuthorizationError"
+          ? patternLifecycleRefusal(
+            requestId,
+            "forbidden",
+            writer.error.message,
+          )
+          : { type: "response", requestId, error: writer.error };
+      }
+      const outcome = await handler({
+        space,
+        principal: writer.principal,
+        verb: message.verb,
+        body: message.body,
+      });
+      return "ok" in outcome
+        ? { type: "response", requestId, ok: outcome.ok }
+        : patternLifecycleRefusal(
+          requestId,
+          outcome.refusal.code,
+          outcome.refusal.message,
+        );
+    } catch (error) {
+      console.error(
+        `memory v2: a \`pattern.lifecycle\` ${message.verb} failed`,
+        error,
+      );
+      return patternLifecycleRefusal(
+        requestId,
+        "internal",
+        `${message.verb} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Runs one `served` request through the installed handler and returns the
+   * response to send (04-protocol.md §4.3.12). The session's principal must
+   * be in the delegating class: the request stands for a crossing another
+   * serving process of the deployment admitted on a wave's behalf, and the
+   * carriage it brings is validated at the engine, so the class is what the
+   * server trusts. Never rejects: a refusal, a missing handler, and a
+   * handler that throws each become an error response.
+   */
+  async runServedRequest(
+    message: ServedRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const run = this.#runServedRequest(message);
+    this.#lifecycleRuns.add(run);
+    try {
+      return await run;
+    } finally {
+      this.#lifecycleRuns.delete(run);
+    }
+  }
+
+  /** Helper for `runServedRequest()`, which does all its work. */
+  async #runServedRequest(
+    message: ServedRequest,
+  ): Promise<ResponseMessage<FabricPlainObject>> {
+    const { requestId, space, sessionId } = message;
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return {
+        type: "response",
+        requestId,
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const principal = session.principal;
+    if (principal === undefined || !this.#isDelegatingPrincipal(principal)) {
+      return servedRequestRefusal(
+        requestId,
+        "forbidden",
+        "A `served` request is admitted only from a session of the " +
+          "delegating class",
+      );
+    }
+    const handler = this.#servedRequests;
+    if (handler === undefined) {
+      return servedRequestRefusal(
+        requestId,
+        "unavailable",
+        "This process runs no serving loop, so it admits no served crossing",
+      );
+    }
+    try {
+      const outcome = await handler({
+        space,
+        principal,
+        sessionId,
+        kind: message.kind,
+        body: message.body,
+      });
+      return "ok" in outcome
+        ? { type: "response", requestId, ok: outcome.ok }
+        : servedRequestRefusal(
+          requestId,
+          outcome.refusal.code,
+          outcome.refusal.message,
+        );
+    } catch (error) {
+      console.error(`memory v2: a \`served\` ${message.kind} failed`, error);
+      return servedRequestRefusal(
+        requestId,
+        "internal",
+        `${message.kind} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Runs a `space.invite` request as the DID its session was opened as, and
+   * returns the response to send. The invitation service decides what that
+   * DID may do; administering invitations takes an explicit OWNER grant.
+   * Refusals are `SpaceInviteRefusal` errors carrying the service's code.
+   */
+  async administerInvites(
+    message: SpaceInviteRequest,
+  ): Promise<ResponseMessage<InviteResult["result"]>> {
+    const { requestId, space, sessionId } = message;
+    const host = this.options.inviteHost;
+    if (host === undefined) {
+      return spaceInviteRefusal(requestId, "invite-service-unsupported");
+    }
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return respondTypedError(
+        requestId,
+        toError("SessionError", "Unknown or replaced session for space"),
+      );
+    }
+    if (session.principal === undefined) {
+      return spaceInviteRefusal(requestId, "not-owner");
+    }
+    try {
+      return {
+        type: "response",
+        requestId,
+        ok: await this.invite({
+          ...message.invite,
+          host,
+          space,
+          principal: session.principal,
+          now: Date.now,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof SpaceInviteError) {
+        return spaceInviteRefusal(requestId, error.code);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Helper for `openSession()`, which redeems `invite` in `space` as
+   * `principal` and returns the receipt, or the invitation service's refusal
+   * code, `invite-service-unsupported` on a server given no invitation host.
+   */
+  async #redeemOnOpen(
+    space: string,
+    principal: string,
+    invite: { inviteId: string; code: string },
+  ): Promise<{ receipt: RedeemReceipt } | { refusal: string }> {
+    const host = this.options.inviteHost;
+    if (host === undefined) return { refusal: "invite-service-unsupported" };
+    try {
+      const result = await this.invite({
+        operation: "redeem",
+        body: invite,
+        host,
+        space,
+        principal,
+        now: Date.now,
+      });
+      if (!isRedeemReceipt(result)) {
+        throw new Error("The invitation service returned no redemption");
+      }
+      return { receipt: result };
+    } catch (error) {
+      if (error instanceof SpaceInviteError) return { refusal: error.code };
+      throw error;
+    }
+  }
+
+  /**
+   * Helper for `runPatternLifecycle()`, which returns the DID `sessionId`
+   * was opened as in `space` when that DID holds WRITE there, or the error
+   * to answer with when the session is gone, is anonymous, or holds no such
+   * grant.
+   */
+  async #sessionWriter(
+    space: string,
+    sessionId: string,
+  ): Promise<{ principal: string } | { error: V2Error }> {
+    const session = this.#sessions.get(space, sessionId);
+    if (session === null || session.routedAuthority?.() === false) {
+      return {
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const principal = session.principal;
+    if (principal === undefined) {
+      return {
+        error: toError(
+          "AuthorizationError",
+          "An anonymous session runs no pattern-lifecycle verbs",
+        ),
+      };
+    }
+    const engine = await this.#openEngine(space);
+    if (this.#sessions.get(space, sessionId) !== session) {
+      return {
+        error: toError("SessionError", "Unknown or replaced session for space"),
+      };
+    }
+    const deny = this.#authorizeMessageWithEngine(
+      engine,
+      space,
+      principal,
+      "WRITE",
+    );
+    return deny === null ? { principal } : { error: deny };
   }
 
   /** Resolve one authoritative OW54 notice. The publication lock, exact-value
@@ -6439,7 +7159,7 @@ export class Server {
           const deny = routedDeny ?? this.#authorizeCommitWithEngine(
             engine,
             message.space,
-            session.principal,
+            session.capabilityPrincipal ?? session.principal,
             message.commit,
           );
           if (deny) {
@@ -10217,6 +10937,30 @@ export class Server {
   }
 
   /**
+   * Installs what runs `pattern.lifecycle` requests, or with `undefined`
+   * removes it. The server advertises `patternLifecycle` from the next
+   * `hello` on while one is installed. Connections that said `hello` before
+   * keep the flags they were given, and a request one of them sends after
+   * the handler is removed is refused.
+   */
+  setPatternLifecycleHandler(
+    handler: PatternLifecycleHandler | undefined,
+  ): void {
+    this.#patternLifecycle = handler;
+  }
+
+  /**
+   * Installs what runs `served` requests, or with `undefined` removes it.
+   * The server advertises `servedRequests` from the next `hello` on while
+   * one is installed, as `setPatternLifecycleHandler` advertises
+   * `patternLifecycle`; a request sent after the handler is removed is
+   * refused as unavailable.
+   */
+  setServedRequestHandler(handler: ServedRequestHandler | undefined): void {
+    this.#servedRequests = handler;
+  }
+
+  /**
    * Watch every commit this server admits: a session transact, a
    * delegated append, the server's own direct write, and the serving
    * loop's wave commits, each reported after the engine has applied it.
@@ -11567,6 +12311,12 @@ const parseDecodedClientMessage = (
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
     if (readCeiling === null) return null;
+    let invite: { inviteId: string; code: string } | undefined;
+    if (parsed.session.invite !== undefined) {
+      const redeem = parseInviteOperation("redeem", parsed.session.invite);
+      if (redeem?.operation !== "redeem") return null;
+      invite = redeem.body;
+    }
     return {
       type: "session.open",
       requestId: parsed.requestId,
@@ -11607,6 +12357,7 @@ const parseDecodedClientMessage = (
         ...(isSpaceKind(parsed.session.spaceKind)
           ? { spaceKind: parsed.session.spaceKind }
           : {}),
+        ...(invite === undefined ? {} : { invite }),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation
@@ -11837,6 +12588,66 @@ const parseDecodedClientMessage = (
       seq: parsed.seq,
       sidecarId: parsed.sidecarId,
       action: parsed.action,
+    };
+  }
+
+  if (
+    parsed.type === "pattern.lifecycle" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.verb === "upload" || parsed.verb === "instantiate" ||
+      parsed.verb === "setsrc") &&
+    isFabricPlainObject(parsed.body)
+  ) {
+    return {
+      type: "pattern.lifecycle",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      verb: parsed.verb,
+      body: parsed.body,
+    };
+  }
+
+  if (
+    parsed.type === "served" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    (parsed.kind === "append" || parsed.kind === "commit" ||
+      parsed.kind === "acl") &&
+    isFabricPlainObject(parsed.body)
+  ) {
+    return {
+      type: "served",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      kind: parsed.kind,
+      body: parsed.body,
+    };
+  }
+
+  if (
+    parsed.type === "space.invite" &&
+    typeof parsed.requestId === "string" &&
+    typeof parsed.space === "string" &&
+    typeof parsed.sessionId === "string" &&
+    isFabricPlainObject(parsed.invite)
+  ) {
+    // Redemption is refused here: it has no session to arrive on.
+    const invite = parseInviteOperation(
+      parsed.invite.operation,
+      parsed.invite.body,
+    );
+    if (invite === null || invite.operation === "redeem") return null;
+    return {
+      type: "space.invite",
+      requestId: parsed.requestId,
+      space: parsed.space,
+      sessionId: parsed.sessionId,
+      invite,
     };
   }
 

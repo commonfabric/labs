@@ -10,8 +10,8 @@ import {
   tracePath,
   valueEqual,
 } from "@commonfabric/data-model";
-import { spliceAll } from "@commonfabric/utils/arrays";
-import { isInstance, isObjectNotArray } from "@commonfabric/utils/types";
+import { spliceAll } from "@commonfabric/collections/splice";
+import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { type EntityDocument, isEntityDocument, type PatchOp } from "../v2.ts";
 import { encodePointer, parsePointer } from "./path.ts";
 

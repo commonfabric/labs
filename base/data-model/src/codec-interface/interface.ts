@@ -11,7 +11,7 @@
  * walker dispatches -- reads that declaration.
  */
 
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import type { FabricInstance, FabricValuePlus } from "@/interface.ts";
 

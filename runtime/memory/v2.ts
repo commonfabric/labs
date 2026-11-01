@@ -16,8 +16,13 @@ import {
   newDefaultJsonCodecEngine,
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
-import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import {
+  isPlainObject,
+  unsafeObjectKeyIn,
+} from "@commonfabric/js-values/types";
+import type { RedeemReceipt } from "./space-invites.ts";
 import type { ClientInfo } from "./v2/client-info.ts";
+import type { InviteOperation } from "./v2/invites.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -1154,6 +1159,9 @@ export type SessionOpenResult = {
 
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
+
+  /** The redemption of the invitation the open carried, when it carried one. */
+  invite?: RedeemReceipt;
 };
 
 export type MemoryProtocolFlags = {
@@ -1358,6 +1366,15 @@ export type MemoryProtocolFlags = {
   connectionAuth?: boolean;
 
   /**
+   * Server capability: a `session.open` may present a UCAN proof chain, and
+   * the session's capability then resolves from the access-list grant to the
+   * chain's root issuer (04-protocol.md §4.5.1). Advertised by a server whose
+   * access-list policy admits delegations. Absent parses to false, and a
+   * client then presents no chain, since such a server refuses one.
+   */
+  sessionOpenProofs?: boolean;
+
+  /**
    * The peer takes part in `session/admissible` (04-protocol.md §4.2.2). A
    * client advertising it may be sent the notice; a server advertising it
    * sends one to such a client, on any connection but a routed one.
@@ -1390,6 +1407,35 @@ export type MemoryProtocolFlags = {
    * reports to itself rather than sending a message the server would refuse.
    */
   sessionReportV1?: boolean;
+
+  /**
+   * Server capability: the server runs `pattern.lifecycle` requests
+   * (04-protocol.md §4.3.10). Advertised exactly while the deployment has a
+   * lifecycle handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and a
+   * client then sends the verbs some other way or not at all.
+   */
+  patternLifecycle?: boolean;
+
+  /**
+   * Server capability: the server runs `served` requests (04-protocol.md
+   * §4.3.12), the crossings one serving process sends the process that owns
+   * the target space. Advertised exactly while the deployment has a served
+   * request handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and
+   * a sender then treats the owner as unavailable.
+   */
+  servedRequests?: boolean;
+
+  /**
+   * Server capability: the server administers invitations through
+   * `space.invite` requests (04-protocol.md §4.3.11). Advertised exactly
+   * while the server knows the public host its invitation links name, since
+   * an invitation's code verifier is bound to that host. Absent (an older
+   * server, or one without the host) parses to false, and a client then
+   * administers invitations some other way or not at all.
+   */
+  spaceInvites?: boolean;
 
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
@@ -1442,9 +1488,13 @@ export type WireMemoryProtocolFlags = {
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
+  sessionOpenProofs?: boolean;
   admissionNotice?: boolean;
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
+  patternLifecycle?: boolean;
+  servedRequests?: boolean;
+  spaceInvites?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1545,6 +1595,17 @@ export type SessionDescriptor = {
    * this descriptor.
    */
   actingAs?: "space-owner";
+
+  /**
+   * An invitation to redeem, as the open's principal, before the open's grant
+   * is checked (04-protocol.md §4.1.2): how someone the space's access list
+   * does not name yet opens a session on it. Bound to the open's principal as
+   * the rest of this descriptor is: signed into the invocation of a signed
+   * open, and covered by the connection's authentication of an open that
+   * names its principal. A client sends it on the open that redeems and not
+   * on the resumes after it.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -2258,6 +2319,85 @@ export type EventAttentionResolveResult = {
 };
 
 /**
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take, as many as the
+ * HTTP route takes in a body. A routed connection bounds every request more
+ * tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
+ * smaller bound before sending it.
+ */
+export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** A pattern-lifecycle verb that a serving deployment runs on request. */
+export type PatternLifecycleVerb = "upload" | "instantiate" | "setsrc";
+
+/**
+ * A request to run a pattern-lifecycle verb in the session's space, as the
+ * session's principal (04-protocol.md §4.3.10).
+ */
+export type PatternLifecycleRequest = {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  verb: PatternLifecycleVerb;
+
+  /**
+   * The verb's arguments, which the memory server hands to the deployment's
+   * lifecycle handler without reading them; the handler validates them, as
+   * `docs/features/server-pattern-lifecycle.md` defines.
+   */
+  body: FabricPlainObject;
+};
+
+/**
+ * Most UTF-8 bytes a `served` message may take on a direct connection, the
+ * bound `pattern.lifecycle` has. A routed connection bounds every request
+ * more tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
+ * smaller bound before sending it.
+ */
+export const SERVED_REQUEST_MAX_BYTES = PATTERN_LIFECYCLE_MAX_BYTES;
+
+/**
+ * What a `served` request carries (04-protocol.md §4.3.12): one delegated
+ * event append, one foreign wave batch, or one served access-list change.
+ */
+export type ServedRequestKind = "append" | "commit" | "acl";
+
+/**
+ * A request from a serving process to the process that owns the session's
+ * space, to admit one crossing into that space on the sender's behalf
+ * (04-protocol.md §4.3.12). Admitted only on a session whose principal is in
+ * the server's delegating class.
+ */
+export type ServedRequest = {
+  type: "served";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  kind: ServedRequestKind;
+
+  /**
+   * The crossing, in the kind's shape, which the memory server hands to the
+   * deployment's served request handler without reading it.
+   */
+  body: FabricPlainObject;
+};
+
+/**
+ * A request to administer the session space's invitations, as the session's
+ * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
+ * redeeming holds no grant on the space yet, so it has no session to send on.
+ */
+export type SpaceInviteRequest = {
+  type: "space.invite";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+
+  /** The operation and its arguments. */
+  invite: Exclude<InviteOperation, { operation: "redeem" }>;
+};
+
+/**
  * Per-kind presence state, keyed by facet name. The relay bounds the map and
  * treats each value as an opaque plain object; a consumer decodes the facets
  * it knows and ignores the rest (04-protocol.md §4.13).
@@ -2447,6 +2587,14 @@ export type SessionAdmissibleMessage = {
 export type V2Error = {
   name: string;
   message: string;
+
+  /**
+   * Stable name of the reason for a refusal, on an error whose kind
+   * classifies its refusals: a `PatternLifecycleRefusal` or a
+   * `SpaceInviteRefusal`. A client branches on this, never on `message`.
+   */
+  code?: string;
+
   /** Runtime incompatibility that requires replacing the client before mounting. */
   clientUpdateRequired?: true;
 
@@ -2502,6 +2650,9 @@ export type ClientMessage =
   | SessionAckRequest
   | SessionCloseRequest
   | EventAttentionResolveRequest
+  | PatternLifecycleRequest
+  | ServedRequest
+  | SpaceInviteRequest
   | PresenceJoinRequest
   | PresencePublishRequest
   | PresenceLeaveRequest
@@ -2738,6 +2889,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // What this build can do. A server advertises it only when its host
   // verifies `connection.auth` (`Server.memoryProtocolFlags()`).
   connectionAuth: true,
+  // What this build can do. A server advertises it only when its
+  // access-list policy admits delegations (`Server.memoryProtocolFlags()`).
+  sessionOpenProofs: true,
   // Build-inherent: this build's server tells a connection it refused a
   // space once a grant admits the refused principal, and its client acts on
   // the notice. A routed connection records no refusal, so it is told
@@ -2750,6 +2904,11 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records the diagnostics a client
   // reports about its session.
   sessionReportV1: true,
+  // Configuration rather than build-inherent: a `Server` advertises each
+  // from what it was given (`Server.memoryProtocolFlags()`).
+  patternLifecycle: false,
+  servedRequests: false,
+  spaceInvites: false,
   routedAuthV1: false,
   routedCompressionV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
@@ -2974,6 +3133,13 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionOpenProofs = value.sessionOpenProofs;
+  if (
+    sessionOpenProofs !== undefined && typeof sessionOpenProofs !== "boolean"
+  ) {
+    return null;
+  }
+
   const admissionNotice = value.admissionNotice;
   if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
     return null;
@@ -2985,6 +3151,23 @@ export const parseMemoryProtocolFlags = (
 
   const sessionReportV1 = value.sessionReportV1;
   if (sessionReportV1 !== undefined && typeof sessionReportV1 !== "boolean") {
+    return null;
+  }
+
+  const patternLifecycle = value.patternLifecycle;
+  if (
+    patternLifecycle !== undefined && typeof patternLifecycle !== "boolean"
+  ) {
+    return null;
+  }
+
+  const servedRequests = value.servedRequests;
+  if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
+    return null;
+  }
+
+  const spaceInvites = value.spaceInvites;
+  if (spaceInvites !== undefined && typeof spaceInvites !== "boolean") {
     return null;
   }
 
@@ -3054,6 +3237,8 @@ export const parseMemoryProtocolFlags = (
     sessionClose: sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
     connectionAuth: connectionAuth === true,
+    // Absent parses to false: a client then presents no proof chain.
+    sessionOpenProofs: sessionOpenProofs === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client no `session/admissible`.
     admissionNotice: admissionNotice === true,
@@ -3063,6 +3248,13 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then sends no
     // `session.report`.
     sessionReportV1: sessionReportV1 === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // `pattern.lifecycle` or `space.invite`.
+    patternLifecycle: patternLifecycle === true,
+    // Absent (an older server) parses to false: a serving process then
+    // treats the owner as unavailable.
+    servedRequests: servedRequests === true,
+    spaceInvites: spaceInvites === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3115,9 +3307,13 @@ export const wireMemoryProtocolFlags = (
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,
+  sessionOpenProofs: flags.sessionOpenProofs,
   admissionNotice: flags.admissionNotice,
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
+  patternLifecycle: flags.patternLifecycle,
+  servedRequests: flags.servedRequests,
+  spaceInvites: flags.spaceInvites,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

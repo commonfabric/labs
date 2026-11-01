@@ -20,7 +20,7 @@
 // this read path.
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import {
   enrollRuntimeOwnedStore,
@@ -59,7 +59,7 @@ import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { parseCfLinkToSigil } from "./sqlite/cf-link.ts";
 import { type IFCLabel, mergeLabel } from "../cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
-import { readStoredCfcMetadata } from "../cfc/metadata.ts";
+import { cfcDeclaredLabelAt, readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
   cfcConfidentialityForObservationNode,
   joinCfcObservedConfidentiality,
@@ -86,7 +86,7 @@ import {
   type SqliteParamsWire,
   sqliteRowToWire,
 } from "@commonfabric/memory/v2";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import {
   type Cell,
@@ -320,31 +320,6 @@ function staticConfidentialityOf(
       ?.confidentiality;
     if (Array.isArray(conf)) {
       for (const clause of conf) out.push(clause);
-    }
-  }
-  return out;
-}
-
-/**
- * Returns the confidentiality a result store already declares on the
- * reference identity of its slots: the declared `followRef` entries at the
- * children of `resultPath`, whether one entry covers every slot or each slot
- * has its own. A declaration only grows, so a settle joins what stands with
- * what it brings.
- */
-function declaredSlotConfidentiality(
-  metadata: ReturnType<typeof readStoredCfcMetadata>,
-  resultPath: readonly string[],
-): CfcConfClause[] {
-  const out: CfcConfClause[] = [];
-  for (const entry of metadata?.labelMap.entries ?? []) {
-    if (
-      entry.origin === "declared" && entry.observes === "followRef" &&
-      entry.path.length === resultPath.length + 1 &&
-      resultPath.every((segment, i) => segment === entry.path[i])
-    ) {
-      const clauses = (entry.label.confidentiality ?? []) as CfcConfClause[];
-      for (const clause of clauses) out.push(clause);
     }
   }
   return out;
@@ -1920,10 +1895,12 @@ export function sqliteQuery(
                 // and the slot carries no row's label beyond the one the
                 // link written there carries for the document it names.
                 const slotIfcAtoms = joinCfcObservedConfidentiality([
-                  declaredSlotConfidentiality(storedMetadata, [
-                    ...base.path,
-                    "result",
-                  ]),
+                  cfcDeclaredLabelAt(
+                    storedMetadata,
+                    [...base.path, "result"],
+                    "followRef",
+                    "children",
+                  ).confidentiality,
                   requestLabel,
                 ]);
                 if (shapeIfcAtoms.length > 0) {

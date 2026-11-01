@@ -11,7 +11,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getPatternEnvironment } from "../builder/env.ts";
 import type { CellScope, Schema } from "../builder/types.ts";

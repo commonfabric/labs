@@ -9,7 +9,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   normalizeCdpOrigin,

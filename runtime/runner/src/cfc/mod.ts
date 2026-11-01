@@ -55,6 +55,7 @@ export {
   redactCaveatSourcesForDisplay,
 } from "./label-view.ts";
 export { cfcLabelViewFromSchema } from "./schema-label-view.ts";
+export { cfcDocumentKey } from "./types.ts";
 export type {
   AttemptedWrite,
   CfcAddress,
@@ -63,6 +64,7 @@ export type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,

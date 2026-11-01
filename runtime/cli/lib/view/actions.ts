@@ -6,7 +6,7 @@
 
 import type { Document, StructureNode } from "./model.ts";
 import type { Match } from "./render.ts";
-import { cpLen } from "./ansi.ts";
+import { codePointColumns } from "./lines.ts";
 
 export function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
@@ -101,11 +101,13 @@ function foldHaystack(original: string): Haystack {
 }
 
 /** Case-sensitive haystack: the line verbatim, with offsets mapped to columns
- * via {@link cpLen} (a non-BMP character is one code point but two code units). */
+ * as `cpLen()` counts them (a non-BMP character is one code point but two code
+ * units). */
 function plainHaystack(original: string): Haystack {
+  const columnOf = codePointColumns(original, [0]);
   return {
     folded: original,
-    colOf: (offset) => cpLen(original.slice(0, offset)),
+    colOf: (offset) => columnOf(0, offset),
   };
 }
 

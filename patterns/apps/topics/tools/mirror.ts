@@ -16,8 +16,8 @@
 
 import { isKeyableObjectOrArray } from "@commonfabric/data-model";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
-import { maxOf, minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { maxOf, minOf } from "@commonfabric/collections/math";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /**
  * A document value reduced to JSON. A link is written as a {@link LinkMark};
@@ -427,11 +427,11 @@ export function searchTopics(
 ): SearchHit[] {
   const hits: SearchHit[] = [];
   for (const topic of topics) {
-    if (exclude.some((pattern) => pattern.test(topic.title))) continue;
+    if (exclude.some((pattern) => matches(topic.title, pattern))) continue;
     const sections = topicSections(topic).filter(({ field }) =>
       fields.includes(field)
     );
-    if (!patterns.every((p) => sections.some(({ text }) => p.test(text)))) {
+    if (!patterns.every((p) => sections.some(({ text }) => matches(text, p)))) {
       continue;
     }
     const snippets = sections.flatMap(({ field, label, text }) =>
@@ -496,6 +496,15 @@ function topicSections(
       ...links.map((link) => link.addedBy),
     ].map((text) => ({ field: "authors" as const, label: "author", text })),
   ];
+}
+
+/**
+ * Whether `pattern` matches `text`, searching from its start whatever the
+ * pattern's `lastIndex`, which this leaves as it was. `RegExp.prototype.test`
+ * instead starts a global or sticky pattern at its `lastIndex` and moves it.
+ */
+export function matches(text: string, pattern: RegExp): boolean {
+  return text.search(pattern) >= 0;
 }
 
 function firstMatch(

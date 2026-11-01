@@ -1,6 +1,6 @@
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isUnsafeObjectKey } from "@commonfabric/utils/types";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { isUnsafeObjectKey } from "@commonfabric/js-values/types";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 
 import {
   codecOf,

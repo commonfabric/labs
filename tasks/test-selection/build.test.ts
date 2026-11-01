@@ -777,6 +777,70 @@ describe("build", () => {
       expect(fold.finish().aggregate.files).toEqual({ [KEY]: UNIT });
     });
 
+    describe("a file a path line moves", () => {
+      const OLD_UNIT = "packages/memory/test/space.test.ts";
+
+      /** A path line moving the memory package, dated `date`. */
+      const moved = (date: string) =>
+        new AliasResolver([{
+          date,
+          from: { p: "packages/memory" },
+          to: { p: "runtime/memory" },
+        }]);
+
+      it("names a record's file where the line moved it", () => {
+        // The test's name does not change when its package moves, so only
+        // the file says where it went, and a suite holding the moved file
+        // claims it from the first run after the move lands.
+        const folded = foldReports(
+          emptyAggregate("2026-08-20"),
+          [stored(CI_NAME, context(), [record({ file: OLD_UNIT })])],
+          moved("2026-08-21"),
+          "2026-08-20",
+        );
+        expect(folded.aggregate.files).toEqual({ [KEY]: UNIT });
+        expect(folded.surfaces.get(KEY)).toEqual({
+          suite: "unit:memory",
+          unit: UNIT,
+          fromFile: true,
+        });
+      });
+
+      it("keeps the file of a record made on the line's date", () => {
+        const folded = foldReports(
+          emptyAggregate("2026-08-20"),
+          [stored(CI_NAME, context(), [record({ file: OLD_UNIT })])],
+          moved("2026-08-20"),
+          "2026-08-20",
+        );
+        expect(folded.aggregate.files).toEqual({ [KEY]: OLD_UNIT });
+      });
+
+      it("names a carried file where the line moved it", () => {
+        // The aggregate published before the move named every file the
+        // old way, and nothing reads it but this.
+        const carried = emptyAggregate("2026-08-19");
+        carried.states[KEY] = emptyState();
+        carried.files[KEY] = OLD_UNIT;
+        const folded = new Fold(carried, moved("2026-08-20"), "2026-08-20")
+          .finish();
+        expect(folded.aggregate.files).toEqual({ [KEY]: UNIT });
+        expect(folded.surfaces.get(KEY)?.unit).toBe(UNIT);
+      });
+
+      it("keeps a carried file the aggregate read on the line's date", () => {
+        // The record that named the file is no newer than the last day
+        // the aggregate read, so it may have been made on the line's
+        // date, and a record of that day keeps its file.
+        const carried = emptyAggregate("2026-08-20");
+        carried.states[KEY] = emptyState();
+        carried.files[KEY] = OLD_UNIT;
+        const folded = new Fold(carried, moved("2026-08-20"), "2026-08-20")
+          .finish();
+        expect(folded.aggregate.files).toEqual({ [KEY]: OLD_UNIT });
+      });
+    });
+
     it("does not fold a day it took from a rollup", () => {
       // A rollup carries the day's reports whole, so its raw objects
       // never reach `folded`; a later run over a wide window has to ask

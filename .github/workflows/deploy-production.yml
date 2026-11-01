@@ -1,19 +1,14 @@
 name: Manual Production Deployment
 
-run-name: Estuary ${{ inputs.ref }} from ${{ inputs.source_branch }} (verify=${{ inputs.verify_only }})
+run-name: Estuary ${{ inputs.ref }} (verify=${{ inputs.verify_only }})
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Full lowercase Labs commit SHA"
+        description: "Full lowercase Labs commit SHA on main"
         required: true
         type: string
-      source_branch:
-        description: "Branch containing the selected Labs commit"
-        type: choice
-        default: main
-        options: [main, alex-daily]
       verify_only:
         description: "Verify all Estuary workers and HTTPS without deploying"
         type: boolean
@@ -32,42 +27,25 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - &check-window
-        name: 🔎 Check the authorized source window
+      - name: 🔎 Verify the exact source commit
+        id: resolve
         env:
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          DEPLOY_SHA: ${{ inputs.ref }}
           WORKFLOW_REF: ${{ github.ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "$WORKFLOW_REF" != refs/heads/main ]]; then
             echo '::error::Dispatch the production workflow on main.'
             exit 1
           fi
-          case "$SOURCE_BRANCH" in
-            main) ;;
-            alex-daily)
-              now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-              if [[ "$now" < '2026-10-19T22:15:16Z' || ! "$now" < '2026-10-22T22:15:16Z' ]]; then
-                echo '::error::The alex-daily Estuary authorization has expired or has not started.'
-                exit 1
-              fi ;;
-            *) echo '::error::Unsupported source branch.'; exit 1 ;;
-          esac
-
-      - name: 🔎 Verify the exact source commit
-        id: resolve
-        env:
-          DEPLOY_SHA: ${{ inputs.ref }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
           if [[ ! "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo '::error::ref must be a full lowercase commit SHA.'
             exit 1
           fi
-          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEPLOY_SHA...$SOURCE_BRANCH" --jq .status)
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$DEPLOY_SHA...main" --jq .status)
           case "$status" in
             ahead|identical) ;;
-            *) echo '::error::The commit is not on the selected source branch.'; exit 1 ;;
+            *) echo '::error::The commit is not on main.'; exit 1 ;;
           esac
           echo "sha=$DEPLOY_SHA" >> "$GITHUB_OUTPUT"
 
@@ -78,7 +56,6 @@ jobs:
     environment: estuary # Protection rules configured in GitHub repo settings
 
     steps:
-      - *check-window
       - name: 📥 Checkout specific ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,7 +102,6 @@ jobs:
         with:
           cache: false
 
-      - *check-window
       - name: 🚀 Deploy application to Estuary (Production)
         if: ${{ !inputs.verify_only }}
         id: deployment
@@ -177,7 +153,6 @@ jobs:
         env:
           REMOTE_OUTPUT: ${{ steps.evidence.outputs.stdout }}
           DEPLOY_SHA: ${{ steps.resolve.outputs.sha }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
         run: |
           python3 - <<'PY'
@@ -196,7 +171,7 @@ jobs:
               raise ValueError("Receipt does not verify the complete Estuary backend")
           proof.update(repository=os.environ["GITHUB_REPOSITORY"], workflow_sha=os.environ["GITHUB_SHA"],
                        run_id=os.environ["GITHUB_RUN_ID"], run_attempt=os.environ["GITHUB_RUN_ATTEMPT"],
-                       source_branch=os.environ["SOURCE_BRANCH"], verify_only=os.environ["VERIFY_ONLY"] == "true")
+                       verify_only=os.environ["VERIFY_ONLY"] == "true")
           pathlib.Path(os.environ["RUNNER_TEMP"], "receipt.json").write_text(json.dumps(proof, indent=2) + "\n")
           PY
 

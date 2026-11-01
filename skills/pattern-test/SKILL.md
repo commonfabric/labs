@@ -34,10 +34,6 @@ Repeat `--test` for multiple entry files and repeat the complete flag set on
 every `setsrc`. The deployment command packages and type-checks attached tests
 but does not execute them, so a successful `cf test` run remains required.
 
-When working in a Pattern Factory Build workspace, also follow
-`docs/common/ai/pattern-factory-build-guide.md` (as mandated by pattern-dev). It
-defines Pattern Factory's build completion gate and expected coverage shape.
-
 For patterns that stamp timestamps or IDs, prefer deterministic assertions over
 recomputing time/random values inside the test itself.
 

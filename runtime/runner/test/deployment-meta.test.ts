@@ -1061,6 +1061,7 @@ describe("deployment-meta", () => {
         "localSessionDocuments",
         "viewScopedReplication",
         "webViewScopedReplication",
+        "pieceCreatorRecord",
         "sharedMemoryConnection",
         "instanceNames",
       ]);

@@ -15,8 +15,8 @@
  */
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
-import { maxOf } from "@commonfabric/utils/math";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { maxOf } from "@commonfabric/collections/math";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { handleTokensIn } from "../../console/steps.ts";
 import type {

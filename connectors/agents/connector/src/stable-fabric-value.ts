@@ -21,8 +21,11 @@ import {
   isCell,
   isCellResultForDereferencing,
 } from "@commonfabric/runner";
-import { isArrayWithOnlyIndexProperties } from "@commonfabric/utils/arrays";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayWithOnlyIndexProperties } from "@commonfabric/js-values/arrays";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!isObjectNotArray(value)) {

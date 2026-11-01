@@ -28,7 +28,7 @@ import {
   readOwnerFieldPolicy,
   stageOwnerPolicyAdoption,
 } from "@commonfabric/runner/cfc/owner-adoption";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 function address(link: NormalizedFullLink): NormalizedFullLink {
   return {

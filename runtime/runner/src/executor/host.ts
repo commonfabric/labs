@@ -30,7 +30,7 @@ import {
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
@@ -38,6 +38,7 @@ import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
@@ -151,6 +152,15 @@ export type ExecutorHostOptions = {
    * `SpaceServerOptions.createWaveCommitSink`. */
   createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop-owner-routing.md`). Present, the host sends every
+   * crossing into a space other than the one a tenure serves through that
+   * space's owner, over a routed plane it keeps for its life; absent, every
+   * crossing goes through this process's server.
+   */
+  route?: RouteOptions;
+
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
   onWaveCycle?: (space: MemorySpace) => void;
@@ -246,11 +256,18 @@ export class ExecutorHost {
   readonly #parkedDisposals = new Set<Promise<void>>();
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
+
+  /** The routed plane, while the host has a route. */
+  readonly #route: RoutedPlane | undefined;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
   constructor(options: ExecutorHostOptions) {
     this.#options = options;
+    this.#route = options.route === undefined
+      ? undefined
+      : new RoutedPlane(options.route);
     // The host is a PROCESS-level flag ENABLER: while it lives, the
     // ambient flag stays on (the memory server's per-class admission
     // reads it), whatever individual runtimes construct or dispose. The
@@ -638,7 +655,12 @@ export class ExecutorHost {
           const parked = this.#takeParkedRuntime(space, engine);
           return parked !== undefined
             ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, context);
+            : this.#options.createRuntime(space, {
+              ...context,
+              ...(this.#options.route === undefined
+                ? {}
+                : { route: this.#options.route }),
+            });
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
@@ -655,6 +677,7 @@ export class ExecutorHost {
         ...(this.#options.createWaveCommitSink !== undefined
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
+        ...(this.#route === undefined ? {} : { route: this.#route }),
         onParked: (reason) => {
           parked = true;
           try {
@@ -975,6 +998,9 @@ export class ExecutorHost {
       this.#discardParkedRuntime(space);
     }
     await Promise.allSettled([...this.#parkedDisposals]);
+    // Every tenure has released its scope by now; what closes here is a
+    // session a park left behind.
+    await this.#route?.close();
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();

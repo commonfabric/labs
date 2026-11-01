@@ -19,9 +19,10 @@
  *   verified signatures, as toolshed's are.
  *
  * Either runs its loop on this thread over a non-persistent store, or, as a
- * toolshed does under `SERVER_EXECUTION_WORKER`, in a Worker of this process
- * over a store in a temporary directory ({@link ServingMemoryServerOptions}'
- * `worker`).
+ * toolshed does over its file store, in a Worker of this process over a store
+ * in a temporary directory ({@link ServingMemoryServerOptions}' `worker`).
+ * Unlike a toolshed, it keeps the worker and the store read-through off
+ * unless the environment turns them on, so a run chooses its arm.
  *
  * The loop's work runs in the serving context, so a test hosting its clients
  * in the same realm tells their output apart with {@link inServingContext}.
@@ -43,7 +44,7 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { ExperimentalOptions } from "../runtime.ts";
 import { newLoopbackServer } from "../storage/v2-emulate.ts";
 import { ExecutorHost, type ExecutorHostOptions } from "./host.ts";
@@ -129,19 +130,21 @@ export type ServingMemoryServerOptions =
 
     /**
      * Whether the serving loop runs in a Worker of this process, over a store
-     * in a temporary directory, as a toolshed's does under
-     * `SERVER_EXECUTION_WORKER`. Default: `true` when that variable is the
-     * literal `true` in this process's environment, so a run with it set
-     * runs every test that leaves this unset under the worker. A worker
-     * takes no closure, so `prepareStorageManager`, `fetch`,
-     * `moduleByteCache`, a policy field holding a function, and the host's
-     * diagnostic hooks other than `onActivationSettled` and `onSpaceParked`
-     * are refused under it; a test that needs one says `false` here.
+     * in a temporary directory, as a toolshed's does over its file store.
+     * Default: `true` when `SERVER_EXECUTION_WORKER` is the literal `true` in
+     * this process's environment, so a run with it set runs every test that
+     * leaves this unset under the worker. A worker takes no closure, so
+     * `prepareStorageManager`, `fetch`, `moduleByteCache`, a policy field
+     * holding a function, and the host's diagnostic hooks other than
+     * `onActivationSettled` and `onSpaceParked` are refused under it; a test
+     * that needs one says `false` here.
      *
      * The environment fills three more of the policy's fields when they are
-     * left unset, as a toolshed's bootstrap does: `storeReadThrough` takes
-     * `true` when `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal
-     * `true`, `overlapWaveCommit` takes `true` when
+     * left unset, from the variables a toolshed's bootstrap reads, as
+     * `policyFromEnvironment()` says: `storeReadThrough` takes `true` when
+     * `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal `true`, where a
+     * toolshed takes it unless the variable is the literal `false`, so the
+     * read-through is opt-in here; `overlapWaveCommit` takes `true` when
      * `SERVER_EXECUTION_OVERLAP_COMMIT` is, and `flushDeadlineMs` and
      * `flushDeadlineMaxMs` take `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
      * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` when those are positive
@@ -182,11 +185,12 @@ export function runsInWorker(
 const TIMER_DELAY_MAX_MS = 2_147_483_647;
 
 /**
- * The loop's policy, with what `policy` leaves unset taken from the
- * environment as the toolshed bootstrap takes it: the store read-through
- * from `SERVER_EXECUTION_STORE_READ_THROUGH` and the overlapped wave commit
- * from `SERVER_EXECUTION_OVERLAP_COMMIT`, each on for the literal `true`,
- * and the flush deadline and the cap it grows to from
+ * The loop's policy, with what `policy` leaves unset taken from the variables
+ * the toolshed bootstrap reads. The store read-through
+ * (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped wave commit
+ * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
+ * alone, where a toolshed keeps the read-through on unless the variable is
+ * `false`. The flush deadline and the cap it grows to come from
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them

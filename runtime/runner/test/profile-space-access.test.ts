@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
+import { decodeDelegation, Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
@@ -73,10 +73,12 @@ describe("profile-space-access", () => {
     try {
       const profileLink = await createProfileThroughHome(ownerRuntime, "Ada");
       const profileSpace = profileLink.space as MemorySpace;
+      // The profile space owns itself; its creator holds a delegation from
+      // the space's key rather than a grant of its own.
       expect(
         (await server.readDocument(profileSpace, aclDocId(profileSpace) as URI))
           ?.value,
-      ).toEqual({ "*": "WRITE", [owner.did()]: "OWNER" });
+      ).toEqual({ "*": "WRITE", [profileSpace]: "OWNER" });
 
       // The owner's runtime is gone before the visitor arrives, so every
       // commit the profile space takes from here on is the visitor's.
@@ -119,6 +121,58 @@ describe("profile-space-access", () => {
       await readerRuntime.dispose();
       await visitorRuntime.dispose();
       await disposeOwner();
+    }
+  });
+
+  it("creates a profile in a space granting every principal READ alone, its creator writing there under the delegation the space's key issues", async () => {
+    // With the wildcard at READ, only the delegation lets the creator write
+    // the profile into the space and copy its pattern there. A visitor, who
+    // can read the space and not the creator's Home, starting the profile and
+    // reading the name it was created with is what shows both landed.
+
+    const ownerRuntime = runtimeAs(owner);
+    const visitorRuntime = runtimeAs(visitor);
+    try {
+      const profileLink = await createProfileThroughHome(ownerRuntime, "Ada", {
+        wildcard: "READ",
+      });
+      const profileSpace = profileLink.space as MemorySpace;
+      expect(
+        (await server.readDocument(profileSpace, aclDocId(profileSpace) as URI))
+          ?.value,
+      ).toEqual({ "*": "READ", [profileSpace]: "OWNER" });
+
+      // Every session the creator holds on the space takes its capability
+      // from the space's own OWNER grant, through the delegation, and none
+      // from the wildcard.
+      const creatorGrants = server.accessForTestingOnly
+        .sessionsForSpace(profileSpace)
+        .filter((session) => session.principal === owner.did())
+        .map((session) => session.capabilityPrincipal);
+      expect(creatorGrants.length).toBeGreaterThan(0);
+      expect(creatorGrants).toEqual(creatorGrants.map(() => profileSpace));
+
+      // Home records the delegation beside the profile, for the creator's
+      // next runtime to hold.
+      const recorded = await ownerRuntime.recordedDelegations(profileSpace);
+      expect(recorded.length).toBe(1);
+      expect((await decodeDelegation(recorded[0])).payload).toMatchObject({
+        iss: profileSpace,
+        aud: owner.did(),
+        sub: profileSpace,
+        cmd: "/memory",
+      });
+
+      const visited = visitorRuntime.getCellFromLink(profileLink);
+      await visited.sync();
+      expect(await visitorRuntime.start(visited)).toBe(true);
+      await visitorRuntime.idle();
+      expect(
+        await visited.key("name").asSchema<string>({ type: "string" }).pull(),
+      ).toBe("Ada");
+    } finally {
+      await visitorRuntime.dispose();
+      await ownerRuntime.dispose();
     }
   });
 

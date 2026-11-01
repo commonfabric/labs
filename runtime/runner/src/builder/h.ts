@@ -7,6 +7,7 @@ import {
   type UiPromptSlotProps,
   type VNode,
 } from "@commonfabric/api";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { isCell } from "../cell.ts";
 import { KeepAsCell } from "../link-utils.ts";
@@ -51,8 +52,30 @@ function bindingTargetLink(value: unknown): unknown {
   return value;
 }
 
+/** Whether `value` is a cell, or a query result read from one. */
+function isBindable(value: unknown): boolean {
+  return isCell(value) || isCellResult(value);
+}
+
+/**
+ * Whether `value` is a record of cells: a plain object with at least one
+ * field, every one of which is a cell.
+ */
+function isCellRecord(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  const members = Object.values(value);
+  return members.length > 0 && members.every(isBindable);
+}
+
 /**
  * JSX factory function for creating virtual DOM nodes.
+ *
+ * A `$` prop binds what it is given, so its value is a cell, or a record of
+ * them: a plain object every field of which is a cell, which the component
+ * reaches field by field. Anything else is refused, including a record with
+ * a field that is not a cell, since the binding would have nothing live to
+ * hand over for that field and nothing to write to.
+ *
  * @param name - The element name or component function
  * @param props - Element properties
  * @param children - Child elements
@@ -87,13 +110,20 @@ export const h: HFunction = Object.assign(
               "\n" +
               "And then using it like `<Item {item} />`",
           );
-        } else if (!isCell(value) && !isCellResult(value)) {
+        } else if (isBindable(value)) {
+          props![key] = bindingTargetLink(value);
+        } else if (isCellRecord(value)) {
+          props![key] = Object.fromEntries(
+            Object.entries(value).map((
+              [name, member],
+            ) => [name, bindingTargetLink(member)]),
+          );
+        } else {
           throw new Error(
             `Bidirectionally bound property ${key} is not reactive\n` +
               "Use pattern parameter or create a cell using new Writable()",
           );
         }
-        props![key] = bindingTargetLink(value);
       });
       return { type: "vnode", name, props, children: children.flat() };
     }

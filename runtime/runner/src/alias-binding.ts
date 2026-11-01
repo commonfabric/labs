@@ -44,7 +44,7 @@
  */
 
 import type { CellScope, JSONSchema, JSONValue } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 type AliasBindingBase = {
   path: readonly string[];

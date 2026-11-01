@@ -40,7 +40,8 @@ vendored type libraries, `turndown.d.ts`, and two symlinks:
 patterns run in, not stock TypeScript. A global that the SES compartment does
 not install has its declaration removed from them, so a pattern that reaches for
 it fails to compile rather than throwing a `TypeError` once deployed. The names
-live in `SANDBOX_WITHHELD_GLOBALS` (`base/utils/src/sandbox-contract.ts`).
+live in `SANDBOX_WITHHELD_GLOBALS`
+(`base/pattern-contract/src/sandbox-contract.ts`).
 
 `compile-types` applies this on the way out, so a regenerated `es2023.d.ts`
 already has them removed. After changing the list, run:

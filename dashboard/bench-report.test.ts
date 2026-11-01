@@ -11,9 +11,11 @@ import {
   benchKey,
   benchmarkReportProblem,
   CALIBRATION_FILE,
+  currentBenchKey,
   isCalibrationKey,
   isKeyBenchmark,
   KEY_BENCHMARKS,
+  MOVED_BENCH_FILES,
   MOVED_PACKAGES,
   parseBenchmarkReport,
 } from "./bench-report.ts";
@@ -107,6 +109,35 @@ describe("bench-report", () => {
         expect({ name, dir: aliases.get(`packages/${name}`) })
           .toEqual({ name, dir });
       }
+    });
+
+    it("maps each moved benchmark file the way the test-identity aliases record its move", async () => {
+      const aliases = new Map(
+        (await Deno.readTextFile(
+          new URL(
+            "../tasks/test-identity-aliases/moved-paths.jsonl",
+            import.meta.url,
+          ),
+        )).split("\n").filter((line) => line.length > 0).map((line) => {
+          const { from, to } = JSON.parse(line);
+          return [from.p, to.p];
+        }),
+      );
+      for (const [from, to] of Object.entries(MOVED_BENCH_FILES)) {
+        expect({ from, to: aliases.get(from) }).toEqual({ from, to });
+      }
+    });
+
+    it("maps a key naming a moved benchmark file, from either earlier layout", () => {
+      const now = "base/collections/src/cache.bench.ts > LRUCache > get";
+      expect(currentBenchKey("base/utils/src/cache.bench.ts > LRUCache > get"))
+        .toBe(now);
+      expect(
+        currentBenchKey("packages/utils/src/cache.bench.ts > LRUCache > get"),
+      ).toBe(now);
+      expect(currentBenchKey(now)).toBe(now);
+      expect(currentBenchKey("base/utils/src/other.bench.ts > x"))
+        .toBe("base/utils/src/other.bench.ts > x");
     });
 
     it("returns a key without a group for a benchmark that has none", () => {

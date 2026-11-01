@@ -1,7 +1,7 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { readWatermarkSeq } from "../src/executor/watermark.ts";
 import { awaitAdmitted, awaitEach } from "./support/serving-waits.ts";
 import {

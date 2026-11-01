@@ -157,7 +157,7 @@ describe("fabrichat-manager", () => {
       tx,
       // deno-lint-ignore no-explicit-any
       pattern as any,
-      { myProfile: profile },
+      { myProfile: profile, sessionProfile: profile },
       resultCell,
     );
     runtime.prepareTxForCommit(tx);

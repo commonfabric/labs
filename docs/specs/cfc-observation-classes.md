@@ -349,7 +349,23 @@ outside that scope. `filter` reads every predicate result there, and `flatMap`
 reads every child result there, so membership and content in those two still
 depend on reads that taint. `map` reads no element value anywhere: it
 republishes references, so what protects an element in its output is the
-element's own label, at the element.
+element's own label, at the element. Its one read outside the marked scope
+is of the list's membership, which it declares onward (`declaredOnwardRead`,
+`reactivity-log.ts`): the join leaves what that read consumed at the list
+itself out and keeps its integrity in the meet, and the flow stage lands
+that, as the join resolved it (`deriveFlowJoin`'s `declaredOnwardAt`), in
+the container's `enumerate` stamp, replaced from the join each reconcile
+like the rest of the stamp — a measurement, never a declaration. What the
+read consumed at the slots — each item's shape, the reference scalar there,
+the pointer a probe finds — is per-item and stays in the join: a child is
+set up from exactly that, so its setup and the container's slot templates
+carry it. So the container's membership
+and length carry what the list's do, and a child the same transaction sets
+up carries its own slot's label and the selection's: a list whose membership
+carries every element's label, a query result (§8.17.6), would otherwise
+hand each child the join of all of them.
+`cfc-declared-onward-read.test.ts` holds the partition to the join, and
+`cfc-map-row-labels.test.ts` measures the children over such a result.
 
 That is what makes the exclusion sound, and it does not come from any read.
 `list.set(members)` writes a link per member, and the slot the link lands in
