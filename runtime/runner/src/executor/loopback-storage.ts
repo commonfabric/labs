@@ -25,7 +25,10 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../storage/v2.ts";
-import { createSignedSessionOpenAuth } from "../storage/v2-remote-session.ts";
+import {
+  createSignedSessionOpenAuth,
+  MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+} from "../storage/v2-remote-session.ts";
 import type { RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 
@@ -41,9 +44,10 @@ export type LoopbackPlane =
 /**
  * The options of a loopback storage manager: a storage manager's, and the
  * deployment's route to each space's owner
- * (`serving-loop-owner-routing.md`), over which a session opened as a space's
- * own key, the genesis of a space the serving runtime creates, reaches that
- * space's owner instead of the plane.
+ * (`serving-loop-owner-routing.md`), over which a session signed by a key
+ * other than the manager's own, the genesis of a space the serving runtime
+ * creates signed by that space's key, reaches the space's owner instead of
+ * the plane.
  */
 export type LoopbackOptions = Omit<Options, "memoryHost" | "spaceHostMap"> & {
   route?: Pick<RouteOptions, "createTransport">;
@@ -55,31 +59,42 @@ class LoopbackSessionFactory implements SessionFactory {
   readonly #plane: LoopbackPlane;
   readonly #route: Pick<RouteOptions, "createTransport"> | undefined;
 
+  /** The manager's own signer, which every session but a genesis is signed by. */
+  readonly #as: Signer;
+
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
+    as: Signer,
     onServerFrame?: (frame: string) => void,
     clientBuild?: ClientBuild,
   ) {
     this.#plane = plane;
     this.#route = route;
+    this.#as = as;
     this.#onServerFrame = onServerFrame;
     this.#clientInfo = createClientInfo(clientBuild);
   }
 
+  /** The route a session signed by `signer` takes to its owner, if any. */
+  #routeFor(signer: Signer): Pick<RouteOptions, "createTransport"> | undefined {
+    return signer.did() === this.#as.did() ? undefined : this.#route;
+  }
+
   /**
-   * The transport of a session on `space` opened as `signer`: the route's to
-   * the space's owner for a session opened as the space's own key, the
-   * genesis of a space this runtime creates; the plane's for every other.
-   * Each server frame is taken in the serving context and reported AFTER
-   * the session has taken it.
+   * The transport of a session on `space` signed by `signer`: the route's to
+   * the space's owner for a session signed by a key other than the manager's
+   * own, the genesis of a space this runtime creates; the plane's for every
+   * other. Each server frame is taken in the serving context and reported
+   * AFTER the session has taken it.
    */
   #transport(space: MemorySpace, signer: Signer): MemoryClient.Transport {
-    const inner = this.#route !== undefined && signer.did() === space
-      ? this.#route.createTransport(space)
+    const route = this.#routeFor(signer);
+    const inner = route !== undefined
+      ? route.createTransport(space)
       : "createTransport" in this.#plane
       ? this.#plane.createTransport()
       : MemoryClient.loopback(this.#plane);
@@ -106,9 +121,14 @@ class LoopbackSessionFactory implements SessionFactory {
         "loopback serving sessions require the service identity signer",
       );
     }
+    // A routed session dials the owner over the network, with the handshake
+    // attempts the routed plane gives its own sessions.
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
       client: this.#clientInfo,
+      ...(this.#routeFor(signer) === undefined
+        ? {}
+        : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
     try {
       const session = await client.mount(
@@ -161,7 +181,13 @@ export class LoopbackStorageManager extends StorageManager {
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(plane, route, onServerFrame, rest.clientBuild),
+      new LoopbackSessionFactory(
+        plane,
+        route,
+        rest.as,
+        onServerFrame,
+        rest.clientBuild,
+      ),
     );
   }
 

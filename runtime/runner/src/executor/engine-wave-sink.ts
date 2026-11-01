@@ -1,12 +1,15 @@
 // The co-hosted reference implementation of the wave commit sink
 // (server-execution v2 stage D, serving-loop.md §3d): commits wave batches
-// directly against the space's engine, on the same process the memory
-// server runs in. This is the store half of plane (a)'s loopback path —
+// directly against the space's engine, on the process the memory server
+// runs in. This is the store half of plane (a)'s loopback path —
 // the wave's ONE derived commit, its basis rows, and its per-doc
 // re-verification all inside one engine transaction (`applyWaveCommit`) —
 // with stage B's derived-class lease admission enforced by the engine
-// itself. Stage F's SpaceServer wires this sink under the serving loop;
-// until then tests drive it.
+// itself. Stage F's SpaceServer wires this sink under the serving loop.
+// The foreign arm is `commitForeignWaveBatch` below, which the owner's
+// served-request handler runs too for a batch that reached it over the
+// route (docs/plans/serving-loop-owner-routing.md), so a foreign batch is
+// admitted the same way whichever process commits it.
 //
 // Stage D's three documented bounds are all discharged:
 // - DISCHARGED (stage F): foreign provisioning batches now apply WITH
@@ -14,9 +17,9 @@
 //   `delegated` carriage (originating chain actor + capabilityRef) rides
 //   the commit metadata, admission validates completeness, and scoped
 //   foreign writes key from the CARRIED identity. A foreign batch with
-//   scoped ops and NO delegated carriage is still refused (commitWave
-//   below) — that path would silently key from the sink's own principal,
-//   the empty-instance trap, cross-space edition.
+//   scoped ops and NO delegated carriage is still refused
+//   (`commitForeignWaveBatch` below) — that path would silently key from
+//   the sink's own principal, the empty-instance trap, cross-space edition.
 // - DISCHARGED (stage F): the seal handoff carries read-only spaces'
 //   read sets (ITransactionSealSink.sealSpaceReads), and the
 //   accumulator's withdrawn-read closure folds them by doc identity.

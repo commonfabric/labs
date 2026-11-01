@@ -126,8 +126,7 @@ refusal as the protocol's standard response `error`, named
 - `refused`: a deterministic admission refusal, the engine's `ProtocolError`.
   The outbox takes its LT4 arm, and the wave takes the foreign-failure arm.
 - `unavailable`: the owner has no handler installed, since no serving loop
-  runs there, or its handler does not serve the kind, as a staged kind's
-  handler does not before its stage lands.
+  runs there.
 - `internal`: anything else.
 
 A transport failure produces no answer at all. The caller treats it, and
@@ -200,7 +199,12 @@ preconditions when it applies it. The worker's port protocol keeps
 `sink.commitWave` for the home batch alone.
 
 **Served access-list changes into another space.** These become `acl` requests,
-awaited at the same commit step as before.
+awaited at the same commit step as before. The owner resolves the change's
+grant against the entry the run delivers, in the source event's space, which
+it reads from the shared store (04-protocol.md §4.3.12); stage L's end state
+keeps the store shared, and a deployment that gives each owner a store of its
+own has to carry the entry in the request or have the source's owner verify
+it.
 
 **`.inSpace()` space creation.** `StorageManager.createSpace` on the serving
 runtime opens the genesis session through the route, signed by the new space's

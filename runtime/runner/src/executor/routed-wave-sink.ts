@@ -13,7 +13,7 @@
 
 import type { ServedAclChange } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Result } from "../storage/interface.ts";
-import type { RoutedScope } from "./routed-plane.ts";
+import { isServedRefusal, type RoutedScope } from "./routed-plane.ts";
 import { servedAclChangeData } from "./served-acl-change.ts";
 import type {
   WaveCommitRejection,
@@ -95,9 +95,14 @@ export function routedWaveCommitSink(
           ),
         };
       } catch (error) {
+        // The owner's refusal keeps the name the local admission's refusal
+        // has; a failure to reach the owner, or its server's own refusal,
+        // is the batch's foreign failure, and the event replays.
         return {
           error: {
-            name: "AclDocumentWriteRefused",
+            name: isServedRefusal(error, "refused")
+              ? "AclDocumentWriteRefused"
+              : "WaveCommitRejected",
             message: `access-list change to ${change.space} failed at its ` +
               `owner: ${messageOf(error)}`,
           },

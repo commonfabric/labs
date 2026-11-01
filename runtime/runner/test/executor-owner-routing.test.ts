@@ -1043,7 +1043,7 @@ export default pattern<
     expect(inner.batches.length).toBe(1);
   });
 
-  it("sends a foreign batch and a foreign access-list change to the owner, each numbered by the plane", async () => {
+  it("sends a foreign batch and a foreign access-list change to the owner through the scope, and nothing to the sink it wraps", async () => {
     const sent: Array<{ kind: string; space: string }> = [];
     const scope: RoutedScope = {
       append: () => Promise.reject(new Error("not an append")),

@@ -1961,9 +1961,18 @@ Semantics:
   the session id to the handler its host installed; a server with no handler
   refuses with `unavailable`, and a handler that throws is refused with
   `internal`. The handler answers with the kind's result, or refuses with
-  `refused` for a crossing the owner's admission rejects deterministically,
-  which the sender does not send again, or with `unavailable` for a kind it
-  does not serve, which the sender keeps and sends again
+  `refused` for a crossing the owner's admission rejects deterministically.
+  What a refusal means to the sender is the crossing's own rule: the outbox
+  retires an `append` refused as `refused` and keeps one refused as
+  `unavailable` or `internal`, and a wave fails foreign on every refusal of a
+  `commit` or an `acl` alike, withholds its home commit, and replays the
+  event (`protocol.md` §2b)
+- for an `acl`, the owner resolves the carried grant against the entry the
+  run delivers, which lives in the stream of the source event's space, a
+  space the owner need not own: it reads that space's store, which the
+  deployment's one shared store gives every process. A deployment whose
+  owners hold stores of their own carries the entry in the request or has the
+  source's owner verify it; neither is specified here
 - the server finishes handling the frame once the crossing has started, and
   sends the response when it settles. Frames after it for the same space are
   not held behind it (section 4.11.2)
@@ -1973,7 +1982,9 @@ Semantics:
   not advertise `servedRequests`. A connection lost before the response
   leaves the crossing's outcome unknown, and the sender's own rule says what
   it does then: the outbox keeps its row and sends it again, and the owner's
-  `eventId` horizon dedupes the repeat
+  `eventId` horizon dedupes the repeat; a wave fails foreign, withholds its
+  home commit, and replays the event, whose next run reads what the lost
+  reply applied (`protocol.md` §2b)
 
 ## 4.4 Selectors
 

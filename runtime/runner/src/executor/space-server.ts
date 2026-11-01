@@ -1680,7 +1680,9 @@ export class SpaceServer implements TransactionSealDestination {
       });
     // With a route, the tenure's crossings into other spaces go through
     // that scope, from the sink and the outbox alike; the outbox disposes
-    // it when the tenure ends.
+    // it when the tenure ends, and a batch still in flight at a park then
+    // fails foreign, since a disposed scope refuses every call, and the
+    // event replays on the next tenure.
     const routeScope = this.#options.route?.scope();
     const routed = routeScope === undefined
       ? sink

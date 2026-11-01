@@ -161,9 +161,11 @@ const runAppend = async (
  * boundary's encoding, committed against the session's space as the sender's
  * own sink commits a foreign batch (protocol.md §2b), keyed by the routed
  * session and the sender's number, and reported to this server as a warm
- * authored commit, which activates the space here. Every refusal of that
- * commit is deterministic for the batch, so each is answered as `refused`;
- * a batch for another space, or a home one, is refused the same way.
+ * authored commit, which activates the space here. Every failure of that
+ * commit is answered as `refused`, the admission's refusals and the store's
+ * failures alike, since the sender replays the event on every answer but
+ * success; a batch for another space, or a home one, is refused the same
+ * way.
  */
 const runCommit = async (
   server: ServedRequestServer,
@@ -192,9 +194,10 @@ const runCommit = async (
   }
   const batch = decoded as unknown as WaveSpaceCommit;
   const engine = await server.engineForSpace(call.space);
+  // No principal, as the sender's own sink passes none: the commit is keyed
+  // by the routed session and the sender's number alone.
   const result = commitForeignWaveBatch(engine, batch, {
     sessionId: call.sessionId,
-    principal: call.principal,
     localSeq,
   });
   if (result.error !== undefined) {
