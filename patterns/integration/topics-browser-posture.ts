@@ -93,8 +93,9 @@ export interface DeclaredTopicsBrowserPosture {
    * delivers and runs none of the derivations' modules itself. Resolved as
    * the web client resolves it from the posture the toolshed runs at, which
    * the shell it serves adopts: the web override where the deployment states
-   * one, else the global setting, under server execution. A shell built with
-   * a define pinning either otherwise is one this field does not describe.
+   * one, else the global setting, else on, under server execution. A shell
+   * built with a define pinning either otherwise is one this field does not
+   * describe.
    */
   readonly servedViews: boolean;
 }
@@ -238,7 +239,7 @@ export function topicsBrowserPostureOf(
     clientFrom,
     servedViews: served &&
       (meta.experimental?.webViewScopedReplication ??
-          meta.experimental?.viewScopedReplication) === true,
+          meta.experimental?.viewScopedReplication ?? true) === true,
   };
 }
 

@@ -557,11 +557,10 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. Whichever role resolves ON also runs with
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
-baked shell, and the test processes of its package-integration and
-pattern-integration suites, so the ON arm's browsers receive only what their
-views need, and its posture probe checks that the toolshed publishes it.
+stay aligned. Web view-scoped replication is on by default under server
+execution, so the ON arm's browsers receive only what their views need without
+a variable of their own, and the ON arm's posture probe checks that the
+toolshed does not publish it off.
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
 flag itself.
 
@@ -570,15 +569,12 @@ test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too. CI's ON arm also runs with web
-view-scoped replication, so reproducing one of its failures takes that flag on
-the same processes:
+on neither arm. Start the servers with it too:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
-  ./scripts/start-local-dev.sh
+EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
 cd patterns
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+EXPERIMENTAL_SERVER_EXECUTION=true \
   API_URL=http://localhost:8000/ \
   deno test --shuffle=$(deno task -q test-seed) --no-check -A \
   ./integration/<name>.test.ts
@@ -628,11 +624,11 @@ these two harnesses while preserving the other inherited flags, so both run
 the OFF arm in every lane. Server-backed targets receive the supplied
 server-execution setting.
 
-For view-scoped replication, run the complete default integration suite with:
+View-scoped replication is on by default under server execution, so the
+complete default integration suite exercises it with:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true \
-EXPERIMENTAL_VIEW_SCOPED_REPLICATION=true deno task integration
+EXPERIMENTAL_SERVER_EXECUTION=true deno task integration
 ```
 
 The browser regression `shell/integration/view-scoped-replication.test.ts`

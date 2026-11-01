@@ -35,7 +35,7 @@ was last checked against the code.
 | [`computedCellIds`](#computedcellids)                                       | `EXPERIMENTAL_COMPUTED_CELL_IDS` env, or `RuntimeOptions.experimental`                                                                          | on                                                                                   | Robin McCollum (#4659)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
 | [`lazyMaterialization`](#lazymaterialization)                               | `EXPERIMENTAL_LAZY_MATERIALIZATION` env, or `RuntimeOptions.experimental`                                                                       | on                                                                                   | Bernhard Seefeld                                      | fold into base read semantics, then delete flag                                                             | implemented, on by default                                         |
 | [`readerSchemaPrecedence`](#readerschemaprecedence)                         | `EXPERIMENTAL_READER_SCHEMA_PRECEDENCE` env, or `RuntimeOptions.experimental`                                                                   | on                                                                                   | Robin McCollum (#6338)                                | graduate to unconditional behavior, then delete flag                                                                                                                                                                              | implemented, on by default                                                      |
-| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
+| [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental`; the shell adopts both from its deployment, and an explicit build define overrides it | on for a web client under server execution, no effect without it; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, on by default under server execution |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define overrides it | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
 | [`localSessionDocuments`](#localsessiondocuments) | `EXPERIMENTAL_LOCAL_SESSION_DOCUMENTS` env / shell build define, or `RuntimeOptions.experimental`; clients adopt the deployment value | off | Bernhard Seefeld (#8919) | validate local session semantics and performance, then graduate for client execution | implemented, opt-in; requires validation-only commit support |
@@ -439,9 +439,9 @@ flags it adopts from the deployment it runs against.
   default is ON). CI resolves stable `default` and `opposite`
   roles through `tasks/server-execution-ci.ts`: `default` leaves the flag
   unset, while `opposite` explicitly selects the inverse and bakes that same
-  value into its toolshed shell. Whichever role resolves ON also sets
-  `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true`, so the ON arm is exercised
-  with web view-scoped replication. Therefore changing the default is exactly:
+  value into its toolshed shell. Web view-scoped replication is on by default
+  under server execution, so the ON arm is exercised with it while CI sets no
+  variable for it. Therefore changing the default is exactly:
   `SERVER_EXECUTION_DEFAULT_ENABLED`, the summary cell above, a dated status
   entry here, and a delta in the plan's live coordination block; workflow
   job topology, probes, skip placement, coverage ownership, test record
@@ -598,14 +598,17 @@ flags it adopts from the deployment it runs against.
   deployment defaults. Both are `"deployment"` in `SHELL_FLAG_SOURCES`, so the
   browser shell runs what the toolshed serving it publishes, and a shell build
   define pins either flag over the deployment.
-- **Default:** global `false`; web override absent. A web runtime resolves
-  `webViewScopedReplication ?? viewScopedReplication ?? false`. An explicit web
-  `false` overrides a global `true`. CI's server-execution ON arm sets the web
-  override `true` on its Toolshed servers, baked shells and the test processes
-  of its package- and pattern-integration suites
-  (`SERVER_EXECUTION_ON_ENVIRONMENT` in `tasks/server-execution-ci.ts`), and
-  its OFF arm sets neither flag. The setting follows the ON arm, so a flip of
-  `serverExecution`'s default moves it to the `default` role's lanes.
+- **Default:** both unset, which is on for a web client under server execution.
+  A web runtime resolves
+  `webViewScopedReplication ?? viewScopedReplication ?? true`, and only under
+  `serverExecution: true` (`Runtime.viewScopedReplicationRequested`). An
+  explicit `false` in either flag turns it off, and an explicit web `false`
+  overrides a global `true`. Without server execution neither flag does
+  anything, whatever its value: the runtime requests no view replication, and
+  the memory server advertises `viewScopedReplicationV1` only under server
+  execution. CI sets neither flag on either arm, so its ON arm runs the
+  default, and the ON arm's posture probe fails a toolshed that publishes it
+  off.
 - **Scope:** requires `serverExecution: true`, the browser-worker
   `clientClass: "web"` preset, and a server advertising
   `viewScopedReplicationV1`. Other client classes retain ordinary replication.
@@ -673,6 +676,11 @@ flags it adopts from the deployment it runs against.
   it serves, where the shell's resolved `serverExecution` is on as well (the
   scope above). A shell build define still pins either flag, and
   `serverExecution` too.
+- **Status (2026-11-01):** on by default for a web client under server
+  execution, with no effect without it. CI's ON arm had set the web override
+  `true` on its servers, baked shells and integration suites; it now sets
+  nothing and runs the default. A deployment that runs server execution and
+  wants the old posture sets `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=false`.
 
 
 ### `lazyMaterialization`

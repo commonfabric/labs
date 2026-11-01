@@ -26,22 +26,13 @@ export interface ServerExecutionCiLane {
   /**
    * The variables the lane's Toolshed servers, baked shells and test
    * processes run under: `EXPERIMENTAL_SERVER_EXECUTION` where the role
-   * names a value, and on the ON arm `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`
-   * too, so the browsers the arm runs receive only what their views need.
+   * names a value, and nothing where it names none.
    */
   readonly environment: Readonly<Record<string, string>>;
 
   /** Test-record variant for the non-default role; default stays unmarked. */
   readonly recordVariant?: "server-execution" | "server-execution-off";
 }
-
-/**
- * The variables an ON lane sets besides the server-execution arm. Each names a
- * flag the arm runs with that is off by default.
- */
-export const SERVER_EXECUTION_ON_ENVIRONMENT: Readonly<
-  Record<string, string>
-> = { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" };
 
 /** Returns the two-arm CI posture for `role`. */
 export function serverExecutionCiLane(
@@ -58,12 +49,9 @@ export function serverExecutionCiLane(
     role,
     enabled,
     label: enabled ? "ON" : "OFF",
-    environment: {
-      ...(experimentalValue === undefined
-        ? {}
-        : { EXPERIMENTAL_SERVER_EXECUTION: experimentalValue }),
-      ...(enabled ? SERVER_EXECUTION_ON_ENVIRONMENT : {}),
-    },
+    environment: experimentalValue === undefined
+      ? {}
+      : { EXPERIMENTAL_SERVER_EXECUTION: experimentalValue },
     ...(experimentalValue === undefined ? {} : {
       experimentalValue,
       recordVariant: enabled ? "server-execution" : "server-execution-off",
@@ -73,7 +61,8 @@ export function serverExecutionCiLane(
 
 /**
  * Verifies the server and baked shell both carry the requested lane posture,
- * web view-scoped replication included.
+ * and that an ON lane's server leaves web view-scoped replication on, as it
+ * is unless a flag turns it off.
  */
 export function assertServerExecutionCiPosture(
   role: ServerExecutionCiRole,
@@ -92,12 +81,14 @@ export function assertServerExecutionCiPosture(
     );
   }
 
-  const viewScoped = experimental?.webViewScopedReplication === true;
-  if (viewScoped !== lane.enabled) {
+  const viewScoped = experimental?.webViewScopedReplication ??
+    experimental?.viewScopedReplication ?? true;
+  if (lane.enabled && viewScoped !== true) {
     throw new Error(
       `${role} lane publishes webViewScopedReplication=` +
-        `${experimental?.webViewScopedReplication}; expected ` +
-        `${lane.enabled ? "true" : "it unset or false"}`,
+        `${experimental?.webViewScopedReplication} and ` +
+        `viewScopedReplication=${experimental?.viewScopedReplication}; ` +
+        "expected web view-scoped replication on",
     );
   }
 

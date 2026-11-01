@@ -463,10 +463,7 @@ describe("opening a capability on a machine that answers", () => {
     const lane = serverExecutionCiLane(role);
     const bodies: Record<string, unknown> = {
       "/api/meta": {
-        experimental: {
-          serverExecution: lane.enabled,
-          ...(lane.enabled ? { webViewScopedReplication: true } : {}),
-        },
+        experimental: { serverExecution: lane.enabled },
         shellServerExecutionDefine: lane.experimentalValue ?? null,
       },
       "/api/health/stats": { servingLoop: lane.enabled ? 1 : null },
@@ -728,17 +725,11 @@ describe("opening a capability on a machine that answers", () => {
     // the value for the opposite arm, and none at all for the default.
     const opposite = serverExecutionCiLane("opposite");
     const named = opposite.experimentalValue;
-    // The ON arm's web view-scoped replication, set on that arm alone.
-    const viewScoped = opposite.enabled ? "true" : undefined;
     const before = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
-    const beforeViewScoped = Deno.env.get(
-      "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
-    );
     Deno.env.set(
       "EXPERIMENTAL_SERVER_EXECUTION",
       named === "true" ? "false" : "true",
     );
-    Deno.env.set("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION", "false");
     try {
       const source = machine({
         "index.ts": "listening (pid 999999). Logs: x\n",
@@ -746,9 +737,6 @@ describe("opening a capability on a machine that answers", () => {
       await open("toolshed", source);
       expect(envOf(source, "index.ts")?.EXPERIMENTAL_SERVER_EXECUTION)
         .toBeUndefined();
-      expect(
-        envOf(source, "index.ts")?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
-      ).toBe(serverExecutionCiLane("default").enabled ? "true" : undefined);
 
       const baked = await openBaked(
         "toolshed-baked",
@@ -773,25 +761,11 @@ describe("opening a capability on a machine that answers", () => {
         envOf(oppositeServer, "toolshed-baked-opposite")
           ?.EXPERIMENTAL_SERVER_EXECUTION,
       ).toBe(named);
-      for (const step of ["build-binaries", "toolshed-baked-opposite"]) {
-        expect(
-          envOf(oppositeServer, step)?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
-          step,
-        ).toBe(viewScoped);
-      }
     } finally {
       if (before === undefined) {
         Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
       } else {
         Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", before);
-      }
-      if (beforeViewScoped === undefined) {
-        Deno.env.delete("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION");
-      } else {
-        Deno.env.set(
-          "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
-          beforeViewScoped,
-        );
       }
     }
   });
@@ -942,19 +916,15 @@ describe("the binaries a lane caches", () => {
     }
   });
 
-  it("bakes each role's arm, and on the ON arm the flags it runs with besides", () => {
+  it("bakes each role's arm and no other flag", () => {
     for (const [on, off] of [[true, false], [false, true]]) {
       expect(cachedBinaries(on)["toolshed-baked-opposite"].bakes)
         .toEqual({
           EXPERIMENTAL_SERVER_EXECUTION: `${off}`,
-          ...(off ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
           CF_COMPILE_CACHE_VERSION: "inputs",
         });
       expect(cachedBinaries(on)["toolshed-baked-default"].bakes)
-        .toEqual({
-          ...(on ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
-          CF_COMPILE_CACHE_VERSION: "inputs",
-        });
+        .toEqual({ CF_COMPILE_CACHE_VERSION: "inputs" });
     }
   });
 });
