@@ -1509,10 +1509,11 @@ export class SpaceServer implements TransactionSealDestination {
   readonly #programClosureGraces = new Map<string, ProgramClosureGrace>();
 
   /** The closure entry documents events wait on (`#programClosureGraces`
-   * and the `program-unavailable` checkpoints), by document id: a commit
-   * writing one into the space wakes the drain and is the recovery its
-   * delivery failures wait on. */
-  readonly #programClosureWaits = new Set<string>();
+   * and the `program-unavailable` checkpoints), by document id, each with the
+   * events waiting on it: a commit writing one into the space wakes the drain
+   * and is the recovery its delivery failures wait on. An event leaves when
+   * the document arrives or the event is covered by a terminal notice. */
+  readonly #programClosureWaits = new Map<string, Set<string>>();
 
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
@@ -2012,7 +2013,7 @@ export class SpaceServer implements TransactionSealDestination {
           entry.eventId,
           entry.deliveryDeferral,
         );
-        this.#rewatchProgramClosure(entry.deliveryDeferral);
+        this.#rewatchProgramClosure(entry.eventId, entry.deliveryDeferral);
       }
     }
     if (pendingEventDocs.length > 0) {
@@ -3882,7 +3883,7 @@ export class SpaceServer implements TransactionSealDestination {
       return false;
     }
     const eventId = entry.eventId;
-    this.#programClosureWaits.add(closureDocId);
+    this.#waitForProgramClosure(closureDocId, eventId);
     this.#options.onEventDeferred?.();
     // The barrier's mid-pass half, as the other deferral arms carry it.
     this.#loadParkDeferredInPass = true;
@@ -3926,7 +3927,7 @@ export class SpaceServer implements TransactionSealDestination {
    * again, or wake its retry at once when the closure arrived while no tenure
    * watched for it (events.md §5).
    */
-  #rewatchProgramClosure(checkpoint: DeliveryDeferral): void {
+  #rewatchProgramClosure(eventId: string, checkpoint: DeliveryDeferral): void {
     const epoch = checkpoint.recoveryEpoch;
     const prefix = programClosureEpoch("");
     if (
@@ -3942,12 +3943,32 @@ export class SpaceServer implements TransactionSealDestination {
       scopeKey: "space",
     });
     if (head === 0) {
-      this.#programClosureWaits.add(closureDocId);
+      this.#waitForProgramClosure(closureDocId, eventId);
     } else {
       this.#observeLoadRecovery({
         failedEpoch: epoch,
         recoveryEpoch: `${epoch}@${head}`,
       });
+    }
+  }
+
+  /** Has `eventId` wait on the arrival of `closureDocId` in the space
+   * (`#programClosureWaits`). */
+  #waitForProgramClosure(closureDocId: string, eventId: string): void {
+    let waiting = this.#programClosureWaits.get(closureDocId);
+    if (waiting === undefined) {
+      waiting = new Set();
+      this.#programClosureWaits.set(closureDocId, waiting);
+    }
+    waiting.add(eventId);
+  }
+
+  /** Takes `eventId` out of every program-closure wait, as when a terminal
+   * notice covers it. */
+  #forgetProgramClosureWait(eventId: string): void {
+    for (const [closureDocId, waiting] of this.#programClosureWaits) {
+      waiting.delete(eventId);
+      if (waiting.size === 0) this.#programClosureWaits.delete(closureDocId);
     }
   }
 
@@ -4304,6 +4325,7 @@ export class SpaceServer implements TransactionSealDestination {
         this.#uncommittedDeliveryFailureEpochs.delete(eventId);
         this.#setActiveDeliveryCheckpoint(eventId, undefined);
         this.#cancelDeliveryFailureWake(eventId);
+        this.#forgetProgramClosureWait(eventId);
         const stats = this.#options.stats.events.needsAttention;
         stats.total += 1;
         stats.byPhase[pending.attention.phase] += 1;
@@ -4474,7 +4496,12 @@ export class SpaceServer implements TransactionSealDestination {
       // past their grace wait on.
       if (this.#programClosureWaits.size > 0) {
         for (const write of record.writes) {
-          if (!this.#programClosureWaits.delete(write.id)) continue;
+          if (
+            write.scopeKey !== "space" ||
+            !this.#programClosureWaits.delete(write.id)
+          ) {
+            continue;
+          }
           this.#eventScanOwed = true;
           this.#observeLoadRecovery({
             failedEpoch: programClosureEpoch(write.id),
