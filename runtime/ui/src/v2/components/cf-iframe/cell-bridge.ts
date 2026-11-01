@@ -652,6 +652,7 @@ export async function resolveCellContextBridge(
     ] as const;
   })).catch((error) => {
     failed.abort();
+    signal?.throwIfAborted();
     throw error;
   });
   signal?.throwIfAborted();

@@ -80,8 +80,8 @@ export class CFIframe extends BaseElement {
     subscribe: true,
   });
 
-  #contextBridge: FabricBridge = { resources: {} };
-  #contextReady = true;
+  private _contextBridge: FabricBridge = { resources: {} };
+  private _contextReady = true;
 
   /**
    * The context setup still under way, if any. A newer setup aborts it, and
@@ -305,17 +305,17 @@ export class CFIframe extends BaseElement {
       this._errorDetails = null;
     }
     if (this.bridge || !this.context) {
-      this.#contextBridge = { resources: {} };
-      this.#contextReady = true;
+      this._contextBridge = { resources: {} };
+      this._contextReady = true;
     } else if (!isCellHandle<Record<string, unknown>>(this.context)) {
-      this.#contextBridge = createCellContextBridge(this.context);
-      this.#contextReady = true;
+      this._contextBridge = createCellContextBridge(this.context);
+      this._contextReady = true;
     } else {
       const context = this.context;
       const setup = new AbortController();
       this.#contextSetup = setup;
-      this.#contextBridge = { resources: {} };
-      this.#contextReady = false;
+      this._contextBridge = { resources: {} };
+      this._contextReady = false;
       if (this.#detached) {
         setup.abort();
         return;
@@ -327,8 +327,8 @@ export class CFIframe extends BaseElement {
       ).then((bridge) => {
         if (setup.signal.aborted) return;
         this.#contextSetup = undefined;
-        this.#contextBridge = bridge;
-        this.#contextReady = true;
+        this._contextBridge = bridge;
+        this._contextReady = true;
         this.requestUpdate();
       }).catch((error) => {
         if (setup.signal.aborted) return;
@@ -362,8 +362,8 @@ export class CFIframe extends BaseElement {
   }
 
   override render() {
-    const bridge = this.bridge ?? this.#contextBridge;
-    const source = this.bridge || this.#contextReady ? this.src : "";
+    const bridge = this.bridge ?? this._contextBridge;
+    const source = this.bridge || this._contextReady ? this.src : "";
     return html`
       <common-iframe-sandbox
         .bridge="${bridge}"

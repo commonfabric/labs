@@ -1109,15 +1109,22 @@ describe("cf-iframe cell bridge", () => {
 
   describe("an aborted signal", () => {
     /**
-     * A context holding one plain field, and how many requests resolving it
-     * has sent.
+     * A context holding one plain field, `count`, whose resolution fails with
+     * `countFailure` when one is given, and how many requests resolving the
+     * context has sent.
      */
-    const plainContext = () => {
+    const plainContext = (countFailure?: Error) => {
       let requests = 0;
       const runtime = runtimeStub({
         [$conn]: () => ({
           request: (request: { type: RequestType; cell: CellRef }) => {
             requests++;
+            if (
+              countFailure && request.type === RequestType.CellResolveAsCell &&
+              request.cell.path[0] === "count"
+            ) {
+              return Promise.reject(countFailure);
+            }
             return Promise.resolve(
               request.type === RequestType.CellResolveAsCell
                 ? { cell: { ...request.cell, id: "of:resolved-context" } }
@@ -1151,6 +1158,17 @@ describe("cf-iframe cell bridge", () => {
 
     it("rejects with its reason when it aborts before the bridge resolves, with no SQLite wait under way", async () => {
       const { context } = plainContext();
+      const setup = new AbortController();
+      const reason = new Error("setup abandoned");
+
+      const resolving = resolveCellContextBridge(context, {}, setup.signal);
+      setup.abort(reason);
+
+      await expect(resolving).rejects.toBe(reason);
+    });
+
+    it("rejects with its reason, not the failure of a resource that fails after it aborts", async () => {
+      const { context } = plainContext(new Error("count unresolved"));
       const setup = new AbortController();
       const reason = new Error("setup abandoned");
 
