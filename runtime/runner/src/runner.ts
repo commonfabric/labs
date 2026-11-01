@@ -8688,13 +8688,6 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
-    // Whether the setup is the principal's act was decided by the transaction
-    // the run was asked in — a handler run's, or one outside any scheduled
-    // action that did not decline it, which attributes this piece's own
-    // initializations — and the transaction it runs in once the family has
-    // landed carries that decision, not one of its own.
-    const attributedOutsideAction = tx.tx.sourceAction === undefined &&
-      options.attributeInitialization !== false;
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -8722,13 +8715,15 @@ export class Runner {
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
         if (speculative) this.#callerOwnedSetupTransactions.add(startTx);
+        // Whether an initialization is the principal's act was decided by the
+        // transaction the run was asked in: a handler run's, or one that
+        // brought the piece into being outside any scheduled action, whose
+        // setup marked it for this piece. The transaction the start runs in
+        // carries that decision and makes none of its own: a start of a piece
+        // found set up, however it was reached, attributes nothing
+        // (cfc-protected-initialization.md, "Attribution of an initialized
+        // value").
         carryAttributionMarks(tx, startTx);
-        if (attributedOutsideAction) {
-          startTx.markCfcAttributedInitialization(
-            runtimeWritePolicyAuthorization,
-            pieceAttributionScope(resultCell),
-          );
-        }
         if (durableReads) markDurableReadTx(startTx);
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the

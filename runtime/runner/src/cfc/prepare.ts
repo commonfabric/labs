@@ -2235,12 +2235,21 @@ type LabelMintOptions = {
   mintSchemaIntegrity?: boolean;
   attributeCurrentPrincipal?: boolean;
   mintValueStamps?: boolean;
+  // The principal a placeholder `ownerPrincipal` binds where the value is an
+  // initialization on nobody's behalf (`attributeCurrentPrincipal` false): the
+  // recorded creator of the piece the document belongs to. The persisted label
+  // then mints `represents-principal` for them and no other claim about the
+  // current principal (`updateAddedOwnerCreator`).
+  bindOwnerTo?: string;
 };
 
 /**
  * The mint options for the label persisted at `path`: no schema integrity
  * over a reference the runtime staged, and no claim about the current
- * principal over a value the runtime initialized on nobody's behalf.
+ * principal over a value the runtime initialized on nobody's behalf. With
+ * `schema`, the schema at the path, such an initialization at a placeholder
+ * `ownerPrincipal` binds the owning piece's recorded creator instead
+ * (`updateAddedOwnerCreator`).
  */
 const labelMintOptionsAt = (
   tx: IExtendedStorageTransaction,
@@ -2250,14 +2259,149 @@ const labelMintOptionsAt = (
     scope: ReturnType<typeof normalizeCellScope>;
   },
   path: readonly string[],
-): LabelMintOptions => ({
-  mintSchemaIntegrity: !pathHoldsStagedReference(tx, target, path),
-  attributeCurrentPrincipal: !pathHoldsUnattributedInitialization(
+  schema?: JSONSchema,
+): LabelMintOptions => {
+  const attributeCurrentPrincipal = !pathHoldsUnattributedInitialization(
     tx,
     target,
     path,
-  ),
-});
+  );
+  const bindOwnerTo = !attributeCurrentPrincipal && schema !== undefined &&
+      isObjectOrArray(schema) && isObjectOrArray(schema.ifc) &&
+      isCurrentPrincipalPlaceholder(schema.ifc.ownerPrincipal)
+    ? updateAddedOwnerCreator(tx, target, path)
+    : undefined;
+  return {
+    mintSchemaIntegrity: !pathHoldsStagedReference(tx, target, path),
+    attributeCurrentPrincipal,
+    ...(bindOwnerTo !== undefined && { bindOwnerTo }),
+  };
+};
+
+/**
+ * The principal a placeholder `ownerPrincipal` at `path` binds when the value
+ * there is initialized on nobody's behalf: the recorded creator of the piece
+ * `target` belongs to, where the stored label at the path names no owner yet.
+ * A path whose stored label already names an owner keeps it, carried forward
+ * as every unattributed re-stage carries it; a piece with no record, or a
+ * document that is no piece's, binds no one, and the field is its first
+ * writer's as before the record existed.
+ *
+ * A source update is nobody's act, so without this the field an update adds
+ * would belong to whoever first wrote it. The piece's creator chose the origin
+ * and with it delegated every later release, so the field is theirs.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
+const updateAddedOwnerCreator = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): string | undefined => {
+  const owners = storedRepresentedPrincipalsAt(tx, target, path);
+  if (owners === undefined || owners.length > 0) return undefined;
+  return pieceCreatorOfDocument(tx, target);
+};
+
+/**
+ * The recorded creator of the piece the document `target` belongs to: the
+ * document's own `creator` meta field for a result document, else the
+ * `creator` of the piece's result document, which an argument document and an
+ * internal document belong to two ways: the setup naming them for the piece
+ * in this transaction (`runtime.piece-setup-store`, `runtime.owned-store`,
+ * whose first source is the result document), and the `result` meta link a
+ * setup writes on them. A result document without a record names no creator,
+ * whatever its own `result` link, which names its parent piece.
+ */
+const pieceCreatorOfDocument = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): string | undefined => {
+  const readMeta = (
+    document: {
+      space: MemorySpace;
+      id: string;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+    field: "creator" | "patternIdentity" | "result",
+  ): unknown =>
+    tx.readOrThrow({
+      space: document.space,
+      id: document.id as URI,
+      scope: document.scope,
+      path: [field],
+    }, { meta: INTERNAL_VERIFIER_META });
+  const creatorOf = (
+    document: {
+      space: MemorySpace;
+      id: string;
+      scope: ReturnType<typeof normalizeCellScope>;
+    },
+  ): string | undefined => {
+    const recorded = readMeta(document, "creator");
+    return typeof recorded === "string" && isWellFormedDID(recorded)
+      ? recorded
+      : undefined;
+  };
+  const own = creatorOf(target);
+  if (own !== undefined) return own;
+  if (readMeta(target, "patternIdentity") !== undefined) return undefined;
+  const key = cfcDocumentKey(target);
+  const named = writePolicyInputsForDocument(tx, target).find((input) =>
+    input.kind === "structural-provenance" &&
+    tx.isRuntimeWritePolicyInput(input) &&
+    (input.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE ||
+      input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE) &&
+    cfcDocumentKey(input.target) === key && input.sources.length > 0
+  );
+  if (named !== undefined && named.kind === "structural-provenance") {
+    return creatorOf(linkDocument(named.sources[0]));
+  }
+  const result = parseLink(readMeta(target, "result"), {
+    ...target,
+    id: target.id as URI,
+    path: [],
+  });
+  if (result === undefined) return undefined;
+  return creatorOf({
+    space: result.space,
+    id: result.id,
+    scope: normalizeCellScope(result.scope),
+  });
+};
+
+/**
+ * The claims `values` make about the current principal, resolved for a value
+ * initialized on nobody's behalf whose owner is `owner`: a
+ * `represents-principal` claim on the placeholder names `owner`, and every
+ * other claim on the placeholder is left out, as it is for any such value.
+ */
+const resolveOwnerBindingValues = (
+  values: readonly unknown[] | undefined,
+  owner: string,
+): readonly CfcAtom[] | undefined => {
+  if (!values) {
+    return undefined;
+  }
+  const resolved = values.flatMap((value) => {
+    if (!hasCurrentPrincipalPlaceholder(value)) {
+      return [value];
+    }
+    return isCurrentPrincipalClaimAtom(value) &&
+        value.kind === "represents-principal" &&
+        isCurrentPrincipalPlaceholder(value.subject)
+      ? [{ kind: value.kind, subject: owner }]
+      : [];
+  });
+  return resolved.length > 0 ? (resolved as readonly CfcAtom[]) : undefined;
+};
 
 /**
  * Whether the label persisted at `path` mints the claims its schema makes
@@ -6067,14 +6211,18 @@ const currentPrincipalIntegrityReason = (
       }`;
     }
     // A run that acts for no one would match or bind an owner it does not
-    // act for, the service under the serving runtime's own snapshot. Only an
-    // initialization on nobody's behalf at a placeholder owner checks no
-    // owner and binds no one, so only that is left to admit.
+    // act for, the service under the serving runtime's own snapshot. Two
+    // writes at a placeholder owner check no owner and bind no one, so only
+    // those are left to admit: an initialization on nobody's behalf, and a
+    // reference the runtime staged there, which writes nothing of the value
+    // it names and mints no owner claim (`pathHoldsStagedReference`), as the
+    // result document's binding to an argument field an update adds.
     // SPEC-PENDING https://github.com/commonfabric/specs/pull/64
     if (
       servedRunActsForNoOne(tx, trustSnapshot) &&
       (!isCurrentPrincipalPlaceholder(ownerPrincipalSpec) ||
-        !pathHoldsUnattributedInitialization(tx, target, path))
+        !(pathHoldsUnattributedInitialization(tx, target, path) ||
+          pathHoldsStagedReference(tx, target, path)))
     ) {
       return `ownerPrincipal requires the run's actor at /${path.join("/")}`;
     }
@@ -8436,6 +8584,13 @@ const derivePersistedLabel = (
   const actingPrincipal = options.attributeCurrentPrincipal === false
     ? undefined
     : tx.getCfcState().trustSnapshot?.actingPrincipal;
+  // A value nobody is attributed, at an owner position the piece's recorded
+  // creator binds, represents the creator (`LabelMintOptions.bindOwnerTo`).
+  const resolveClaims = (values: readonly unknown[] | undefined) =>
+    options.attributeCurrentPrincipal === false &&
+      options.bindOwnerTo !== undefined
+      ? resolveOwnerBindingValues(values, options.bindOwnerTo)
+      : resolveCurrentPrincipalLabelValues(values, actingPrincipal);
   const copiedInputLabel = sourceEntryLabels && exactCopySourcePath(schema)
     ? sourceEntryLabels.get(pathKey(exactCopySourcePath(schema)!))
     : undefined;
@@ -8450,9 +8605,8 @@ const derivePersistedLabel = (
     projectionClaim !== undefined && projectionClaim !== "malformed"
       ? projectedSourceLabel(sourceEntryLabels!, projectionClaim)
       : undefined;
-  const addedIntegrity = resolveCurrentPrincipalLabelValues(
+  const addedIntegrity = resolveClaims(
     Array.isArray(ifc?.addIntegrity) ? ifc.addIntegrity : undefined,
-    actingPrincipal,
   );
   return {
     // Normalize confidentiality clauses on persist (Epic A4): an authored or
@@ -8476,10 +8630,7 @@ const derivePersistedLabel = (
     ),
     integrity: mintSchemaIntegrity
       ? mergeLabelValues(
-        resolveCurrentPrincipalLabelValues(
-          schemaLabel.integrity,
-          actingPrincipal,
-        ),
+        resolveClaims(schemaLabel.integrity),
         copiedInputLabel?.integrity,
         projectedInputLabel?.integrity,
         addedIntegrity?.filter((atom) =>
@@ -11805,7 +11956,7 @@ const verifyWriteFloor = function* (
     // `addIntegrity` mints + `exactCopyOf`/`projection` carries,
     // evidence-gated so a pattern author cannot forge runtime-minted atoms
     // to satisfy their own floor.
-    const mint = labelMintOptionsAt(tx, target, entry.path);
+    const mint = labelMintOptionsAt(tx, target, entry.path, entry.schema);
     const declared = derivePersistedLabel(
       tx,
       entry.schema,
@@ -12781,7 +12932,12 @@ export function* prepareBoundaryCommitSteps(
           ) {
             remintedDeclaredPaths.set(pathKey(entry.path), entry.path);
           }
-          const mint = labelMintOptionsAt(tx, target, entry.path);
+          const mint = labelMintOptionsAt(
+            tx,
+            target,
+            entry.path,
+            entry.schema,
+          );
           const derived = gateRuntimeMintedIntegrity(
             derivePersistedLabel(
               tx,
