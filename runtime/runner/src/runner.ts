@@ -4952,7 +4952,7 @@ export class Runner {
 
   /**
    * The creator a piece created before the runtime recorded one gives
-   * evidence of, or none for a piece that already holds a record. A space
+   * evidence of; the caller has found no record on the piece. A space
    * root belongs to the space's owner, whom its access list names
    * (`aclOwner`); a list this replica does not hold names no one. Any other
    * piece names the one principal the stored labels of its owner-protected
@@ -4965,12 +4965,6 @@ export class Runner {
     resultCell: Cell<unknown>,
   ): string | undefined {
     const result = resultCell.withTx(tx);
-    if (
-      result.getMetaRaw("creator", { meta: ignoreReadForScheduling }) !==
-        undefined
-    ) {
-      return undefined;
-    }
     const link = result.getAsNormalizedFullLink();
     const root = this.#runtime.getSpaceCell(link.space, undefined, tx)
       .key("defaultPattern").get();
@@ -5220,11 +5214,16 @@ export class Runner {
     // write to it. A keyless pattern gets no durable pointer, so no record.
     // A source transition of a piece created before the runtime recorded
     // creators records the one its owner-protected fields give evidence of,
-    // so the field the transition installs can bind them.
+    // so the field the transition installs can bind them. A piece that
+    // records a creator keeps it, a pointer installed again over the record
+    // included.
     if (
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
       this.#runtime.experimental.pieceCreatorRecord === true &&
-      (previousIdentityRef === undefined || !samePattern)
+      (previousIdentityRef === undefined || !samePattern) &&
+      resultCell.withTx(tx).getMetaRaw("creator", {
+          meta: ignoreReadForScheduling,
+        }) === undefined
     ) {
       const creator = previousIdentityRef === undefined
         ? this.#pieceCreatorFor(tx, resultCell, validationOptions)

@@ -6382,10 +6382,11 @@ const pieceCreatorRecordReasons = (
         other.address.path[0] === "patternIdentity" &&
         !valueEqual(other.value, other.previousValue)
       );
-      if (
-        !installsPointer &&
-        !(movesPointer && path.length === 1 && detail.previousPresent === false)
-      ) {
+      if (detail.previousPresent !== false) {
+        refuse("a piece records its creator once");
+        continue;
+      }
+      if (!installsPointer && !(movesPointer && path.length === 1)) {
         refuse(
           "only the transaction that brings the piece into being, or a source transition of a piece without one, records one",
         );

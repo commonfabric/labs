@@ -17,6 +17,7 @@ import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { RunnerRunOptions } from "../src/runner.ts";
+import { getMetaLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -83,7 +84,16 @@ describe("cfc-piece-creator", () => {
     runtime: Runtime,
     space: MemorySpace,
     options: { tx?: IExtendedStorageTransaction; run?: RunnerRunOptions } = {},
-  ): Promise<Cell<Piece>> => {
+  ): Promise<Cell<Piece>> =>
+    (await createPieceOf(runtime, space, options))
+      .result;
+
+  /** {@link createPiece}, returning the compiled pattern as well. */
+  const createPieceOf = async (
+    runtime: Runtime,
+    space: MemorySpace,
+    options: { tx?: IExtendedStorageTransaction; run?: RunnerRunOptions } = {},
+  ) => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: PIECE_SOURCE }],
@@ -105,7 +115,7 @@ describe("cfc-piece-creator", () => {
     if (options.tx === undefined) {
       expect((await tx.commit().settled).error).toBeUndefined();
     }
-    return result;
+    return { result, compiled };
   };
 
   /** The creator the stored result document of `result` names, read afresh. */
@@ -220,6 +230,75 @@ describe("cfc-piece-creator", () => {
 
     const attack = edit(client);
     result.withTx(attack).setMetaRaw(
+      "creator",
+      bob.did(),
+      rawMetaWriteAuthorization,
+    );
+    attack.markCfcPieceCreator(
+      runtimeWritePolicyAuthorization,
+      { space: link.space, id: link.id },
+      bob.did(),
+    );
+    expect((await attack.commit().settled).error?.message).toContain(
+      "creator record",
+    );
+    expect(await storedCreator(result)).toBe(alice.did());
+  });
+
+  it("keeps the recorded creator when a setup installs the pointer again", async () => {
+    const { result, compiled } = await createPieceOf(client, alice.did());
+    const link = result.getAsNormalizedFullLink();
+    const argument = client.getCellFromLink(getMetaLink(result, "argument")!);
+
+    const clear = edit(client);
+    result.withTx(clear).setMetaRaw(
+      "patternIdentity",
+      undefined,
+      rawMetaWriteAuthorization,
+    );
+    expect((await clear.commit().settled).error).toBeUndefined();
+
+    // Bob's runtime sets the piece up again over the retained record.
+    const member = connect(bob);
+    const reloaded = member.getCellFromLink<Piece>(link);
+    await reloaded.sync();
+    const again = member.edit();
+    member.run(
+      again,
+      compiled,
+      member.getCellFromLink(argument.getAsNormalizedFullLink()),
+      reloaded,
+    );
+    expect((await again.commit().settled).error).toBeUndefined();
+
+    expect(await storedCreator(result)).toBe(alice.did());
+  });
+
+  it("refuses a creator written over one already stored by a transaction that installs the pointer again", async () => {
+    const result = await createPiece(client, alice.did());
+    const link = result.getAsNormalizedFullLink();
+    const identity = result.getMetaRaw("patternIdentity");
+
+    const clear = edit(client);
+    result.withTx(clear).setMetaRaw(
+      "patternIdentity",
+      undefined,
+      rawMetaWriteAuthorization,
+    );
+    expect((await clear.commit().settled).error).toBeUndefined();
+
+    // A runtime that loads the document afresh finds the pointer absent, as
+    // the store holds it, so its write installs the pointer.
+    const attacker = connect(alice);
+    const reloaded = attacker.getCellFromLink<Piece>(link);
+    await reloaded.sync();
+    const attack = edit(attacker);
+    reloaded.withTx(attack).setMetaRaw(
+      "patternIdentity",
+      identity,
+      rawMetaWriteAuthorization,
+    );
+    reloaded.withTx(attack).setMetaRaw(
       "creator",
       bob.did(),
       rawMetaWriteAuthorization,

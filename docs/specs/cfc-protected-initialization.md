@@ -290,7 +290,8 @@ whether the piece records its creator.
 
 A piece records the principal it was created for in the `creator` meta field
 of its result document, written by the setup that brings it into being and
-admitted by no later write: a creation outside any action and a handler's
+admitted by no later write, a setup that installs the pointer again over a
+retained record included: a creation outside any action and a handler's
 creation record the acting principal; a child a piece instantiates records its
 parent's creator, whoever's run instantiated it; a served run acting for no
 one records nothing. A piece created before the runtime recorded creators gains
