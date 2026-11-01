@@ -1,10 +1,11 @@
 /**
  * The toolshed's serving worker entry (serving-loop-worker.md): the runner's
  * worker main with what this deployment adds. The pattern-lifecycle verbs
- * its route sends are built here from `@commonfabric/piece`'s served
- * lifecycle, requests the serving runtimes address to the public origin go
- * to this server's own listener when an internal origin is set, and one
- * compiled-module cache serves every space the worker serves. Loading this
+ * its `pattern.lifecycle` handler sends are built here from
+ * `@commonfabric/piece`'s served lifecycle, requests the serving runtimes
+ * address to the public origin go to this server's own listener when an
+ * internal origin is set, and one compiled-module cache serves every space
+ * the worker serves. Loading this
  * module anywhere but in a Worker serves nothing; `lib/server-execution.ts`
  * starts it.
  */

@@ -2308,10 +2308,9 @@ export type EventAttentionResolveResult = {
 };
 
 /**
- * Most UTF-8 bytes a `pattern.lifecycle` message may take, as many as the
- * HTTP route takes in a body. A routed connection bounds every request more
- * tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
- * smaller bound before sending it.
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take. A routed
+ * connection bounds every request more tightly (`ROUTED_QUEUE_LIMIT`), and a
+ * client holds a request to the smaller bound before sending it.
  */
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 

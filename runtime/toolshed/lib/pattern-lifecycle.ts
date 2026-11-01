@@ -1,13 +1,15 @@
-// The pattern-lifecycle verbs behind the route: authorize the caller as a
-// writer of the space, hand the verb to the space's serving runtime, and
-// turn what comes back into a status and a body. Creation and source changes
-// run inside `@commonfabric/piece`'s served operations on the serving loop's
-// cycle; registration uses trusted event ingress after creation commits
-// (docs/features/server-pattern-lifecycle.md);
-// this module holds the transport's half and is tested against a real
-// memory server and serving host.
+/**
+ * The pattern-lifecycle verbs as a `pattern.lifecycle` request on a memory
+ * session runs them: validate the verb's arguments, authorize the caller as a
+ * writer of the space, hand the verb to the space's serving runtime, and turn
+ * what comes back into a receipt or a refusal with its code. Creation and
+ * source changes run inside `@commonfabric/piece`'s served operations on the
+ * serving loop's cycle; registration uses trusted event ingress after creation
+ * commits (docs/features/server-pattern-lifecycle.md).
+ */
 
 import type { AttributeValue } from "@opentelemetry/api";
+import { z } from "zod";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -40,7 +42,58 @@ import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
 } from "@/lib/space-authority.ts";
-import { lifecycleBodies } from "./pattern-lifecycle.routes.ts";
+
+const programSchema = z.object({
+  main: z.string(),
+  mainExport: z.string().optional(),
+  files: z.array(z.object({ name: z.string(), contents: z.string() })),
+  sourceRoots: z.array(z.string()).optional(),
+  dataFiles: z.array(z.string()).optional(),
+});
+
+const patternRefSchema = z.object({
+  identity: z.string(),
+  symbol: z.string(),
+});
+
+const sourceFields = {
+  program: programSchema.optional(),
+  pattern: patternRefSchema.optional(),
+};
+
+/** Whether a body names exactly one of `program` and `pattern`. */
+const oneSource = (body: { program?: unknown; pattern?: unknown }): boolean =>
+  (body.program === undefined) !== (body.pattern === undefined);
+
+const oneSourceMessage = {
+  message: "Supply exactly one of `program` and `pattern`.",
+};
+
+/**
+ * Each verb's arguments as a `pattern.lifecycle` request carries them, without
+ * the space, which the request's session supplies.
+ */
+const lifecycleBodies = {
+  upload: z.object({ program: programSchema }),
+  instantiate: z.object({
+    ...sourceFields,
+    requestKey: z.string().min(1).max(256).optional(),
+    argument: z.record(z.string(), z.unknown()).optional(),
+    repository: z.string().optional(),
+    slug: z.string().optional(),
+    force: z.boolean().optional(),
+    register: z.boolean().optional(),
+    start: z.boolean().optional(),
+  }).refine(oneSource, oneSourceMessage),
+  setsrc: z.object({
+    piece: z.string(),
+    ...sourceFields,
+    repository: z.string().optional(),
+    dangerouslyAllowIncompatibleSchema: z.boolean().optional(),
+    expectedPattern: patternRefSchema.optional(),
+    start: z.boolean().optional(),
+  }).refine(oneSource, oneSourceMessage),
+};
 
 export interface LifecycleDeps {
   /** What the writer check reads the space's ACL through. */
@@ -48,14 +101,14 @@ export interface LifecycleDeps {
 
   /**
    * The serving loop, running on this thread or in a worker of this process;
-   * `undefined` on a deployment running without it, which answers every verb
-   * 503. It builds each verb from the descriptor it is sent and runs it as
-   * the serving side's own identity, since the verb runs as the loop's
-   * bookkeeping under the lease.
+   * `undefined` on a deployment running without it, which refuses every verb
+   * with `server-execution-off`. It builds each verb from the descriptor it is
+   * sent and runs it as the serving side's own identity, since the verb runs
+   * as the loop's bookkeeping under the lease.
    */
   host: () => ServedLifecycleVerbRunner | undefined;
 
-  /** Trusted event ingress after this route authenticates and authorizes the caller. */
+  /** Trusted event ingress once the caller is authorized as a writer. */
   append: Server["commitDelegatedAppend"];
 
   /** Trusted, narrowly addressed observation of the prepared event's durable sidecar. */
@@ -93,13 +146,10 @@ export type LifecycleErrorCode =
   | "space-not-served"
   | "internal";
 
-/** What a verb returns: its receipt on 200, or a refusal with its code. */
+/** What a verb returns: its receipt, or a refusal with its code. */
 export type LifecycleResult<T> =
-  | { status: 200; body: T }
-  | {
-    status: 400 | 403 | 404 | 409 | 422 | 500 | 503;
-    body: { error: string; code: LifecycleErrorCode };
-  };
+  | { ok: T }
+  | { refusal: { code: LifecycleErrorCode; message: string } };
 
 /** A request's pattern source as the wire carries it: one of the two. */
 export interface WireSource {
@@ -108,22 +158,19 @@ export interface WireSource {
 }
 
 const refuse = (
-  status: Exclude<LifecycleResult<never>["status"], 200>,
   code: LifecycleErrorCode,
-  error: string,
-): LifecycleResult<never> => ({ status, body: { error, code } });
+  message: string,
+): LifecycleResult<never> => ({ refusal: { code, message } });
 
-const REFUSAL_STATUS: Record<
-  ServedLifecycleRefusalCode,
-  403 | 404 | 409 | 422
-> = {
-  "compile-failed": 422,
-  "pattern-not-found": 404,
-  "setup-failed": 422,
-  "slug-taken": 409,
-  "piece-not-found": 404,
-  "incompatible": 422,
-  "source-moved": 409,
+/** Every code a served verb's own refusal carries. */
+const SERVED_REFUSAL_CODES: Record<ServedLifecycleRefusalCode, true> = {
+  "compile-failed": true,
+  "pattern-not-found": true,
+  "setup-failed": true,
+  "slug-taken": true,
+  "piece-not-found": true,
+  "incompatible": true,
+  "source-moved": true,
 };
 
 function wireSource(source: WireSource): ServedPatternSource | undefined {
@@ -148,7 +195,7 @@ const servedRefusalOf = (
     return undefined;
   }
   const { code } = error as { code?: unknown };
-  return typeof code === "string" && Object.hasOwn(REFUSAL_STATUS, code)
+  return typeof code === "string" && Object.hasOwn(SERVED_REFUSAL_CODES, code)
     ? { code: code as ServedLifecycleRefusalCode, message: error.message }
     : undefined;
 };
@@ -172,7 +219,6 @@ async function runServedVerb<Verb extends ServedLifecycleVerbDescriptor>(
   const host = deps.host();
   if (host === undefined) {
     return refuse(
-      503,
       "server-execution-off",
       "This deployment does not run the serving loop, so pattern-lifecycle " +
         "verbs cannot run on it (EXPERIMENTAL_SERVER_EXECUTION).",
@@ -193,37 +239,28 @@ async function runServedVerb<Verb extends ServedLifecycleVerbDescriptor>(
       { space, caller: callerDid, detail: authority.logDetail },
       "pattern-lifecycle verb refused",
     );
-    return refuse(403, "forbidden", authority.message);
+    return refuse("forbidden", authority.message);
   }
   try {
     const run = await host.runLifecycleVerb(space as MemorySpace, verb);
     for (const timing of run.timings) timings?.push(timing);
-    return {
-      status: 200,
-      body: run.receipt as ServedLifecycleReceipts[Verb["name"]],
-    };
+    return { ok: run.receipt as ServedLifecycleReceipts[Verb["name"]] };
   } catch (error) {
     if (error instanceof LifecycleVerbFailure) {
       for (const timing of error.timings) timings?.push(timing);
     }
     const refusal = servedRefusalOf(error);
-    if (refusal !== undefined) {
-      return refuse(
-        REFUSAL_STATUS[refusal.code],
-        refusal.code,
-        refusal.message,
-      );
-    }
+    if (refusal !== undefined) return refuse(refusal.code, refusal.message);
     const message = error instanceof Error ? error.message : String(error);
     // The loop's own `SpaceNotServedError`, by the name a worker's port keeps.
     if (error instanceof Error && error.name === "SpaceNotServedError") {
-      return refuse(503, "space-not-served", message);
+      return refuse("space-not-served", message);
     }
     deps.logger?.warn(
       { space, verb: verb.name, error: message },
       "pattern-lifecycle verb failed",
     );
-    return refuse(500, "internal", `${verb.name} failed: ${message}`);
+    return refuse("internal", `${verb.name} failed: ${message}`);
   }
 }
 
@@ -237,9 +274,7 @@ export async function processUpload(
     name: "upload",
     request: { program: input.program },
   });
-  return uploaded.status === 200
-    ? { status: 200, body: { pattern: uploaded.body } }
-    : uploaded;
+  return "ok" in uploaded ? { ok: { pattern: uploaded.ok } } : uploaded;
 }
 
 /** What the `instantiate` verb takes from its request. */
@@ -279,12 +314,10 @@ export async function processInstantiate(
   // receipt; a refusal has only the caller's.
   annotateRequestSpan(
     deps.requestSpan,
-    result.status === 200 ? result.body.requestKey : input.requestKey,
+    "ok" in result ? result.ok.requestKey : input.requestKey,
     timings,
   );
-  return result.status === 200
-    ? { status: 200, body: { ...result.body, timings } }
-    : result;
+  return "ok" in result ? { ok: { ...result.ok, timings } } : result;
 }
 
 /**
@@ -315,11 +348,10 @@ async function instantiate(
 ): Promise<LifecycleResult<ServedInstantiateReceipt>> {
   const source = wireSource(input);
   if (source === undefined) {
-    return Promise.resolve(refuse(
-      400,
+    return refuse(
       "invalid-source",
       "Supply exactly one of `program` and `pattern`.",
-    ));
+    );
   }
   const result = await runServedVerb(deps, callerDid, input.space, {
     name: "instantiate",
@@ -339,18 +371,17 @@ async function instantiate(
       start: input.start !== false,
     },
   }, timings);
-  if (result.status !== 200) return result;
+  if (!("ok" in result)) return result;
   if (
-    result.body.registration.status === "skipped" ||
-    result.body.registration.status === "handled"
+    result.ok.registration.status === "skipped" ||
+    result.ok.registration.status === "handled"
   ) return result;
   const incomplete = (
     receipt: ServedInstantiateReceipt,
     phase: string,
     code: LifecycleErrorCode,
   ): LifecycleResult<ServedInstantiateReceipt> => ({
-    status: 200,
-    body: {
+    ok: {
       ...receipt,
       registration: {
         status: "failed",
@@ -364,20 +395,20 @@ async function instantiate(
   });
   const prepared = await runServedVerb(deps, callerDid, input.space, {
     name: "registration-prepare",
-    request: { receipt: result.body, actingUser: callerDid },
+    request: { receipt: result.ok, actingUser: callerDid },
   }, timings);
-  if (prepared.status !== 200) {
-    return incomplete(result.body, "preparation", prepared.body.code);
+  if (!("ok" in prepared)) {
+    return incomplete(result.ok, "preparation", prepared.refusal.code);
   }
   const delivering = performance.now();
-  const outcome = prepared.body.delivery === undefined
+  const outcome = prepared.ok.delivery === undefined
     ? {}
     : await observeRegistrationDelivery(
       deps,
       callerDid,
-      prepared.body.delivery,
+      prepared.ok.delivery,
     );
-  if (prepared.body.delivery !== undefined) {
+  if (prepared.ok.delivery !== undefined) {
     timings.push({
       phase: "registration.delivery",
       ms: Math.round(performance.now() - delivering),
@@ -385,11 +416,11 @@ async function instantiate(
   }
   const finished = await runServedVerb(deps, callerDid, input.space, {
     name: "registration-finish",
-    request: { prepared: prepared.body, actingUser: callerDid, outcome },
+    request: { prepared: prepared.ok, actingUser: callerDid, outcome },
   }, timings);
-  return finished.status === 200
+  return "ok" in finished
     ? finished
-    : incomplete(prepared.body.receipt, "completion", finished.body.code);
+    : incomplete(prepared.ok.receipt, "completion", finished.refusal.code);
 }
 
 /** Observe only a server-prepared stream; no process-identity session reads private space data. */
@@ -498,7 +529,6 @@ export async function processSetSource(
   const source = wireSource(input);
   if (source === undefined) {
     return refuse(
-      400,
       "invalid-source",
       "Supply exactly one of `program` and `pattern`.",
     );
@@ -509,8 +539,8 @@ export async function processSetSource(
       name: "upload",
       request: { program: source.program },
     });
-    if (uploaded.status !== 200) return uploaded;
-    candidate = uploaded.body;
+    if (!("ok" in uploaded)) return uploaded;
+    candidate = uploaded.ok;
   } else {
     candidate = source.pattern;
   }
@@ -537,28 +567,20 @@ export async function processSetSource(
 
 /**
  * Runs one `pattern.lifecycle` request the memory server handed over: the
- * verb's arguments are validated as the HTTP route validates its body, the
- * verb runs as `call.principal`, and the result becomes the outcome the
- * memory server answers with. A body that fails validation is refused as
- * `invalid-request`.
+ * verb's arguments are validated against the verb's schema, the verb runs as
+ * `call.principal`, and its result is the outcome the memory server answers
+ * with. A body that fails validation is refused as `invalid-request`.
  */
 export async function processLifecycleCall(
   deps: LifecycleDeps,
   call: PatternLifecycleCall,
 ): Promise<PatternLifecycleOutcome> {
-  const result = await lifecycleResult(deps, call);
-  if (result === undefined) {
-    return {
-      refusal: {
-        code: "invalid-request",
-        message:
-          `The \`${call.verb}\` arguments do not match the verb's schema`,
-      },
-    };
-  }
-  return result.status === 200
-    ? { ok: result.body }
-    : { refusal: { code: result.body.code, message: result.body.error } };
+  return await lifecycleResult(deps, call) ?? {
+    refusal: {
+      code: "invalid-request",
+      message: `The \`${call.verb}\` arguments do not match the verb's schema`,
+    },
+  };
 }
 
 /**

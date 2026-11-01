@@ -116,8 +116,9 @@ interest's generation itself.
 A publish over unchanged interests then asks the server nothing, where the
 request alone waited for the server's thread's turn, however empty the list.
 
-**Lifecycle verbs run in the worker, from a descriptor.** The route sends a
-verb as its name and its request, on either arm, and whichever thread runs the
+**Lifecycle verbs run in the worker, from a descriptor.** The toolshed's
+`pattern.lifecycle` handler sends a verb as its name and its request, on
+either arm, and whichever thread runs the
 loop builds the verb's closures over a `PiecesController` from the same
 functions in `@commonfabric/piece`'s served lifecycle. The receipt comes back
 as data, a structured clone on the port, so a verb hands back plain values: a
@@ -247,8 +248,8 @@ between the two.
    (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
    is `true`, or is unset or empty over a file memory store, and the
-   in-process host otherwise. It hands the routes a `ServingLoop` either
-   way; the pattern-lifecycle verbs cross as the
+   in-process host otherwise. It hands the rest of the process a
+   `ServingLoop` either way; the pattern-lifecycle verbs cross as the
    descriptors `@commonfabric/piece`'s `served-lifecycle-verbs.ts` names on
    both paths; the health route reads the relayed stats through the
    provider the bridge registers. The flag is registered in

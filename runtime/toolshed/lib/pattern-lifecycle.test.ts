@@ -27,7 +27,7 @@ import {
   processLifecycleCall,
   processSetSource,
   processUpload,
-} from "./pattern-lifecycle.utils.ts";
+} from "./pattern-lifecycle.ts";
 
 const PROGRAM = {
   main: "/main.tsx",
@@ -57,27 +57,24 @@ const NUMERIC_SEED_PROGRAM = {
   }],
 };
 
-/** Narrow a result to its success body, failing loudly otherwise. */
+/** Narrow a result to its receipt, failing loudly otherwise. */
 const ok = <T>(result: LifecycleResult<T>): T => {
-  assert(
-    result.status === 200,
-    `expected 200, got ${result.status}: ${JSON.stringify(result.body)}`,
-  );
-  return result.body;
+  assert("ok" in result, `expected a receipt, got ${JSON.stringify(result)}`);
+  return result.ok;
 };
 
 /** Narrow a result to its refusal, failing loudly otherwise. */
 const refused = (result: LifecycleResult<unknown>) => {
-  assert(result.status !== 200, "expected a refusal");
-  return { status: result.status, ...result.body };
+  assert("refusal" in result, "expected a refusal");
+  return result.refusal;
 };
 
 describe("pattern-lifecycle verbs (transport half)", () => {
   // Authorization against a real ACL document, and the verbs against a
   // real serving host. The memory server's own enforcement is off so the
   // serving side's loopback sessions need no grant; what is under test is
-  // the writer check the route makes against the ACL, and the routing of a
-  // verb into the host and of its outcome into a status.
+  // the writer check made against the ACL, and the routing of a verb into
+  // the host and of its outcome into a receipt or a refusal's code.
 
   let server: MemoryV2Server.Server;
   let factory: LoopbackSessionFactory;
@@ -512,7 +509,6 @@ export default pattern(() => {
         program: PROGRAM,
       }),
     );
-    expect(mallorySees.status).toBe(403);
     expect(mallorySees.code).toBe("forbidden");
     const operatorSees = refused(
       await processInstantiate(deps, operator.did(), {
@@ -520,12 +516,12 @@ export default pattern(() => {
         program: PROGRAM,
       }),
     );
-    expect(operatorSees.status).toBe(403);
+    expect(operatorSees.code).toBe("forbidden");
     // Refused before the host saw anything.
     expect(host!.stats().lifecycleVerbs.runs).toBe(0);
   });
 
-  it("answers 503 with its own code on a deployment without the serving loop", async () => {
+  it("refuses with `server-execution-off` on a deployment without the serving loop", async () => {
     const seen = refused(
       await processInstantiate(
         { ...deps, host: () => undefined },
@@ -533,7 +529,6 @@ export default pattern(() => {
         { space, program: PROGRAM },
       ),
     );
-    expect(seen.status).toBe(503);
     expect(seen.code).toBe("server-execution-off");
   });
 
@@ -545,12 +540,11 @@ export default pattern(() => {
         pattern: { identity: "x", symbol: "default" },
       }),
     );
-    expect(both.status).toBe(400);
     expect(both.code).toBe("invalid-source");
     const neither = refused(
       await processInstantiate(deps, alice.did(), { space }),
     );
-    expect(neither.status).toBe(400);
+    expect(neither.code).toBe("invalid-source");
   });
 
   it("returns the same durable piece when a caller repeats its request key", async () => {
@@ -639,7 +633,7 @@ export default pattern(() => {
     expect(uploaded.pattern).toEqual(created.pattern);
   });
 
-  it("replaces a piece's source for a writer, and maps its refusals to their statuses", async () => {
+  it("replaces a piece's source for a writer, and refuses each other request with its code", async () => {
     const created = ok(
       await processInstantiate(deps, alice.did(), {
         space,
@@ -668,7 +662,6 @@ export default pattern(() => {
         program: PROGRAM,
       }),
     );
-    expect(incompatible.status).toBe(422);
     expect(incompatible.code).toBe("incompatible");
 
     const missing = refused(
@@ -678,7 +671,6 @@ export default pattern(() => {
         program: PROGRAM,
       }),
     );
-    expect(missing.status).toBe(404);
     expect(missing.code).toBe("piece-not-found");
 
     const moved = refused(
@@ -689,7 +681,6 @@ export default pattern(() => {
         expectedPattern: created.pattern,
       }),
     );
-    expect(moved.status).toBe(409);
     expect(moved.code).toBe("source-moved");
 
     const reader = refused(
@@ -699,7 +690,7 @@ export default pattern(() => {
         program: PROGRAM,
       }),
     );
-    expect(reader.status).toBe(403);
+    expect(reader.code).toBe("forbidden");
 
     // A pattern the space already holds, by identity, moves the piece back.
     const restored = ok(
@@ -718,11 +709,10 @@ export default pattern(() => {
         piece: created.pieceId,
       }),
     );
-    expect(sourceless.status).toBe(400);
     expect(sourceless.code).toBe("invalid-source");
   });
 
-  it("maps a compile failure to 422", async () => {
+  it("refuses a program that does not compile with `compile-failed`", async () => {
     const attributes = new Map<string, unknown>();
     const requestSpan: NonNullable<LifecycleDeps["requestSpan"]> = {
       setAttribute(key, value) {
@@ -739,7 +729,6 @@ export default pattern(() => {
         },
       }),
     );
-    expect(broken.status).toBe(422);
     expect(broken.code).toBe("compile-failed");
     expect(attributes.get("cf.lifecycle.instantiate.run_ms")).toEqual(
       expect.any(Number),
@@ -747,7 +736,7 @@ export default pattern(() => {
     expect(attributes.has("cf.lifecycle.instantiate.confirm_ms")).toBe(false);
   });
 
-  it("answers 500 with its own code when the verb fails for a reason it does not name", async () => {
+  it("refuses with `internal` when the verb fails for a reason it does not name", async () => {
     const failing: ServedLifecycleVerbRunner = {
       runLifecycleVerb: () => Promise.reject(new Error("the loop fell over")),
     };
@@ -758,12 +747,11 @@ export default pattern(() => {
         { space, program: PROGRAM },
       ),
     );
-    expect(seen.status).toBe(500);
     expect(seen.code).toBe("internal");
-    expect(seen.error).toContain("the loop fell over");
+    expect(seen.message).toContain("the loop fell over");
   });
 
-  it("answers 503 when the space is served elsewhere", async () => {
+  it("refuses with `space-not-served` when the space is served elsewhere", async () => {
     // Another holder's unexpired lease: this deployment's host cannot
     // acquire, so the verb cannot run here. The host built in beforeEach
     // activated the space when the genesis session opened, so it parks
@@ -782,7 +770,6 @@ export default pattern(() => {
           program: PROGRAM,
         }),
       );
-      expect(seen.status).toBe(503);
       expect(seen.code).toBe("space-not-served");
     } finally {
       await rival.close();
@@ -840,7 +827,7 @@ export default pattern(() => {
       expect(host!.stats().lifecycleVerbs.runs).toBe(0);
     });
 
-    it("returns a verb's refusal under the code the HTTP route sends", async () => {
+    it("returns a verb's refusal under its own code", async () => {
       const outcome = await processLifecycleCall(deps, {
         space,
         principal: mallory.did(),

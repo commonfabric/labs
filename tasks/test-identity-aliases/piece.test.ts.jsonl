@@ -1,0 +1,1 @@
+{"date":"2026-11-07","from":{"k":"unit","s":"cli","n":"cli piece parsing > served registration > retains retry guidance for malformed success, timeout, and server-error replies"},"to":{"k":"unit","s":"cli","n":"cli piece parsing > served registration > retains retry guidance for a refusal that leaves the outcome unknown"}}

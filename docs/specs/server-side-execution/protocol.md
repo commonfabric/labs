@@ -76,8 +76,8 @@ RULED 2026-08-24 and BUILT: the client-authored classification above is
 the posture of a runtime running the whole stack. A `cf` client connected
 to a deployment running the serving loop no longer performs the
 instantiation transaction itself: `cf piece new` sends the program it
-resolved to `/api/pattern-lifecycle/*`, and the space's serving runtime
-compiles it and materializes the piece — the setup transaction, stamped
+resolved to the space's serving runtime, which compiles it and
+materializes the piece — the setup transaction, stamped
 `bookkeeping` under the space's lease and carrying the requester's trust
 snapshot — as a step of a wave cycle
 ([docs/features/server-pattern-lifecycle.md](../../features/server-pattern-lifecycle.md)).
@@ -91,11 +91,10 @@ wave's withdrawable acceptance cannot supply that, its setup transaction
 commits directly to the store as the serving loop's own derived-class
 commit, outside the wave (serving-loop.md §3e). Every other client of
 the piece controller, such as the shell, keeps the client-side shape
-until its own migration. AMENDED 2026-10-30: `cf` sends each verb as a
+until its own migration. AMENDED 2026-10-31: a verb travels only as a
 `pattern.lifecycle` request on the space's memory session (memory-v2
-`04-protocol.md` §4.3.10), which reaches the process that holds the
-space's lease, and posts it to `/api/pattern-lifecycle/*` only when the
-memory server does not advertise `patternLifecycle`.)*
+`04-protocol.md` §4.3.10), which reaches the process that serves the
+space.)*
 
 **The `system` class is PRODUCER-defined, its contents exemplary
 (RULED 2026-08-05).** The stamp rides the memory server's generic

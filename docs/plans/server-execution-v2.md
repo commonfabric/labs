@@ -41,16 +41,15 @@ The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
 dispositions and the owner's rollout decision; the flip record alone does not
 establish current readiness.
 
-**Delta 2026-10-30 (the verbs on the space's memory session): `cf` sends
-each lifecycle verb as a `pattern.lifecycle` memory request on the space's
-session, which reaches the process that holds the space's lease, and posts
-to `/api/pattern-lifecycle/*` only when the memory server does not advertise
-`patternLifecycle` (`docs/features/server-pattern-lifecycle.md`, "Sending a
-verb").**
+**Delta 2026-10-31 (the verbs on the space's memory session): a lifecycle
+verb travels only as a `pattern.lifecycle` memory request on the space's
+session, which reaches the process that serves the space; the toolshed
+serves no HTTP route for the verbs (`docs/features/server-pattern-lifecycle.md`,
+"Sending a verb").**
 
 **Delta 2026-09-11 (the served source update): `setsrc` is a served verb.
-Under ON, `cf piece setsrc` sends the resolved program to
-`/api/pattern-lifecycle/setsrc`; the serving runtime uploads it as a verb
+Under ON, `cf piece setsrc` sends the resolved program to the space's
+serving runtime, which uploads it as a verb
 of its own and, in the cycle after, commits the update's setup transaction
 DIRECTLY to the store — the loop's own derived-class commit outside the
 wave, its written docs re-verified against the seq it was stamped at — so
@@ -63,8 +62,8 @@ client-side. OFF is byte-identical.**
 **Delta 2026-09-09 (the lifecycle verbs as server calls): the seed archived
 at `docs/history/plans/server-pattern-verbs-seed.md` is BUILT for `upload`
 and `instantiate`. Under ON, `cf piece new` sends the resolved program to
-`/api/pattern-lifecycle/*`, and the space's serving runtime compiles,
-materializes, and commits inside a wave cycle
+the space's serving runtime, which compiles, materializes, and commits
+inside a wave cycle
 (`docs/features/server-pattern-lifecycle.md`), the registry entry and the
 slug in the creation's own transaction; the receipt returns once that wave
 has committed and the verb's durability read has passed, ahead of the

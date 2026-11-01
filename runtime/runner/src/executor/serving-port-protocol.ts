@@ -330,8 +330,8 @@ const faultOf = (error: unknown): PortFault => {
  * The error a fault stands for on this side. An untimed `ProtocolError`
  * keeps its class: the outbox classifies delegated-append refusals by it.
  * Lifecycle failures instead retain their timing envelope and reconstruct
- * the underlying error as its cause. Lifecycle routes classify those
- * failures by name and code, which the envelope also keeps.
+ * the underlying error as its cause. A lifecycle verb's caller classifies
+ * those failures by name and code, which the envelope also keeps.
  */
 const errorOf = (fault: PortFault): Error => {
   const error = fault.name === "ProtocolError"
