@@ -1690,7 +1690,7 @@ export class SpaceServer implements TransactionSealDestination {
     const routeScope = this.#options.route?.scope();
     const routed = routeScope === undefined
       ? sink
-      : routedWaveCommitSink(sink, routeScope, space);
+      : routedWaveCommitSink(sink, routeScope, space, this.#options.stats);
     this.#sink = this.#options.decorateWaveCommitSink?.(routed, space) ??
       routed;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6

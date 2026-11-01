@@ -354,6 +354,7 @@ export class ExecutorHost {
         })),
       },
       memo: { ...this.#stats.memo },
+      routed: { ...this.#stats.routed },
       outbox: { ...this.#stats.outbox },
       lease: { ...this.#stats.lease },
       lifecycleVerbs: { ...this.#stats.lifecycleVerbs },

@@ -1,8 +1,8 @@
 /**
  * Two toolshed processes over one memory store, behind a proxy that routes
  * each space's memory socket to the toolshed owning it the way the
- * deployment's proxy does: a served run on one process writes into a space
- * owned by the other, and the write lands on its owner alone
+ * deployment's proxy does: a served run on one process sends an event into
+ * a space owned by the other, and the event is served on its owner alone
  * (docs/plans/serving-loop-owner-routing.md, stage R4). Each toolshed starts
  * from source in a process of its own, with `MEMORY_URL` naming the proxy.
  */
@@ -11,9 +11,11 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { defer } from "@commonfabric/async/defer";
+import type { FabricPlainObject } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  entityIdFrom,
   experimentalOptionsFromEnv,
   type JSONSchema,
   type MemorySpace,
@@ -90,7 +92,7 @@ async function startToolshed(
   // listener line is the one the start waits for.
   const transcript: string[] = [];
   const listening = defer<URL>();
-  const read = async (stream: ReadableStream<Uint8Array>) => {
+  const read = async (stream: ReadableStream<Uint8Array<ArrayBuffer>>) => {
     let pending = "";
     for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
       pending += chunk;
@@ -203,8 +205,11 @@ function startProxy(toolsheds: Record<ToolshedName, URL>): {
   };
 }
 
-/** A piece whose handler writes the number it is sent into its `target` cell. */
-const WRITER_PATTERN = [
+/**
+ * A piece whose handler writes the number it is sent into its own `value`:
+ * the one on the target space, whose write stays in the space it is in.
+ */
+const COUNTER_PATTERN = [
   "import { handler, pattern } from 'commonfabric';",
   "",
   "const write = handler(",
@@ -212,23 +217,56 @@ const WRITER_PATTERN = [
   "  {",
   "    type: 'object',",
   "    properties: {",
-  "      target: {",
+  "      value: {",
   "        type: 'object',",
   "        properties: { n: { type: 'number' } },",
   "        asCell: ['cell'],",
   "      },",
   "    },",
+  "    required: ['value'],",
+  "  },",
+  "  ({ n }, { value }) => {",
+  "    value.set({ n });",
+  "  },",
+  ");",
+  "",
+  "export default pattern<",
+  "  { value: { n: number } },",
+  "  { value: { n: number }; write: { n: number } }",
+  ">(({ value }) => ({ value, write: write({ value }) }));",
+].join("\n");
+
+/**
+ * A piece whose handler sends the number it is sent on into the stream its
+ * `target` names: the one on the home space, whose send into the counter's
+ * stream on the other space is the crossing (protocol.md §2b, the only
+ * mutation of another space a served run makes).
+ */
+const FORWARDER_PATTERN = [
+  "import { handler, pattern } from 'commonfabric';",
+  "",
+  "const forward = handler(",
+  "  { type: 'object', properties: { n: { type: 'number' } }, required: ['n'] },",
+  "  {",
+  "    type: 'object',",
+  "    properties: {",
+  "      target: {",
+  "        type: 'object',",
+  "        properties: { n: { type: 'number' } },",
+  "        asCell: ['stream'],",
+  "      },",
+  "    },",
   "    required: ['target'],",
   "  },",
   "  ({ n }, { target }) => {",
-  "    target.set({ n });",
+  "    target.send({ n });",
   "  },",
   ");",
   "",
   "export default pattern<",
   "  { target: { n: number } },",
   "  { write: { n: number } }",
-  ">(({ target }) => ({ write: write({ target }) }));",
+  ">(({ target }) => ({ write: forward({ target }) }));",
 ].join("\n");
 
 const COUNTER_SCHEMA = {
@@ -237,9 +275,12 @@ const COUNTER_SCHEMA = {
   required: ["n"],
 } as const satisfies JSONSchema;
 
+/** The shape of either piece's result: the stream its handler is sent on,
+ * and, on the counter, the value it writes. */
 const RESULT_SCHEMA = {
   type: "object",
   properties: {
+    value: COUNTER_SCHEMA,
     write: {
       type: "object",
       properties: { n: { type: "number" } },
@@ -249,13 +290,26 @@ const RESULT_SCHEMA = {
   required: ["write"],
 } as const satisfies JSONSchema;
 
-/** The spaces a toolshed's memory server has recorded a commit in. */
-async function committedSpaces(toolshed: URL): Promise<string[]> {
+/** A toolshed's health stats: the spaces its memory server has recorded a
+ * commit in, and the crossings its serving loop sent through the route. */
+async function healthStats(toolshed: URL): Promise<{
+  committedSpaces: string[];
+  routed: { appends: number; batches: number; aclChanges: number };
+}> {
   const response = await fetch(new URL("/api/health/stats", toolshed));
   const stats = await response.json() as {
     commitRates?: { spaces: { space: string }[] };
+    servingLoop?: {
+      routed: { appends: number; batches: number; aclChanges: number };
+    };
   };
-  return (stats.commitRates?.spaces ?? []).map((entry) => entry.space);
+  return {
+    committedSpaces: (stats.commitRates?.spaces ?? []).map((entry) =>
+      entry.space
+    ),
+    routed: stats.servingLoop?.routed ??
+      { appends: 0, batches: 0, aclChanges: 0 },
+  };
 }
 
 describe("owner-routing", () => {
@@ -292,7 +346,7 @@ describe("owner-routing", () => {
     await Deno.remove(memoryDir, { recursive: true });
   });
 
-  it("lands a served run's write into a space owned by the other toolshed on that toolshed alone, routed through the proxy", async () => {
+  it("serves a run's event into a space owned by the other toolshed on that toolshed alone, routed through the proxy", async () => {
     const alice = await Identity.fromPassphrase(
       `owner-routing-alice-${crypto.randomUUID()}`,
     );
@@ -303,17 +357,33 @@ describe("owner-routing", () => {
     const runtime = new Runtime({
       apiUrl: toolsheds.A.url,
       // The toolsheds serve whatever lane this process runs in, so the
-      // client runs the served posture outright.
+      // client runs the served posture outright: its event goes to the
+      // piece's owner rather than running here.
       experimental: {
         ...withServerExecutionDefault(experimentalOptionsFromEnv(Deno.env.get)),
         serverExecution: true,
       },
       storageManager: manager,
     });
+    // The sending client answers its own event at once from its speculation
+    // overlay, so what landed is read by a client that sent nothing.
+    const readerManager = StorageManager.open({
+      as: alice,
+      memoryHost: proxy.url,
+    });
+    const reader = new Runtime({
+      apiUrl: toolsheds.A.url,
+      experimental: {
+        ...withServerExecutionDefault(experimentalOptionsFromEnv(Deno.env.get)),
+        serverExecution: false,
+      },
+      storageManager: readerManager,
+    });
     try {
-      // One space owned by each toolshed: the home of the piece on A, and
-      // the target of its handler's write on B. A fresh space's DID decides
-      // its owner, so spaces are created until each toolshed owns one.
+      // One space owned by each toolshed: the home of the forwarder on A,
+      // and the target space of the counter on B. A fresh space's DID
+      // decides its owner, so spaces are created until each toolshed owns
+      // one.
       const spaces: Partial<Record<ToolshedName, MemorySpace>> = {};
       while (spaces.A === undefined || spaces.B === undefined) {
         const space = await manager.createSpace({ [alice.did()]: "OWNER" });
@@ -322,48 +392,72 @@ describe("owner-routing", () => {
       const home = spaces.A;
       const target = spaces.B;
 
-      // The target cell exists on its owner before the piece names it.
-      const targetCell = runtime.getCell(
-        target,
-        "routed-target",
-        COUNTER_SCHEMA,
-      );
-      await runtime.editWithRetry((tx) => targetCell.withTx(tx).set({ n: 0 }));
-      await manager.synced();
-
-      const compiled = await runtime.patternManager.compilePattern(
-        WRITER_PATTERN,
-        { space: home },
-      );
-      const resultCell = runtime.getCell(
-        home,
-        "routed-writer",
-        compiled.resultSchema,
-      );
-      const result = await runtime.runSynced(resultCell, compiled, {
-        target: targetCell,
+      // Each piece is created and started on its space's owner, over the
+      // space's memory session, as `cf piece new` creates one: the counter
+      // on B first, so the forwarder on A can name its stream.
+      const instantiate = async (
+        space: MemorySpace,
+        contents: string,
+        argument: Record<string, unknown>,
+      ) => {
+        const receipt = await manager.runPatternLifecycle(
+          space,
+          "instantiate",
+          {
+            program: {
+              main: "/main.tsx",
+              files: [{ name: "/main.tsx", contents }],
+            },
+            argument,
+          } as FabricPlainObject,
+        ) as { pieceId: string };
+        const id = entityIdFrom(receipt.pieceId);
+        const piece = runtime.getCellFromEntityId(space, id, [], RESULT_SCHEMA);
+        await piece.sync();
+        return { id, piece };
+      };
+      const counter = await instantiate(target, COUNTER_PATTERN, {
+        value: { n: 0 },
       });
-      const shaped = result.asSchema(RESULT_SCHEMA);
+      const forwarder = await instantiate(home, FORWARDER_PATTERN, {
+        target: counter.piece.key("write").getAsLink(),
+      });
       await runtime.editWithRetry((tx) =>
-        shaped.key("write").withTx(tx).send({ n: 7 })
+        forwarder.piece.key("write").withTx(tx).send({ n: 7 })
       );
 
-      // The handler ran on A, the home's owner, and its write into the
-      // target reached B, the target's owner, which is where the client
-      // reads it.
+      // The forwarder ran on A, the home's owner, and its send reached the
+      // counter on B, the target's owner, whose handler wrote the number
+      // where the reader reads it.
       await waitForCellValue(
-        runtime,
-        targetCell,
+        reader,
+        reader.getCellFromEntityId(
+          target,
+          counter.id,
+          ["value"],
+          COUNTER_SCHEMA,
+        ),
         (value: { n: number } | undefined) => value?.n === 7,
-        { stuckLabel: "the routed write to reach the target's owner" },
+        {
+          stuckLabel: "the forwarded event to be served on the target's owner",
+        },
       );
 
-      // The target's commits were recorded on its owner and on no other
-      // process: the sender's memory server admitted nothing in it.
-      expect(await committedSpaces(toolsheds.B.url)).toContain(target);
-      expect(await committedSpaces(toolsheds.A.url)).not.toContain(target);
-      expect(await committedSpaces(toolsheds.A.url)).toContain(home);
+      // The forwarder's send crossed as an append that A's loop sent to B
+      // through the route, and B's loop sent nothing: the crossing went
+      // one way. With routing off, A would have appended to the shared
+      // store itself and counted nothing.
+      const [statsA, statsB] = await Promise.all([
+        healthStats(toolsheds.A.url),
+        healthStats(toolsheds.B.url),
+      ]);
+      expect(statsA.routed.appends).toBeGreaterThanOrEqual(1);
+      expect(statsB.routed).toEqual({ appends: 0, batches: 0, aclChanges: 0 });
+      expect(statsA.committedSpaces).toContain(home);
+      expect(statsB.committedSpaces).toContain(target);
     } finally {
+      await reader.dispose();
+      await readerManager.close();
       await runtime.dispose();
       await manager.close();
     }

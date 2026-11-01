@@ -1993,7 +1993,8 @@ structureLoadRefused, structureLoadDeferred, structureLoadStuck, structureLoadTe
 structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
 foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
-undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
+undemandedNarrowingRuns, earlyEmitRefusals, routed: {appends, batches,
+aclChanges}, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
@@ -2095,7 +2096,14 @@ never a home-space outage; `warmRequests` counts explicit warm
 requests issued — one per foreign provisioning batch a wave durably
 committed (§1's third activation trigger, RULED 2026-08-21) — so a
 provisioning flow whose target never derives its staged setup is
-diagnosable from the issue count against the target's activity) (`effectAcks` counts
+diagnosable from the issue count against the target's activity;
+`routed` counts the crossings sent to another space's owner through
+the deployment's route (serving-loop-owner-routing.md), by kind and
+once the owner answered — the outbox's event appends, the wave's
+foreign batches and its access-list changes into other spaces — so a
+deployment reads there whether routing carries its crossings: zero
+with the route off, and on a process every crossing of which stays
+home) (`effectAcks` counts
 effect-channel ack writes, so the
 §3 amplification metric is computable from counters alone —
 `settleAdvances` counts S1's drain-settle quiescence advances (RULED

@@ -15,6 +15,7 @@ import type { ServedAclChange } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { isServedRefusal, type RoutedScope } from "./routed-plane.ts";
 import { servedAclChangeData } from "./served-acl-change.ts";
+import type { ServingLoopStats } from "./stats.ts";
 import type {
   WaveCommitRejection,
   WaveCommitSink,
@@ -27,12 +28,14 @@ const messageOf = (error: unknown): string =>
 
 /**
  * The sink described in the file header: `inner`'s reads and home commits,
- * with every crossing into a space other than `home` sent through `route`.
+ * with every crossing into a space other than `home` sent through `route`
+ * and counted in `stats.routed` once the owner answered.
  */
 export function routedWaveCommitSink(
   inner: WaveCommitSink,
   route: RoutedScope,
   home: MemorySpace,
+  stats: Pick<ServingLoopStats, "routed">,
 ): WaveCommitSink {
   return {
     ...(inner.reportsCommits === undefined
@@ -58,7 +61,9 @@ export function routedWaveCommitSink(
     ): Promise<Result<{ seq: number }, WaveCommitRejection>> => {
       if (batch.home) return await inner.commitWave(batch);
       try {
-        return { ok: await route.commit(batch.space, batch) };
+        const committed = await route.commit(batch.space, batch);
+        stats.routed.batches += 1;
+        return { ok: committed };
       } catch (error) {
         // The owner's refusal and a failure to reach it are both the foreign
         // failure of protocol.md §2b: the home commit is withheld and the
@@ -88,12 +93,12 @@ export function routedWaveCommitSink(
         return await inner.commitSpaceAccessChange(change);
       }
       try {
-        return {
-          ok: await route.acl(
-            change.space as MemorySpace,
-            servedAclChangeData(change),
-          ),
-        };
+        const committed = await route.acl(
+          change.space as MemorySpace,
+          servedAclChangeData(change),
+        );
+        stats.routed.aclChanges += 1;
+        return { ok: committed };
       } catch (error) {
         // The owner's refusal keeps the name the local admission's refusal
         // has; a failure to reach the owner, or its server's own refusal,

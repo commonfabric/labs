@@ -2177,7 +2177,10 @@ the per-epic implementation notes).
   memory server's read row admits a routed service-identity session under the
   read actor's grant.
   [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
-  runs two toolshed processes behind a proxy that routes by space.
+  runs two toolshed processes behind a proxy that routes by space. The
+  crossings a process sent through the route are counted by kind under
+  `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
+  deployment reads there whether routing carries its crossings.
 - **Path to removal.** Once a release with the route on has been deployed to
   every process, the plan's stage L moves the lease into memory; then delete
   the knob and the in-process crossings.

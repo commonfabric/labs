@@ -338,10 +338,14 @@ component is nothing the harness has to work around.
 
 `runtime/runner/integration/owner-routing.test.ts` runs two toolshed processes
 from source behind a proxy in the test process that routes `?space=` the way
-nginx does, over one memory directory: a served run on one process writes into
-a space owned by the other, and the write lands on its owner alone. The
-cross-space scenario of the server-execution benchmarks (an event from one
-space into another) is measured with the flag on and off.
+nginx does, over one memory directory: a served run on one process sends an
+event into a space owned by the other, and the event is served on its owner
+alone. The crossings a process sends through the route are counted by kind in
+its serving loop's stats (`servingLoop.routed` under `/api/health/stats`,
+serving-loop.md §7), which is how the test tells a routed crossing from one
+that stayed home, and how a deployment does. The cross-space scenario of the
+server-execution benchmarks (an event from one space into another) is measured
+with the flag on and off.
 
 ## Stages
 

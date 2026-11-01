@@ -631,6 +631,15 @@ export type ServingLoopStats = {
     dropped: number;
   };
   memo: { hits: number; misses: number; inflight: number };
+
+  /** The crossings this process sent to another space's owner through the
+   * deployment's route (`serving-loop-owner-routing.md`), by kind, each
+   * counted once the owner answered: the outbox's event appends, the
+   * wave's foreign batches, and its access-list changes into other
+   * spaces. Zero with the route off, and zero on a process every
+   * crossing of which stays home, so a deployment reads here whether
+   * routing is carrying its crossings. */
+  routed: { appends: number; batches: number; aclChanges: number };
   outbox: {
     queued: number;
     completed: number;
@@ -802,6 +811,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     dropped: 0,
   },
   memo: { hits: 0, misses: 0, inflight: 0 },
+  routed: { appends: 0, batches: 0, aclChanges: 0 },
   outbox: {
     queued: 0,
     completed: 0,
