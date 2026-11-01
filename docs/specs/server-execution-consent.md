@@ -130,9 +130,9 @@ delegations the space refuses, and nothing else
 ([`profile-delegation.md`](profile-delegation.md), "Rotation and revocation");
 a space that refuses none holds an empty list or no `revocations` key.
 
-Both live in the value rather than in a sibling metadata field of
-the document, beside `cfc` or `result`. Metadata fields are delivered and
-followed by rules of their own
+Both live in the value rather than in a sibling metadata field of the
+document, beside `cfc` or `result`. Metadata fields are delivered and followed
+by rules of their own
 ([`memory-v2/01-data-model.md`](memory-v2/01-data-model.md),
 [`memory-v2/05-queries.md`](memory-v2/05-queries.md) §5.3.2), and consent is
 access-list data: it takes the access list's validation and write rules, and
@@ -153,10 +153,10 @@ and refuses any other.
 **Writing it is unchanged.** A change is an access-list commit: a single
 whole-document `set`, by an OWNER, in a commit of its own (INV-12 in
 [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md)). The validator
-additionally verifies every chain in `delegations`: each is over this space,
-its links meet, and its signatures hold, and that every entry of `revocations`
-is a CID. A writer that changes membership replaces `acl` and keeps
-`delegations` and `revocations` as they stand, as the writers already
+additionally verifies that every chain in `delegations` is over this space,
+with links that meet and signatures that hold, and that every entry of
+`revocations` is a CID. A writer that changes membership replaces `acl` and
+keeps `delegations` and `revocations` as they stand, as the writers already
 keep the document's sibling fields (`writeAcl` in
 `runtime/runner/src/acl-manager.ts`, and the served access-list change in
 `runtime/memory/v2/server.ts`). A genesis commit may carry `delegations`, so a
@@ -167,11 +167,11 @@ access list and nothing else in its own name; every other served read runs as
 the space's owner (the OW31 ruling, in
 [`server-side-execution/verification-coverage.md`](server-side-execution/verification-coverage.md)).
 The consent delegations are part of that document, so the ruling covers them:
-the memory server reads them when it decides the lease, and an executor reads
-them, as it reads the access list, to learn whether it may serve the space. A
-principal with READ reads the document as it reads any other, so it reads the
-chains too. They disclose the space's owners, whom `acl` already names, and
-which executors serve the space.
+the memory server reads them when it decides the lease, as it reads the access
+list today, and the executor identity may read them under the same ruling to
+learn whether it may serve the space. A principal with READ reads the document
+as it reads any other, so it reads the chains too. They disclose the space's
+owners, whom `acl` already names, and which executors serve the space.
 
 If the document is written only by an OWNER and consulted by the server, an
 entry already shows that an owner consented. The signature adds what a document
@@ -211,7 +211,9 @@ document's size, which an open question below takes up.
 
 A reader that predates the new form finds keys that are not principals, takes
 the list for malformed, and fails closed, so the space admits no one. The new
-form therefore reaches readers before any writer produces it:
+form therefore reaches readers before any writer produces it. The sites below
+are where the access-list helpers in `runtime/memory/acl.ts` are used today;
+the change has to find every reader, not only these.
 
 1. Every reader accepts both forms. The memory server goes first: its
    access-list classification (`readAclState`), genesis validation
@@ -224,9 +226,12 @@ form therefore reaches readers before any writer produces it:
    `private-inbox.ts` and `profile-space-root.ts`; `cf acl`; and the state
    inspector's compaction. The private inbox's vetting compares a list for
    exact equality (`sameAcl`), so it compares the `acl` of either form.
-2. Writers produce the new form, and a writer converts a legacy list on its
-   next write. No reader needs the conversion; it only lets the legacy branch be
-   retired eventually.
+2. Writers produce the new form: the genesis of every space, self-owned ones
+   included (`#createSpaceAs` in `runtime/runner/src/storage/v2.ts`),
+   `writeAcl`, the served access-list change (`space-access-change.ts` and the
+   memory server), and `cf acl` (`runtime/cli/lib/acl.ts`). A writer converts a
+   legacy list on its next write. No reader needs the conversion; it only lets
+   the legacy branch be retired eventually.
 3. Where the document carries a persisted label map (its `cfc` field) keyed by
    value paths, a label under a principal's key moves with the list, from
    `value.<principal>` to `value.acl.<principal>`, in the commit that converts
