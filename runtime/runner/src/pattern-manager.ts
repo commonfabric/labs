@@ -1071,8 +1071,8 @@ export class PatternManager {
 
   /**
    * The in-flight and cached compilation tables, the retained compiles, the
-   * module-cache bound, the compile-cache writer a test may supply, and the
-   * four closure steps that
+   * spaces recorded as holding each closure, the module-cache bound, the
+   * compile-cache writer a test may supply, and the four closure steps that
    * a test drives directly; a replication driven here runs under a fresh
    * ticket, as one issued by the manager does.
    */
@@ -1087,6 +1087,10 @@ export class PatternManager {
     readonly inProgressCompilations: Map<string, ProgramCompilation>;
     maxEvaluatedModuleCacheSize: number;
     readonly modulesByIdentity: Map<string, { exports: Exports }>;
+    readonly persistedClosureSpaces: ReadonlyMap<
+      string,
+      ReadonlyMap<MemorySpace, ReadonlySet<string>>
+    >;
     readonly persistedCompileCacheClosures: Map<string, string>;
     readonly retainedCompiles: Map<string, RetainedCompile>;
     hasStoredCompileCacheClosure(
@@ -1132,6 +1136,7 @@ export class PatternManager {
         outerThis.#maxEvaluatedModuleCacheSize = value;
       },
       modulesByIdentity: this.#modulesByIdentity,
+      persistedClosureSpaces: this.#persistedClosureSpaces,
       persistedCompileCacheClosures: this.#persistedCompileCacheClosures,
       retainedCompiles: this.#retainedCompiles,
       hasStoredCompileCacheClosure: (

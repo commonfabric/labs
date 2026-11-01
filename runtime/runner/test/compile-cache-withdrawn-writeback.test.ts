@@ -216,4 +216,28 @@ describe("compile-cache-withdrawn-writeback", () => {
 
     expect(entryWrites.entries).toEqual([{ refused: false }]);
   });
+
+  it("leaves the space out of the closure's recorded holders after the wave withdrew its write there", async () => {
+    // What a replication takes as a fallback origin, and what a load served
+    // from memory takes as a space needing no copy.
+
+    const serving = servingRuntime!;
+    refuseEntryWrite = true;
+    await compileIntoHome(serving);
+
+    expect(
+      serving.patternManager.accessForTestingOnly.persistedClosureSpaces
+        .get(ENTRY_IDENTITY)?.has(homeSpace) ?? false,
+    ).toBe(false);
+  });
+
+  it("records the space among the closure's holders after the wave committed its write there", async () => {
+    const serving = servingRuntime!;
+    await compileIntoHome(serving);
+
+    expect(
+      serving.patternManager.accessForTestingOnly.persistedClosureSpaces
+        .get(ENTRY_IDENTITY)?.has(homeSpace),
+    ).toBe(true);
+  });
 });
