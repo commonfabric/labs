@@ -32,15 +32,34 @@ export const servedAclChangeData = (
   return data;
 };
 
-/** The served access-list change `data` stands for, its function rebuilt. */
+/**
+ * The served access-list change `data` stands for, its function rebuilt.
+ * Every change is the carried actor's: the admission keys the change on
+ * `actingPrincipal`, so a list naming another actor would let a crossing
+ * borrow that actor's level.
+ *
+ * @throws Error when a change names an actor other than the carried one.
+ */
 export const servedAclChangeOf = (
   data: ServedAclChangeData,
-): ServedAclChange => ({
-  ...data,
-  change: (stored) =>
-    applyAccessListChanges(
-      data.space as MemorySpace,
-      validateStoredAcl(stored),
-      data.changes,
-    ),
-});
+): ServedAclChange => {
+  const foreign = data.changes.find((change) =>
+    change.actor !== data.actingPrincipal
+  );
+  if (foreign !== undefined) {
+    throw new Error(
+      `the access-list change to ${data.space} is made by ` +
+        `${data.actingPrincipal}, but a change in it names ${foreign.actor} ` +
+        "as its actor",
+    );
+  }
+  return {
+    ...data,
+    change: (stored) =>
+      applyAccessListChanges(
+        data.space as MemorySpace,
+        validateStoredAcl(stored),
+        data.changes,
+      ),
+  };
+};

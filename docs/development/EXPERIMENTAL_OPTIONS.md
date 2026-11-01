@@ -2157,11 +2157,14 @@ the per-epic implementation notes).
   threads the loop can run on, carries the crossing as a `served` request of
   the memory protocol (the memory protocol chapter's section 4.3.12), and the
   owner admits it as its own host's call. The outbox's event appends, the
-  pattern-lifecycle handler's registration delivery, the wave's foreign
-  batches and access-list changes, and the genesis of a space the serving
-  runtime creates go that way, and the loop's sessions in every space but its
-  home, which are its reads of other spaces, are opened with the owner, so
-  the owner's commits wake it.
+  pattern-lifecycle handler's registration delivery, and the wave's foreign
+  batches and access-list changes go that way. The genesis of a space the
+  serving runtime creates takes the same route as a signed `session.open`
+  rather than a `served` request: the session signed by the new space's own
+  key is opened with the space's owner, and its first commit, the access
+  list, lands there. The loop's sessions in every space but its home, which
+  are its reads of other spaces, are opened with the owner too, so the
+  owner's commits wake it.
   [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
   is the design and its stages.
 - **Current default and planned end state.** Off by default. The end state is
