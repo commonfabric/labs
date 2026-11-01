@@ -782,6 +782,62 @@ describe("stage G SpaceServer recovery seams", () => {
     expect(Engine.serverSeq(engine)).toBe(seqBefore);
   });
 
+  it("extends a lease that lapsed with no successor at its next renewal, keeps the tenure, and reports the recovery to the memory server once", async () => {
+    // The row expires under the holder, as it does when synchronous work
+    // holds both renewal drivers past the TTL. Nobody took it, so the next
+    // tick's renewal extends it: no loss, no reacquire, the tenure serves
+    // on, and the memory server hears of the recovery as it hears of a
+    // reacquire, since a push pass inside the lapse judged the loopback
+    // session a former holder.
+    const notices: Array<{ space: string; principal: string }> = [];
+    const noticeArrivals = new ArrivalLog<void>();
+    const spy = new Proxy(server, {
+      get(target, prop, receiver) {
+        if (prop === "noteLeaseReacquired") {
+          return (notice: { space: string; principal: string }) => {
+            notices.push(notice);
+            noticeArrivals.record();
+            return target.noteLeaseReacquired(notice);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as typeof server;
+    const stats = emptyServingLoopStats();
+    const ttlMs = 50;
+    const created = newSpaceServer({
+      serverFacade: spy,
+      stats,
+      policy: {
+        flushDeadlineMs: 2_000,
+        idleParkMs: 600_000,
+        leaseTtlMs: ttlMs,
+        renewIntervalMs: 25,
+      },
+    });
+    expect(await created.activate()).toBe(true);
+    expect(stats.lease.lost).toBe(0);
+
+    // The lapse: the row's expiry is moved into the past, more than a TTL
+    // behind the last renewal the loop recorded.
+    engine.database.prepare(
+      "UPDATE execution_lease SET expires_at = :past WHERE space = :space",
+    ).run({ past: Date.now() - 2 * ttlMs, space });
+    await noticeArrivals.reached(1);
+    expect(stats.lease.lapsesRecovered).toBe(1);
+    expect(stats.lease.lost).toBe(0);
+    expect(liveExecutionLeaseHolder(engine, space)).toBe(created.holder);
+    expect(notices).toEqual([{ space, principal: serviceSigner.did() }]);
+    expect(created.active).toBe(true);
+    // The ticks that follow renew a live row and report nothing.
+    await awaitEach(cycles, () => {
+      created.noteDemandChanged();
+      return true;
+    });
+    expect(notices.length).toBe(1);
+  });
+
   it("reports a survived renewal blip to the memory server: the renew arm's same-process reacquire calls noteLeaseReacquired with the space and the service identity — once per blip, never on a plain renewal, never when the reacquire fails and the space parks (fan-out stage A's finding 1, the re-arm's trigger)", async () => {
     // A Proxy facade over the real server that records the notice; every
     // other call passes through (the sx2 facade pattern above).

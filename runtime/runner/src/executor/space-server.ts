@@ -1682,9 +1682,11 @@ export class SpaceServer implements TransactionSealDestination {
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
       // A lapse the renewal drivers have not reached yet shows first as the
-      // memory server refusing a derived commit (serving-loop.md §2).
+      // memory server refusing a derived commit (serving-loop.md §2). The
+      // refused wave's work is withdrawn, so the lapse is not recovered: the
+      // tenure ends, and the loop parks on the abort.
       onHomeRefused: () => {
-        this.#confirmLease(engine);
+        this.#confirmLease(engine, { recoverLapse: false });
       },
     };
     const sink = this.#options.createWaveCommitSink?.(sinkDeps) ??
@@ -3430,16 +3432,21 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Whether the space's lease row names this holder live. A row that does
-   * not runs the renew arm, which ends the tenure and then reacquires or
-   * parks, and the row is read again after it. A closed engine confirms
-   * nothing.
+   * not runs the renew arm, which recovers a lapse nobody claimed, or ends
+   * the tenure and then reacquires or parks, and the row is read again
+   * after it. `recoverLapse: false` has a lapse end the tenure, for a
+   * caller whose commit the store refused inside it. A closed engine
+   * confirms nothing.
    */
-  #confirmLease(engine: Engine.Engine): boolean {
+  #confirmLease(
+    engine: Engine.Engine,
+    options: { recoverLapse?: boolean } = {},
+  ): boolean {
     if (!engine.database.open) return false;
     const holds = () =>
       liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
     if (holds()) return true;
-    this.#renew();
+    this.#renew(options);
     return holds();
   }
 
@@ -3456,7 +3463,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#renew();
   }
 
-  #renew(): void {
+  #renew(options: { recoverLapse?: boolean } = {}): void {
     const lease = this.#lease;
     if (
       lease === undefined || (!this.#active && !this.#initializing) ||
@@ -3467,8 +3474,15 @@ export class SpaceServer implements TransactionSealDestination {
     // tenure start.
     this.#lastRenewAt = Date.now();
     let renewed: boolean;
+    // A renewal that found the row expired recovered a lapse: synchronous
+    // work (a compile) held both renewal drivers past the TTL. The store
+    // refused every derived commit meanwhile and admitted no one else's,
+    // so the tenure continues.
+    let lapsed = false;
     try {
-      renewed = lease.renew();
+      const renewal = lease.renew(options);
+      renewed = renewal !== "lost";
+      lapsed = renewal === "recovered";
     } catch (error) {
       if (!this.#initializing || this.#active) throw error;
       // A failed lease-store operation leaves initialization without an
@@ -3487,6 +3501,21 @@ export class SpaceServer implements TransactionSealDestination {
         error,
       ]);
       renewed = false;
+    }
+    if (renewed && lapsed && this.#active) {
+      // A push pass that ran inside the lapse judged this runtime's
+      // loopback session a former holder; the row is live again, so the
+      // memory server re-arms the session's exemption now, as it does
+      // after the reacquire below.
+      this.#options.stats.lease.lapsesRecovered += 1;
+      logger.warn("lease-lapse-recovered", () => [
+        `space ${this.#options.space}: the lease lapsed with no successor ` +
+        "and its renewal extended it; the tenure continues (serving-loop.md §2)",
+      ]);
+      this.#options.server.noteLeaseReacquired({
+        space: this.#options.space,
+        principal: this.#options.serviceIdentity,
+      });
     }
     if (!renewed) {
       // Stop committing immediately (serving-loop.md §2's MUST): the

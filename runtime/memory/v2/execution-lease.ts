@@ -128,7 +128,11 @@ WHERE execution_lease.holder = excluded.holder
    OR execution_lease.expires_at <= :now
 `;
 
-// Renewal only ever EXTENDS a lease the caller still holds live: a lapsed or
+// Renewal EXTENDS the row that still names the caller, live or lapsed: a
+// lapse nobody claimed leaves the row the caller's, and the store refused
+// every derived commit while it lasted (an expired row matches nobody), so
+// extending it resumes a tenure nothing came between. A rival's acquire
+// during the lapse names the rival, and its release deletes the row, so a
 // succeeded holder's renewal matches zero rows, and that zero is the signal
 // to stop committing (serving-loop.md §2's MUST).
 const RENEW = `
@@ -136,7 +140,6 @@ UPDATE execution_lease
 SET expires_at = :expires_at
 WHERE space = :space
   AND holder = :holder
-  AND expires_at > :now
 `;
 
 const RELEASE = `
@@ -167,10 +170,24 @@ export const acquireExecutionLease = (
   }) > 0;
 
 /**
+ * What a renewal found: `extended`, a live row of the caller's, now
+ * extended; `recovered`, the caller's row expired with no successor, now
+ * extended, after a lapse that refused the caller's commits and admitted no
+ * one else's; `lost`, a row naming another holder or none, which is the
+ * moment the caller MUST stop committing.
+ */
+export type ExecutionLeaseRenewal = "extended" | "recovered" | "lost";
+
+const HELD_EXPIRY = `
+SELECT expires_at FROM execution_lease
+WHERE space = :space
+  AND holder = :holder
+`;
+
+/**
  * Renew a held lease by direct table update — a renewal is NEVER a commit
- * (serving-loop.md §2). Returns `false` when there was nothing live to
- * renew — the row expired or another holder took it — which is the moment
- * the holder MUST stop committing.
+ * (serving-loop.md §2). The row that still names the caller is extended,
+ * live or lapsed; one that names another holder, or is gone, is not.
  */
 export const renewExecutionLease = (
   engine: Engine,
@@ -180,13 +197,19 @@ export const renewExecutionLease = (
     now = Date.now(),
     ttlMs = EXECUTION_LEASE_TTL_MS,
   }: ExecutionLeaseWrite,
-): boolean =>
-  engine.database.prepare(RENEW).run({
+): ExecutionLeaseRenewal => {
+  const held = engine.database.prepare(HELD_EXPIRY).get<
+    { expires_at: number }
+  >({ space, holder });
+  if (held === undefined) return "lost";
+  const extended = engine.database.prepare(RENEW).run({
     space,
     holder,
-    now,
     expires_at: now + ttlMs,
   }) > 0;
+  if (!extended) return "lost";
+  return held.expires_at > now ? "extended" : "recovered";
+};
 
 /**
  * Release the caller's own lease row (parking — serving-loop.md §1). A row
@@ -294,22 +317,32 @@ export class ExecutionLeaseCycle {
 
   /**
    * Renew the held lease (the SpaceServer drives this every
-   * `EXECUTION_LEASE_RENEW_INTERVAL_MS`). A failed renewal ends the tenure
-   * right here — before the caller can see the `false`, let alone
-   * reacquire — which is the abort-before-reacquire sequencing.
+   * `EXECUTION_LEASE_RENEW_INTERVAL_MS`). A `lost` renewal — the row names
+   * another holder, or is gone — ends the tenure right here, before the
+   * caller can see the outcome, let alone reacquire, which is the
+   * abort-before-reacquire sequencing. A lapse nobody claimed is
+   * `recovered`, and the tenure continues, unless the caller says not to
+   * recover one: a caller the store has already refused a commit for knows
+   * the lapse withdrew this tenure's work, so the tenure ends as `lost`
+   * and the row, extended, is the reacquire's.
    */
-  renew(): boolean {
-    if (!this.#held) return false;
-    const renewed = renewExecutionLease(this.#engine, {
+  renew(
+    options: { recoverLapse?: boolean } = {},
+  ): ExecutionLeaseRenewal {
+    if (!this.#held) return "lost";
+    let renewal = renewExecutionLease(this.#engine, {
       space: this.#space,
       holder: this.#holder,
       now: this.#now(),
       ttlMs: this.#ttlMs,
     });
-    if (!renewed) {
+    if (renewal === "recovered" && options.recoverLapse === false) {
+      renewal = "lost";
+    }
+    if (renewal === "lost") {
       this.#held = false;
     }
-    return renewed;
+    return renewal;
   }
 
   /** Release the lease (parking): ends the tenure, deletes our own row. */

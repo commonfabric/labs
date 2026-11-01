@@ -392,7 +392,8 @@ processes* (deploy overlap, partition) it holds via the lease:
   worker-generation succession as well as every CROSS-process succession (deploy overlap, a successor host) for
   free. The one residue — a same-process reacquire after a pause
   that outlived the TTL (a runtime GC pause is the canonical cause;
-  nothing to do with the deferred session-data GC of scopes.md §8) —
+  nothing to do with the deferred session-data GC of scopes.md §8)
+  during which a rival took the row —
   is covered by the stop-committing-immediately MUST below,
   enforced IN-PROCESS before reacquiring (an in-memory generation
   counter suffices; co-hosting makes the abort-before-reacquire
@@ -433,7 +434,19 @@ processes* (deploy overlap, partition) it holds via the lease:
   receives the not-served error; the request alone is not a persistent
   reactivation criterion. These boundaries are covered by
   `test/executor/activation-lease.test.ts`.
-- On renewal failure or expiry: the SpaceServer MUST stop committing
+- A renewal extends the row that still names the holder, live or lapsed: a
+  lapse nobody claimed (synchronous work, a compile, holding both renewal
+  drivers past the TTL) refused the holder's commits while it lasted and
+  admitted no one else's, so the next renewal extends the row and the tenure
+  continues; the SpaceServer reports the recovery to the memory server as it
+  reports a reacquire, since a push pass inside the lapse judged its loopback
+  session a former holder (`lease.lapsesRecovered` in §7). A lapse the
+  memory server reveals by refusing a derived commit is not recovered: the
+  refused wave's work is withdrawn, so the renew arm the refusal runs ends
+  the tenure as a loss, and the loop parks on the abort as below. A rival's
+  acquire during the lapse names the rival, and its release deletes the row,
+  so the holder's renewal then matches nothing: that is renewal failure.
+- On renewal failure: the SpaceServer MUST stop committing
   immediately (in-flight transaction aborts), then re-acquire or park.
   A wave aborted this way parks the tenure even when the re-acquire
   succeeds. §1's re-evaluation after a park then starts a new tenure for
@@ -2022,7 +2035,7 @@ maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
-budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
+budgetDeferrals}, lease: {held, lost, lapsesRecovered}, parkedRuntimes: {retained, reused,
 discarded, held}, push: {prioritizedSessions, followerSessions,
 mixedFlushes} }`
 (`parkedRuntimes` counts the runtimes idle parks kept, those a successor
