@@ -1023,7 +1023,8 @@ holds the measurements and the conditions for revisiting.
   and it is server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: whether
   pieces carry the record is the deployment's decision, since its serving side
   is what binds an update-added field to it. The flag is consumed from the
-  Runtime instance, at the one place a setup brings a piece into being
+  Runtime instance, at the one place a setup writes the record, where it
+  brings a piece into being or moves a legacy piece's pattern pointer
   (`#setupInternal` in
   [`runtime/runner/src/runner.ts`](../../runtime/runner/src/runner.ts)); there
   is no ambient control point.
@@ -1033,15 +1034,19 @@ holds the measurements and the conditions for revisiting.
   the `creator` meta field a setup writes on a new piece's result document,
   naming the DID of the principal the piece was created for. A child a piece
   instantiates records its parent's creator; a piece a served run creates
-  records the run's actor; a run that acts for no one records nothing. Commit
-  preparation admits a write to the field only in the transaction that
-  installs the piece's first pattern pointer, with the runtime's own mark
-  vouching for the value, and refuses every other write to it, whatever grant
-  the writer holds. With the flag off, no record is written and a stored one
-  is left as it is. The record exists so that a field a later release adds
-  with `ownerPrincipal: CurrentPrincipal` can be bound to the piece's creator
-  rather than to whoever first writes it; that binding is the plan's next
-  stage and is not behind this flag yet.
+  records the run's actor; a run that acts for no one records nothing. A
+  piece from before the record gains one at its next source transition, from
+  the one principal its owner-protected fields' stored labels name, and none
+  where they name two or none. Commit preparation admits a write to the field
+  only in the transaction that installs the piece's first pattern pointer, or
+  in a source transition that finds the field absent, with the runtime's own
+  mark vouching for the value either way, and refuses every other write to
+  it, whatever grant the writer holds. With the flag off, no record is
+  written and a stored one is left as it is. The record exists so that a
+  field a later release adds with `ownerPrincipal: CurrentPrincipal` is bound
+  to the piece's creator rather than to whoever first writes it; that binding
+  follows the record wherever one is stored and is gated by nothing else, so
+  the flag decides which pieces carry a record and so which bind.
 - **Current default and planned end state.** Off by default. Set
   `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` or pass
   `RuntimeOptions.experimental.pieceCreatorRecord: true` to record creators.
@@ -1050,8 +1055,10 @@ holds the measurements and the conditions for revisiting.
   `runtime/runner/src/cfc/prepare.ts` naming the ruling's specs pull request.
   Once that ruling merges, the record becomes unconditional and the flag is
   deleted.
-- **Status on 2026-11-01.** Implemented and off. Both arms are covered by
-  `runtime/runner/test/cfc-piece-creator.test.ts`, and the plumbing by
+- **Status on 2026-11-01.** Implemented and off. The record and the writes
+  refused are covered by `runtime/runner/test/cfc-piece-creator.test.ts`, the
+  binding and the legacy record by
+  `runtime/runner/test/cfc-creator-owner-binding.test.ts`, and the plumbing by
   `runtime/runner/test/experimental-options.test.ts`.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority and shell-source entries, the default, and the gate at the write

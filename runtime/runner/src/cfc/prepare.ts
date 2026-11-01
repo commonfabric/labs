@@ -1174,7 +1174,7 @@ const hasLabelValues = (label: IFCLabel): boolean =>
 
 const CURRENT_PRINCIPAL_PLACEHOLDER_KEY = "__ctCurrentPrincipal";
 
-const isCurrentPrincipalPlaceholder = (value: unknown): boolean =>
+export const isCurrentPrincipalPlaceholder = (value: unknown): boolean =>
   isObjectOrArray(value) && value[CURRENT_PRINCIPAL_PLACEHOLDER_KEY] === true;
 
 const hasCurrentPrincipalPlaceholder = (value: unknown): boolean => {
@@ -6315,19 +6315,21 @@ const currentPrincipalIntegrityReason = (
 
 /**
  * Why each write of the `creator` meta field this transaction makes is
- * refused: nothing for a write the runtime's record of a new piece admits,
- * and one reason per write refused.
+ * refused: nothing for a write the runtime's record of a piece's creator
+ * admits, and one reason per write refused.
  *
  * The field names the principal a piece was created for, and it is worth
  * more than a space grant only if a write to it is admitted once, by the
- * runtime, in the transaction that brings the piece into being, and refused
- * afterward. A write is admitted when it lands the whole field; when the
- * transaction installs the document's first pattern pointer, writing
- * `patternIdentity` where none was present; when the runtime recorded the
- * same principal for the document (`CfcTxState.pieceCreators`), which is what
- * carries its authorization; when the value is a well-formed DID; and when it
- * is not the serving runtime's own identity, since a piece the service
- * creates for no one has no creator to record.
+ * runtime, and refused afterward. A write is admitted when it lands the whole
+ * field; when the runtime recorded the same principal for the document
+ * (`CfcTxState.pieceCreators`), which is what carries its authorization; when
+ * the value is a well-formed DID; when it is not the serving runtime's own
+ * identity, since a piece the service creates for no one has no creator to
+ * record; and when the transaction is one of the two that may record one:
+ * the one that brings the piece into being, writing `patternIdentity` where
+ * none was present, or a source transition of a piece created before the
+ * runtime recorded creators, which moves `patternIdentity` and finds the field
+ * absent (`piece-creator-evidence.ts` says what such a record is made from).
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
 const pieceCreatorRecordReasons = (
@@ -6369,9 +6371,20 @@ const pieceCreatorRecordReasons = (
           : other.address.path.length === 1 &&
             other.address.path[0] === "patternIdentity")
       );
-      if (!installsPointer) {
+      const movesPointer = details.some((other) =>
+        other.address.id === id &&
+        normalizeCellScope(other.address.scope) === target.scope &&
+        other.previousPresent !== false &&
+        other.address.path.length === 1 &&
+        other.address.path[0] === "patternIdentity" &&
+        !valueEqual(other.value, other.previousValue)
+      );
+      if (
+        !installsPointer &&
+        !(movesPointer && path.length === 1 && detail.previousPresent === false)
+      ) {
         refuse(
-          "only the transaction that brings the piece into being records one",
+          "only the transaction that brings the piece into being, or a source transition of a piece without one, records one",
         );
         continue;
       }

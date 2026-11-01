@@ -261,6 +261,22 @@ repoint; this one gives it something to consult.
 
 ## Stages
 
+Stages 1, 3, 4, 5 and 6 are built, behind the `pieceCreatorRecord`
+experimental option where they persist something new. Stage 2, the ruling,
+is open: the two `SPEC-PENDING` markers name no pull request yet. Three
+things differ from the design below. The binding is made where the label is
+persisted (`labelMintOptionsAt` and `derivePersistedLabel` in `prepare.ts`),
+which resolves the owning piece through the setup provenance that names an
+argument or internal document for it or through the `result` back-link, rather
+than inside `currentPrincipalIntegrityReason`, which keeps admitting the
+initialization as before. A deferred piece start no longer marks its own
+transaction: it carries the marks of the transaction it was deferred from, so
+a start of a piece found set up attributes nothing, and a served run acting
+for no one is admitted the result document's staged binding to the new field.
+The legacy record is written from owner-field evidence only; resolving the
+space owner for a legacy root whose fields name no owner is not built, since
+the runner has no view of the ACL, and such a root stays without a record.
+
 1. **Scope the attribution mark.** Conforming implementation; lands first and
    alone. Regression test as described under "Tests", item 5. Update the
    labs document's sentence on the mark to say which documents it covers.

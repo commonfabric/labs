@@ -118,6 +118,7 @@ import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
+import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
 import { servedRunActsForNoOne } from "./cfc/prepare.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
@@ -4916,7 +4917,6 @@ export class Runner {
     }
   }
 
-  /** Internal setup that returns whether scheduling is required. */
   /**
    * The principal a piece set up in `tx` records as its creator, or none.
    *
@@ -4956,6 +4956,41 @@ export class Runner {
     return snapshot.actingPrincipal;
   }
 
+  /**
+   * The creator a piece created before the runtime recorded one gives
+   * evidence of (`legacyPieceCreatorEvidence`), read from the stored labels
+   * of its argument document and of the internal documents its manifest
+   * names, or none: for a piece that already holds a record, or one whose
+   * owner-protected fields name no single principal.
+   */
+  #legacyPieceCreator(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<unknown>,
+  ): string | undefined {
+    const result = resultCell.withTx(tx);
+    if (
+      result.getMetaRaw("creator", { meta: ignoreReadForScheduling }) !==
+        undefined
+    ) {
+      return undefined;
+    }
+    const documents: NormalizedFullLink[] = [];
+    const argument = getMetaLink(result, "argument");
+    if (argument !== undefined) documents.push({ ...argument, path: [] });
+    const manifest = result.getMetaRaw("internal", {
+      meta: ignoreReadForScheduling,
+    });
+    if (Array.isArray(manifest)) {
+      for (const entry of manifest) {
+        if (!isObjectNotArray(entry)) continue;
+        const link = parseLink(entry.link, result);
+        if (link !== undefined) documents.push({ ...link, path: [] });
+      }
+    }
+    return legacyPieceCreatorEvidence(tx, documents);
+  }
+
+  /** Internal setup that returns whether scheduling is required. */
   #setupInternal<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
     patternOrModule: Pattern | Module | undefined,
@@ -5171,12 +5206,17 @@ export class Runner {
     // the record where `#applySetupState` installs the piece's first durable
     // pattern pointer and the runtime vouches for it, and refuses every later
     // write to it. A keyless pattern gets no durable pointer, so no record.
+    // A source transition of a piece created before the runtime recorded
+    // creators records the one its owner-protected fields give evidence of,
+    // so the field the transition installs can bind them.
     if (
-      previousIdentityRef === undefined &&
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
-      this.#runtime.experimental.pieceCreatorRecord === true
+      this.#runtime.experimental.pieceCreatorRecord === true &&
+      (previousIdentityRef === undefined || !samePattern)
     ) {
-      const creator = this.#pieceCreatorFor(tx, resultCell, validationOptions);
+      const creator = previousIdentityRef === undefined
+        ? this.#pieceCreatorFor(tx, resultCell, validationOptions)
+        : this.#legacyPieceCreator(tx, resultCell);
       if (creator !== undefined) {
         resultCell.withTx(tx).setMetaRaw(
           "creator",

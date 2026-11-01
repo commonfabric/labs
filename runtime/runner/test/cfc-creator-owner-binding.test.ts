@@ -66,7 +66,79 @@ export default pattern<{
 }>(({ count, items }) => ({ count, items, add: edit({ items }) }));
 `;
 
-type Result = { count: number; items?: string[]; add?: { add: string } };
+/**
+ * A release from before the runtime recorded creators: a note list the acting
+ * principal owns, which its one writer, `note`, adds to.
+ */
+const LEGACY_RELEASE = `/// <cts-enable />
+import {
+  Cfc,
+  CurrentPrincipal,
+  Default,
+  handler,
+  pattern,
+  RepresentsCurrentUser,
+  Writable,
+  WriteAuthorizedBy,
+} from "commonfabric";
+const note = handler<{ add: string }, { notes: Writable<string[]> }>(
+  (event, { notes }) => {
+    notes.set([...notes.get(), event.add]);
+  },
+);
+type Notes = RepresentsCurrentUser<
+  Cfc<WriteAuthorizedBy<string[], typeof note>, { ownerPrincipal: CurrentPrincipal }>
+>;
+export default pattern<{ notes: Writable<Default<Notes, []>> }>(
+  ({ notes }) => ({ notes, note: note({ notes }) }),
+);
+`;
+
+/** The legacy release's successor: the same notes, and the owned list `items`. */
+const LEGACY_SECOND_RELEASE = `/// <cts-enable />
+import {
+  Cfc,
+  CurrentPrincipal,
+  Default,
+  handler,
+  pattern,
+  RepresentsCurrentUser,
+  Writable,
+  WriteAuthorizedBy,
+} from "commonfabric";
+const note = handler<{ add: string }, { notes: Writable<string[]> }>(
+  (event, { notes }) => {
+    notes.set([...notes.get(), event.add]);
+  },
+);
+const edit = handler<{ add: string }, { items: Writable<string[]> }>(
+  (event, { items }) => {
+    items.set([...items.get(), event.add]);
+  },
+);
+type Notes = RepresentsCurrentUser<
+  Cfc<WriteAuthorizedBy<string[], typeof note>, { ownerPrincipal: CurrentPrincipal }>
+>;
+type Items = RepresentsCurrentUser<
+  Cfc<WriteAuthorizedBy<string[], typeof edit>, { ownerPrincipal: CurrentPrincipal }>
+>;
+export default pattern<{
+  notes: Writable<Default<Notes, []>>;
+  items: Writable<Default<Items, []>>;
+}>(({ notes, items }) => ({
+  notes,
+  items,
+  note: note({ notes }),
+  add: edit({ items }),
+}));
+`;
+
+type Result = {
+  count?: number;
+  notes?: string[];
+  items?: string[];
+  add?: { add: string };
+};
 
 describe("cfc-creator-owner-binding", () => {
   let server: ReturnType<typeof newLoopbackServer>;
@@ -103,9 +175,12 @@ describe("cfc-creator-owner-binding", () => {
       files: [{ name: "/main.tsx", contents: source }],
     }, { space });
 
-  /** Creates a piece of the first release on `runtime`; returns its result link. */
-  const createPiece = async (runtime: Runtime): Promise<NormalizedFullLink> => {
-    const compiled = await compile(runtime, FIRST_RELEASE);
+  /** Creates a piece of `source` on `runtime`; returns its result link. */
+  const createPiece = async (
+    runtime: Runtime,
+    source = FIRST_RELEASE,
+  ): Promise<NormalizedFullLink> => {
+    const compiled = await compile(runtime, source);
     const result = runtime.getCell<Result>(
       space,
       `piece-${pieces++}`,
@@ -118,7 +193,7 @@ describe("cfc-creator-owner-binding", () => {
   };
 
   /**
-   * Runs the second release over the piece at `link` on `runtime`, which
+   * Runs the release `source` over the piece at `link` on `runtime`, which
    * installs `items` from its default as a release adding the field does, and
    * keeps the piece running there. Returns the refusal, if any, and the
    * running result cell.
@@ -126,8 +201,9 @@ describe("cfc-creator-owner-binding", () => {
   const update = async (
     runtime: Runtime,
     link: NormalizedFullLink,
+    source = SECOND_RELEASE,
   ): Promise<{ refusal: string | undefined; result: Cell<Result> }> => {
-    const compiled = await compile(runtime, SECOND_RELEASE);
+    const compiled = await compile(runtime, source);
     const stored = runtime.getCellFromLink<Result>(link);
     await stored.sync();
     await runtime.getCellFromLink(getMetaLink(stored, "argument")!).sync();
@@ -180,6 +256,14 @@ describe("cfc-creator-owner-binding", () => {
     result.key("add").send({ add: item });
     await runtime.idle();
     await runtime.storageManager.synced();
+  };
+
+  /** The recorded creator of the piece at `link`, as a runtime opened now reads it. */
+  const creatorOf = async (link: NormalizedFullLink): Promise<unknown> => {
+    const reader = connect(alice, { pieceCreatorRecord: false });
+    const result = reader.getCellFromLink<Result>(link);
+    await result.sync();
+    return result.getMetaRaw("creator");
   };
 
   /** The stored `items` of the piece at `link`, as a runtime opened now reads them. */
@@ -246,9 +330,24 @@ describe("cfc-creator-owner-binding", () => {
     const theirs = await update(member, link);
     expect(theirs.refusal).toBeUndefined();
 
+    expect(await creatorOf(link)).toBeUndefined();
     expect(await ownersOfItems(link)).toEqual([]);
     await add(member, theirs.result, "theirs");
     expect(await itemsOf(link)).toEqual(["theirs"]);
     expect(await ownersOfItems(link)).toEqual([bob.did()]);
+  });
+
+  it("records the one principal a piece with no record's owned fields name at its next source transition, and binds the field to them", async () => {
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const link = await createPiece(legacy, LEGACY_RELEASE);
+    expect(await creatorOf(link)).toBeUndefined();
+
+    const theirs = await update(member, link, LEGACY_SECOND_RELEASE);
+    expect(theirs.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBe(alice.did());
+    expect(await ownersOfItems(link)).toEqual([alice.did()]);
+    await add(member, theirs.result, "forged");
+    expect(await itemsOf(link)).toEqual([]);
   });
 });
