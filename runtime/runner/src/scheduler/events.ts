@@ -1181,7 +1181,12 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           // stays pending and a later wave re-drains it, under the serving
           // loop's bounded deferral budget — a condition that outlasts the
           // budget hardens into §5's drop notice rather than wedging the
-          // stream. A client event waits as described above.
+          // stream. The exception is a pattern the runtime could not load,
+          // which the deferral names: when the space lacks the pattern's
+          // program closure, the loop waits for the closure to arrive, and
+          // past a grace counts the absence against the failed-state budget,
+          // which ends in a needs-attention notice rather than a drop. A
+          // client event waits as described above.
           // A verdict that did not start the piece and names no reason is
           // one whose start threw, which the start walk logs and collapses.
           const pieceStartReason = verdict.started
@@ -1203,6 +1208,16 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
                   servedOutcome: {
                     kind: "deferred",
                     cause: "origin-pending",
+                    message: reason,
+                  },
+                }
+                : pieceStartReason === "pattern-unloadable" &&
+                    verdict.patternIdentity !== undefined
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "pattern-unloadable",
+                    patternIdentity: verdict.patternIdentity,
                     message: reason,
                   },
                 }

@@ -859,6 +859,10 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The replication runs after the run that creates the child, so a served
+  event can reach the child first; it waits for the closure's arrival
+  ([`server-side-execution/events.md`](server-side-execution/events.md)
+  §5).
   The same replication runs for a load the runner's in-memory artifact
   index serves: the index is cross-space, so a space whose loads of an
   identity are all served from it never receives the compiled closure, and

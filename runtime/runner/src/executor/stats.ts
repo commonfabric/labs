@@ -574,6 +574,16 @@ export type ServingLoopStats = {
      */
     originPendingDeferrals: number;
 
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * event's piece names a pattern whose program closure the space does not
+     * hold yet, within the grace the loop gives the closure to arrive
+     * (events.md §5). Counted per deferral. A count that grows while
+     * `processed` does not names a closure that is not arriving; past the
+     * grace the event becomes a `program-unavailable` delivery failure.
+     */
+    programWaitDeferrals: number;
+
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
      * preflight parked on an in-flight replica load its closure reads
@@ -807,6 +817,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     originPendingDeferrals: 0,
+    programWaitDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,

@@ -2055,7 +2055,7 @@ drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
 lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
 handlerNotRunDeferrals, staleReadRequeues, arrivalHeldDeferrals,
-originPendingDeferrals, loadParkDeferrals,
+originPendingDeferrals, programWaitDeferrals, loadParkDeferrals,
 loadParkFailures, deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
@@ -2309,6 +2309,12 @@ The `events` block's DISPOSITION counters:
   follow of its origin (§3e), once per scan the follow outlasts. Growing
   while `originFollows` does not, it names a follow that is not
   completing.
+- `programWaitDeferrals` counts the drain deferrals that spent none of
+  the deferral budget because the event's piece names a pattern whose
+  program closure the space does not hold yet, within the grace for its
+  arrival (events.md §5). Growing while `processed` does not, it names a
+  closure that is not arriving; past the grace the event is a
+  `program-unavailable` delivery failure.
 - `deliveryDeferralsActive`, `deliveryFailuresActive`, and
   `maxAccumulatedDeliveryFailureMs` expose the current durable
   checkpoint population without treating settlement as failure.

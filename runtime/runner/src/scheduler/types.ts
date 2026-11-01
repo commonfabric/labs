@@ -328,6 +328,18 @@ export type ServedEventFailureOutcome =
     message: string;
   }
   | {
+    /** The piece the event addresses names a pattern this runtime could not
+     * load (`pattern-unloadable`). The serving loop asks its space's store
+     * whether the pattern's program closure is there (events.md §5): a
+     * closure still on its way into a space is waited for rather than
+     * charged to the deferral budget. */
+    kind: "deferred";
+
+    cause: "pattern-unloadable";
+    patternIdentity: string;
+    message: string;
+  }
+  | {
     kind: "deferred";
     cause: "delivery-failure";
     role: "failed-head";
