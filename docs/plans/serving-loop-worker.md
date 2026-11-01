@@ -131,15 +131,18 @@ cell read with no schema returns nested objects as proxies over the store,
 which the port cannot clone.
 
 **Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
-at the end of each wave cycle, just ahead of each wave commit, at each
-activation and park, and on request; the main thread registers a stats
-provider that returns the latest copy, so `/api/health/stats` keeps its shape
-and waits on nothing. The post ahead of a commit travels on the port the
-commit does, whose messages the main thread handles in order, so a client
-that has seen a wave's commit reads counters that include what that wave
-counted. The loop's own logger counts and timing statistics are the worker
-realm's, so they cross on request (`ServingLoopHandle.diagnostics()`), and a
-request waits for the
+at the end of each wave cycle, at each activation and park, and on request;
+the main thread registers a stats provider that returns the latest copy, so
+`/api/health/stats` keeps its shape and waits on nothing. Just ahead of each
+wave commit the worker also posts the `events` block alone, which the main
+thread merges into that copy: the whole counters, settle series included,
+cost about as much to post as a commit. The events post travels on the port
+the commit does, whose messages the main thread handles in order, so a client
+that has seen a wave's commit reads event counters that include what that
+wave's drain counted, and a later full post, never older than an events post
+before it, replaces the merged block with everything else. The loop's own
+logger counts and timing statistics are the worker realm's, so they cross on
+request (`ServingLoopHandle.diagnostics()`), and a request waits for the
 worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
 apart from `stats` so that a worker in a long settle, or one that is hung,
 delays only the caller who asked for its loggers. A test that reads a refusal

@@ -182,7 +182,7 @@ describe("serving-worker", () => {
     // What the health route would answer at the moment each commit is
     // admitted on this thread: the counters the worker last posted.
     let appendSeq: number | undefined;
-    let countedAtCover: ServingLoopStats["events"] | undefined;
+    let countedAtCover: ServingLoopStats | undefined;
     const unwatch = server.watchAdmittedCommits((notice) => {
       if (notice.space !== space) return;
       if ((notice.eventAppends?.length ?? 0) > 0) {
@@ -191,7 +191,7 @@ describe("serving-worker", () => {
         appendSeq !== undefined && countedAtCover === undefined &&
         readWatermarkSeq(engine) >= appendSeq
       ) {
-        countedAtCover = worker.stats()?.events;
+        countedAtCover = worker.stats();
       }
     });
     try {
@@ -204,7 +204,9 @@ describe("serving-worker", () => {
       cancelDemand();
     }
 
-    expect(countedAtCover?.appended).toBe(1);
-    expect(countedAtCover?.processed).toBe(1);
+    expect(countedAtCover?.events.appended).toBe(1);
+    expect(countedAtCover?.events.processed).toBe(1);
+    // The events post updates the last full copy rather than replacing it.
+    expect(countedAtCover?.activeSpaces).toBe(1);
   });
 });

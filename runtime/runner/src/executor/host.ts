@@ -310,10 +310,22 @@ export class ExecutorHost {
     return { failureParkStreaks: this.#failureParkStreaks };
   }
 
+  /** The `events` block of {@link stats}, alone and in its own copy. */
+  eventStats(): ServingLoopStats["events"] {
+    refreshDeliveryCheckpointStats(this.#stats);
+    return {
+      ...this.#stats.events,
+      needsAttention: {
+        ...this.#stats.events.needsAttention,
+        byPhase: { ...this.#stats.events.needsAttention.byPhase },
+      },
+    };
+  }
+
   /** The §7 counters, live: static counts merged with per-space state
    * (activeSpaces and watermarkLag read the current SpaceServers). */
   stats(): ServingLoopStats {
-    refreshDeliveryCheckpointStats(this.#stats);
+    const events = this.eventStats();
     let watermarkLag = 0;
     let activeSpaces = 0;
     for (const server of this.#spaces.values()) {
@@ -327,13 +339,7 @@ export class ExecutorHost {
       // the top-level spread shares its reference (the same reason as
       // NIT-1's settle-series copy below).
       derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events: {
-        ...this.#stats.events,
-        needsAttention: {
-          ...this.#stats.events.needsAttention,
-          byPhase: { ...this.#stats.events.needsAttention.byPhase },
-        },
-      },
+      events,
       demand: { ...this.#stats.demand },
       settle: {
         // NIT-1: deep-copy the entries — a series row stays live after it

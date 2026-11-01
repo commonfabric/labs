@@ -231,6 +231,13 @@ export type PlaneNotices = {
   };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
+
+  /**
+   * The `events` block of the counters alone, posted ahead of each wave
+   * commit. It updates the copy the last `host.stats` left, which the next
+   * `host.stats` replaces whole.
+   */
+  "host.eventStats": { events: ServingLoopStats["events"] };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";
