@@ -54,8 +54,10 @@ let loop: ServingLoop | undefined;
 
 /**
  * The routed plane this thread's lifecycle delivery sends through while the
- * loop runs with owner routing on; the loop's host keeps one of its own on
- * whichever thread it runs.
+ * loop runs with owner routing on. The loop's host keeps one of its own on
+ * whichever thread it runs, so on the main-thread arm two planes dial the
+ * same route; each numbers the appends on its own sessions, so the two never
+ * meet at the owner.
  */
 let route: RoutedPlane | undefined;
 

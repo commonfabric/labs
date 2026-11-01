@@ -48,16 +48,22 @@ export type RouteOptions = {
  * close the sessions no other scope uses.
  */
 export type RoutedScope = {
-  /** Sends one delegated event append into `space` through its owner. */
+  /**
+   * Sends one delegated event append into `space` through its owner. The
+   * entry's position on the session is the plane's to number, so the owner
+   * keys the append by a pair no other append on that session has.
+   */
   append(
     space: MemorySpace,
-    entry: ServedAppendEntry,
+    entry: Omit<ServedAppendEntry, "localSeq">,
   ): Promise<ServedAppendResult>;
 
   /**
-   * Calls `onChange` each time the owner pushes a change to the document
-   * `id` in `space`, until the returned function is called. The push is the
-   * owner's, so a commit from whichever process made it reaches the caller.
+   * Calls `onChange` each time the owner pushes a change the session
+   * watches, the document `id` in `space` among them, until the returned
+   * function is called. The push is the owner's, so a commit from whichever
+   * process made it reaches the caller. A session's watches share one push,
+   * so a caller reads the document itself to learn whether its own changed.
    */
   watchDocument(
     space: MemorySpace,
@@ -65,6 +71,7 @@ export type RoutedScope = {
     onChange: () => void,
   ): Promise<() => void>;
 
+  /** Releases the scope's hold on every session it used. */
   dispose(): void;
 };
 
@@ -108,11 +115,22 @@ export const webSocketRoute = (
   };
 };
 
+/** A routed session to one target space's owner, and its position counter. */
 type RoutedSession = {
+  /** The connection the session is open on, closed with the session. */
   client: MemoryClient.Client;
+
+  /** The session, open as the service identity bound to the space's owner. */
   session: MemoryClient.SpaceSession;
+
+  /** The position of the last append sent on the session, from zero. */
+  localSeq: number;
 };
 
+/**
+ * A host's routed sessions, one per target space, as the file header
+ * describes. Scopes use the sessions; the plane opens and closes them.
+ */
 export class RoutedPlane {
   readonly #options: RouteOptions;
   readonly #clientInfo: Readonly<ClientInfo>;
@@ -138,6 +156,7 @@ export class RoutedPlane {
     return { sessionSpaces: [...this.#sessions.keys()] };
   }
 
+  /** A new user of the plane's sessions, to be disposed once it is done. */
   scope(): RoutedScope {
     const scope: RoutedScope = {
       append: (space, entry) => this.#append(scope, space, entry),
@@ -156,15 +175,17 @@ export class RoutedPlane {
     await Promise.all([...this.#closing]);
   }
 
+  /** Sends `entry` on `space`'s session, numbered after its last append. */
   async #append(
     scope: RoutedScope,
     space: MemorySpace,
-    entry: ServedAppendEntry,
+    entry: Omit<ServedAppendEntry, "localSeq">,
   ): Promise<ServedAppendResult> {
-    const { session } = await this.#use(scope, space);
-    const result = await session.runServed(
+    const routed = await this.#use(scope, space);
+    const sent: ServedAppendEntry = { ...entry, localSeq: ++routed.localSeq };
+    const result = await routed.session.runServed(
       "append",
-      entry as unknown as FabricPlainObject,
+      sent as unknown as FabricPlainObject,
     );
     const { seq, deduped } = result as Partial<ServedAppendResult>;
     if (typeof deduped !== "boolean") {
@@ -175,6 +196,7 @@ export class RoutedPlane {
     return { deduped, ...(typeof seq === "number" ? { seq } : {}) };
   }
 
+  /** Adds a watch for `id` on `space`'s session and wakes `onChange` on it. */
   async #watchDocument(
     scope: RoutedScope,
     space: MemorySpace,
@@ -182,8 +204,9 @@ export class RoutedPlane {
     onChange: () => void,
   ): Promise<() => void> {
     const { session } = await this.#use(scope, space);
+    const watchId = `routed:${id}`;
     const view = await session.watchAdd([{
-      id: `routed:${id}`,
+      id: watchId,
       kind: "graph",
       // A watch for the wake alone: the document's value is read from the
       // shared store, so the walk follows nothing.
@@ -200,11 +223,12 @@ export class RoutedPlane {
         onChange();
       }
     })();
-    // The watch itself stays on the session, which closes with the scope's
-    // release; only the wake stops here.
+    // The removal is sent on a session the scope may be releasing at the
+    // same time, and a session that closed first has no watch to remove.
     return () => {
       watching = false;
       void results.return?.();
+      void session.watchRemoveSync([watchId]).catch(() => {});
     };
   }
 
@@ -234,6 +258,7 @@ export class RoutedPlane {
     return session;
   }
 
+  /** Dials `space`'s owner and opens the session, or closes what it dialed. */
   async #open(space: MemorySpace): Promise<RoutedSession> {
     const transport = this.#options.createTransport(space);
     const client = await MemoryClient.connect({
@@ -247,13 +272,14 @@ export class RoutedPlane {
         { actingAs: "space-owner" },
         this.#options.sessionOpenAuth,
       );
-      return { client, session };
+      return { client, session, localSeq: 0 };
     } catch (error) {
       await client.close().catch(() => {});
       throw error;
     }
   }
 
+  /** Forgets `scope` and closes the sessions it was the last user of. */
   #release(scope: RoutedScope): void {
     for (const [space, users] of [...this.#users]) {
       if (!users.delete(scope) || users.size > 0) continue;
@@ -262,6 +288,7 @@ export class RoutedPlane {
     }
   }
 
+  /** Closes `space`'s session once open, and tracks the close for `close()`. */
   #closeSession(space: string): void {
     const session = this.#sessions.get(space);
     if (session === undefined) return;

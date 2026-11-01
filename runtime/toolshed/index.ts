@@ -1,4 +1,5 @@
 import type { Runtime } from "@commonfabric/runner";
+import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import app from "@/app.ts";
@@ -32,7 +33,7 @@ import {
 } from "@/lib/server-execution.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/routes/pattern-lifecycle/pattern-lifecycle.handlers.ts";
-import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
+
 // Create a global runtime instance for the server
 let runtime: Runtime;
 

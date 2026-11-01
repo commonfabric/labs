@@ -1,9 +1,11 @@
-// Owner routing (docs/plans/serving-loop-owner-routing.md, R1): a serving
-// loop reaches a space other than its home through that space's owner. Two
-// memory servers over one file store stand for two processes of a
-// deployment, each with its own ExecutorHost; the route maps a space to the
-// server that owns it, and routed sessions connect to that server over the
-// loopback transport.
+/**
+ * Owner routing (docs/plans/serving-loop-owner-routing.md, R1): a serving
+ * loop reaches a space other than its home through that space's owner. Two
+ * memory servers over one file store stand for two processes of a
+ * deployment, each with its own ExecutorHost; the route maps a space to the
+ * server that owns it, and routed sessions connect to that server over the
+ * loopback transport.
+ */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -459,19 +461,56 @@ describe("executor owner routing", () => {
       actingPrincipal: aliceSigner.did(),
       actingSession: "sess-1",
       capabilityRef: "cap-routed",
-      localSeq: 1,
     };
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
 
     const first = plane.scope();
     const second = plane.scope();
     await first.append(targetSpace, entry);
-    await second.append(targetSpace, { ...entry, localSeq: 2 });
+    await second.append(targetSpace, { ...entry, eventId: "evt-routed-2" });
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([targetSpace]);
+    // Two scopes, one session: the plane numbered the second append after
+    // the first, and the owner admitted both.
+    expect((await entriesOn("B", targetSpace, sidecar)).length).toBe(2);
 
     first.dispose();
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([targetSpace]);
     second.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
+  it("wakes a routed document watch when the owner admits a commit to the document", async () => {
+    const plane = new RoutedPlane(route());
+    planes.push(plane);
+    await createStreamDoc("B", targetSpace, stream.id);
+    const scope = plane.scope();
+    // The session's push carries every change the owner admits, so the
+    // wake reads the document and settles once the entry is in it.
+    const landed = Promise.withResolvers<void>();
+    const cancel = await scope.watchDocument(targetSpace, sidecar, () => {
+      void entriesOn("B", targetSpace, sidecar).then((entries) => {
+        if (entries.some((entry) => entry.eventId === "evt-watched")) {
+          landed.resolve();
+        }
+      });
+    });
+    // A commit the owner makes for itself, as a crossing from a third
+    // process would reach it.
+    await servers.B.commitDelegatedAppend({
+      targetSpace,
+      targetStream: sidecar,
+      targetStreamLink: stream,
+      eventId: "evt-watched",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "cap-routed",
+      sessionId: "owner-direct",
+      localSeq: 1,
+    });
+    await landed.promise;
+    cancel();
+    scope.dispose();
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
   });
 });

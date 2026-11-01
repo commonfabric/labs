@@ -9,6 +9,7 @@
  */
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import { isFabricPlainObject } from "@commonfabric/data-model";
 import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   ServedRequestHandler,
@@ -31,9 +32,6 @@ export type ServedAppendEntry = Omit<
 /** What the owner answers an `append` with. */
 export type ServedAppendResult = { seq?: number; deduped: boolean };
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 /**
  * Reads an `append` body as the entry it carries, or returns the reason it
  * is not one. A body a sender built from an outbox row always reads; one
@@ -53,12 +51,14 @@ const readAppendEntry = (
     sessionlessSpaceScope,
     capabilityRef,
     localSeq,
-  } = body as Record<string, unknown>;
+  } = body;
   if (typeof targetStream !== "string") return { invalid: "targetStream" };
   if (typeof eventId !== "string") return { invalid: "eventId" };
   if (typeof capabilityRef !== "string") return { invalid: "capabilityRef" };
   if (typeof localSeq !== "number") return { invalid: "localSeq" };
-  if (targetStreamLink !== undefined && !isPlainObject(targetStreamLink)) {
+  if (
+    targetStreamLink !== undefined && !isFabricPlainObject(targetStreamLink)
+  ) {
     return { invalid: "targetStreamLink" };
   }
   if (actingPrincipal !== undefined && typeof actingPrincipal !== "string") {

@@ -90,7 +90,7 @@ describe("served", () => {
   });
 
   /** A server whose delegating class is `SERVICE` alone. */
-  const newServer = (): Server => {
+  const newServer = (mode: "off" | "enforce" = "off"): Server => {
     const server = new Server({
       store: new URL(`memory://served-${crypto.randomUUID()}`),
       subscriptionRefreshDelayMs: 0,
@@ -99,7 +99,7 @@ describe("served", () => {
         return typeof issuer === "string" ? issuer : undefined;
       },
       sessionOpenAuth: { audience: AUDIENCE },
-      acl: { mode: "off", delegatingDids: [SERVICE] },
+      acl: { mode, delegatingDids: [SERVICE] },
     });
     servers.push(server);
     return server;
@@ -125,6 +125,7 @@ describe("served", () => {
   const openSession = async (
     server: Server,
     principal: string,
+    session: { actingAs?: "space-owner" } = {},
   ): Promise<{ wire: Wire; sessionId: string }> => {
     const { wire, hello } = await greet(server);
     const requestId = crypto.randomUUID();
@@ -132,7 +133,7 @@ describe("served", () => {
       type: "session.open",
       requestId,
       space: SPACE,
-      session: {},
+      session,
       invocation: {
         iss: principal,
         aud: hello.sessionOpen!.audience,
@@ -242,6 +243,51 @@ describe("served", () => {
         code: "unavailable",
         message: expect.any(String),
       });
+    });
+
+    it("admits a request under `enforce` from the service's session bound to the owner of a space that grants the service nothing, and refuses the owner's own", async () => {
+      const server = newServer("enforce");
+      const { calls, handler } = recording();
+      server.setServedRequestHandler(handler);
+      // The space's genesis, as creating a space writes it: the one write
+      // the space identity makes without a grant.
+      const genesis = await openSession(server, SPACE);
+      const written = crypto.randomUUID();
+      await genesis.wire.receive({
+        type: "transact",
+        requestId: written,
+        space: SPACE,
+        sessionId: genesis.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: `of:${SPACE}`,
+            value: { value: { [ALICE]: "OWNER" } },
+          }],
+        },
+      });
+      expect((await genesis.wire.response(written)).error).toBeUndefined();
+
+      // The routed plane's open: the service identity, bound to the owner.
+      const routed = await openSession(server, SERVICE, {
+        actingAs: "space-owner",
+      });
+      const admitted = await routed.wire.response(
+        await request(routed.wire, routed.sessionId),
+      );
+      expect(admitted.error).toBeUndefined();
+      expect(calls.map((call) => call.principal)).toEqual([SERVICE]);
+
+      // The owner holds every grant on the space and is still not the
+      // delegating class, so the owner's session sends no crossing.
+      const owner = await openSession(server, ALICE);
+      const refused = await owner.wire.response(
+        await request(owner.wire, owner.sessionId),
+      );
+      expect(refused.error?.code).toBe("forbidden");
+      expect(calls.length).toBe(1);
     });
 
     it("returns a handler's refusal under its own code", async () => {

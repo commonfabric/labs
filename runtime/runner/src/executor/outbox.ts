@@ -120,9 +120,11 @@ export class SpaceOutbox {
   readonly #space?: string;
   readonly #localSeqRef: { value: number };
 
-  /** The route to each target space's owner, which delivers the appends in
+  /**
+   * The route to each target space's owner, which delivers the appends in
    * place of this process's server; absent, every append is delivered to
-   * this process's server. Disposed with the outbox. */
+   * this process's server. Disposed with the outbox.
+   */
   readonly #route: RoutedScope | undefined;
 
   /** In-flight effect entries per effect key — §4's in-flight dedupe,
@@ -209,9 +211,11 @@ export class SpaceOutbox {
     /** Per-space egress budgets (Phase 6); absent = unbounded. */
     budget?: OutboxBudgetPolicy;
 
-    /** The tenure's scope on the host's routed plane
+    /**
+     * The tenure's scope on the host's routed plane
      * (`serving-loop-owner-routing.md`): present, each append is sent to
-     * the target's owner as a `served` request. */
+     * the target's owner as a `served` request.
+     */
     route?: RoutedScope;
 
     /** DIAGNOSTIC (tests): called as each in-flight effect is retired,
@@ -605,11 +609,11 @@ export class SpaceOutbox {
             ? { sessionlessSpaceScope: true }
             : {}),
           capabilityRef: row.capabilityRef,
-          localSeq: ++this.#localSeqRef.value,
         };
         // Through the route, the target's owner admits the append on the
-        // routed session; otherwise this process's server admits it under
-        // the delivering service session.
+        // routed session, numbered by the plane; otherwise this process's
+        // server admits it under the delivering service session, numbered
+        // from the host's counter.
         if (this.#route !== undefined) {
           await this.#route.append(row.targetSpace as MemorySpace, entry);
         } else {
@@ -617,6 +621,7 @@ export class SpaceOutbox {
             ...entry,
             targetSpace: row.targetSpace,
             sessionId: this.#sessionId,
+            localSeq: ++this.#localSeqRef.value,
           });
         }
         // Delivery-ack: the target processed the entry (admitted or

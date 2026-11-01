@@ -2748,9 +2748,9 @@ class Connection {
           ));
           return;
         }
-        // A foreign wave batch takes a wave commit to apply, so the request
-        // is not awaited, as a lifecycle verb is not: the frames behind it
-        // go ahead, and the answer goes out when the crossing settles.
+        // A crossing takes as long as its admission does, so the request is
+        // not awaited, as a lifecycle verb is not: the frames behind it go
+        // ahead, and the answer goes out when the crossing settles.
         const { space, sessionId, requestId } = parsed;
         void this.#server.runServedRequest(parsed).then((response) => {
           if (this.#closed) return;
@@ -3037,6 +3037,7 @@ export type ServedRequestCall = {
   /** The session the request came on, which a commit it makes is keyed by. */
   sessionId: string;
 
+  /** Which crossing the body carries. */
   kind: ServedRequestKind;
 
   /** The crossing, as the sender sent it and not yet validated. */

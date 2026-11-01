@@ -2142,9 +2142,9 @@ the per-epic implementation notes).
   crossing on the process's own memory server, and other values warn and do
   the same. The route is `MEMORY_URL`, the deployment's memory endpoint that
   its proxy routes by space. Meaningful only with the serving loop running
-  ([`serverExecution`](#serverexecution) on). The serving memory server the
-  tests build takes a route as an option instead, and every test of a routed
-  arm sets it.
+  ([`serverExecution`](#serverexecution) on). The runner's tests give their
+  `ExecutorHost` a route as an option instead, and every test of a routed
+  arm sets one.
 - **Added by.** Bernhard Seefeld, in the change that serves each space from the
   process that owns it.
 - **Purpose.** A deployment runs many toolshed processes over one memory store,

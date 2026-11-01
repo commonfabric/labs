@@ -401,8 +401,10 @@ async function instantiate(
     : incomplete(prepared.body.receipt, "completion", finished.body.code);
 }
 
-/** A registration event as the delivery's transport sends it: the entry
- * without the session and position each transport numbers its own way. */
+/**
+ * A registration event as the delivery's transport sends it: the entry
+ * without the session and position each transport numbers its own way.
+ */
 type DeliveryEntry = Omit<
   Parameters<Server["commitDelegatedAppend"]>[0],
   "sessionId" | "localSeq"
@@ -431,10 +433,6 @@ export interface DeliveryTransport {
   dispose: () => void;
 }
 
-/** This process's position counter for the deliveries it routes, which the
- * owner keys each one by together with the routed session. */
-let routedDeliverySeq = 0;
-
 /**
  * The transport for a registration into `streamSpace` from a verb that ran
  * in `verbSpace`: the process's own server when the stream's space is the
@@ -462,13 +460,11 @@ export function registrationDeliveryTransport(
       dispose: () => {},
     };
   }
+  // The owner's session names the target, and the plane numbers the entry.
   const scope = route.scope();
   return {
     append: ({ targetSpace, ...entry }) =>
-      scope.append(targetSpace as MemorySpace, {
-        ...entry,
-        localSeq: ++routedDeliverySeq,
-      }),
+      scope.append(targetSpace as MemorySpace, entry),
     watch: (space, id, onChange) => scope.watchDocument(space, id, onChange),
     dispose: () => scope.dispose(),
   };

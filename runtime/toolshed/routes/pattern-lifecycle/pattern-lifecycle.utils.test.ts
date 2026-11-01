@@ -923,12 +923,14 @@ describe("registrationDeliveryTransport()", () => {
 
   type Call = { kind: string; args: unknown[] };
 
-  const fakeDeps = (calls: Call[]) => ({
-    append: (sent: unknown) => {
+  const fakeDeps = (
+    calls: Call[],
+  ): Pick<LifecycleDeps, "append" | "watchAdmittedCommits"> => ({
+    append: (sent) => {
       calls.push({ kind: "local append", args: [sent] });
       return Promise.resolve({ deduped: false });
     },
-    watchAdmittedCommits: (watcher: unknown) => {
+    watchAdmittedCommits: (watcher) => {
       calls.push({ kind: "local watch", args: [watcher] });
       return () => calls.push({ kind: "local cancel", args: [] });
     },
@@ -958,7 +960,7 @@ describe("registrationDeliveryTransport()", () => {
       {
         ...fakeDeps(calls),
         ...(routed ? { route: () => ({ scope: () => fakeScope(calls) }) } : {}),
-      } as unknown as LifecycleDeps,
+      },
       verbSpace,
       streamSpace,
     );
@@ -1017,19 +1019,13 @@ describe("registrationDeliveryTransport()", () => {
       "routed dispose",
     ]);
     expect(calls[0].args.slice(0, 2)).toEqual([foreign, "of:stream"]);
-    // The owner's session names the target and the sender's session; the
-    // entry's position is this process's own.
+    // The owner's session names the target and the sender's session, and
+    // the plane numbers the entry on that session.
     const [space, sent] = calls[1].args as [string, Record<string, unknown>];
     expect(space).toBe(foreign);
     expect(sent.targetSpace).toBeUndefined();
     expect(sent.sessionId).toBeUndefined();
+    expect(sent.localSeq).toBeUndefined();
     expect(sent.eventId).toBe("event-1");
-    const again = transportOf([], home, foreign, true);
-    const later: Call[] = [];
-    await transportOf(later, home, foreign, true).append(entry);
-    again.dispose();
-    expect((later[0].args[1] as { localSeq: number }).localSeq).toBeGreaterThan(
-      sent.localSeq as number,
-    );
   });
 });
