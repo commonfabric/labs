@@ -467,6 +467,46 @@ processes* (deploy overlap, partition) it holds via the lease:
 FORBIDDEN: per-action leases, lease fencing tokens per commit, lease
 renewal via the commit stream, more than one lease shape.
 
+### A deleted space
+
+A deleted space
+([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) is not served,
+in any ACL mode. The memory server refuses every commit to one, a derived
+commit and every commit carrying delegated carriage included, with a
+`ProtocolError` naming the deletion, and that refusal is deterministic: no
+successor tenure could have it admitted.
+
+- Activation reads the space's access list before it acquires a lease. When
+  it finds a tombstone there, it starts no tenure, and §1's re-evaluation
+  starts none for that space again, whatever demand it sees.
+- A tenure reads and commits its own space engine-direct, and holds no session
+  on it, so no session revocation tells it of the deletion. What tells it is
+  the host's notice that an admitted commit wrote the space's ACL document
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs.
+  On that notice for its own space the SpaceServer reads the ACL document, and
+  when it holds a tombstone it ends the tenure for good. It stops committing at
+  once, as on a lease loss, disposes of the runtime, releases the lease, and
+  does not re-acquire it. A refused commit naming the deletion ends it the same
+  way, which is the backstop for a deletion committed through another process,
+  whose commit the host does not see.
+- A tenure serving another space that holds a session on the deleted one, as a
+  cross-space replica, learns of the deletion from that session's `deleted`
+  revocation. It goes on serving its own space.
+- An outbox row whose target space is deleted is refused at delivery like any
+  other deterministic admission refusal (§5), and is deleted with the
+  source-side notice written first.
+- An outbox drain reads its own space's ACL document before it starts each
+  row, and stops at the first row it finds the space deleted before, leaving
+  that row and every later one in place for a reap to remove with the rest of
+  the store. So once a drain has read the deletion it starts no further row.
+  The window that remains is one row: a row whose read found the space live
+  may still be admitted at its target, even when the deletion commits while
+  that row's delivery is under way. A drain's own commits after the deletion,
+  such as a failure notice or a row's retirement, are refused like any other
+  commit to the space, and the drain stops there too.
+
+Deletion is not implemented yet.
+
 ## 3. The loop, normatively
 
 State per SpaceServer: `W` = watermark, the highest space seq whose
