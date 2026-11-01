@@ -9,7 +9,9 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
   ensureSpaceRootsFromEnv,
+  ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
+  serverExecutionRoute,
   serverExecutionWorkerFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
@@ -536,6 +538,91 @@ describe("startServerExecutionHost with the store read-through on", () => {
       );
     } finally {
       await connection.close();
+      await stopServerExecutionHost();
+      await server.close();
+    }
+  });
+});
+
+describe("ownerRoutingFromEnv()", () => {
+  it("is off when the knob is unset, empty or the literal false", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, { SERVER_EXECUTION_OWNER_ROUTING: "" }, {
+        SERVER_EXECUTION_OWNER_ROUTING: "false",
+      }]
+    ) {
+      expect(ownerRoutingFromEnv(envOf(env), (m) => warnings.push(m))).toBe(
+        false,
+      );
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("is on for the literal true alone, and off with a warning for anything else", () => {
+    const warnings: string[] = [];
+    const routingWith = (value: string) =>
+      ownerRoutingFromEnv(
+        envOf({ SERVER_EXECUTION_OWNER_ROUTING: value }),
+        (m) => warnings.push(m),
+      );
+    expect(routingWith("true")).toBe(true);
+    expect(warnings).toEqual([]);
+    expect(routingWith("on")).toBe(false);
+    expect(routingWith("1")).toBe(false);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_OWNER_ROUTING");
+  });
+});
+
+describe("startServerExecutionHost with owner routing", () => {
+  const startWith = async (knobs: Record<string, string>) => {
+    const server = new MemoryServer({
+      store: new URL(`memory://owner-routing-${crypto.randomUUID()}`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-owner-routing" },
+    });
+    const loop = startServerExecutionHost({
+      server,
+      identity: await Identity.fromPassphrase("owner routing service"),
+      apiUrl: new URL("http://toolshed.test"),
+      memoryUrl: new URL("http://memory.test"),
+      envGet: (name) =>
+        ({
+          EXPERIMENTAL_SERVER_EXECUTION: "true",
+          SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+          ...knobs,
+        })[name],
+    });
+    expect(loop).toBeDefined();
+    return server;
+  };
+
+  it("keeps a routed plane for the lifecycle delivery while the loop runs, on either thread", async () => {
+    for (const worker of ["false", "true"]) {
+      const server = await startWith({
+        SERVER_EXECUTION_OWNER_ROUTING: "true",
+        SERVER_EXECUTION_WORKER: worker,
+      });
+      try {
+        // Opened lazily: no session dials the route until a delivery needs
+        // one, so the plane exists with no sessions.
+        expect(serverExecutionRoute()?.accessForTestingOnly.sessionSpaces)
+          .toEqual([]);
+      } finally {
+        await stopServerExecutionHost();
+        await server.close();
+      }
+      expect(serverExecutionRoute()).toBeUndefined();
+    }
+  });
+
+  it("keeps no routed plane with the knob off", async () => {
+    const server = await startWith({});
+    try {
+      expect(serverExecutionRoute()).toBeUndefined();
+    } finally {
       await stopServerExecutionHost();
       await server.close();
     }

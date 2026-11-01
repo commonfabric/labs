@@ -13,6 +13,7 @@ import {
 } from "@commonfabric/piece/ops";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { LoopbackStorageManager } from "@commonfabric/runner/executor/loopback-storage";
+import type { RoutedScope } from "@commonfabric/runner/executor/routed-plane";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   createAclServer,
@@ -27,6 +28,7 @@ import {
   processLifecycleCall,
   processSetSource,
   processUpload,
+  registrationDeliveryTransport,
 } from "./pattern-lifecycle.utils.ts";
 
 const PROGRAM = {
@@ -359,6 +361,54 @@ export default pattern(() => {
       "Not authorized to write to that space",
     );
     expect(result.registration.terminal).toBeUndefined();
+  });
+
+  it("delivers a registration into the verb's own space on its own server, with a route present", async () => {
+    const root = ok(
+      await processInstantiate(deps, alice.did(), {
+        space,
+        register: false,
+        program: {
+          main: "/main.tsx",
+          files: [{
+            name: "/main.tsx",
+            contents: `
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(({piece}, {panels}) => panels.addUnique(piece));
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return {pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels})};
+});`,
+          }],
+        },
+      }),
+    );
+    const owner = new PiecesController(
+      await createSession({ identity: alice, spaceDid: spaceIdentity.did() }),
+      runtime,
+    );
+    await owner.ready;
+    await owner.linkDefaultPattern(runtime.getCellFromEntityId(
+      space as MemorySpace,
+      entityIdFrom(root.pieceId),
+    ));
+    // The verb's space is the one this process serves, so the delivery
+    // stays on this server whatever route the process has.
+    const result = ok(
+      await processInstantiate(
+        {
+          ...deps,
+          route: () => ({
+            scope: () => {
+              throw new Error("the route was dialed for a home delivery");
+            },
+          }),
+        },
+        bob.did(),
+        { space, program: PROGRAM, register: true, requestKey: "home-route" },
+      ),
+    );
+    expect(result.registration.status).toBe("handled");
   });
 
   for (
@@ -852,5 +902,134 @@ export default pattern(() => {
         refusal: { code: "forbidden", message: expect.any(String) },
       });
     });
+  });
+});
+
+describe("registrationDeliveryTransport()", () => {
+  // Which server a registration's delivery appends to and watches: the
+  // process's own for the space the verb ran in, and the stream's owner
+  // through the route for any other space, when the process has a route.
+  const home = "did:key:z6MkhomeSpace" as MemorySpace;
+  const foreign = "did:key:z6MkforeignSpace" as MemorySpace;
+  const entry = {
+    targetSpace: foreign,
+    targetStream: "of:stream",
+    eventId: "event-1",
+    payload: { piece: "piece-1" },
+    actingPrincipal: "did:key:z6Mkbob",
+    actingSession: "did:key:z6Mkbob",
+    capabilityRef: "stream-append:of:stream",
+  };
+
+  type Call = { kind: string; args: unknown[] };
+
+  const fakeDeps = (calls: Call[]) => ({
+    append: (sent: unknown) => {
+      calls.push({ kind: "local append", args: [sent] });
+      return Promise.resolve({ deduped: false });
+    },
+    watchAdmittedCommits: (watcher: unknown) => {
+      calls.push({ kind: "local watch", args: [watcher] });
+      return () => calls.push({ kind: "local cancel", args: [] });
+    },
+  });
+
+  const fakeScope = (calls: Call[]): RoutedScope => ({
+    append: (space, sent) => {
+      calls.push({ kind: "routed append", args: [space, sent] });
+      return Promise.resolve({ deduped: false });
+    },
+    watchDocument: (space, id, onChange) => {
+      calls.push({ kind: "routed watch", args: [space, id, onChange] });
+      return Promise.resolve(() =>
+        calls.push({ kind: "routed cancel", args: [] })
+      );
+    },
+    dispose: () => calls.push({ kind: "routed dispose", args: [] }),
+  });
+
+  const transportOf = (
+    calls: Call[],
+    verbSpace: string,
+    streamSpace: string,
+    routed: boolean,
+  ) =>
+    registrationDeliveryTransport(
+      {
+        ...fakeDeps(calls),
+        ...(routed ? { route: () => ({ scope: () => fakeScope(calls) }) } : {}),
+      } as unknown as LifecycleDeps,
+      verbSpace,
+      streamSpace,
+    );
+
+  it("appends to and watches its own server for the verb's space, and a foreign one without a route", async () => {
+    for (
+      const [streamSpace, routed] of [[home, true], [foreign, false]] as const
+    ) {
+      const calls: Call[] = [];
+      const transport = transportOf(calls, home, streamSpace, routed);
+      const fired: string[] = [];
+      const cancel = await transport.watch(
+        streamSpace,
+        "of:stream",
+        () => fired.push("change"),
+      );
+      await transport.append({ ...entry, targetSpace: streamSpace });
+      cancel();
+      transport.dispose();
+      expect(calls.map((call) => call.kind)).toEqual([
+        "local watch",
+        "local append",
+        "local cancel",
+      ]);
+      // Its own server's notices are filtered to the stream's document in
+      // the stream's space, each delivery under a session of its own.
+      const watcher = calls[0].args[0] as (notice: {
+        space: string;
+        writes: { id: string }[];
+      }) => void;
+      watcher({ space: streamSpace, writes: [{ id: "of:other" }] });
+      watcher({
+        space: home === streamSpace ? foreign : home,
+        writes: [{ id: "of:stream" }],
+      });
+      expect(fired).toEqual([]);
+      watcher({ space: streamSpace, writes: [{ id: "of:stream" }] });
+      expect(fired).toEqual(["change"]);
+      const sent = calls[1].args[0] as { sessionId: string; localSeq: number };
+      expect(typeof sent.sessionId).toBe("string");
+      expect(sent.localSeq).toBe(1);
+    }
+  });
+
+  it("appends to and watches the stream's owner through the route for another space", async () => {
+    const calls: Call[] = [];
+    const transport = transportOf(calls, home, foreign, true);
+    const cancel = await transport.watch(foreign, "of:stream", () => {});
+    await transport.append(entry);
+    cancel();
+    transport.dispose();
+    expect(calls.map((call) => call.kind)).toEqual([
+      "routed watch",
+      "routed append",
+      "routed cancel",
+      "routed dispose",
+    ]);
+    expect(calls[0].args.slice(0, 2)).toEqual([foreign, "of:stream"]);
+    // The owner's session names the target and the sender's session; the
+    // entry's position is this process's own.
+    const [space, sent] = calls[1].args as [string, Record<string, unknown>];
+    expect(space).toBe(foreign);
+    expect(sent.targetSpace).toBeUndefined();
+    expect(sent.sessionId).toBeUndefined();
+    expect(sent.eventId).toBe("event-1");
+    const again = transportOf([], home, foreign, true);
+    const later: Call[] = [];
+    await transportOf(later, home, foreign, true).append(entry);
+    again.dispose();
+    expect((later[0].args[1] as { localSeq: number }).localSeq).toBeGreaterThan(
+      sent.localSeq as number,
+    );
   });
 });

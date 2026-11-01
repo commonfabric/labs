@@ -36,6 +36,7 @@ import {
   type LifecyclePhaseTiming,
   LifecycleVerbFailure,
 } from "@commonfabric/runner/executor/lifecycle-verb";
+import type { RoutedPlane } from "@commonfabric/runner/executor/routed-plane";
 import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
@@ -54,6 +55,13 @@ export interface LifecycleDeps {
    * bookkeeping under the lease.
    */
   host: () => ServedLifecycleVerbRunner | undefined;
+
+  /**
+   * The routed plane to other spaces' owners while the process routes its
+   * crossings (docs/plans/serving-loop-owner-routing.md); `undefined` while
+   * it does not, and then every delivery goes to this process's own server.
+   */
+  route?: () => Pick<RoutedPlane, "scope"> | undefined;
 
   /** Trusted event ingress after this route authenticates and authorizes the caller. */
   append: Server["commitDelegatedAppend"];
@@ -375,6 +383,7 @@ async function instantiate(
     : await observeRegistrationDelivery(
       deps,
       callerDid,
+      input.space,
       prepared.body.delivery,
     );
   if (prepared.body.delivery !== undefined) {
@@ -392,10 +401,84 @@ async function instantiate(
     : incomplete(prepared.body.receipt, "completion", finished.body.code);
 }
 
+/** A registration event as the delivery's transport sends it: the entry
+ * without the session and position each transport numbers its own way. */
+type DeliveryEntry = Omit<
+  Parameters<Server["commitDelegatedAppend"]>[0],
+  "sessionId" | "localSeq"
+>;
+
+/**
+ * How a registration's delivery reaches the stream's space: where it appends
+ * the event, and where it watches the stream's document for the event's
+ * outcome.
+ */
+export interface DeliveryTransport {
+  /** Sends the registration event into the stream's space, at least once. */
+  append: (entry: DeliveryEntry) => Promise<unknown>;
+
+  /**
+   * Calls `onChange` each time the document `id` in `space` changes, until
+   * the returned function is called.
+   */
+  watch: (
+    space: MemorySpace,
+    id: string,
+    onChange: () => void,
+  ) => Promise<() => void>;
+
+  /** Releases what the transport holds. */
+  dispose: () => void;
+}
+
+/** This process's position counter for the deliveries it routes, which the
+ * owner keys each one by together with the routed session. */
+let routedDeliverySeq = 0;
+
+/**
+ * The transport for a registration into `streamSpace` from a verb that ran
+ * in `verbSpace`: the process's own server when the stream's space is the
+ * verb's, which this process serves, and otherwise the stream's owner
+ * through the route while the process has one. Without a route every
+ * delivery stays on this process's server.
+ */
+export function registrationDeliveryTransport(
+  deps: Pick<LifecycleDeps, "append" | "watchAdmittedCommits" | "route">,
+  verbSpace: string,
+  streamSpace: string,
+): DeliveryTransport {
+  const route = verbSpace === streamSpace ? undefined : deps.route?.();
+  if (route === undefined) {
+    return {
+      append: (entry) =>
+        deps.append({ ...entry, sessionId: crypto.randomUUID(), localSeq: 1 }),
+      watch: (space, id, onChange) =>
+        Promise.resolve(deps.watchAdmittedCommits((notice) => {
+          if (
+            notice.space === space &&
+            notice.writes.some((write) => write.id === id)
+          ) onChange();
+        })),
+      dispose: () => {},
+    };
+  }
+  const scope = route.scope();
+  return {
+    append: ({ targetSpace, ...entry }) =>
+      scope.append(targetSpace as MemorySpace, {
+        ...entry,
+        localSeq: ++routedDeliverySeq,
+      }),
+    watch: (space, id, onChange) => scope.watchDocument(space, id, onChange),
+    dispose: () => scope.dispose(),
+  };
+}
+
 /** Observe only a server-prepared stream; no process-identity session reads private space data. */
 async function observeRegistrationDelivery(
   deps: LifecycleDeps,
   callerDid: string,
+  verbSpace: string,
   delivery: NonNullable<ServedRegistrationPreparation["delivery"]>,
 ): Promise<ServedRegistrationOutcome> {
   const { stream, eventId, piece } = delivery;
@@ -434,16 +517,17 @@ async function observeRegistrationDelivery(
       if (outcome !== undefined) consequence.resolve(outcome);
     }).catch((error) => consequence.reject(error));
   };
-  const cancel = deps.watchAdmittedCommits((notice) => {
-    if (
-      notice.space === stream.space &&
-      notice.writes.some((write) => write.id === targetStream)
-    ) observe();
-  });
-  observe();
+  const transport = registrationDeliveryTransport(
+    deps,
+    verbSpace,
+    stream.space,
+  );
+  let cancel: (() => void) | undefined;
   try {
+    cancel = await transport.watch(stream.space, targetStream, observe);
+    observe();
     const [, outcome] = await Promise.all([
-      deps.append({
+      transport.append({
         targetSpace: stream.space,
         targetStream,
         targetStreamLink: stream,
@@ -452,8 +536,6 @@ async function observeRegistrationDelivery(
         actingPrincipal: callerDid,
         actingSession: callerDid,
         capabilityRef: `stream-append:${targetStream}`,
-        sessionId: crypto.randomUUID(),
-        localSeq: 1,
       }),
       consequence.promise,
     ]);
@@ -469,7 +551,8 @@ async function observeRegistrationDelivery(
     return { error: error instanceof Error ? error.message : String(error) };
   } finally {
     finished = true;
-    cancel();
+    cancel?.();
+    transport.dispose();
   }
 }
 
