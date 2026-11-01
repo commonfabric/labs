@@ -1388,14 +1388,18 @@ A blank reply also writes `model-turn-<n>-empty-reply.json` beside the run
 report. Its `modelAttemptSequence` links to the report's attempt record. The
 diagnostic names the decoder and records its decoded text length, trimmed text
 length, and function-call count, with the reason it judged the reply empty.
-`responseBodyExcerpt` retains the provider payload as JSON, bounded to 2,048
-characters like other response-body diagnostics; `responseBodyBytes` records the
-full serialized UTF-8 size and `responseBodyTruncated` marks a cut excerpt.
-Codex evidence includes the terminal response and the collected streamed output
-items, which supply decoder input when the terminal output is empty. These
-payloads stay in the sidecar artifact, outside transcripts, reports, and
-standard output. Normal text replies and tool-only replies write no such
-artifact.
+`responseBodyExcerpt` retains response evidence as JSON, bounded to 64 KiB of
+UTF-8 without splitting a code point; `responseBodyBytes` records the full
+serialized size of that evidence and `responseBodyTruncated` marks a cut
+excerpt. Responses evidence keeps `status`, `incomplete_details`, `error`, every
+`output` item with all its fields, `usage`, and `model`. Chat Completions
+evidence keeps the complete `choices`, `usage`, and `model`. Echoed request
+fields such as `instructions` and `tools` are excluded before applying the
+bound. Codex evidence includes the selected terminal fields and the complete
+collected streamed output items, which supply decoder input when the terminal
+output is empty. These payloads stay in the sidecar artifact, outside
+transcripts, reports, and standard output. Normal text replies and tool-only
+replies write no such artifact.
 
 A failed attempt carries the provider's own reason wherever the provider stated
 one. `providerError` holds the provider's `type`, `code`, and `message` as the

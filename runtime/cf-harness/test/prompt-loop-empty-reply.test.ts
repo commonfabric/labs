@@ -91,7 +91,14 @@ describe("prompt-loop-empty-reply", () => {
           const isCodex = provider.startsWith("codex");
           const payload = provider === "chat"
             ? {
+              model,
+              usage: {
+                prompt_tokens: 100,
+                completion_tokens: 0,
+                total_tokens: 100,
+              },
               choices: [{
+                finish_reason: "stop",
                 message: {
                   role: "assistant",
                   content,
@@ -100,12 +107,32 @@ describe("prompt-loop-empty-reply", () => {
               }],
             }
             : {
+              instructions: "fixture instructions ".padEnd(19_000, "x"),
+              tools: [{
+                type: "function",
+                name: "fixture_tool",
+                description: "echoed tool",
+              }],
+              model,
+              usage: { input_tokens: 100, output_tokens: 0, total_tokens: 100 },
               status: "completed",
+              incomplete_details: null,
+              error: null,
               output: [{
+                type: "reasoning",
+                id: "reasoning-fixture",
+                summary: [],
+                encrypted_content: "fixture-reasoning".repeat(200),
+              }, {
                 type: "message",
                 role: "assistant",
                 content: [
                   { type: "output_text", text: content },
+                  {
+                    type: "refusal",
+                    refusal: "",
+                    detail: "fixture refusal metadata",
+                  },
                   { type: "unknown_part", text: "private-marker" },
                 ],
               }],
@@ -116,6 +143,16 @@ describe("prompt-loop-empty-reply", () => {
           const terminal = provider === "codex-streamed"
             ? { ...payload, output: [] }
             : payload;
+          const {
+            instructions: _instructions,
+            tools: _tools,
+            ...retainedPayload
+          } = payload;
+          const {
+            instructions: _terminalInstructions,
+            tools: _terminalTools,
+            ...retainedTerminal
+          } = terminal;
           const events = [
             ...streamedItems.map((item) => ({
               type: "response.output_item.done",
@@ -205,7 +242,15 @@ describe("prompt-loop-empty-reply", () => {
             });
             const raw = JSON.parse(artifact.diagnostic.responseBodyExcerpt);
             expect(raw).toEqual(
-              isCodex ? { terminal, streamedItems } : payload,
+              isCodex
+                ? { terminal: retainedTerminal, streamedItems }
+                : retainedPayload,
+            );
+            expect(artifact.diagnostic.responseBodyExcerpt).not.toContain(
+              "fixture instructions",
+            );
+            expect(artifact.diagnostic.responseBodyExcerpt).not.toContain(
+              "echoed tool",
             );
             expect(artifact.diagnostic.responseBodyTruncated).toBe(false);
             expect(artifact.diagnostic.responseBodyBytes).toBe(

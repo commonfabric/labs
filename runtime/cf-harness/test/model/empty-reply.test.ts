@@ -5,14 +5,22 @@ import { emptyReplyDiagnostic } from "../../src/model/empty-reply.ts";
 
 describe("empty-reply", () => {
   it("bounds the raw payload and records its original UTF-8 byte count", () => {
-    const payload = { content: "🍩".repeat(3_000) };
+    const payload = {
+      output: [{ type: "reasoning", encrypted_content: "🍩".repeat(20_000) }],
+    };
     const serialized = JSON.stringify(payload);
     const diagnostic = emptyReplyDiagnostic(
       { role: "assistant", content: "" },
       "responses",
       payload,
     );
-    expect(diagnostic?.responseBodyExcerpt).toBe(serialized.slice(0, 2_048));
+    const excerpt = diagnostic?.responseBodyExcerpt ?? "";
+    expect(new TextEncoder().encode(excerpt).length).toBeLessThanOrEqual(
+      65_536,
+    );
+    expect(new TextEncoder().encode(excerpt).length).toBeGreaterThan(65_532);
+    expect(serialized.startsWith(excerpt)).toBe(true);
+    expect(excerpt).not.toContain("�");
     expect(diagnostic?.responseBodyTruncated).toBe(true);
     expect(diagnostic?.responseBodyBytes).toBe(
       new TextEncoder().encode(serialized).length,
