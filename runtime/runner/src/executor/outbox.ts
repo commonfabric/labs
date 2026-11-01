@@ -629,9 +629,13 @@ export class SpaceOutbox {
         deleteExecutionOutboxRow(this.#engine, row.rowId);
       } catch (error) {
         // The owner's `refused` is the engine's `ProtocolError`, answered
-        // over the route; every other refusal of the owner's is transient.
+        // over the route, and an append too large to send is refused before
+        // it is sent and never fits later; every other refusal of the
+        // owner's is transient.
         if (
-          error instanceof ProtocolError || isServedRefusal(error, "refused")
+          error instanceof ProtocolError ||
+          isServedRefusal(error, "refused") ||
+          isServedRefusal(error, "payload-too-large")
         ) {
           // LT4: a deterministic admission rejection does not retry. The
           // source-side failure notice writes BEFORE the row retires

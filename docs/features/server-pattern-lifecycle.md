@@ -240,13 +240,16 @@ durable event sidecar, including a read after subscription to recover already
 completed replays. The event goes to the process's own memory server, except
 that a stream in a space other than the verb's, on a toolshed routing its
 crossings (`SERVER_EXECUTION_OWNER_ROUTING`), is appended to through that
-space's owner on a routed session, which the observer then watches for the
-stream's changes. A separate serving wave reads the computed registry and
-records `registration.status: "handled"`; its receipt is checked after the wave
-commits. The process needs delegation authority, without a READ or WRITE grant
-in the space: private reads and receipt writes use the serving runtime, and the
-out-of-wave observer reads only the prepared event's sidecar through the trusted
-memory service. Waiting outside the wave lets the event's consequences commit.
+space's owner on a routed session, and the observer watches the stream's
+document on that session for its changes; the readback of the outcome, on the
+subscription and on each wake, stays on the process's own trusted memory
+service, as does the recovery read. A separate serving wave reads the computed
+registry and records `registration.status: "handled"`; its receipt is checked
+after the wave commits. The process needs delegation authority, without a READ
+or WRITE grant in the space: private reads and receipt writes use the serving
+runtime, and the out-of-wave observer reads only the prepared event's sidecar
+through the trusted memory service. Waiting outside the wave lets the event's
+consequences commit.
 This permits a default pattern to derive its registry from panels; the route
 never writes that export. The event and receipt make a lost response retryable
 without another panel. `register: false` returns `skipped`. If registration

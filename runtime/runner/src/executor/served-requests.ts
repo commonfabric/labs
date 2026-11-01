@@ -85,7 +85,9 @@ const readAppendEntry = (
   if (typeof targetStream !== "string") return { invalid: "targetStream" };
   if (typeof eventId !== "string") return { invalid: "eventId" };
   if (typeof capabilityRef !== "string") return { invalid: "capabilityRef" };
-  if (typeof localSeq !== "number") return { invalid: "localSeq" };
+  if (typeof localSeq !== "number" || !Number.isSafeInteger(localSeq)) {
+    return { invalid: "localSeq" };
+  }
   if (
     targetStreamLink !== undefined && !isFabricPlainObject(targetStreamLink)
   ) {

@@ -111,14 +111,23 @@ A session request, beside `pattern.lifecycle`
   The response is the seq the batch committed at.
 - **`acl`**: one served access-list change, as the list of changes the worker
   port's `ServedAclChangeData` carries. The owner rebuilds the change function
-  from the list and runs `commitServedAclChange`.
+  from the list and runs `commitServedAclChange`, so the admission is the
+  owner's, and a refusal there fails that run alone, as the local commit's
+  refusal does (serving-loop.md §3d). Only a sealed run's change is sent: a
+  withdrawn run and a client's speculative echo commit nothing, and a change
+  the seal's check refused never reaches the owner.
 
-The answer is `{ ok }` with the kind's result, or `{ refusal: { code, message }
-}`:
+The handler answers `{ ok }` with the kind's result, or `{ refusal: { code,
+message } }`. On the wire the server sends `ok` as the response's `ok`, and a
+refusal as the protocol's standard response `error`, named
+`ServedRequestRefusal` with the refusal's `code` and `message`
+(04-protocol.md §4.3.12), which the client raises as that error:
 
 - `refused`: a deterministic admission refusal, the engine's `ProtocolError`.
   The outbox takes its LT4 arm, and the wave takes the foreign-failure arm.
-- `unavailable`: the owner has no serving loop.
+- `unavailable`: the owner has no handler installed, since no serving loop
+  runs there, or its handler does not serve the kind, as a staged kind's
+  handler does not before its stage lands.
 - `internal`: anything else.
 
 A transport failure produces no answer at all. The caller treats it, and
@@ -174,9 +183,15 @@ request to the owner, and its failure rule covers the new failure:
   loop already keeps classes it as `unknown`, which retries and does not harden
   into a drop at the first attempt.
 - A reply lost after the owner applied the batch leaves the same state a crash
-  between the halves leaves today: the replay converges because provisioning is
-  deterministic and its allocation record makes re-provisioning a no-op
-  (`protocol.md` §2b, "Replay safety").
+  between the halves leaves today, and the replay converges the same way: the
+  replay is a fresh run of the event, not a resend of the batch. The run reads
+  the state the applied batch left, and every foreign write it stages is
+  derived from that read, with its precondition taken from it, so a write the
+  owner already applied is either absent from the new batch or asserted
+  against the state it produced, and provisioning finds its allocation record
+  and is a no-op (`protocol.md` §2b, "Replay safety"). A write the replay
+  still cannot land is a foreign failure like any other, and falls to the
+  error-is-the-consequence rule.
 
 The wave's commit-step reads of a foreign space (heads, intrusions, stale reads)
 stay on the shared store through `engineForSpace`. SQLite's `data_version`
