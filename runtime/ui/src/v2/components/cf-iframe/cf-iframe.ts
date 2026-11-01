@@ -82,7 +82,20 @@ export class CFIframe extends BaseElement {
 
   private _contextBridge: FabricBridge = { resources: {} };
   private _contextReady = true;
-  private _contextGeneration = 0;
+
+  /**
+   * The context setup still under way, if any. A newer setup aborts it, and
+   * so does a disconnection, which leaves it here, aborted, to start over on
+   * connecting again.
+   */
+  #contextSetup: AbortController | undefined;
+
+  /**
+   * Whether the element was disconnected and has not connected since. An
+   * update still runs then, and a setup it prepares waits, aborted, for the
+   * element to connect again.
+   */
+  #detached = false;
 
   /**
    * Where the host serves the sandbox's outer frame, as the runtime it
@@ -121,6 +134,24 @@ export class CFIframe extends BaseElement {
     const previous = this.#presentation;
     this.#presentation = value;
     this.requestUpdate("presentation", previous);
+  }
+
+  /** Starts over a context setup that a disconnection aborted or deferred. */
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#detached = false;
+    if (this.#contextSetup?.signal.aborted) this.prepareContextBridge();
+  }
+
+  /**
+   * Aborts a context setup under way, whose wait for a SQLite database keeps
+   * that database's producer demanded, and defers any setup an update
+   * prepares until the element connects again.
+   */
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#detached = true;
+    this.#contextSetup?.abort();
   }
 
   static override styles = [
@@ -268,7 +299,8 @@ export class CFIframe extends BaseElement {
   }
 
   private prepareContextBridge() {
-    const generation = ++this._contextGeneration;
+    this.#contextSetup?.abort();
+    this.#contextSetup = undefined;
     if (this._errorDetails?.source === "cf-iframe context") {
       this._errorDetails = null;
     }
@@ -280,18 +312,27 @@ export class CFIframe extends BaseElement {
       this._contextReady = true;
     } else {
       const context = this.context;
+      const setup = new AbortController();
+      this.#contextSetup = setup;
       this._contextBridge = { resources: {} };
       this._contextReady = false;
+      if (this.#detached) {
+        setup.abort();
+        return;
+      }
       void resolveCellContextBridge(
         context,
         this.resourceKinds ?? {},
+        setup.signal,
       ).then((bridge) => {
-        if (generation !== this._contextGeneration) return;
+        if (setup.signal.aborted) return;
+        this.#contextSetup = undefined;
         this._contextBridge = bridge;
         this._contextReady = true;
         this.requestUpdate();
       }).catch((error) => {
-        if (generation !== this._contextGeneration) return;
+        if (setup.signal.aborted) return;
+        this.#contextSetup = undefined;
         const description = error instanceof Error
           ? error.message
           : String(error);

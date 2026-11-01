@@ -15,6 +15,7 @@
 // so its setup transaction commits directly, outside the wave, and its
 // receipt is the store's verdict.
 
+import type { JSONSchema } from "@commonfabric/api";
 import {
   streamEntriesDocId,
   type StreamEventsDocValue,
@@ -303,13 +304,11 @@ export async function servedInstantiatePiece(
   const runtime = pieces.runtime;
   const space = pieces.getSpace();
   const requestKey = request.requestKey ?? crypto.randomUUID();
-  const requestRecord = runtime.getCell<ServedInstantiateReceipt | undefined>(
+  const requestRecord = receiptRecord(
+    runtime,
     space,
-    {
-      purpose: "piece-instantiation-receipt",
-      principal: request.actingUser,
-      requestKey,
-    },
+    requestKey,
+    request.actingUser,
   );
   await requestRecord.sync();
   const completed = requestRecord.get();
@@ -415,17 +414,60 @@ export interface ServedRegistrationOutcome {
   terminal?: true;
 }
 
-function registrationRecord(
+/**
+ * The shape a creation receipt is retained in. Read through it, the record
+ * hands back plain data: read with no schema, a nested object such as
+ * `pattern` comes back as a proxy over the store, which a receipt cannot be,
+ * since it leaves the runtime as an HTTP body and, from a serving worker, as
+ * a structured clone on the serving port.
+ */
+const receiptSchema = {
+  type: "object",
+  properties: {
+    requestKey: { type: "string" },
+    registration: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["skipped", "pending", "handled", "failed"],
+        },
+        error: { type: "string" },
+        attempt: { type: "number" },
+        terminal: { type: "boolean" },
+      },
+      required: ["status"],
+    },
+    pieceId: { type: "string" },
+    pattern: {
+      type: "object",
+      properties: {
+        identity: { type: "string" },
+        symbol: { type: "string" },
+      },
+      required: ["identity", "symbol"],
+    },
+    slug: { type: "string" },
+  },
+  required: ["requestKey", "registration", "pieceId", "pattern"],
+} as const satisfies JSONSchema;
+
+/** The record retaining the receipt of `actingUser`'s request `requestKey`. */
+function receiptRecord(
   runtime: Runtime,
   space: MemorySpace,
-  receipt: ServedInstantiateReceipt,
+  requestKey: string,
   actingUser: string,
 ): Cell<ServedInstantiateReceipt | undefined> {
-  return runtime.getCell<ServedInstantiateReceipt | undefined>(space, {
-    purpose: "piece-instantiation-receipt",
-    principal: actingUser,
-    requestKey: receipt.requestKey,
-  });
+  return runtime.getCell<ServedInstantiateReceipt | undefined>(
+    space,
+    {
+      purpose: "piece-instantiation-receipt",
+      principal: actingUser,
+      requestKey,
+    },
+    receiptSchema,
+  );
 }
 
 /** Select one durable attempt and resolve its native event target inside a serving wave. */
@@ -439,10 +481,10 @@ export async function prepareServedRegistration(
     receipt.registration.status === "handled"
   ) return { receipt };
   const runtime = pieces.runtime;
-  const requestRecord = registrationRecord(
+  const requestRecord = receiptRecord(
     runtime,
     pieces.getSpace(),
-    receipt,
+    receipt.requestKey,
     actingUser,
   );
   await requestRecord.sync();
@@ -543,10 +585,10 @@ export async function finishServedRegistration(
     receipt.registration.status === "handled"
   ) return receipt;
   const runtime = pieces.runtime;
-  const requestRecord = registrationRecord(
+  const requestRecord = receiptRecord(
     runtime,
     pieces.getSpace(),
-    receipt,
+    receipt.requestKey,
     actingUser,
   );
   const attempt = receipt.registration.attempt ?? 0;
@@ -622,8 +664,12 @@ export async function confirmServedRegistration(
   receipt: ServedInstantiateReceipt,
   actingUser: string,
 ): Promise<void> {
-  const retained = await registrationRecord(runtime, space, receipt, actingUser)
-    .pull();
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
   if (retained === undefined || retained.pieceId !== receipt.pieceId) {
     throw new Error("Registration receipt was not retained");
   }
@@ -902,8 +948,12 @@ export async function confirmServedInstantiate(
   receipt: ServedInstantiateReceipt,
   actingUser: string,
 ): Promise<void> {
-  const retained = await registrationRecord(runtime, space, receipt, actingUser)
-    .pull();
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
   const expectedPiece = runtime.getCell(space, {
     purpose: "piece-instantiation",
     principal: actingUser,

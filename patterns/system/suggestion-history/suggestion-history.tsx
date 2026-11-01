@@ -24,6 +24,12 @@ export type Output = {
   [UI]: VNode;
 };
 
+function isHistoryEntry(entry: unknown): entry is SuggestionHistoryEntry {
+  return typeof entry === "object" && entry !== null &&
+    "result" in entry && entry.result != null &&
+    "messages" in entry && Array.isArray(entry.messages);
+}
+
 function extractText(content: any): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -61,7 +67,12 @@ const SuggestionHistory = pattern<Input, Output>(() => {
   const { result: entries } = wish<SuggestionHistoryEntry[] | Default<[]>>({
     query: "#suggestions",
   });
-  const allEntries = computed(() => entries ?? []);
+  // `#suggestions` is an ordinary hashtag, so what the wish finds is a piece
+  // tagged with it, not a history list. Only entries shaped as history are
+  // read; anything else reads as no entries.
+  const allEntries = computed(() =>
+    Array.isArray(entries) ? entries.filter(isHistoryEntry) : []
+  );
 
   return {
     [NAME]: "Suggestion History",
