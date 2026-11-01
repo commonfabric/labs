@@ -60,6 +60,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   taken from the code's own module, not the graph's data, so a rule that guards
   on the identity rests on it. It needs a narrow specs ruling first, and it
   parks a per-item threshold drawn from a policy key.
+- [A piece's creator owns the fields an update adds](piece-creator-owns-update-added-fields.md)
+  records, once and by the runtime alone, the principal a piece was created
+  for, and binds a placeholder-owner field that a source update installs to
+  that record instead of to its first writer. It carries the ruling text for
+  the specs pull request, scopes the attribution mark to the new piece's own
+  documents as the rapids fix, and says how pieces created before the record
+  gain one.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's

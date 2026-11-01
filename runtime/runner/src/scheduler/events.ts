@@ -918,7 +918,14 @@ function chainOnCommit(
  * enclosing it derives. A client under server execution runs the handler only
  * as its speculative echo, which the served run replaces, so it starts the
  * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server.
+ * read, to the server. A serving runtime also has the piece's origin followed
+ * before its first start of it (`EnsurePieceOptions.originFollowed`, which
+ * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
+ * opens a piece it serves, so the start is where the piece's source is
+ * brought up to date; the pieces its inputs come from are followed the same
+ * way before they start. A start a follow is still owed, the piece's own or
+ * an input source's, is declined, and the served event it was for is
+ * deferred to a later wave as any start that could not happen yet defers it.
  */
 function startEventPiece(
   runtime: Runtime,
@@ -927,6 +934,7 @@ function startEventPiece(
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
+    originFollowed: runtime.pieceOriginFollowed,
   });
 }
 
@@ -1185,7 +1193,21 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           const reason = `Event dropped: no handler registered for ` +
             `${args.eventLink.id} and its piece ${pieceState}`;
           if (queuedEvent.served !== undefined) {
-            dropQueuedEvent(state, queuedEvent, reason, "deferred");
+            dropQueuedEvent(
+              state,
+              queuedEvent,
+              reason,
+              "deferred",
+              pieceStartReason === "origin-pending"
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "origin-pending",
+                    message: reason,
+                  },
+                }
+                : {},
+            );
             // A deferral carries the drain's arrival-order barrier
             // (events.md §2; review-6459 F1's sibling arm), exactly as
             // the handler-not-run withdrawal and the facade's load-park
