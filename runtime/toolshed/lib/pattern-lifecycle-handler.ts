@@ -10,7 +10,10 @@ import {
   type LifecycleDeps,
   processLifecycleCall,
 } from "@/lib/pattern-lifecycle.ts";
-import { serverExecutionHost } from "@/lib/server-execution.ts";
+import {
+  serverExecutionHost,
+  serverExecutionRoute,
+} from "@/lib/server-execution.ts";
 import { hostsSpaceInStore } from "@/lib/space-authority.ts";
 import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
@@ -61,6 +64,7 @@ const deps = (requestSpan: Span): LifecycleDeps => ({
       (await memoryServer.readDocument(space, aclDocId(space)))?.value,
   },
   host: serverExecutionHost,
+  route: serverExecutionRoute,
   append: (entry) => memoryServer.commitDelegatedAppend(entry),
   readDocument: (space, id) => memoryServer.readDocument(space, id),
   watchAdmittedCommits: (watcher) => memoryServer.watchAdmittedCommits(watcher),

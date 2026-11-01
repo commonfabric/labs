@@ -32,6 +32,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   reads the store on its own SQLite connections, sends wave commits and
   everything else it needs from the memory server over a `MessagePort`, and
   the request thread stops waiting behind waves.
+- [Serving each space from the process that owns it](serving-loop-owner-routing.md)
+  routes every serving-loop action on another space (event appends, foreign
+  wave batches, access-list changes, space creation, and reads) to the
+  process that space's memory socket reaches, so that a deployment with several
+  toolsheds over one store serves each space from one process. It then moves
+  the execution lease into memory, with a worker heartbeat as its only timer.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.

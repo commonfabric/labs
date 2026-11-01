@@ -1002,6 +1002,181 @@ describe("cf-iframe cell bridge", () => {
       ).resolves.toEqual({ rows: [] });
       expect(queried).toEqual(["of:database"]);
     });
+
+    describe("that its producer never writes", () => {
+      // Nothing answers the wait's read of the database, so only an abort, or
+      // the failure of the bridge as a whole, ends the wait.
+
+      /**
+       * A context holding the source `database` and the field `other`, whose
+       * resolution fails with `otherFailure` when one is given. `held` is
+       * what is subscribed on the source; `waiting` resolves once the wait
+       * has asked for the database, and `released` once nothing is held.
+       */
+      const neverWritten = (otherFailure?: Error) => {
+        const held = new Set<CellHandle<unknown>>();
+        const waiting = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
+        const runtime = runtimeStub({
+          [$conn]: () => ({
+            request: (request: { type: RequestType; cell: CellRef }) => {
+              const [name] = request.cell.path;
+              if (request.type === RequestType.CellPull) {
+                if (name !== "database") {
+                  return Promise.resolve({ value: undefined });
+                }
+                waiting.resolve();
+                return new Promise(() => {});
+              }
+              if (request.type === RequestType.CellResolveAsCell) {
+                if (name === "other" && otherFailure) {
+                  return Promise.reject(otherFailure);
+                }
+                return Promise.resolve({
+                  cell: name === undefined
+                    ? {
+                      ...request.cell,
+                      id: "of:resolved-context",
+                      schema: {
+                        type: "object",
+                        properties: {
+                          database: { type: "object", asCell: ["sqlite"] },
+                          other: { type: "string" },
+                        },
+                      },
+                    }
+                    : { ...request.cell, id: `of:${name}`, path: [] },
+                });
+              }
+              return Promise.resolve({});
+            },
+            subscribe: (cell: CellHandle<unknown>) => {
+              held.add(cell);
+              return Promise.resolve();
+            },
+            unsubscribe: (cell: CellHandle<unknown>) => {
+              held.delete(cell);
+              if (held.size === 0) released.resolve();
+              return Promise.resolve();
+            },
+            peersOf: () => [],
+            signal: { aborted: false },
+          }),
+        });
+        return {
+          context: new CellHandle<Record<string, unknown>>(runtime, {
+            ...ref,
+            schema: true,
+          }),
+          held,
+          waiting: waiting.promise,
+          released: released.promise,
+        };
+      };
+
+      it("rejects with the abort's reason, and holds no subscription on the source, once its wait is aborted", async () => {
+        const { context, held, waiting } = neverWritten();
+        const setup = new AbortController();
+        const reason = new Error("setup abandoned");
+
+        const resolving = resolveCellContextBridge(
+          context,
+          { database: "sqlite" },
+          setup.signal,
+        );
+        await waiting;
+        expect(held.size).toBe(2);
+        setup.abort(reason);
+
+        await expect(resolving).rejects.toBe(reason);
+        expect(held.size).toBe(0);
+      });
+
+      it("rejects with the error another field's resolution fails with, and holds no subscription on the source", async () => {
+        const { context, held, released } = neverWritten(
+          new Error("other unresolved"),
+        );
+
+        await expect(
+          resolveCellContextBridge(context, { database: "sqlite" }),
+        ).rejects.toThrow("other unresolved");
+        await released;
+
+        expect(held.size).toBe(0);
+      });
+    });
+  });
+
+  describe("an aborted signal", () => {
+    /**
+     * A context holding one plain field, `count`, whose resolution fails with
+     * `countFailure` when one is given, and how many requests resolving the
+     * context has sent.
+     */
+    const plainContext = (countFailure?: Error) => {
+      let requests = 0;
+      const runtime = runtimeStub({
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            requests++;
+            if (
+              countFailure && request.type === RequestType.CellResolveAsCell &&
+              request.cell.path[0] === "count"
+            ) {
+              return Promise.reject(countFailure);
+            }
+            return Promise.resolve(
+              request.type === RequestType.CellResolveAsCell
+                ? { cell: { ...request.cell, id: "of:resolved-context" } }
+                : { value: undefined },
+            );
+          },
+          subscribe: () => Promise.resolve(),
+          unsubscribe: () => Promise.resolve(),
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      });
+      return {
+        context: new CellHandle<Record<string, unknown>>(runtime, {
+          ...ref,
+          schema: { type: "object", properties: { count: { type: "number" } } },
+        }),
+        requests: () => requests,
+      };
+    };
+
+    it("rejects with its reason, and sends nothing, when it aborted before the call", async () => {
+      const { context, requests } = plainContext();
+      const reason = new Error("setup abandoned");
+
+      await expect(
+        resolveCellContextBridge(context, {}, AbortSignal.abort(reason)),
+      ).rejects.toBe(reason);
+      expect(requests()).toBe(0);
+    });
+
+    it("rejects with its reason when it aborts before the bridge resolves, with no SQLite wait under way", async () => {
+      const { context } = plainContext();
+      const setup = new AbortController();
+      const reason = new Error("setup abandoned");
+
+      const resolving = resolveCellContextBridge(context, {}, setup.signal);
+      setup.abort(reason);
+
+      await expect(resolving).rejects.toBe(reason);
+    });
+
+    it("rejects with its reason, not the failure of a resource that fails after it aborts", async () => {
+      const { context } = plainContext(new Error("count unresolved"));
+      const setup = new AbortController();
+      const reason = new Error("setup abandoned");
+
+      const resolving = resolveCellContextBridge(context, {}, setup.signal);
+      setup.abort(reason);
+
+      await expect(resolving).rejects.toBe(reason);
+    });
   });
 
   it("ignores inherited resource-kind hints", async () => {

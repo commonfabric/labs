@@ -1418,6 +1418,16 @@ export type MemoryProtocolFlags = {
   patternLifecycle?: boolean;
 
   /**
+   * Server capability: the server runs `served` requests (04-protocol.md
+   * §4.3.12), the crossings one serving process sends the process that owns
+   * the target space. Advertised exactly while the deployment has a served
+   * request handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and
+   * a sender then treats the owner as unavailable.
+   */
+  servedRequests?: boolean;
+
+  /**
    * Server capability: the server administers invitations through
    * `space.invite` requests (04-protocol.md §4.3.11). Advertised exactly
    * while the server knows the public host its invitation links name, since
@@ -1483,6 +1493,7 @@ export type WireMemoryProtocolFlags = {
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
   patternLifecycle?: boolean;
+  servedRequests?: boolean;
   spaceInvites?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
@@ -2337,6 +2348,40 @@ export type PatternLifecycleRequest = {
 };
 
 /**
+ * Most UTF-8 bytes a `served` message may take on a direct connection, the
+ * bound `pattern.lifecycle` has. A routed connection bounds every request
+ * more tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
+ * smaller bound before sending it.
+ */
+export const SERVED_REQUEST_MAX_BYTES = PATTERN_LIFECYCLE_MAX_BYTES;
+
+/**
+ * What a `served` request carries (04-protocol.md §4.3.12): one delegated
+ * event append, one foreign wave batch, or one served access-list change.
+ */
+export type ServedRequestKind = "append" | "commit" | "acl";
+
+/**
+ * A request from a serving process to the process that owns the session's
+ * space, to admit one crossing into that space on the sender's behalf
+ * (04-protocol.md §4.3.12). Admitted only on a session whose principal is in
+ * the server's delegating class.
+ */
+export type ServedRequest = {
+  type: "served";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  kind: ServedRequestKind;
+
+  /**
+   * The crossing, in the kind's shape, which the memory server hands to the
+   * deployment's served request handler without reading it.
+   */
+  body: FabricPlainObject;
+};
+
+/**
  * A request to administer the session space's invitations, as the session's
  * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
  * redeeming holds no grant on the space yet, so it has no session to send on.
@@ -2605,6 +2650,7 @@ export type ClientMessage =
   | SessionCloseRequest
   | EventAttentionResolveRequest
   | PatternLifecycleRequest
+  | ServedRequest
   | SpaceInviteRequest
   | PresenceJoinRequest
   | PresencePublishRequest
@@ -2860,6 +2906,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
+  servedRequests: false,
   spaceInvites: false,
   routedAuthV1: false,
   routedCompressionV1: false,
@@ -3113,6 +3160,11 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const servedRequests = value.servedRequests;
+  if (servedRequests !== undefined && typeof servedRequests !== "boolean") {
+    return null;
+  }
+
   const spaceInvites = value.spaceInvites;
   if (spaceInvites !== undefined && typeof spaceInvites !== "boolean") {
     return null;
@@ -3198,6 +3250,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client then sends no
     // `pattern.lifecycle` or `space.invite`.
     patternLifecycle: patternLifecycle === true,
+    // Absent (an older server) parses to false: a serving process then
+    // treats the owner as unavailable.
+    servedRequests: servedRequests === true,
     spaceInvites: spaceInvites === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
@@ -3256,6 +3311,7 @@ export const wireMemoryProtocolFlags = (
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
   patternLifecycle: flags.patternLifecycle,
+  servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,

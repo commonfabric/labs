@@ -589,10 +589,19 @@ admission
 validates that grant (§2) — delegation, never impersonation — and
 stamps `firedAt` from the carried actor, so the event RUNS AS THE
 SESSION IT ORIGINATED FROM even across the space boundary. The
-target's SpaceServer processes it like any event.
+target's SpaceServer processes it like any event. The append
+reaches the target's admission on the host's own memory server, or,
+with the host given a route to each space's owner
+(`SERVER_EXECUTION_OWNER_ROUTING`,
+[owner routing](../../plans/serving-loop-owner-routing.md)), as a
+`served` `append` on the host's routed session to that owner
+(memory-v2 04-protocol.md §4.3.12), admitted there from the
+delegating-class session under the same carried actor: "co-hosted"
+then means one deployment rather than one process.
 Rejection at the target (LT4, RULED 2026-08-03): the outbox's
 at-least-once retry covers TRANSPORT failures only; a
-DETERMINISTIC admission rejection — an invalid capability grant —
+DETERMINISTIC admission rejection — an invalid capability grant,
+or the owner's `refused` answer to the routed append —
 is not retried. It surfaces in the SOURCE space per events.md §5's
 error-is-the-consequence shape: a failure notice on the source
 event's stream entry, written by the source SpaceServer in a later

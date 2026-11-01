@@ -129,6 +129,13 @@ export type ServingWorkerInit = {
 
   /** The serving runtimes' experimental options. */
   readonly experimental: ExperimentalOptions | undefined;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`); absent, the
+   * host crosses through the process's own server.
+   */
+  readonly route: string | undefined;
 };
 
 /** What the worker asks of the thread that holds the memory server. */

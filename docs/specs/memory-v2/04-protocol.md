@@ -104,6 +104,7 @@ If the server accepts the protocol, it returns:
     "admissionNotice": true,
     "sessionReportV1": true,
     "patternLifecycle": true,
+    "servedRequests": true,
     "spaceInvites": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
@@ -387,6 +388,14 @@ while it runs the serving loop. It defaults to `false` when absent: a client
 then sends no `pattern.lifecycle` request, and sends the verb some other way
 or not at all. Only the server advertises it, and a client's `hello` leaves it
 out.
+
+`servedRequests` advertises that the server takes `served` requests (section
+4.3.12), the crossings another process of its deployment sends it as the owner
+of their target space. It is not build-inherent: a server advertises it
+exactly while its host has installed a served-request handler, which toolshed
+does while it runs the serving loop. It defaults to `false` when absent: a
+client then sends no `served` request and keeps the crossing for a later
+attempt. Only the server advertises it, and a client's `hello` leaves it out.
 
 `spaceInvites` advertises that the server administers a space's invitations
 through `space.invite` requests (section 4.3.11). It is not build-inherent: a
@@ -755,6 +764,7 @@ interface HelloMessage {
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
     patternLifecycle?: boolean;
+    servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
     // Specified, not yet built (INV-16).
@@ -776,6 +786,7 @@ interface RequestMessage {
     | "session.close"
     | "event.attention.resolve"
     | "pattern.lifecycle"
+    | "served"
     | "space.invite"
     | "presence.join"
     | "presence.publish"
@@ -1850,6 +1861,80 @@ Semantics:
   every request with `invite-service-unsupported`, and a client raises the same
   code without sending when the server does not advertise `spaceInvites`
 
+### 4.3.12 `served` — Deliver a Crossing to a Space's Owner
+
+`served` carries one crossing from the serving host of one space into the
+session's space, for the process that owns that space to admit: the host's
+side of
+[owner routing](../../plans/serving-loop-owner-routing.md), where a crossing
+was a call on the host's own co-hosted memory server. A server advertises it
+with the `servedRequests` capability flag. The session is the host's routed
+session to the owner, open as the deployment's service identity.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface ServedRequest {
+  type: "served";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  kind: "append" | "commit" | "acl";
+  /** The crossing, in the kind's shape, which the server hands on unread. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of an `append`: the admitted entry's position, or that the target's
+ * `eventId` horizon already held it. */
+interface ServedAppendResult {
+  seq?: number;
+  deduped: boolean;
+}
+```
+
+The kinds are the serving loop's three crossings. An `append` is one
+delegated event append (`serving-loop.md` §5): its body is the entry the
+owner's `commitDelegatedAppend` takes, without the target space, which the
+session names, and without the session, which is the one the request came on.
+A `commit` is a foreign wave batch and an `acl` an access-list change
+(`protocol.md` §2b); a handler that serves neither yet refuses them as
+unavailable.
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`SERVED_REQUEST_MAX_BYTES`, the `pattern.lifecycle` bound) with
+  `payload-too-large`. A client refuses before sending a request whose
+  encoding takes more than that, or more than its connection takes in one
+  request
+- the session's principal must be of the access list's delegating class
+  (`acl.delegatingDids`, the deployment's service identity); any other
+  session is refused with `forbidden`. The crossing then runs under the actor
+  its body carries, as the delegated carriage does on the host's own server
+  (`protocol.md` §2): the deployment's processes trust each other's carried
+  actor claims, and admissibility comes from the validated grant
+- the server hands the kind, the `body` unread, the space, the principal and
+  the session id to the handler its host installed; a server with no handler
+  refuses with `unavailable`, and a handler that throws is refused with
+  `internal`. The handler answers with the kind's result, or refuses with
+  `refused` for a crossing the owner's admission rejects deterministically,
+  which the sender does not send again, or with `unavailable` for a kind it
+  does not serve, which the sender keeps and sends again
+- the server finishes handling the frame once the crossing has started, and
+  sends the response when it settles. Frames after it for the same space are
+  not held behind it (section 4.11.2)
+- a refusal is an error named `ServedRequestRefusal` whose `code` names the
+  reason (section 4.7)
+- a client raises `served-unsupported` without sending when the server does
+  not advertise `servedRequests`. A connection lost before the response
+  leaves the crossing's outcome unknown, and the sender's own rule says what
+  it does then: the outbox keeps its row and sends it again, and the owner's
+  `eventId` horizon dedupes the repeat
+
 ## 4.4 Selectors
 
 Selectors still describe sets of entities or schema-guided traversals. The
@@ -2348,10 +2433,17 @@ interface SpaceInviteRefusal extends Error {
   /** The invitation service's refusal code (section 4.3.11). */
   code: string;
 }
+
+interface ServedRequestRefusal extends Error {
+  name: "ServedRequestRefusal";
+  /** Why the crossing was refused (section 4.3.12). */
+  code: string;
+}
 ```
 
-A `PatternLifecycleRefusal` and a `SpaceInviteRefusal` carry `code` in the
-response's `error`, and a client branches on it.
+A `PatternLifecycleRefusal`, a `SpaceInviteRefusal` and a
+`ServedRequestRefusal` carry `code` in the response's `error`, and a client
+branches on it.
 
 ## 4.8 Client Library API
 
