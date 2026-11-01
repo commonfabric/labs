@@ -1,7 +1,9 @@
 # View-scoped client replication and speculative execution
 
-Status: experimental core implemented behind an off-by-default flag; wider
-rollout remains gated on workload correctness and performance. The
+Status: experimental core implemented, and on by default for a web client under
+server execution, without effect where server execution is off. The default is
+on ahead of Stage 4's per-view fallback and gate, which remain open; rollout to
+other client classes remains gated on workload correctness and performance. The
 implementation includes session-owned view interests, observed read selection,
 shared component schemas, and guarded stored-graph registration. Successful
 partial graph bindings retain their scheduler state across coverage updates and
