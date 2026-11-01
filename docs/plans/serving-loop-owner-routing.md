@@ -221,44 +221,61 @@ moves the lease out of their admission.
 
 ## Reads that name an instance
 
-`protocol.md` §2's read row admits a read naming an `entity_scope_key` from a
-live lease holder on the co-hosted memory server. It checks the full DR1 holder
-minted by that process (`#denyExplicitInstanceReads` and
-`#liveCoHostedLeaseSpaceFor` in `runtime/memory/v2/server.ts`). A routed read
-session reaches the owner from a sibling process, whose holder the owner never
-minted and whose lease it cannot see. So the row changes:
+`protocol.md` §2's read row admitted a read naming an `entity_scope_key` from a
+live lease holder on the co-hosted memory server, checking the full DR1 holder
+minted by that process. A routed read session reaches the owner from a sibling
+process, whose holder the owner never minted and whose lease it cannot see. So
+the row, as R3 restated it (`#denyExplicitInstanceReads` and
+`#isServingSession` in `runtime/memory/v2/server.ts`):
 
-- **Who may name an instance:** a session authenticated as the deployment's
-  service identity, the delegating class, whether or not it holds a lease
+- **Who may name an instance:** the space's own serving session on this server,
+  which is a session from the owner's process whose principal holds the space's
+  live lease, and a session authenticated as the deployment's service identity,
+  the delegating class, from any process, whether or not it holds a lease
   anywhere.
+- **Which process a session is from:** the connection says so.
+  `Server.connect()` takes `inProcess`, which the in-process transport
+  (`MemoryClient.loopback`) and the worker's port set and a socket never does
+  (`Connection.inProcess`). A sibling process's session carries the same
+  service principal over a socket, so the owner tells its own serving session
+  from a routed one by the connection, not by the holder.
 - **Unchanged:** the grant-scoped read rule (a foreign scoped instance is read
   under its actor's own READ grant on the space), the refusal of an unnamed
   scoped read from a serving session, and the wire collapse guard for everyone
   else.
-- **What goes:** the per-process sharpening. It kept a second process sharing
-  the service DID from passing on this process's lease rows. A deployment
-  whose processes hold one key gives that second process the same trust, and
-  this plan is what makes it a peer.
+- **Gone:** the per-process sharpening as a rule about lease rows. It kept a
+  second process sharing the service DID from passing on this process's lease
+  rows. A deployment whose processes hold one key gives that second process the
+  same trust, and this plan is what makes it a peer; the holder equality now
+  decides only whether a session from this process is the space's serving
+  session.
   [`verification-coverage.md`](../specs/server-side-execution/verification-coverage.md)
-  records a Phase-1 acceptance that waits on that sharpening; the stage that
-  makes the change records its retirement there.
-- **What stays:** the session's keyed delivery (`leaseHolderReads`, and the
+  records the Phase-1 acceptance that waited on that sharpening as closed.
+- **Kept:** the session's keyed delivery (`leaseHolderReads`, and the
   `scopeKey` field it puts on the wire). It is armed by the first admitted
-  named read, and from then on it is a property of the session's principal for
-  the session's life.
-- **Also goes:** the lapse machinery that hangs from the lease:
-  `leaseHolderReadsLapsed`, its re-arm when the lease is lost, and
-  `noteLeaseReacquired` with its port notice.
-- **The unnamed-scope guard:** `#denyForeignServingScopedRead` decides that a
-  serving session is reading a foreign space by finding a live lease it holds
+  named read, and from then on the instances the session named are delivered
+  to it for the session's life.
+- **Also gone:** the lapse machinery that hung from the lease:
+  `leaseHolderReadsLapsed`, its re-arm when the lease was lost, and
+  `noteLeaseReacquired` with its port notice. The renew arm's survived blip
+  reaches tests through `ExecutorHostOptions.onLeaseReacquired`.
+- **The unnamed-scope guard:** `#denyForeignServingScopedRead` decided that a
+  serving session was reading a foreign space by finding a live lease it held
   on some other space of the same server. A routed session holds none there. It
-  decides instead by principal class: a delegating-class session that does not
-  hold the read space's live lease on this server is reading a foreign space,
-  and its unnamed scoped read is refused as now. Home reads stay on the
-  loopback session and keep passing on the holder equality.
+  decides instead by the session's binding: a session opened under
+  `actingAs: "space-owner"`, which the serving runtime's sessions are
+  (`SessionState.servingBinding`), that is not the read space's serving
+  session on this server is reading a foreign space, and its unnamed scoped
+  read is refused. Home reads stay on the loopback session and pass as the
+  serving session.
+- **Demand:** the owner's demand excludes the service principal, so a routed
+  session registers none, as an in-process foreign read never did. The owner
+  derives for its own clients' demand, and a sibling's read sees what the
+  owner's loop last derived for the actor
+  ([`verification-coverage.md`](../specs/server-side-execution/verification-coverage.md)
+  OW35).
 
-This is the one ruling the plan needs on admission. Once the plan is approved,
-the ruling is recorded where `protocol.md` §2 records the 2026-08-03 ruling it
+The ruling is recorded where `protocol.md` §2 records the 2026-08-03 ruling it
 amends.
 
 ## Activation
@@ -308,13 +325,13 @@ which server admitted what and which host serves what.
 Two details make the two hosts behave as two processes would. The serving
 memory server of the test support
 (`runtime/runner/src/executor/serving-memory-server.deno.ts`) takes a store it
-is handed, so two of them open one file. And the lease holder's process
-component (`adoptProcessInstanceId` in
-`runtime/memory/v2/execution-lease.ts`) is one value per module instance, so
-the hosts of one test process mint one holder until R3. The read row binds a
-serving session's holder to that component, so R1 and R2 leave it shared and
-assert on which server admitted what; from R3 on, each host takes its own
-component, and the two holders differ as two processes' do.
+is handed, so two of them open one file. And a routed session's transport in
+the harness is a loopback connection opened with `inProcess: false`, so the
+owner takes it for a sibling process's, as it would a socket's. The lease
+holder's process component (`adoptProcessInstanceId` in
+`runtime/memory/v2/execution-lease.ts`) stays one value per test process; the
+read row tells the hosts' sessions apart by their connections, so the shared
+component is nothing the harness has to work around.
 
 R4 adds one integration test with two toolshed processes behind a proxy that
 routes `?space=` the way nginx does, and measures the cross-space scenario of
@@ -342,7 +359,7 @@ flag on and off.
    - Test: provisioning into a space owned by B lands on B and warm-activates it
      there; with B unreachable, the foreign batch fails, X's home commit does
      not land, and the event replays once B is back.
-3. [ ] **R3: reads through the owner, and the read row.**
+3. [x] **R3: reads through the owner, and the read row.**
    - Remote sessions for every space but the home.
    - The read-row change, with its ruling recorded in `protocol.md` §2, and
      the Phase-1 acceptance it retires recorded in `verification-coverage.md`.

@@ -24,6 +24,7 @@ import {
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   acquireServerExecutionEnabler,
+  resolveScopeKey,
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
@@ -55,6 +56,7 @@ import {
 } from "../src/executor/wave.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
   TEST_SESSION_OPEN_AUDIENCE,
   testPrincipalSessionOpenAuthFactory,
@@ -80,13 +82,20 @@ describe("executor owner routing", () => {
   let runtimes: Runtime[];
   let activations: ArrivalLog<{ host: Label; space: string; outcome: string }>;
   let servingRuntimes: Map<Label, Runtime>;
+  let onServingRuntime:
+    | ((label: Label, runtime: Runtime) => Promise<void>)
+    | undefined;
   let releaseServerExecution: () => void;
 
   /** The route of the deployment: each space's owner by the test's map,
    * and B's for a space the map does not place. */
   const route = (): RouteOptions => ({
+    // The loopback transport stands for the deployment's network: a routed
+    // session reaches the owner from another process.
     createTransport: (space) =>
-      MemoryClient.loopback(owners.get(space) ?? servers.B),
+      MemoryClient.loopback(owners.get(space) ?? servers.B, {
+        inProcess: false,
+      }),
     sessionOpenAuth: testPrincipalSessionOpenAuthFactory(serviceSigner),
   });
 
@@ -109,7 +118,7 @@ describe("executor owner routing", () => {
       serviceIdentity: serviceSigner.did(),
       // The serving runtime's own storage plane, with the route: a session
       // opened as a created space's own key, its genesis, dials the owner.
-      createRuntime: (space, context) => {
+      createRuntime: async (space, context) => {
         const manager = LoopbackStorageManager.connect(server, {
           as: serviceSigner,
           servingHomeSpace: space,
@@ -125,13 +134,14 @@ describe("executor owner routing", () => {
           experimental: { serverExecution: true },
         });
         servingRuntimes.set(label, runtime);
-        return Promise.resolve({
+        await onServingRuntime?.(label, runtime);
+        return {
           runtime,
           dispose: async () => {
             await runtime.dispose();
             await manager.close();
           },
-        });
+        };
       },
       policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
       onActivationSettled: (space, outcome) =>
@@ -201,6 +211,7 @@ describe("executor owner routing", () => {
     runtimes = [];
     activations = new ArrivalLog();
     servingRuntimes = new Map();
+    onServingRuntime = undefined;
   });
 
   afterEach(async () => {
@@ -981,6 +992,225 @@ export default pattern<
     }).catch((error) => error);
     expect(isServedRefusal(refused, "refused")).toBe(true);
     scope.dispose();
+  });
+
+  //
+  // Reads through the owner (R3)
+  //
+  // The serving runtime's storage plane opens every space but its home over
+  // the route, so a foreign read is a session with the space's owner, which
+  // wakes it on every commit to that space, from whichever process the
+  // commit came.
+  //
+
+  it("reads a space owned by another server through its owner and is woken by the owner's commits: a home derivation over a foreign doc re-derives on a foreign commit alone, and the sender's server holds no session in the foreign space", async () => {
+    const hostA = newHost("A");
+    newHost("B");
+
+    // Bob seeds the FOREIGN input doc on its owner before the home loop
+    // activates, so the first derivation reads a real value.
+    const bobManager = EmulatedStorageManager.connectTo(servers.B, {
+      as: bobSigner,
+    });
+    managers.push(bobManager);
+    const bobRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: bobManager,
+    });
+    runtimes.push(bobRuntime);
+    const bobInput = bobRuntime.getCell<{ n: number }>(
+      targetSpace,
+      "routed-read-input",
+      undefined,
+    );
+    {
+      const tx = bobRuntime.edit();
+      bobInput.withTx(tx).set({ n: 1 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await bobRuntime.storageManager.synced();
+
+    // The serving graph on A: a HOME pattern whose argument is the FOREIGN
+    // doc, so the home derivation reads across the space boundary
+    // (serving-loop.md §3b) and the result commits home.
+    onServingRuntime = async (label, runtime) => {
+      if (label !== "A") return;
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: [
+            "import { computed, pattern } from 'commonfabric';",
+            "export default pattern<{ n: number }, { total: number }>(",
+            "  ({ n }) => ({ total: computed(() => n + 100) }),",
+            ");",
+          ].join("\n"),
+        }],
+      }, { space: homeSpace });
+      const foreignArgument = runtime.getCell<{ n: number }>(
+        targetSpace,
+        "routed-read-input",
+        undefined,
+      );
+      const result = runtime.getCell<{ total: number }>(
+        homeSpace,
+        "routed-read-result",
+        compiled.resultSchema,
+      );
+      await foreignArgument.sync();
+      await result.sync();
+      // Flushed before the run commits, so the replica the commit reads
+      // against is current and the commit has nothing to conflict with.
+      await runtime.storageManager.synced();
+      const tx = runtime.edit();
+      runtime.run(tx, compiled, foreignArgument, result);
+      const committed = await tx.commit().settled;
+      if (committed.error !== undefined) {
+        throw new Error(
+          `serving pattern run failed: ${committed.error.message}`,
+        );
+      }
+      await runtime.idle();
+    };
+
+    // Alice's DEMAND on the HOME result activates the home space on A.
+    const clientManager = EmulatedStorageManager.connectTo(servers.A, {
+      as: aliceSigner,
+    });
+    managers.push(clientManager);
+    const clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    runtimes.push(clientRuntime);
+    const clientResult = clientRuntime.getCell<{ total: number }>(
+      homeSpace,
+      "routed-read-result",
+      undefined,
+    );
+    const cancel = clientResult.sink(() => {});
+    try {
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 101,
+        { stuckLabel: "the client's total to reach 101" },
+      );
+      // The foreign read went to the owner: B holds the serving runtime's
+      // session in the target space, and A holds none. The sender's loop
+      // never activates a space it reached through the route.
+      expect(
+        servers.B.hasLiveSessionsForSpace(targetSpace, {
+          excludePrincipal: bobSigner.did(),
+        }),
+      ).toBe(true);
+      expect(servers.A.hasLiveSessionsForSpace(targetSpace)).toBe(false);
+      expect(hostA.spaceServer(targetSpace)).toBeUndefined();
+
+      // The FOREIGN commit lands on its owner. No home input follows: the
+      // owner's push to the routed session is what starts the
+      // re-derivation.
+      {
+        const tx = bobRuntime.edit();
+        bobInput.withTx(tx).set({ n: 2 });
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await waitForCellValue(
+        clientRuntime,
+        clientResult.key("total"),
+        (total: number | undefined) => total === 102,
+        { stuckLabel: "the client's total to reach 102" },
+      );
+    } finally {
+      cancel();
+    }
+  });
+
+  it("admits a named scoped read of a foreign instance on the owner for an actor the space grants READ, and refuses one for an actor it does not before it leaves the sender", async () => {
+    newHost("A");
+    newHost("B");
+    const aliceDid = aliceSigner.did();
+    const bobDid = bobSigner.did();
+
+    // Alice owns the target space, and her user-scoped doc lives there,
+    // written on its owner, engine-direct.
+    const docId = "of:routed-read-scoped";
+    await servers.B.writeDocument(targetSpace, `of:${targetSpace}`, {
+      [aliceDid]: "OWNER",
+    });
+    applyCommit(await servers.B.engineForSpace(targetSpace), {
+      sessionId: "owner-routing-setup",
+      space: targetSpace,
+      principal: aliceDid,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: docId,
+          scope: "user",
+          value: { value: { draft: "alice's" } } as never,
+        }],
+      },
+    });
+
+    // Alice's demand on a home doc activates the home space on A.
+    const clientManager = EmulatedStorageManager.connectTo(servers.A, {
+      as: aliceSigner,
+    });
+    managers.push(clientManager);
+    const clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+    });
+    runtimes.push(clientRuntime);
+    const demandCell = clientRuntime.getCell<{ ping: number }>(
+      homeSpace,
+      "routed-read-demand",
+      undefined,
+    );
+    const cancel = demandCell.sink(() => {});
+    try {
+      await activated("A", homeSpace);
+      const manager = servingRuntimes.get("A")!
+        .storageManager as LoopbackStorageManager;
+      const foreignUser = { space: targetSpace, scope: "user" as const };
+
+      // Alice's own instance: admitted on the owner under her READ grant,
+      // and read from there.
+      await manager.syncInstance(
+        { space: targetSpace, id: docId as never, scope: "user" },
+        { principal: aliceDid },
+      );
+      expect(manager.scopedReadStanding(foreignUser, { principal: aliceDid }))
+        .toBe("admitted");
+      const replica = manager.open(targetSpace).replica;
+      expect(
+        (replica.getDocument(docId as never, "user", { principal: aliceDid })
+          ?.value as { draft?: string } | undefined)?.draft,
+      ).toBe("alice's");
+      expect(servers.B.hasLiveSessionsForSpace(targetSpace)).toBe(true);
+      expect(servers.A.hasLiveSessionsForSpace(targetSpace)).toBe(false);
+
+      // Bob's instance: the list grants him nothing, and the sender's own
+      // probe of the grant refuses the read before it reaches the owner,
+      // whose admission refuses the same read from any process
+      // (`memory/test/v2-explicit-read.test.ts`).
+      const refused = await manager.open(targetSpace).sync(
+        docId as never,
+        { path: [], schema: false },
+        "user",
+        resolveScopeKey("user", { principal: bobDid }),
+      );
+      expect(refused.error?.name).toBe("ForeignScopedReadRefusedError");
+      expect(refused.error?.message ?? "").toContain(
+        `grants ${bobDid} nothing (READ required)`,
+      );
+      expect(manager.scopedReadStanding(foreignUser, { principal: bobDid }))
+        .toBe("refused");
+    } finally {
+      cancel();
+    }
   });
 
   //

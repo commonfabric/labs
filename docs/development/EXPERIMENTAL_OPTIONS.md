@@ -63,7 +63,7 @@ was last checked against the code.
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
-| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | off | Bernhard Seefeld (serve each space from the process that owns it) | land the routed crossings stage by stage, turn the route on by default, then delete the knob and the in-process crossings | implemented for every crossing but reads, off by default |
+| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | off | Bernhard Seefeld (serve each space from the process that owns it) | land the routed crossings stage by stage, turn the route on by default, then delete the knob and the in-process crossings | implemented for every crossing, off by default |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -2159,19 +2159,21 @@ the per-epic implementation notes).
   owner admits it as its own host's call. The outbox's event appends, the
   pattern-lifecycle handler's registration delivery, the wave's foreign
   batches and access-list changes, and the genesis of a space the serving
-  runtime creates go that way; reads follow in the plan's next stage.
+  runtime creates go that way, and the loop's sessions in every space but its
+  home, which are its reads of other spaces, are opened with the owner, so
+  the owner's commits wake it.
   [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
   is the design and its stages.
 - **Current default and planned end state.** Off by default. The end state is
   the route on without a knob, every crossing through the owner, and the lease
   kept in memory rather than in the store.
 - **Status on 2026-11-01.** Implemented for event appends, the registration
-  delivery, foreign wave batches, access-list changes and genesis, off by
-  default. The served request admits every kind; reads still open loopback
-  sessions on the process's own server.
-- **Path to removal.** Land the remaining crossings, turn the route on by
-  default once a release with it has been deployed, then delete the knob and
-  the in-process crossings.
+  delivery, foreign wave batches, access-list changes, genesis and reads, off
+  by default. The served request admits every kind, and the memory server's
+  read row admits a routed service-identity session under the read actor's
+  grant.
+- **Path to removal.** Turn the route on by default once a release with it has
+  been deployed, then delete the knob and the in-process crossings.
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 

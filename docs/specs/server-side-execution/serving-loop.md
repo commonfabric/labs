@@ -764,8 +764,11 @@ executing:
   2026-08-18/19; protocol.md §2b's free-read row carries the full
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
-  v2 assumes spaces co-hosted on one memory server; sharding is out of
-  scope. *(Phase 5 pinned the wake end to end and added NO machinery
+  With owner routing (`docs/plans/serving-loop-owner-routing.md`) that
+  session reaches the foreign space's owner from the home's process,
+  and the owner's commits wake the home loop over it; without the
+  route the session is on the home's own memory server, which v2 then
+  assumes holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
   the registration; a foreign commit's frames arrive on that session,
   the scheduler runs autonomously off storage notifications, and the

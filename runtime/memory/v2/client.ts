@@ -5445,19 +5445,27 @@ export type QueuedFrameTransport = Transport & {
 /**
  * A transport to an in-process server, delivering its frames as
  * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
- * disconnect the server initiates is invisible over loopback.
+ * disconnect the server initiates is invisible over loopback. The server
+ * takes the connection as one from this process unless `inProcess` is
+ * `false`, which a test passes where its loopback transport stands for the
+ * deployment's network.
  */
 export const loopback = (
   server: {
     connect(
       send: (message: ServerMessage, payload?: string) => void,
       syncParts?: PartLimits,
+      options?: { inProcess?: boolean },
     ): {
       receive(payload: string): Promise<void>;
       close(): void;
     };
   },
-  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
+  options: {
+    syncParts?: PartLimits;
+    messageLimits?: PartLimits;
+    inProcess?: boolean;
+  } = {},
 ): Transport => {
   // The transport exists before the connection, so a frame the server
   // sends as it connects is queued rather than lost.
@@ -5466,9 +5474,13 @@ export const loopback = (
     receive: (payload) => built.connection!.receive(payload),
     close: () => built.connection?.close(),
   });
-  built.connection = server.connect((message, payload) => {
-    transport.deliver(payload ?? encodeMemoryBoundary(message));
-  }, options.syncParts);
+  built.connection = server.connect(
+    (message, payload) => {
+      transport.deliver(payload ?? encodeMemoryBoundary(message));
+    },
+    options.syncParts,
+    { inProcess: options.inProcess ?? true },
+  );
   return options.messageLimits === undefined
     ? transport
     : { ...transport, messageLimits: options.messageLimits };

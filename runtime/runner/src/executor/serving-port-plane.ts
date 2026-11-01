@@ -401,11 +401,6 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
-  noteLeaseReacquired(notice: { space: string; principal: string }): void {
-    this.#endpoint.notify("server.noteLeaseReacquired", { notice });
-  }
-
-  /** @inheritDoc */
   checkServedAclChange(
     change: ServedAclChange,
   ): ReturnType<HostMemoryServer["checkServedAclChange"]> {

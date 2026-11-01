@@ -226,9 +226,6 @@ export type PlaneNotices = {
   "worker.ready": null;
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
-  "server.noteLeaseReacquired": {
-    notice: { space: string; principal: string };
-  };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
   "host.activationSettled": {

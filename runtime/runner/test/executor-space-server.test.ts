@@ -32,7 +32,6 @@ import {
   acquireExecutionLease,
   executionLeaseHolder,
   liveExecutionLeaseHolder,
-  releaseExecutionLease,
 } from "@commonfabric/memory/v2/execution-lease";
 import {
   decodeMemoryBoundary,
@@ -779,69 +778,6 @@ describe("stage G SpaceServer recovery seams", () => {
     await awaitEach(cycles, () => lastStats.waves > wavesBefore);
     expect(flushed).toBe(0);
     expect(Engine.serverSeq(engine)).toBe(seqBefore);
-  });
-
-  it("reports a survived renewal blip to the memory server: the renew arm's same-process reacquire calls noteLeaseReacquired with the space and the service identity — once per blip, never on a plain renewal, never when the reacquire fails and the space parks (fan-out stage A's finding 1, the re-arm's trigger)", async () => {
-    // A Proxy facade over the real server that records the notice; every
-    // other call passes through (the sx2 facade pattern above).
-    const notices: Array<{ space: string; principal: string }> = [];
-    const noticeArrivals = new ArrivalLog<void>();
-    const spy = new Proxy(server, {
-      get(target, prop, receiver) {
-        if (prop === "noteLeaseReacquired") {
-          return (notice: { space: string; principal: string }) => {
-            notices.push(notice);
-            noticeArrivals.record();
-            return target.noteLeaseReacquired(notice);
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }) as typeof server;
-    const stats = emptyServingLoopStats();
-    const created = newSpaceServer({
-      serverFacade: spy,
-      stats,
-      policy: {
-        flushDeadlineMs: 2_000,
-        idleParkMs: 600_000,
-        renewIntervalMs: 25,
-      },
-    });
-    expect(await created.activate()).toBe(true);
-    // Activation itself reports nothing. Whether a PLAIN renewal reports
-    // is carried by the count assertions after the blip below: the renew
-    // ticks every 25 ms for the rest of this test, so a renewal that
-    // reported would push the count past the one the blip produces.
-    expect(notices).toEqual([]);
-    expect(stats.lease.lost).toBe(0);
-
-    // The blip: the row vanishes with NO rival, so the next tick's
-    // renewal FAILS and the same-process reacquire SUCCEEDS.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    // The notice is the reacquire's own edge; the failed tick and the
-    // restored row are what produced it.
-    await noticeArrivals.reached(1);
-    expect(stats.lease.lost).toBeGreaterThanOrEqual(1);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(created.holder);
-    expect(notices).toEqual([{ space, principal: serviceSigner.did() }]);
-    expect(created.active).toBe(true);
-
-    // A blip the reacquire LOSES (a rival took the row) parks the space
-    // and reports nothing: there is no live lease to re-arm under.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: executionLeaseHolder("did:key:rival-process"),
-        ttlMs: 600_000,
-      }),
-    ).toBe(true);
-    await parks.reached(1);
-    expect(created.active).not.toBe(true);
-    // One notice per blip, over every plain renewal since.
-    expect(notices.length).toBe(1);
   });
 
   it("resolves a second park only once the first has parked the space", async () => {

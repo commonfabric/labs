@@ -158,6 +158,9 @@ describe("Phase 5 cross-space serving", () => {
   beforeEach(() => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
+      // The serving sessions' foreign named reads are admitted by the
+      // service identity's class (protocol.md §2's read row).
+      delegatingDids: [serviceSigner.did()],
     });
     servingRuntime = undefined;
     onServingRuntime = undefined;

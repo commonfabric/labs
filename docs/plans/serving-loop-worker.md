@@ -107,7 +107,7 @@ mirror from it and serves the three lookups the loop makes without waiting,
 registry would. The worker asks the main thread for `demandForSessions`,
 `viewInterestsForSpace`, `setViewSelection`, `foreignWriteAuthorityFor`,
 `checkServedAclChange`, `commitDelegatedAppend`, `idle` and `flushSessions`, and
-tells it of `noteExecutorCommit` and `noteLeaseReacquired` without waiting. The
+tells it of `noteExecutorCommit` without waiting. The
 demand set crosses as shares per session, read once and kept on the worker
 (`DemandShareCache`) until the server's `demandChanged` names that session
 again, so a demand pass hands the space server's mirror the objects it compared

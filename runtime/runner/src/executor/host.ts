@@ -183,6 +183,10 @@ export type ExecutorHostOptions = {
    * reason. The host's own `onParked` handling is unaffected. */
   onSpaceParked?: (space: MemorySpace, reason: string) => void;
 
+  /** DIAGNOSTIC (tests): a tenure's same-process reacquire after a renewal
+   * blip it survived, with the space. */
+  onLeaseReacquired?: (space: MemorySpace) => void;
+
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds — see `SpaceServerOptions`. */
   onEffectRetired?: () => void;
@@ -678,6 +682,9 @@ export class ExecutorHost {
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
         ...(this.#route === undefined ? {} : { route: this.#route }),
+        ...(this.#options.onLeaseReacquired === undefined ? {} : {
+          onLeaseReacquired: () => this.#options.onLeaseReacquired?.(space),
+        }),
         onParked: (reason) => {
           parked = true;
           try {
