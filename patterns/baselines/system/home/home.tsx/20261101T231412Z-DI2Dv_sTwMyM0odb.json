@@ -2402,13 +2402,13 @@
             "$ref": "#/$defs/SharedSpaceRetitle",
             "asCell": [
               "stream"
-            ]
+            ],
+            "description": "Absent from a Home older than this stream."
           }
         },
         "required": [
           "register",
-          "changeMembership",
-          "retitle"
+          "changeMembership"
         ],
         "type": "object"
       },

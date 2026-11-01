@@ -191,7 +191,9 @@ handler in Home calls it from there. One with none, such as a Loom daemon that
 reaches Home only through its streams, sends `retitleSharedSpace`, which does
 the same and returns the same. The stream takes the caller's word for the
 title, as registration does, and reads nothing from the space's root, so whoever
-holds the current title is the one to send it, to their own Home.
+holds the current title is the one to send it, to their own Home. The stream is
+optional in `sharedSpaceCommandsSchema`: a caller that needs it reports
+`home-update-required` for a Home without it.
 
 FabriChat's manager in Home calls all three from its own handlers. For standalone
 `fabrichat-room` spaces, the catalog's current state and revision govern the

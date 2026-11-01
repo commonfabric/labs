@@ -28,7 +28,8 @@ export interface SharedSpaceCommands {
     SharedSpaceMembershipChange,
     SharedSpaceMembershipResult
   >;
-  retitle: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
+  /** Absent from a Home older than this stream. */
+  retitle?: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
 }
 
 /** An application's undo of its own import, under the removal contract. */

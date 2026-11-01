@@ -156,7 +156,7 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries[SPACE]?.state === "saved"
   );
   const action_retitle = action(() => {
-    home.sharedSpaces.commands.retitle.send({
+    home.sharedSpaces.commands.retitle!.send({
       space: SPACE,
       title: "Renamed loom",
     });
