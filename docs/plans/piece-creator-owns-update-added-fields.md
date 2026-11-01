@@ -273,9 +273,10 @@ initialization as before. A deferred piece start no longer marks its own
 transaction: it carries the marks of the transaction it was deferred from, so
 a start of a piece found set up attributes nothing, and a served run acting
 for no one is admitted the result document's staged binding to the new field.
-The legacy record is written from owner-field evidence only; resolving the
-space owner for a legacy root whose fields name no owner is not built, since
-the runner has no view of the ACL, and such a root stays without a record.
+The legacy record for a space root comes from the space's access list, which
+the runner reads as it does for membership (`aclOwner` in the memory
+package's `acl.ts`, the rule the memory server resolves a space owner by);
+owner-field evidence decides for every other piece.
 
 1. **Scope the attribution mark.** Conforming implementation; lands first and
    alone. Regression test as described under "Tests", item 5. Update the

@@ -1035,7 +1035,8 @@ holds the measurements and the conditions for revisiting.
   naming the DID of the principal the piece was created for. A child a piece
   instantiates records its parent's creator; a piece a served run creates
   records the run's actor; a run that acts for no one records nothing. A
-  piece from before the record gains one at its next source transition, from
+  piece from before the record gains one at its next source transition: a
+  space root takes the owner its space's access list names, any other piece
   the one principal its owner-protected fields' stored labels name, and none
   where they name two or none. Commit preparation admits a write to the field
   only in the transaction that installs the piece's first pattern pointer, or

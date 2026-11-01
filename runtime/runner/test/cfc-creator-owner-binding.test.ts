@@ -169,11 +169,15 @@ describe("cfc-creator-owner-binding", () => {
     return runtime;
   };
 
-  const compile = (runtime: Runtime, source: string): Promise<Pattern> =>
+  const compile = (
+    runtime: Runtime,
+    source: string,
+    into: MemorySpace = space,
+  ): Promise<Pattern> =>
     runtime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: source }],
-    }, { space });
+    }, { space: into });
 
   /** Creates a piece of `source` on `runtime`; returns its result link. */
   const createPiece = async (
@@ -203,7 +207,7 @@ describe("cfc-creator-owner-binding", () => {
     link: NormalizedFullLink,
     source = SECOND_RELEASE,
   ): Promise<{ refusal: string | undefined; result: Cell<Result> }> => {
-    const compiled = await compile(runtime, source);
+    const compiled = await compile(runtime, source, link.space);
     const stored = runtime.getCellFromLink<Result>(link);
     await stored.sync();
     await runtime.getCellFromLink(getMetaLink(stored, "argument")!).sync();
@@ -335,6 +339,32 @@ describe("cfc-creator-owner-binding", () => {
     await add(member, theirs.result, "theirs");
     expect(await itemsOf(link)).toEqual(["theirs"]);
     expect(await ownersOfItems(link)).toEqual([bob.did()]);
+  });
+
+  it("records the space's owner on a space root with no record at its next source transition, and binds the field to them", async () => {
+    // A space alice owns, whose root bob's runtime moves to the next release.
+    const owned = await managers[0].createSpace({ [alice.did()]: "OWNER" });
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const compiled = await compile(legacy, FIRST_RELEASE, owned);
+    const result = legacy.getCell<Result>(
+      owned,
+      "root",
+      compiled.resultSchema,
+    );
+    const tx = legacy.edit();
+    legacy.run(tx, compiled, {}, result);
+    legacy.getSpaceCell(owned, undefined, tx).key("defaultPattern").set(result);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const link = result.getAsNormalizedFullLink();
+    expect(await creatorOf(link)).toBeUndefined();
+
+    const theirs = await update(member, link);
+    expect(theirs.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBe(alice.did());
+    expect(await ownersOfItems(link)).toEqual([alice.did()]);
+    await add(member, theirs.result, "forged");
+    expect(await itemsOf(link)).toEqual([]);
   });
 
   it("records the one principal a piece with no record's owned fields name at its next source transition, and binds the field to them", async () => {

@@ -12,7 +12,7 @@ import {
   refuseFabricInstance,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
-import { type ACL, aclDocId } from "@commonfabric/memory/acl";
+import { type ACL, aclDocId, aclOwner, isACL } from "@commonfabric/memory/acl";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
@@ -4952,10 +4952,13 @@ export class Runner {
 
   /**
    * The creator a piece created before the runtime recorded one gives
-   * evidence of (`legacyPieceCreatorEvidence`), read from the stored labels
-   * of its argument document and of the internal documents its manifest
-   * names, or none: for a piece that already holds a record, or one whose
-   * owner-protected fields name no single principal.
+   * evidence of, or none for a piece that already holds a record. A space
+   * root belongs to the space's owner, whom its access list names
+   * (`aclOwner`); a list this replica does not hold names no one. Any other
+   * piece names the one principal the stored labels of its owner-protected
+   * fields represent (`legacyPieceCreatorEvidence`), read from its argument
+   * document and the internal documents its manifest names, and none where
+   * they name no single principal.
    */
   #legacyPieceCreator(
     tx: IExtendedStorageTransaction,
@@ -4967,6 +4970,21 @@ export class Runner {
         undefined
     ) {
       return undefined;
+    }
+    const link = result.getAsNormalizedFullLink();
+    const root = this.#runtime.getSpaceCell(link.space, undefined, tx)
+      .key("defaultPattern").get();
+    if (root !== undefined && root.getAsNormalizedFullLink().id === link.id) {
+      const acl = this.#runtime.getCellFromLink<ACL>(
+        {
+          space: link.space,
+          id: aclDocId(link.space) as URI,
+          path: [],
+        },
+        undefined,
+        tx,
+      ).get();
+      return isACL(acl) ? aclOwner(acl, link.space) : undefined;
     }
     const documents: NormalizedFullLink[] = [];
     const argument = getMetaLink(result, "argument");

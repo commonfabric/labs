@@ -294,8 +294,9 @@ admitted by no later write: a creation outside any action and a handler's
 creation record the acting principal; a child a piece instantiates records its
 parent's creator, whoever's run instantiated it; a served run acting for no
 one records nothing. A piece created before the runtime recorded creators gains
-one at its next source transition, from the one principal the stored labels of
-its owner-protected fields represent, and none where those fields name two
+one at its next source transition: a space root takes the owner its space's
+access list names, and any other piece the one principal the stored labels of
+its owner-protected fields represent, none where those fields name two
 principals or none. The record is written only while the
 `pieceCreatorRecord` experimental option is on
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)).
