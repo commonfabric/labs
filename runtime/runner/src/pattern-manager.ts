@@ -942,8 +942,12 @@ export class PatternManager {
    * failed one: the space is forgotten as a holder of the closure, and, for
    * a write the runtime made as itself (`retained`), the space is owed the
    * repair a failed write-back is owed, paid from the retained compile by the
-   * next load in the space (`#owedRepair()`). Tracked in `#compileCacheWrites`
-   * until the waves have decided.
+   * next load in the space (`#owedRepair()`). A withdrawal acts even when a
+   * later write recorded the space meanwhile: that write may have changed
+   * nothing, read against the replica the withdrawn write had already
+   * changed, so it holds nothing on its own; and when it did land, acting
+   * costs one write back that changes nothing. Tracked in
+   * `#compileCacheWrites` until the waves have decided.
    */
   #watchCacheWriteDurability(
     space: MemorySpace,
@@ -4109,9 +4113,11 @@ export class PatternManager {
     // entry-present/descendant-missing state, not producible by this
     // ordering, still degrades to a clean recompile.) The next session's
     // re-write diffs already-durable docs to nothing. The `persistence`
-    // promise callers await still resolves only after ALL chunks are
-    // durable, so the "refs-only pattern JSON requires a durable closure"
-    // contract is unchanged.
+    // promise callers await resolves only after the store has taken ALL
+    // chunks. On a serving runtime that is each chunk's acceptance into a
+    // wave, which can still withdraw it at the wave commit; the chunks'
+    // settlements (`settlements`) say whether it did, and
+    // `#watchCacheWriteDurability()` acts on a withdrawal.
     const { chunks, extraRoots } = planCompileCacheWriteChunks(
       modules,
       entryIdentity,
