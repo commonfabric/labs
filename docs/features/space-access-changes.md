@@ -184,9 +184,14 @@ So a member a served handler adds is in the list before anything the handler
 sent on reaches its target, which is what a target checking the sender's
 access needs. A change the seal admitted and the commit refuses, because the
 list changed in between, requeues the run's event, and its replay is decided
-against the list as it then stands. A change that landed stands whatever the
-wave does after it, as on a client: a replay of the event finds nothing left to
-change and sends nothing.
+against the list as it then stands. Where the change commits on the space's
+owner, the owner decides it against its own store, so its refusal on any
+admission ground, the actor's level there included, requeues the event the
+same way, and so does a failure to reach the owner at all, until the owner
+answers. A change that landed stands whatever the wave does after it, as on a
+client: a replay of the event finds nothing left to change and sends nothing,
+which is also what a replay finds when the owner applied the change and its
+answer was lost.
 
 A client runs a served event's handler as well, as its speculative echo. The
 echo checks and stages the change like any run, and commits nothing: the

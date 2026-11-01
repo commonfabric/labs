@@ -10,6 +10,7 @@
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import { isFabricPlainObject } from "@commonfabric/data-model";
+import { getLogger } from "@commonfabric/logger";
 import { decodeMemoryBoundary, ProtocolError } from "@commonfabric/memory/v2";
 import type {
   ServedRequestCall,
@@ -51,6 +52,20 @@ export type ServedRequestServer = Pick<
   | "commitServedAclChange"
 >;
 
+const logger = getLogger("served-requests", {
+  enabled: true,
+  level: "warn",
+});
+
+/**
+ * Whether `value` is a sender's position for a crossing: a safe integer
+ * from zero, as the plane numbers them. Read the same way for every kind,
+ * so a body with another kind of number is refused before it reaches the
+ * commit's bookkeeping.
+ */
+const isLocalSeq = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
 /** The refusal of a body that reads as no crossing of its kind. */
 const unreadable = (
   kind: string,
@@ -85,7 +100,7 @@ const readAppendEntry = (
   if (typeof targetStream !== "string") return { invalid: "targetStream" };
   if (typeof eventId !== "string") return { invalid: "eventId" };
   if (typeof capabilityRef !== "string") return { invalid: "capabilityRef" };
-  if (typeof localSeq !== "number" || !Number.isSafeInteger(localSeq)) {
+  if (!isLocalSeq(localSeq)) {
     return { invalid: "localSeq" };
   }
   if (
@@ -173,7 +188,7 @@ const runCommit = async (
 ): Promise<ServedRequestOutcome> => {
   const { batch: encoded, localSeq } = call.body;
   if (typeof encoded !== "string") return unreadable("commit", "batch");
-  if (typeof localSeq !== "number") return unreadable("commit", "localSeq");
+  if (!isLocalSeq(localSeq)) return unreadable("commit", "localSeq");
   const decoded = decodeMemoryBoundary(encoded);
   if (!isFabricPlainObject(decoded) || decoded.space !== call.space) {
     return {
@@ -182,6 +197,11 @@ const runCommit = async (
         message: "The commit carries no batch into the session's space",
       },
     };
+  }
+  if (
+    !Array.isArray(decoded.operations) || !Array.isArray(decoded.preconditions)
+  ) {
+    return unreadable("commit", "batch");
   }
   if (decoded.home !== false) {
     return {
@@ -203,8 +223,19 @@ const runCommit = async (
   if (result.error !== undefined) {
     return { refusal: { code: "refused", message: result.error.message } };
   }
-  const notice = foreignWaveCommitNotice(engine, batch, result.ok.seq);
-  if (notice !== undefined) server.noteExecutorCommit(notice);
+  try {
+    const notice = foreignWaveCommitNotice(engine, batch, result.ok.seq);
+    if (notice !== undefined) server.noteExecutorCommit(notice);
+  } catch (error) {
+    // The batch is in the store whatever the report did, so a failure to
+    // announce it is logged rather than answered as a failed commit, which
+    // would have the sender replay the event over a batch that landed.
+    logger.error("served-commit-report-failed", () => [
+      `reporting the served commit at seq ${result.ok.seq} in ${call.space} ` +
+      "failed",
+      error,
+    ]);
+  }
   return { ok: { seq: result.ok.seq } };
 };
 
@@ -237,7 +268,16 @@ const readAclChange = (
   ) {
     return { invalid: "change.sourceEvent" };
   }
-  if (!Array.isArray(change.changes)) return { invalid: "change.changes" };
+  if (
+    !Array.isArray(change.changes) ||
+    change.changes.some((item) =>
+      !isFabricPlainObject(item) || typeof item.principal !== "string" ||
+      (item.level !== undefined && typeof item.level !== "string") ||
+      item.actor !== actingPrincipal
+    )
+  ) {
+    return { invalid: "change.changes" };
+  }
   return {
     change: {
       space,
@@ -266,7 +306,7 @@ const runAcl = async (
   call: ServedRequestCall,
 ): Promise<ServedRequestOutcome> => {
   const { localSeq } = call.body;
-  if (typeof localSeq !== "number") return unreadable("acl", "localSeq");
+  if (!isLocalSeq(localSeq)) return unreadable("acl", "localSeq");
   const read = readAclChange(call.body);
   if ("invalid" in read) return unreadable("acl", read.invalid);
   if (read.change.space !== call.space) {

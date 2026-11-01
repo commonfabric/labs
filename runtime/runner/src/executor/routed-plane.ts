@@ -148,6 +148,9 @@ export const webSocketRoute = (
 };
 
 /** A routed session to one target space's owner, and its position counter. */
+/** The id of the server's watch on document `id` for a routed session. */
+const routedWatchId = (id: string): string => `routed:${id}`;
+
 type RoutedSession = {
   /** The connection the session is open on, closed with the session. */
   client: MemoryClient.Client;
@@ -272,7 +275,7 @@ export class RoutedPlane {
    * Sends one `served` request of `kind` on `space`'s session, with `body`
    * and the number after the session's last crossing, and returns the
    * owner's answer. A session whose server advertises no `servedRequests`
-   * is closed, so the next crossing dials the owner afresh: the server
+   * is replaced, so the next crossing dials the owner afresh: the server
    * advertises the capability exactly while its loop runs, and a session
    * opened while it did not is told nothing when it starts to.
    */
@@ -282,7 +285,8 @@ export class RoutedPlane {
     kind: ServedRequestKind,
     body: object,
   ): Promise<FabricPlainObject> {
-    const routed = await this.#use(scope, space);
+    const opened = this.#use(scope, space);
+    const routed = await opened;
     const sent = { ...body, localSeq: ++routed.localSeq };
     try {
       return await routed.session.runServed(
@@ -290,11 +294,42 @@ export class RoutedPlane {
         sent as unknown as FabricPlainObject,
       );
     } catch (error) {
-      if (isServedRefusal(error, "served-unsupported")) {
-        this.#closeSession(space);
+      if (
+        isServedRefusal(error, "served-unsupported") &&
+        this.#sessions.get(space) === opened
+      ) {
+        this.#replace(space, routed);
       }
       throw error;
     }
+  }
+
+  /**
+   * Closes `space`'s session, `routed`, and where documents are watched on
+   * it opens the next session with those watches added, so a watcher
+   * outlives the session it registered on and the next crossing finds the
+   * session open. A watcher set moves to the next session as it is, which is
+   * what its cancellation finds there.
+   */
+  #replace(space: MemorySpace, routed: RoutedSession): void {
+    this.#closeSession(space);
+    if (routed.watchers.size === 0) return;
+    const next = this.#open(space).then(async (session) => {
+      try {
+        for (const [id, watchers] of routed.watchers) {
+          session.watchers.set(id, watchers);
+          await this.#addWatch(session, id);
+        }
+        return session;
+      } catch (error) {
+        await session.client.close().catch(() => {});
+        throw error;
+      }
+    });
+    this.#sessions.set(space, next);
+    next.catch(() => {
+      if (this.#sessions.get(space) === next) this.#sessions.delete(space);
+    });
   }
 
   /**
@@ -308,29 +343,12 @@ export class RoutedPlane {
     onChange: () => void,
   ): Promise<() => void> {
     const routed = await this.#use(scope, space);
-    const { session } = routed;
-    const watchId = `routed:${id}`;
     let watchers = routed.watchers.get(id);
     if (watchers === undefined) {
       watchers = new Set();
       routed.watchers.set(id, watchers);
       try {
-        const view = await session.watchAdd([{
-          id: watchId,
-          kind: "graph",
-          // A watch for the wake alone: the document's value is read from
-          // the shared store, so the walk follows nothing.
-          query: {
-            roots: [{
-              id,
-              scope: "space",
-              selector: { path: [], schema: false },
-            }],
-          },
-        }]);
-        if (routed.subscription === undefined) {
-          routed.subscription = this.#subscribe(routed, view);
-        }
+        await this.#addWatch(routed, id);
       } catch (error) {
         // The document is not watched, so its next watcher adds the watch.
         if (routed.watchers.get(id) === watchers) routed.watchers.delete(id);
@@ -338,17 +356,47 @@ export class RoutedPlane {
       }
     }
     watchers.add(onChange);
-    // The removal is sent on a session the scope may be releasing at the
-    // same time, and a session that closed first has no watch to remove.
+    // The removal goes to the session the document is watched on by then,
+    // which a replacement may have opened since; a session that closed
+    // first has no watch to remove, and the scope may be releasing it at the
+    // same time.
     return () => {
       if (!watchers.delete(onChange) || watchers.size > 0) return;
-      if (routed.watchers.get(id) === watchers) routed.watchers.delete(id);
-      void session.watchRemoveSync([watchId]).catch(() => {});
-      if (routed.watchers.size === 0 && routed.subscription !== undefined) {
-        void routed.subscription.return?.();
-        routed.subscription = undefined;
-      }
+      void this.#sessions.get(space)?.then((current) => {
+        if (current.watchers.get(id) !== watchers) return;
+        current.watchers.delete(id);
+        void current.session.watchRemoveSync([routedWatchId(id)]).catch(
+          () => {},
+        );
+        if (current.watchers.size === 0 && current.subscription !== undefined) {
+          void current.subscription.return?.();
+          current.subscription = undefined;
+        }
+      }).catch(() => {});
     };
+  }
+
+  /**
+   * Adds the server's watch on document `id` to `routed`'s session, and the
+   * session's one subscription where it has none yet.
+   */
+  async #addWatch(routed: RoutedSession, id: string): Promise<void> {
+    const view = await routed.session.watchAdd([{
+      id: routedWatchId(id),
+      kind: "graph",
+      // A watch for the wake alone: the document's value is read from the
+      // shared store, so the walk follows nothing.
+      query: {
+        roots: [{
+          id,
+          scope: "space",
+          selector: { path: [], schema: false },
+        }],
+      },
+    }]);
+    if (routed.subscription === undefined) {
+      routed.subscription = this.#subscribe(routed, view);
+    }
   }
 
   /**

@@ -8,6 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import type { FabricPlainObject } from "@commonfabric/api";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -24,6 +25,7 @@ import {
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import {
   acquireServerExecutionEnabler,
+  encodeMemoryBoundary,
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
@@ -597,6 +599,46 @@ describe("executor owner routing", () => {
     expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
   });
 
+  it("keeps a document's watch when the session it registered on is replaced, the owner having advertised no served requests while it opened", async () => {
+    const plane = new RoutedPlane(route());
+    planes.push(plane);
+    await createStreamDoc("B", targetSpace, stream.id);
+    // The session opens while B serves no requests, so the client refuses
+    // the first crossing on it as unsupported and the plane replaces it.
+    servers.B.setServedRequestHandler(undefined);
+    const scope = plane.scope();
+    const woken = new ArrivalLog<string>();
+    const cancel = await scope.watchDocument(targetSpace, sidecar, () => {
+      void entriesOn("B", targetSpace, sidecar).then((entries) => {
+        for (const entry of entries) woken.record(entry.eventId);
+      });
+    });
+    servers.B.setServedRequestHandler(
+      servedRequestHandler({ server: servers.B }),
+    );
+    const entry = {
+      targetStream: sidecar,
+      targetStreamLink: stream,
+      eventId: "evt-replaced-session",
+      payload: {},
+      actingPrincipal: aliceSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "cap-routed",
+    };
+    const unsupported = await scope.append(targetSpace, entry).catch((
+      error,
+    ) => error);
+    expect(isServedRefusal(unsupported, "served-unsupported")).toBe(true);
+
+    // The next crossing dials afresh and lands, and the watch, moved to the
+    // session it opened, wakes on the owner's commit.
+    await scope.append(targetSpace, entry);
+    await woken.matching((eventId) => eventId === entry.eventId);
+    cancel();
+    scope.dispose();
+    expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+  });
+
   it("refuses a call on a disposed scope, so a user that outlives its close opens no session", async () => {
     const plane = new RoutedPlane(route());
     planes.push(plane);
@@ -981,6 +1023,120 @@ export default pattern<
     }).catch((error) => error);
     expect(isServedRefusal(refused, "refused")).toBe(true);
     scope.dispose();
+  });
+
+  //
+  // The owner's handler
+  //
+  // What the handler refuses before the owner's admission sees it, and what
+  // it answers once the batch is in the store.
+  //
+
+  /** The genesis of the target, owned by Alice, on B. */
+  const targetGenesis = async (): Promise<void> => {
+    const engine = await servers.B.engineForSpace(targetSpace);
+    applyCommit(engine, {
+      sessionId: "owner-routing-genesis",
+      space: targetSpace,
+      principal: targetSpace,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${targetSpace}`,
+          value: { value: { [aliceSigner.did()]: "OWNER" } },
+        }],
+      },
+    });
+  };
+
+  /** A call of `kind` on the target's routed session with `body`. */
+  const callOf = (
+    kind: "commit" | "acl",
+    body: Record<string, unknown>,
+  ): MemoryV2Server.ServedRequestCall => ({
+    kind,
+    space: targetSpace,
+    principal: serviceSigner.did(),
+    sessionId: "routed-handler-test",
+    body: body as MemoryV2Server.ServedRequestCall["body"],
+  });
+
+  it("refuses an access-list change over the route whose change names an actor other than the carried one, leaving the list as it was", async () => {
+    const plane = new RoutedPlane(route());
+    planes.push(plane);
+    await targetGenesis();
+    const scope = plane.scope();
+    const refused = await scope.acl(targetSpace, {
+      space: targetSpace,
+      actingPrincipal: bobSigner.did(),
+      actingSession: "sess-1",
+      capabilityRef: "event-consequence:evt-acl-borrowed",
+      sourceEvent: {
+        space: homeSpace,
+        sidecarId: "of:routed-acl-borrowed-sidecar",
+        eventId: "evt-acl-borrowed",
+      },
+      // Bob's change made in Alice's name: refused as unreadable before the
+      // owner resolves any grant.
+      changes: [{
+        principal: bobSigner.did(),
+        level: "OWNER",
+        actor: aliceSigner.did(),
+      }],
+    }).catch((error) => error);
+    expect(isServedRefusal(refused, "refused")).toBe(true);
+    const acl = await servers.B.readDocument(targetSpace, `of:${targetSpace}`);
+    expect(acl?.value).toEqual({ [aliceSigner.did()]: "OWNER" });
+    scope.dispose();
+  });
+
+  it("refuses a commit whose batch does not read as one, and a commit or an access-list change whose position is not a sender's, deterministically", async () => {
+    const handler = servedRequestHandler({ server: servers.B });
+    const malformed = await handler(callOf("commit", {
+      batch: encodeMemoryBoundary({ space: targetSpace, home: false }),
+      localSeq: 1,
+    }));
+    expect("refusal" in malformed && malformed.refusal.code).toBe("refused");
+    const batch = encodeMemoryBoundary(
+      foreignBatch(targetSpace) as unknown as FabricPlainObject,
+    );
+    for (const localSeq of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+      const commit = await handler(callOf("commit", { batch, localSeq }));
+      expect("refusal" in commit && commit.refusal.code).toBe("refused");
+      const acl = await handler(callOf("acl", { change: {}, localSeq }));
+      expect("refusal" in acl && acl.refusal.code).toBe("refused");
+    }
+  });
+
+  it("answers a commit that landed with its seq when reporting it to the server fails", async () => {
+    await targetGenesis();
+    const server: Parameters<typeof servedRequestHandler>[0]["server"] = {
+      engineForSpace: (space) => servers.B.engineForSpace(space),
+      commitDelegatedAppend: (entry) => servers.B.commitDelegatedAppend(entry),
+      commitServedAclChange: (change) =>
+        servers.B.commitServedAclChange(change),
+      noteExecutorCommit: () => {
+        throw new Error("report failed (test-induced)");
+      },
+    };
+    const outcome = await servedRequestHandler({ server })(callOf("commit", {
+      batch: encodeMemoryBoundary({
+        ...foreignBatch(targetSpace),
+        operations: [{
+          op: "set",
+          id: "of:routed-reported",
+          value: { value: { reported: false } },
+        }],
+      } as unknown as FabricPlainObject),
+      localSeq: 1,
+    }));
+    expect(outcome).toEqual({ ok: { seq: 2 } });
+    const engine = await servers.B.engineForSpace(targetSpace);
+    expect(readDoc(engine, { id: "of:routed-reported" })?.value).toEqual({
+      reported: false,
+    });
   });
 
   //

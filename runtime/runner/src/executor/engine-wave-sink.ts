@@ -179,8 +179,11 @@ export function commitForeignWaveBatch(
   batch: WaveSpaceCommit,
   envelope: { sessionId: string; principal?: string; localSeq: number },
 ): Result<{ seq: number }, WaveCommitRejection> {
-  const commit = waveBatchCommit(batch, envelope.localSeq);
   try {
+    // Built inside the guard: a batch another process sent has the shape
+    // its sender gave it, and one that does not read is a refusal, which
+    // the sender replays, never a failure of the owner's handler.
+    const commit = waveBatchCommit(batch, envelope.localSeq);
     if (batch.operations.some((op) => op.op === "sqlite")) {
       // No Phase-1 producer folds sqlite into a foreign provisioning
       // batch, and the attachment identity for a foreign run is
