@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
-import { toValuePath } from "@commonfabric/memory/v2";
+import { operationAnchorsDocId, toValuePath } from "@commonfabric/memory/v2";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
@@ -155,6 +155,115 @@ describe("cf inspect operations", () => {
       expect(scopes).toContain("user z6MkInsp…ions");
       expect(scopes).toContain("session z6MkInsp…ions/session:");
       expect(scopes).toContain("inspect overlay");
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("reports a field's anchors, their checkpoint, and the anchors document check", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "inspect-anchors-" });
+    try {
+      const path = `${directory}/anchors.sqlite`;
+      const engine = await open({
+        url: toFileUrl(path),
+        operationCheckpointInterval: 1,
+      });
+      try {
+        applyCommit(engine, {
+          sessionId: "session:setup",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:anchored",
+              value: { value: { body: "hello world" } },
+            }],
+          },
+        });
+        applyCommit(engine, {
+          sessionId: "session:writer",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "apply-op",
+              id: "of:anchored",
+              path: toValuePath(["body"]),
+              codec: CODEMIRROR_CHANGESET_CODEC,
+              submissionId: "writer:1",
+              base: null,
+              baselineHash: operationBaselineHash("hello world"),
+              payload: {
+                updates: [{ clientId: "writer", changes: [11, [0, "!"]] }],
+              },
+              anchors: {
+                add: [{ id: "w", from: 6, to: 11 }, {
+                  id: "h",
+                  from: 0,
+                  to: 5,
+                }],
+              },
+            }],
+          },
+        });
+      } finally {
+        close(engine);
+      }
+
+      const documentId = operationAnchorsDocId({
+        id: "of:anchored",
+        scope: "space",
+        path: ["body"],
+      });
+      const anchors = [{ id: "h", from: 0, to: 5 }, {
+        id: "w",
+        from: 6,
+        to: 11,
+      }];
+      const json = JSON.parse(
+        await output(["operations", path, "of:anchored", "--json"]),
+      );
+      expect(json.fields[0]).toMatchObject({
+        active: true,
+        cursor: { epoch: 1, version: 1 },
+        anchors,
+        anchorsCommitSeq: 2,
+        anchorsDocumentId: documentId,
+        checkpoints: [{ version: 0, anchors: [] }, { version: 1, anchors }],
+        consistency: { anchorsDocumentMatches: true, healthy: true },
+      });
+
+      const human = await output(["operations", path, "of:anchored"]);
+      expect(human).toContain("healthy");
+      expect(human).toContain(
+        `anchors=2 anchors-document=${documentId} anchors-document-matches=true`,
+      );
+
+      const legacy = new Database(path);
+      try {
+        legacy.exec("ALTER TABLE op_field_epoch DROP COLUMN anchors");
+        legacy.exec("ALTER TABLE op_field_epoch DROP COLUMN anchors_seq");
+        legacy.exec("ALTER TABLE op_checkpoint DROP COLUMN anchors");
+      } finally {
+        legacy.close();
+      }
+      const withoutColumns = JSON.parse(
+        await output(["operations", path, "of:anchored", "--json"]),
+      );
+      expect(withoutColumns.fields[0]).toMatchObject({
+        anchors: [],
+        anchorsCommitSeq: null,
+        anchorsDocumentId: documentId,
+        checkpoints: [{ version: 0, anchors: [] }, { version: 1, anchors: [] }],
+        consistency: { anchorsDocumentMatches: null, healthy: true },
+      });
+      expect(await output(["operations", path, "of:anchored"])).toContain(
+        "anchors=0 anchors-document=",
+      );
+      expect(await output(["operations", path, "of:anchored"])).toContain(
+        "anchors-document-matches=n/a",
+      );
     } finally {
       await Deno.remove(directory, { recursive: true });
     }

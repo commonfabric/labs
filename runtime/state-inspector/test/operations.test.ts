@@ -11,6 +11,8 @@ import {
 import {
   CODEMIRROR_CHANGESET_CODEC,
   encodeMemoryBoundary,
+  operationAnchorsDocId,
+  resolveScopeKey,
   toValuePath,
 } from "@commonfabric/memory/v2";
 import {
@@ -51,6 +53,7 @@ describe("operation field inspection", () => {
           materialized: null,
           operations: [submitted],
         }),
+        mapAnchors: ({ anchors }) => [...anchors],
       }]),
     });
     try {
@@ -471,6 +474,96 @@ describe("operation field inspection", () => {
         ]);
       } finally {
         space.close();
+      }
+    } finally {
+      await Deno.remove(path);
+    }
+  });
+  it("addresses a per-user field's anchors document by scope name and reports a diverged head", async () => {
+    const principal = "did:key:z6MkAnchoredUser";
+    const scopeKey = resolveScopeKey("user", { principal });
+    const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+    const engine = await open({ url: toFileUrl(path) });
+    try {
+      applyCommit(engine, {
+        sessionId: "session:setup",
+        principal,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:mine",
+            scope: "user",
+            value: { value: { body: "ab" } },
+          }],
+        },
+      });
+      applyCommit(engine, {
+        sessionId: "session:alice",
+        principal,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "apply-op",
+            id: "of:mine",
+            scope: "user",
+            path: toValuePath(["body"]),
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId: "alice:1",
+            base: null,
+            baselineHash: operationBaselineHash("ab"),
+            payload: {
+              updates: [{ clientId: "alice", changes: append(2, "c") }],
+            },
+            anchors: { add: [{ id: "a", from: 0, to: 1 }] },
+          }],
+        },
+      });
+    } finally {
+      close(engine);
+    }
+
+    const documentId = operationAnchorsDocId({
+      id: "of:mine",
+      scope: "user",
+      path: ["body"],
+    });
+    try {
+      const space = openSpace(path);
+      try {
+        const [field] = inspectOperationFields(space, { id: "of:mine" }).fields;
+        expect(field).toMatchObject({
+          address: { scope: scopeKey },
+          anchors: [{ id: "a", from: 0, to: 1 }],
+          anchorsCommitSeq: 2,
+          anchorsDocumentId: documentId,
+          consistency: { anchorsDocumentMatches: true, healthy: true },
+        });
+      } finally {
+        space.close();
+      }
+
+      const corrupt = new Database(path);
+      try {
+        corrupt.prepare(
+          "UPDATE op_field_epoch SET anchors = NULL, anchors_seq = NULL WHERE id = ?",
+        ).run("of:mine");
+      } finally {
+        corrupt.close();
+      }
+      const diverged = openSpace(path);
+      try {
+        const [field] = inspectOperationFields(diverged, { id: "of:mine" })
+          .fields;
+        expect(field).toMatchObject({
+          anchors: [],
+          anchorsCommitSeq: null,
+          consistency: { anchorsDocumentMatches: false, healthy: false },
+        });
+      } finally {
+        diverged.close();
       }
     } finally {
       await Deno.remove(path);

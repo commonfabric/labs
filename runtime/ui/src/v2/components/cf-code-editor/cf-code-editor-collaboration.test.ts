@@ -1207,6 +1207,7 @@ describe("CFCodeEditor collaboration", () => {
       cursor: { epoch: 1, version: 0 },
       baselineHash: "baseline:1",
       materialized: "abc",
+      anchors: [],
       operations: [],
     };
     let subscriber:

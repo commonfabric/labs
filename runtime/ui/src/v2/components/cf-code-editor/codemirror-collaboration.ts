@@ -766,6 +766,7 @@ export class CodeMirrorCollaborationController {
       cursor: resolution.to,
       baselineHash: this.#baselineHash,
       materialized: this.#view.state.doc.toString(),
+      anchors: [],
       operations: resolution.operations,
     };
     const updates = codeMirrorIntegratedUpdates(snapshot, current);
