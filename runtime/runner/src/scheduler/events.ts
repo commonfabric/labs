@@ -1206,6 +1206,16 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
                     message: reason,
                   },
                 }
+                : pieceStartReason === "pattern-unloadable" &&
+                    verdict.patternIdentity !== undefined
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "pattern-unloadable",
+                    patternIdentity: verdict.patternIdentity,
+                    message: reason,
+                  },
+                }
                 : {},
             );
             // A deferral carries the drain's arrival-order barrier

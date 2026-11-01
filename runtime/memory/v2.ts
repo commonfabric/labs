@@ -453,6 +453,9 @@ export type DeliveryFailureClass =
   | "authorization"
   | "protocol"
   | "timeout"
+  /** The space lacks the program closure of the pattern the event's piece
+   * runs, past the serving loop's grace for its arrival (events.md §5). */
+  | "program-unavailable"
   | "unknown";
 
 /** Durable processing state for an event whose runnable handler has not yet

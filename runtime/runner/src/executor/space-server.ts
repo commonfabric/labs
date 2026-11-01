@@ -81,6 +81,44 @@ import { ViewPlanPublisher } from "./view-plan-publisher.ts";
  * criterion needs the drop) without racing the creation window. */
 const EVENT_DEFERRAL_REARM_MS = 250;
 
+/**
+ * How long a served event waits for the program closure of its piece's
+ * pattern to arrive in its space before the absence becomes a
+ * `program-unavailable` delivery failure (events.md §5;
+ * SpaceServerPolicy.programClosureGraceMs). This is an exception to the
+ * repository's no-timeout rule, and the reason is that nothing else can end
+ * the wait: the closure is written by whichever runtime created the piece,
+ * usually the serving runtime of another space, and this loop cannot observe
+ * that replication, only its commit landing here. The bound ends in the
+ * delivery-failure budget, not a drop; it cancels nothing in flight; and it
+ * is held in memory only, so a restart or a lease handoff starts it afresh.
+ */
+const PROGRAM_CLOSURE_GRACE_MS = 10_000;
+
+/**
+ * The recovery epoch a `program-unavailable` delivery failure waits on: the
+ * arrival of the closure entry document `docId` in the space (events.md §5).
+ */
+const programClosureEpoch = (docId: string): string =>
+  `program-closure:${docId}`;
+
+/** One served event's grace for its program closure to arrive
+ * (`SpaceServer.#programClosureGraces`). */
+type ProgramClosureGrace = {
+  /** The event's stream entry. */
+  readonly sidecarId: string;
+  readonly seq: number;
+
+  /** When the wait began, on the delivery-failure clock. */
+  readonly since: number;
+
+  /** The timer that ends the grace, while it runs. */
+  timer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Whether the grace has ended. */
+  expired: boolean;
+};
+
 /** The default bound on the tenure's awaited space-root ensure
  * (SpaceServerPolicy.rootEnsureDeadlineMs): generous — a cold compile
  * of the system root is seconds, not tens of seconds — because the
@@ -131,6 +169,7 @@ import {
   type OwningRootAddress,
 } from "../ensure-piece-running.ts";
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
+import { sourceDocKey } from "../compilation-cache/cell-cache.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
 import {
   stampWaveRunContext,
@@ -309,6 +348,11 @@ export type SpaceServerPolicy = {
 
   /** Injected wall clock for deterministic delivery-budget verification. */
   deliveryFailureNow?: () => number;
+
+  /** How long a served event waits for its pattern's program closure to
+   * arrive in the space before the absence is a delivery failure
+   * (PROGRAM_CLOSURE_GRACE_MS; events.md §5). */
+  programClosureGraceMs?: number;
 
   /** The execution lease's TTL (serving-loop.md §2; production takes the
    * wire default EXECUTION_LEASE_TTL_MS). A knob so tests can pin the
@@ -1455,6 +1499,21 @@ export class SpaceServer implements TransactionSealDestination {
 
   readonly #deliveryLoadRecoveries = new Map<string, string>();
 
+  /**
+   * The served events waiting, within their grace, for their pattern's
+   * program closure to arrive in the space (events.md §5), by event id. Memory
+   * only, so a new tenure starts each grace afresh; an event whose absence
+   * already became a delivery failure has its checkpoint instead and no entry
+   * here.
+   */
+  readonly #programClosureGraces = new Map<string, ProgramClosureGrace>();
+
+  /** The closure entry documents events wait on (`#programClosureGraces`
+   * and the `program-unavailable` checkpoints), by document id: a commit
+   * writing one into the space wakes the drain and is the recovery its
+   * delivery failures wait on. */
+  readonly #programClosureWaits = new Set<string>();
+
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
    * re-arms after a REAL wait even when no input ever arrives. Input
@@ -1854,34 +1913,8 @@ export class SpaceServer implements TransactionSealDestination {
       this.#pendingShadowFlipWake = true;
       this.#feedArrived?.resolve();
     };
-    runtime.storageManager.loadRecoveryObserver = (recovery) => {
-      const relevantEventIds = [...this.#deliveryCheckpoints]
-        .filter(([, checkpoint]) =>
-          checkpoint.phase === "dispatch-load" &&
-          checkpoint.state === "failed" &&
-          checkpoint.recoveryEpoch === recovery.failedEpoch
-        )
-        .map(([eventId]) => eventId);
-      for (
-        const [eventId, failedEpoch] of this.#uncommittedDeliveryFailureEpochs
-      ) {
-        if (failedEpoch === recovery.failedEpoch) {
-          relevantEventIds.push(eventId);
-        }
-      }
-      if (relevantEventIds.length === 0) return;
-      this.#deliveryLoadRecoveries.set(
-        recovery.failedEpoch,
-        recovery.recoveryEpoch,
-      );
-      for (const eventId of relevantEventIds) {
-        this.#deliveryCheckpointWriteBlocked.delete(eventId);
-        this.#attentionSealWriteBlocked.delete(eventId);
-        this.#deliveryWriteBlockedAt.delete(eventId);
-      }
-      this.#eventScanOwed = true;
-      this.#feedArrived?.resolve();
-    };
+    runtime.storageManager.loadRecoveryObserver = (recovery) =>
+      this.#observeLoadRecovery(recovery);
 
     // Phase 4 (builtins.md §4, LT3): the served navigateTo's
     // connectivity check — the intent write requires the acting session
@@ -1979,6 +2012,7 @@ export class SpaceServer implements TransactionSealDestination {
           entry.eventId,
           entry.deliveryDeferral,
         );
+        this.#rewatchProgramClosure(entry.deliveryDeferral);
       }
     }
     if (pendingEventDocs.length > 0) {
@@ -3778,6 +3812,182 @@ export class SpaceServer implements TransactionSealDestination {
     }, EVENT_DEFERRAL_REARM_MS);
   }
 
+  /**
+   * Takes `recovery` as the positive recovery evidence of every
+   * `dispatch-load` delivery failure waiting on its failed epoch (events.md
+   * §5), which wakes one retry of each: a load that settled a new generation
+   * of the document that failed, or a program closure that arrived.
+   */
+  #observeLoadRecovery(
+    recovery: { failedEpoch: string; recoveryEpoch: string },
+  ): void {
+    const relevantEventIds = [...this.#deliveryCheckpoints]
+      .filter(([, checkpoint]) =>
+        checkpoint.phase === "dispatch-load" &&
+        checkpoint.state === "failed" &&
+        checkpoint.recoveryEpoch === recovery.failedEpoch
+      )
+      .map(([eventId]) => eventId);
+    for (
+      const [eventId, failedEpoch] of this.#uncommittedDeliveryFailureEpochs
+    ) {
+      if (failedEpoch === recovery.failedEpoch) {
+        relevantEventIds.push(eventId);
+      }
+    }
+    if (relevantEventIds.length === 0) return;
+    this.#deliveryLoadRecoveries.set(
+      recovery.failedEpoch,
+      recovery.recoveryEpoch,
+    );
+    for (const eventId of relevantEventIds) {
+      this.#deliveryCheckpointWriteBlocked.delete(eventId);
+      this.#attentionSealWriteBlocked.delete(eventId);
+      this.#deliveryWriteBlockedAt.delete(eventId);
+    }
+    this.#eventScanOwed = true;
+    this.#feedArrived?.resolve();
+  }
+
+  /**
+   * Defers a served event whose piece names a pattern this runtime could not
+   * load, when the space's store does not hold the pattern's program closure
+   * (events.md §5). The closure is written by whichever runtime created the
+   * piece, so the event waits for it: within the grace
+   * (PROGRAM_CLOSURE_GRACE_MS) the deferral is settlement, spending no
+   * budget, writing no checkpoint and arming no backstop, and past it the
+   * absence is a `program-unavailable` delivery failure under the
+   * failed-state budget. Either way the commit that writes the closure's entry
+   * into the space wakes the event (`#programClosureWaits`), and either way
+   * the event holds the later arrivals behind it (§2). Returns `false`, and
+   * leaves the deferral to the deferral budget, when the store holds the
+   * closure's entry: what failed then is not its absence.
+   */
+  #deferForProgramClosure(
+    runtime: Runtime,
+    entry: StreamEventEntry,
+    streamEntry: { sidecarId: string; index: number; seq: number },
+    patternIdentity: string,
+  ): boolean {
+    const closureDocId = runtime.getCell(
+      this.#options.space,
+      sourceDocKey(patternIdentity),
+    ).getAsNormalizedFullLink().id;
+    if (
+      Engine.selectDocHead(this.#options.engine, {
+        id: closureDocId,
+        scopeKey: "space",
+      }) !== 0
+    ) {
+      return false;
+    }
+    const eventId = entry.eventId;
+    this.#programClosureWaits.add(closureDocId);
+    this.#options.onEventDeferred?.();
+    // The barrier's mid-pass half, as the other deferral arms carry it.
+    this.#loadParkDeferredInPass = true;
+    const checkpoint =
+      this.#pendingDeliveryCheckpointWrites.get(eventId)?.checkpoint ??
+        this.#deliveryCheckpoints.get(eventId) ??
+        entry.deliveryDeferral;
+    if (checkpoint === undefined) {
+      let grace = this.#programClosureGraces.get(eventId);
+      if (grace === undefined) {
+        grace = {
+          sidecarId: streamEntry.sidecarId,
+          seq: streamEntry.seq,
+          since: this.#deliveryFailureNow(),
+          timer: undefined,
+          expired: false,
+        };
+        this.#programClosureGraces.set(eventId, grace);
+        this.#armProgramClosureGraceEnd(eventId, grace);
+      }
+      if (
+        !grace.expired &&
+        this.#deliveryFailureNow() - grace.since < this.#programClosureGraceMs()
+      ) {
+        this.#options.stats.events.programWaitDeferrals += 1;
+        this.#drainInFlight.delete(eventId);
+        return true;
+      }
+    }
+    this.#endProgramClosureGrace(eventId);
+    this.#recordDeliveryFailure(runtime, entry, streamEntry, {
+      failureClass: "program-unavailable",
+      recoveryEpoch: programClosureEpoch(closureDocId),
+      permanentEvidence: false,
+    });
+    return true;
+  }
+
+  /**
+   * Has a replayed `program-unavailable` checkpoint wait on its closure
+   * again, or wake its retry at once when the closure arrived while no tenure
+   * watched for it (events.md §5).
+   */
+  #rewatchProgramClosure(checkpoint: DeliveryDeferral): void {
+    const epoch = checkpoint.recoveryEpoch;
+    const prefix = programClosureEpoch("");
+    if (
+      checkpoint.failureClass !== "program-unavailable" ||
+      checkpoint.state !== "failed" || epoch === undefined ||
+      !epoch.startsWith(prefix)
+    ) {
+      return;
+    }
+    const closureDocId = epoch.slice(prefix.length);
+    const head = Engine.selectDocHead(this.#options.engine, {
+      id: closureDocId,
+      scopeKey: "space",
+    });
+    if (head === 0) {
+      this.#programClosureWaits.add(closureDocId);
+    } else {
+      this.#observeLoadRecovery({
+        failedEpoch: epoch,
+        recoveryEpoch: `${epoch}@${head}`,
+      });
+    }
+  }
+
+  #programClosureGraceMs(): number {
+    return this.#options.policy?.programClosureGraceMs ??
+      PROGRAM_CLOSURE_GRACE_MS;
+  }
+
+  /** Arms the timer that ends `grace` (PROGRAM_CLOSURE_GRACE_MS's
+   * exception), whose firing re-drains the event to take it past the grace,
+   * or forgets the grace of an event that has its consequence by then. A
+   * wake belongs to the active tenure, as the delivery-failure wakes do. */
+  #armProgramClosureGraceEnd(
+    eventId: string,
+    grace: ProgramClosureGrace,
+  ): void {
+    if (!this.#active) return;
+    grace.timer = setTimeout(() => {
+      grace.timer = undefined;
+      grace.expired = true;
+      const stored = this.#storedStreamEntry(
+        grace.sidecarId,
+        eventId,
+        grace.seq,
+      );
+      if (stored === undefined || stored.consequenced === true) {
+        this.#programClosureGraces.delete(eventId);
+        return;
+      }
+      this.#eventScanOwed = true;
+      this.#feedArrived?.resolve();
+    }, this.#programClosureGraceMs());
+  }
+
+  #endProgramClosureGrace(eventId: string): void {
+    const grace = this.#programClosureGraces.get(eventId);
+    if (grace?.timer !== undefined) clearTimeout(grace.timer);
+    this.#programClosureGraces.delete(eventId);
+  }
+
   #deliveryFailureNow(): number {
     return this.#options.policy?.deliveryFailureNow?.() ?? Date.now();
   }
@@ -4258,6 +4468,19 @@ export class SpaceServer implements TransactionSealDestination {
           record.eventAppends.filter(
             (append) => append.retryOf !== undefined,
           ).length;
+      }
+      // A commit writing a closure entry that events wait on (events.md §5)
+      // re-drains them, and is the recovery the delivery failures of those
+      // past their grace wait on.
+      if (this.#programClosureWaits.size > 0) {
+        for (const write of record.writes) {
+          if (!this.#programClosureWaits.delete(write.id)) continue;
+          this.#eventScanOwed = true;
+          this.#observeLoadRecovery({
+            failedEpoch: programClosureEpoch(write.id),
+            recoveryEpoch: `${programClosureEpoch(write.id)}@${record.seq}`,
+          });
+        }
       }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
       // the piece's pattern-run commit is exactly such a record) —
@@ -5053,6 +5276,17 @@ export class SpaceServer implements TransactionSealDestination {
                     );
                     if (arrivalHeld) {
                       this.#options.stats.events.arrivalHeldDeferrals += 1;
+                    } else if (
+                      "cause" in outcome &&
+                      outcome.cause === "pattern-unloadable" &&
+                      this.#deferForProgramClosure(
+                        runtime,
+                        entry,
+                        streamEntry,
+                        outcome.patternIdentity,
+                      )
+                    ) {
+                      return;
                     }
                     // A start declined for the loop's own follow of the
                     // piece's origin (§3e) is the loop waiting on itself:
@@ -8182,6 +8416,10 @@ export class SpaceServer implements TransactionSealDestination {
       clearTimeout(timer);
     }
     this.#deliveryFailureWakeTimers.clear();
+    for (const eventId of [...this.#programClosureGraces.keys()]) {
+      this.#endProgramClosureGrace(eventId);
+    }
+    this.#programClosureWaits.clear();
     for (const eventId of [...this.#deliveryCheckpoints.keys()]) {
       this.#setActiveDeliveryCheckpoint(eventId, undefined);
     }
