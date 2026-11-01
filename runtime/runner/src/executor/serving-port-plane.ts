@@ -77,6 +77,7 @@ export const servingPlaneEndpoint = (port: PortLike): ServingPlaneEndpoint =>
 /** What the worker's host answers the server's thread with. */
 export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
+  eventStats: () => ServingLoopStats["events"];
   diagnostics: () => ServingLoopDiagnostics;
   runLifecycleVerb: (
     space: MemorySpace,
@@ -203,15 +204,22 @@ type WaveCommitSinkReads = Required<
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it.
+ * `reportEventStats` runs just before each commit is posted.
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
+  readonly #reportEventStats: () => void;
   readonly #reads: EngineWaveCommitSink;
 
-  constructor(endpoint: ServingPlaneEndpoint, deps: WaveCommitSinkDeps) {
+  constructor(
+    endpoint: ServingPlaneEndpoint,
+    deps: WaveCommitSinkDeps,
+    reportEventStats: () => void,
+  ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
+    this.#reportEventStats = reportEventStats;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -281,6 +289,13 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
+    // The event counters cross ahead of the commit on the same port, whose
+    // messages the server's thread handles in order, so it holds what this
+    // wave's drain counted before it applies the commit. A client that has
+    // seen the commit then reads counters that include it. Only the `events`
+    // block crosses here: the whole counters, settle series included, cost
+    // about as much to post as the commit itself.
+    this.#reportEventStats();
     try {
       const { result, homeRefused } = await this.#endpoint.request(
         "sink.commitWave",
@@ -553,6 +568,7 @@ export class ServingPlane {
   readonly #server: HostMemoryServer;
   readonly #loopback: LoopbackPlane;
   #observer: ServerExecutionObserver | undefined;
+  #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
   #closed = false;
 
@@ -628,11 +644,17 @@ export class ServingPlane {
 
   /** The tenure's sink; `ExecutorHostOptions.createWaveCommitSink`. */
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
-    return new PlaneWaveCommitSink(this.#endpoint, deps);
+    return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
+      if (this.#host === undefined) return;
+      this.#endpoint.notify("host.eventStats", {
+        events: this.#host.eventStats(),
+      });
+    });
   }
 
   /** Installs what the server's thread may ask of the worker's host. */
   serve(host: ServingPlaneHost): void {
+    this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
     this.#endpoint.onRequest(
