@@ -32,7 +32,7 @@ import {
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
-import { lifecycleRequestHandler } from "@/routes/pattern-lifecycle/pattern-lifecycle.handlers.ts";
+import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 
 // Create a global runtime instance for the server
 let runtime: Runtime;

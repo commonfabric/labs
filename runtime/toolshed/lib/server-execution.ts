@@ -45,8 +45,8 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
 
 /**
  * The serving loop as the rest of this process reaches it, whichever thread
- * runs it: the lifecycle verbs the route sends, and the loop's counters and
- * close.
+ * runs it: the lifecycle verbs the `pattern.lifecycle` handler sends, and the
+ * loop's counters and close.
  */
 export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle;
 
@@ -500,8 +500,8 @@ export function startServerExecutionHost(options: {
 }
 
 /**
- * The serving loop while it runs, for the routes that hand it work — the
- * pattern-lifecycle verbs among them; `undefined` off the flag.
+ * The serving loop while it runs, for what hands it work — the
+ * `pattern.lifecycle` handler among them; `undefined` off the flag.
  */
 export function serverExecutionHost(): ServingLoop | undefined {
   return loop;

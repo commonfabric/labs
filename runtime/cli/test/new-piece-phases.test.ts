@@ -30,7 +30,6 @@ describe("newPiece()", () => {
           } as never),
         getPinnedProgramFromFile: () =>
           Promise.resolve({ main: "/main.tsx", files: [] }),
-        loadIdentity: () => Promise.resolve({} as never),
         instantiatePieceOnServer: () =>
           Promise.resolve({
             pieceId: "fid1:created",

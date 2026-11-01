@@ -1190,7 +1190,6 @@ describe("cli piece parsing", () => {
     const deps = {
       loadPieces: () => Promise.resolve(controller as any),
       getPinnedProgramFromFile: () => Promise.resolve(program as any),
-      loadIdentity: () => Promise.resolve({} as any),
       instantiatePieceOnServer: (_config: unknown, input: unknown) => {
         seen.requests.push(input);
         return Promise.resolve({
@@ -1247,7 +1246,7 @@ describe("cli piece parsing", () => {
     type Receipt = Awaited<ReturnType<Instantiate>>;
 
     /** Observe the CLI boundary without starting a runtime or a live service. */
-    async function fixture() {
+    function fixture() {
       const requests: Request[] = [];
       const opened: string[] = [];
       const started: unknown[] = [];
@@ -1265,7 +1264,6 @@ describe("cli piece parsing", () => {
           return Promise.resolve();
         },
       };
-      const identity = await Identity.fromPassphrase("cli served registration");
       const state: {
         status: Receipt["registration"]["status"];
         transportError?: Error;
@@ -1277,7 +1275,6 @@ describe("cli piece parsing", () => {
               ReturnType<NonNullable<Dependencies["loadPieces"]>>
             >,
           ),
-        loadIdentity: () => Promise.resolve(identity),
         getPinnedProgramFromFile: () =>
           Promise.resolve({ main: "/main.tsx", files: [] }),
         instantiatePieceOnServer: (_config, request) => {
@@ -1308,7 +1305,7 @@ describe("cli piece parsing", () => {
 
     for (const status of ["pending", "failed"] as const) {
       it(`stops before opening or starting a piece when registration is ${status}`, async () => {
-        const run = await fixture();
+        const run = fixture();
         run.state.status = status;
         const result = await run.create({ requestKey: "registration-retry" })
           .then(
@@ -1331,7 +1328,7 @@ describe("cli piece parsing", () => {
     }
 
     it("registers an unstarted piece and leaves it unstarted after registration completes", async () => {
-      const run = await fixture();
+      const run = fixture();
       expect(await run.create({ start: false, requestKey: "unstarted-retry" }))
         .toBe(PIECE);
       expect(run.requests).toHaveLength(1);
@@ -1345,7 +1342,7 @@ describe("cli piece parsing", () => {
     });
 
     it("reports its generated key and forwards that same key when failed registration is retried", async () => {
-      const run = await fixture();
+      const run = fixture();
       run.state.status = "failed";
       const result = await run.create().then(
         () => undefined,
@@ -1368,12 +1365,8 @@ describe("cli piece parsing", () => {
     });
 
     it("preserves a deterministic serving refusal without reporting an uncertain creation", async () => {
-      const run = await fixture();
-      const refusal = new ServedLifecycleError(
-        "unauthorized",
-        403,
-        "Access denied",
-      );
+      const run = fixture();
+      const refusal = new ServedLifecycleError("forbidden", "Access denied");
       run.state.transportError = refusal;
       const result = await run.create().catch((error: unknown) => error);
       expect(result).toBe(refusal);
@@ -1382,7 +1375,7 @@ describe("cli piece parsing", () => {
     });
 
     it("retains the retry key after an unknown transport outcome and does not start", async () => {
-      const run = await fixture();
+      const run = fixture();
       run.state.transportError = new Error("response connection closed");
       const result = await run.create().then(
         () => undefined,
@@ -1399,13 +1392,12 @@ describe("cli piece parsing", () => {
       expect(run.started).toEqual([]);
     });
 
-    it("retains retry guidance for malformed success, timeout, and server-error replies", async () => {
-      for (const status of [200, 408, 500, 503]) {
-        const run = await fixture();
+    it("retains retry guidance for a refusal that leaves the outcome unknown", async () => {
+      for (const code of ["internal", "space-not-served"]) {
+        const run = fixture();
         run.state.transportError = new ServedLifecycleError(
-          `http-${status}`,
-          status,
-          "Unconfirmed response",
+          code,
+          "Unconfirmed outcome",
         );
         const error = await run.create().catch((error: unknown) => error);
         expect(error).toBeInstanceOf(Error);
@@ -1446,7 +1438,6 @@ describe("cli piece parsing", () => {
       loadPieces: () => Promise.resolve(controller as any),
       resolvePieceAddress: () => Promise.resolve(PIECE),
       getPinnedProgramFromFile: () => Promise.resolve(program as any),
-      loadIdentity: () => Promise.resolve({} as any),
       setPieceSourceOnServer: (_config: unknown, input: unknown) => {
         seen.requests.push(input);
         return Promise.resolve({
