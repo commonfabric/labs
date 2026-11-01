@@ -17,11 +17,14 @@ recovery, and adversarial verification work below remains part of this plan. The
 existing server-execution specs retain authority over durable commits, events,
 effects, and speculation overlays.
 
-Rollout requires a complete passing integration campaign and measured workload
-comparisons. Preserve bounded view-plan traversal, verify complete 100-topic
-rendering on the rollout build, reduce the remaining navigation overhead, and
-resolve consequence completion for 10-voter, 10-option lunch bursts before
-enabling deployments. The
+The default for a web client under server execution turned on before the
+integration campaign and workload comparisons below were complete, and a
+deployment can still turn it off. Rollout beyond that, to other client classes,
+and removing that off switch require a complete passing integration campaign and
+measured workload comparisons: preserve bounded view-plan traversal, verify
+complete 100-topic rendering on the rollout build, reduce the remaining
+navigation overhead, and resolve consequence completion for 10-voter, 10-option
+lunch bursts. The
 [validation and benchmark snapshot](../history/benchmarks/view-scoped-replication-2026-09-10.md)
 records the integration corrections, enabled and disabled comparisons, CPU
 attribution, and remaining measurement limits. The
