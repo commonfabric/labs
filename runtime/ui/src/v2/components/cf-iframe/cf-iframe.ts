@@ -91,6 +91,13 @@ export class CFIframe extends BaseElement {
   #contextSetup: AbortController | undefined;
 
   /**
+   * Whether the element was disconnected and has not connected since. An
+   * update still runs then, and a setup it prepares waits, aborted, for the
+   * element to connect again.
+   */
+  #detached = false;
+
+  /**
    * Where the host serves the sandbox's outer frame, as the runtime it
    * provided says, or `undefined` to have the sandbox inline it.
    *
@@ -129,18 +136,21 @@ export class CFIframe extends BaseElement {
     this.requestUpdate("presentation", previous);
   }
 
-  /** Starts over a context setup that a disconnection aborted. */
+  /** Starts over a context setup that a disconnection aborted or deferred. */
   override connectedCallback() {
     super.connectedCallback();
+    this.#detached = false;
     if (this.#contextSetup?.signal.aborted) this.prepareContextBridge();
   }
 
   /**
    * Aborts a context setup under way, whose wait for a SQLite database keeps
-   * that database's producer demanded.
+   * that database's producer demanded, and defers any setup an update
+   * prepares until the element connects again.
    */
   override disconnectedCallback() {
     super.disconnectedCallback();
+    this.#detached = true;
     this.#contextSetup?.abort();
   }
 
@@ -306,6 +316,10 @@ export class CFIframe extends BaseElement {
       this.#contextSetup = setup;
       this._contextBridge = { resources: {} };
       this._contextReady = false;
+      if (this.#detached) {
+        setup.abort();
+        return;
+      }
       void resolveCellContextBridge(
         context,
         this.resourceKinds ?? {},

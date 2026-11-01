@@ -290,16 +290,19 @@ describe("CFIframe", () => {
 
     /**
      * A context whose database is never written. `held` is what is subscribed
-     * on its source; `nextWait()` resolves once a setup waits for the
-     * database, and `nextRelease()` once nothing is held.
+     * on its source, and `requests()` how many requests a setup has sent;
+     * `nextWait()` resolves once a setup waits for the database, and
+     * `nextRelease()` once nothing is held.
      */
     const unwrittenDatabase = () => {
       const held = new Set<CellHandle<unknown>>();
+      let requests = 0;
       let wait: PromiseWithResolvers<void> | undefined;
       let release: PromiseWithResolvers<void> | undefined;
       const runtime = {
         [$conn]: () => ({
           request: (request: { type: RequestType; cell: CellRef }) => {
+            requests++;
             if (request.type === RequestType.CellResolveAsCell) {
               return Promise.resolve({
                 cell: { ...request.cell, id: "of:resolved" },
@@ -331,6 +334,7 @@ describe("CFIframe", () => {
       return {
         context: new CellHandle(runtime, ref),
         held,
+        requests: () => requests,
         nextWait: () => (wait = Promise.withResolvers()).promise,
         nextRelease: () => (release = Promise.withResolvers()).promise,
       };
@@ -355,6 +359,24 @@ describe("CFIframe", () => {
 
       expect(held.size).toBe(2);
       expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("sends nothing for a context set while disconnected, and waits for the database once connected again", async () => {
+      const { context, held, requests, nextWait } = unwrittenDatabase();
+      const element = new HeadlessIframe();
+      element.src = "<p>ready</p>";
+      element.connectedCallback();
+      element.disconnectedCallback();
+
+      element.context = context;
+      internals(element).willUpdate(contextChange());
+      expect(requests()).toBe(0);
+      const waiting = nextWait();
+      element.connectedCallback();
+      await waiting;
+
+      expect(held.size).toBe(2);
       expect(templateValues(element)[1]).toBe("");
     });
 
