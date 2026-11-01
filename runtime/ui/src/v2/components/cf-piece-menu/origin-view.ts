@@ -84,17 +84,18 @@ export function formatTimestamp(ms: number): string {
 /**
  * Which state a piece's source is in.
  *
- * `following`, `unknown`, `unreachable`, and `refused` all record an origin.
- * What separates them is what the last attempt to follow it did, which is why
- * an origin alone cannot say — and `unknown` is the case where nothing has
- * tried, which reads as up to date unless it is named. `unusable` records a
- * string nothing can follow, which is not detachment: the piece carries
- * something a person can repair.
+ * `following`, `unknown`, `unreachable`, `unapplied`, and `refused` all
+ * record an origin. What separates them is what the last attempt to follow it
+ * did, which is why an origin alone cannot say — and `unknown` is the case
+ * where nothing has tried, which reads as up to date unless it is named.
+ * `unusable` records a string nothing can follow, which is not detachment: the
+ * piece carries something a person can repair.
  */
 export type FollowState =
   | "following"
   | "unknown"
   | "unreachable"
+  | "unapplied"
   | "refused"
   | "detached"
   | "unusable";
@@ -224,6 +225,23 @@ export function describeFollowState(
       detail: "It is running the source it last accepted. This may right " +
         "itself when the origin comes back.",
       reason: reconciliation.detail ?? "the origin did not answer",
+      at: reconciliation.at,
+      ...(reconciliation.offered === undefined
+        ? {}
+        : { offered: reconciliation.offered }),
+      canUpdate: true,
+      canForce: false,
+    };
+  }
+  if (reconciliation.outcome === "unapplied") {
+    return {
+      state: "unapplied",
+      label: "New source not applied",
+      summary: "The origin offered new source and this piece could not " +
+        "apply it yet.",
+      detail: "It is running the source it last accepted, and tries again " +
+        "the next time it is opened.",
+      reason: reconciliation.detail ?? "the write that adopts it did not land",
       at: reconciliation.at,
       ...(reconciliation.offered === undefined
         ? {}

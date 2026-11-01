@@ -19,6 +19,7 @@ export function applyLocalExperimentalDefaults(
   experimental.lazyMaterialization ??= true;
   experimental.agentBuiltin ??= true;
   experimental.localFold ??= false;
+  experimental.pieceCreatorRecord ??= false;
   // TODO(danfuzz): Turn this on only once a runtime whose naming mode
   // differs from a space's data is kept away from that space;
   // `instance-naming-modes.test.ts` pins what one does to it until then.

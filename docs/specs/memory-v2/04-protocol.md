@@ -1760,10 +1760,9 @@ Semantics:
 `instantiate`, `setsrc` — in the session's space, as the session's principal.
 A server advertises it with the `patternLifecycle` capability flag. The verbs,
 their arguments, and their receipts are defined in
-[`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md),
-which also defines them as HTTP routes; a request on the session reaches the
-process that serves the space, since the space's memory connection is routed
-to that process.
+[`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md).
+A request on the session reaches the process that serves the space, since the
+space's memory connection is routed to that process.
 
 ```typescript
 // Shown at module scope.
@@ -1776,7 +1775,7 @@ interface PatternLifecycleRequest {
   space: SpaceId;
   sessionId: SessionId;
   verb: "upload" | "instantiate" | "setsrc";
-  /** The verb's arguments: the route's body without `space`. */
+  /** The verb's arguments; the session supplies the space. */
   body: Record<string, unknown>;
 }
 
@@ -1789,11 +1788,11 @@ Semantics:
 - a request naming a session the connection does not hold gets a
   `SessionError`
 - the server refuses a message of more than 8 MiB in UTF-8
-  (`PATTERN_LIFECYCLE_MAX_BYTES`, the HTTP route's body limit) with
-  `payload-too-large`. A client refuses before sending a request whose
-  encoding takes more than that, or more than its connection takes in one
-  request: 4 MiB on a routed connection (`ROUTED_QUEUE_LIMIT`), which the
-  router would otherwise refuse by closing the connection
+  (`PATTERN_LIFECYCLE_MAX_BYTES`) with `payload-too-large`. A client refuses
+  before sending a request whose encoding takes more than that, or more than
+  its connection takes in one request: 4 MiB on a routed connection
+  (`ROUTED_QUEUE_LIMIT`), which the router would otherwise refuse by closing
+  the connection
 - the DID the session was opened as must itself hold WRITE on the space; a
   grant reached only through a proof chain's root issuer (section 4.5.1) does
   not count, since the verb commits with the requester's own trust. An
@@ -1808,7 +1807,8 @@ Semantics:
   not held behind the verb (section 4.11.2), and on a routed connection the
   request's credit returns to the router when the frame's handling ends
 - a refusal is an error named `PatternLifecycleRefusal` whose `code` names the
-  reason (section 4.7); the handler's codes are those of the HTTP route
+  reason (section 4.7); `server-pattern-lifecycle.md` lists the handler's
+  codes
 - a client raises `lifecycle-unsupported` without sending when the server does
   not advertise `patternLifecycle`. A connection lost before the response
   leaves the verb's outcome unknown
