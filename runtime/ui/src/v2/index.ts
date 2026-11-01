@@ -144,6 +144,7 @@ export * from "./components/cf-space-link/index.ts";
 export * from "./components/cf-drag-source/index.ts";
 export * from "./components/cf-drop-zone/index.ts";
 export * from "./components/cf-picker/index.ts";
+export * from "./components/cf-suggestions/index.ts";
 export * from "./components/cf-secret-viewer/index.ts";
 export * from "./components/cf-webhook/index.ts";
 export * from "./components/cf-router/index.ts";
