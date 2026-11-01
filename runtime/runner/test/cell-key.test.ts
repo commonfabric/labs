@@ -156,6 +156,57 @@ describe("Cell", () => {
         });
       });
 
+      describe("under a union with a label beside it", () => {
+        it("carries the label to a key of an arm, as narrowing the whole path does", () => {
+          // `key()` narrows one segment at a time, so it reaches a child of
+          // the union starting from the union itself.
+
+          const cell = cellHolding(
+            "labeled nullable object",
+            {
+              type: "object",
+              properties: {
+                f: {
+                  anyOf: [
+                    { type: "object", properties: { a: { type: "string" } } },
+                    { type: "null" },
+                  ],
+                  ifc: { confidentiality: ["sec"] },
+                },
+              },
+            },
+            { f: { a: "s" } },
+          );
+          const labeled = { type: "string", ifc: { confidentiality: ["sec"] } };
+
+          expect(linkSchemaOf(cell.key("f").key("a"))).toEqual(labeled);
+          expect(linkSchemaOf(cell.key("f", "a"))).toEqual(labeled);
+        });
+      });
+
+      describe("under an array with a label", () => {
+        it("carries the label to an element, as narrowing the whole path does", () => {
+          const cell = cellHolding(
+            "labeled array",
+            {
+              type: "object",
+              properties: {
+                list: {
+                  type: "array",
+                  items: { type: "string" },
+                  ifc: { confidentiality: ["sec"] },
+                },
+              },
+            },
+            { list: ["s"] },
+          );
+          const labeled = { type: "string", ifc: { confidentiality: ["sec"] } };
+
+          expect(linkSchemaOf(cell.key("list").key(0))).toEqual(labeled);
+          expect(linkSchemaOf(cell.key("list", 0))).toEqual(labeled);
+        });
+      });
+
       describe("for `length`", () => {
         it("returns no schema, and reads the length, on an array", () => {
           const cell = cellHolding(

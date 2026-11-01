@@ -534,6 +534,30 @@ reconciled pin.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
+- Narrowing a schema to a path (`labelAtPosition` and
+  `confidentialityPassedDown` in `cfc.ts`) gives each position one `ifc`,
+  where §4.2.2 resolves a template per observation class. Where what a
+  position inherits meets its own label, narrowing joins the two, where
+  §4.2.2 has the more specific entry replace the inherited one for its class:
+  an over-taint. A position whose own label observes `value`, `shape` or
+  `enumerate` beneath an inherited label gets one covering label holding
+  both, so its own atoms label the other classes' reads too: an over-taint.
+  An object passes its label to its properties whatever the label observes,
+  where §4.6.3 passes down only a container's default `label`: an over-taint.
+- A position whose own label observes `followRef` beneath an inherited label
+  keeps that class with the inherited atoms joined in. The reference read is
+  over-tainted, and the position's own content reads are not labeled by what
+  it inherits; below such a position in an array or a union, the inherited
+  label goes no further. That is an under-taint wherever the narrowed schema
+  is what declares a document's labels: an element anchored out of an array
+  whose label it inherits declares, if its schema observes `followRef`, no
+  inherited label for its content, and a read through the element's own link
+  goes unlabeled where the same read through the holder does not, the layout
+  difference §4.6.4 rules out. A covering label in its place would leave the
+  reference read unlabeled, and a write through the position would merge that
+  into the stored declaration its siblings share. Declaring an anchored
+  document's entries from the holder schema's entries at the element's path,
+  rather than from the one label narrowing returns, closes it.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;

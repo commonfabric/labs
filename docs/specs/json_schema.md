@@ -519,8 +519,11 @@ what the cursor declares about its type decides how:
   and nothing has been turned down.
 - A type list, an `anyOf` or a `oneOf` narrows each arm and unions the
   results; an arm that narrows to `false` drops out, and one that narrows to a
-  true schema makes the union `true`. Returning to the same `anyOf` or `oneOf`
-  branch list in the same definition scope without consuming a path segment
+  true schema makes the union `true`. The arms of an `anyOf` or a `oneOf` are
+  read without the keywords beside them; a label beside them reaches the arms
+  as [How narrowing labels a position](#how-narrowing-labels-a-position) says.
+  Returning to the same `anyOf` or `oneOf` branch
+  list in the same definition scope without consuming a path segment
   contributes `false`: the other arms already describe the children it can
   reach. Consuming a segment permits the list to be expanded again, so recursive
   object and array paths keep narrowing at each level. One narrowing expands
@@ -562,3 +565,28 @@ what the cursor declares about its type decides how:
   property the parent reads, and under the second carries the wildcard and
   reads a property the parent does not
   ([The read entry](link-schema-precedence.md#the-read-entry)).
+
+### How narrowing labels a position
+
+Narrowing labels each position on a path from two things: its own `ifc`, and
+the confidentiality the containers above it pass down. Nothing else about the
+path enters, so a path narrowed in one call and one narrowed segment by
+segment end on the same label.
+
+- An object passes its label to its properties, whatever the label observes.
+  An array passes its label to its elements, `unknown` to what it holds, and
+  a label beside an `anyOf` or a `oneOf` to what the arms narrow to, each only
+  where the label is covering: a label that observes one class of the
+  container (`observes`) stays on the container. Each arm of a type list is
+  the schema read as one of its types, and passes the label as that type
+  does.
+- What a position inherits joins its own label. Where its own label observes
+  `value`, `shape` or `enumerate`, the two become one covering label, which
+  then passes down as a covering label does. A label observing `followRef`
+  keeps that class and takes the inherited atoms in; it then passes down only
+  where it sits on an object.
+
+A `schemaAtPath` result carries one `ifc`, where the CFC specification
+resolves a template per observation class. Where the two differ, and in
+which direction, is recorded in
+[`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8.
