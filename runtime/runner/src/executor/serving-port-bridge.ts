@@ -398,12 +398,18 @@ export class ServingPortBridge {
     );
     endpoint.onRequest("loopback.open", ({ transport }) => {
       if (this.#closed) throw new Error("the serving port bridge is closed");
-      const connection = server.connect((message) => {
-        endpoint.notify("loopback.frame", {
-          transport,
-          frame: encodeMemoryBoundary(message as unknown as FabricValue),
-        });
-      });
+      // The worker's sessions are this process's own: the serving loop's
+      // home sessions reach the server over the port.
+      const connection = server.connect(
+        (message) => {
+          endpoint.notify("loopback.frame", {
+            transport,
+            frame: encodeMemoryBoundary(message as unknown as FabricValue),
+          });
+        },
+        undefined,
+        { inProcess: true },
+      );
       this.#connections.set(transport, connection);
     });
     endpoint.onRequest("loopback.send", ({ transport, payload }) => {
@@ -420,9 +426,6 @@ export class ServingPortBridge {
     });
     endpoint.onNotice("server.noteExecutorCommit", ({ notice }) => {
       server.noteExecutorCommit(notice);
-    });
-    endpoint.onNotice("server.noteLeaseReacquired", ({ notice }) => {
-      server.noteLeaseReacquired(notice);
     });
     endpoint.onNotice("worker.ready", () => {
       this.#workerReady.resolve();

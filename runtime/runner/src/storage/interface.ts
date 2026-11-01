@@ -965,8 +965,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * it, because the ACL is the only input that decision has. Never widens
    * authority: a genuine de-authorization is refused again at `session.open`.
    * Implemented by the v2 StorageManager; the serving loop's host is its only
-   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
-   * such commit.
+   * caller, for the commits its own memory server admits. The other trigger
+   * is `retrySpaceAccess()`, for a host that sees no such commit. A serving
+   * runtime's grant verdicts on another space's actors do not depend on it:
+   * its replica of that space watches the list over its own session.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 

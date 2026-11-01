@@ -517,7 +517,7 @@ modeling ruling generalizes this into the transaction identity model
 (protocol.md §1): envelope identity for single-session authored
 transactions, per-action-run annotations inside the server-driven wave
 commit — closing ledger LD3 (the shared `scope_key` vocabulary,
-key-vocabulary.md §3) and LD5 (the lease-holder read row, protocol.md
+key-vocabulary.md §3) and LD5 (the explicit-instance read row, protocol.md
 §2). scopes.md §7 M3 resolves the same way — `resolveScopeKey`'s
 session-fed admission path (`#decideTransaction()` in
 `runtime/memory/v2/server.ts` handing `session.principal` and

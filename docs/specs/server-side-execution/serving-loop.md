@@ -438,10 +438,8 @@ processes* (deploy overlap, partition) it holds via the lease:
   lapse nobody claimed (synchronous work, a compile, holding both renewal
   drivers past the TTL) refused the holder's commits while it lasted and
   admitted no one else's, so the next renewal extends the row and the tenure
-  continues; the SpaceServer reports the recovery to the memory server as it
-  reports a reacquire, since a push pass inside the lapse judged its loopback
-  session a former holder (`lease.lapsesRecovered` in §7). A lapse the
-  memory server reveals by refusing a derived commit is not recovered: the
+  continues, and the SpaceServer counts the recovery
+  (`lease.lapsesRecovered` in §7). A lapse the memory server reveals by refusing a derived commit is not recovered: the
   refused wave's work is withdrawn, so the renew arm the refusal runs ends
   the tenure as a loss, and the loop parks on the abort as below. A rival's
   acquire during the lapse names the rival, and its release deletes the row,
@@ -777,8 +775,11 @@ executing:
   2026-08-18/19; protocol.md §2b's free-read row carries the full
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
-  v2 assumes spaces co-hosted on one memory server; sharding is out of
-  scope. *(Phase 5 pinned the wake end to end and added NO machinery
+  With owner routing (`docs/plans/serving-loop-owner-routing.md`) that
+  session reaches the foreign space's owner from the home's process,
+  and the owner's commits wake the home loop over it; without the
+  route the session is on the home's own memory server, which v2 then
+  assumes holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
   the registration; a foreign commit's frames arrive on that session,
   the scheduler runs autonomously off storage notifications, and the

@@ -477,6 +477,10 @@ export type SpaceServerOptions = {
   policy?: SpaceServerPolicy;
   onParked?: (reason: string) => void;
 
+  /** DIAGNOSTIC (tests): the renew arm's same-process reacquire after a
+   * renewal blip the tenure survived, and a lapse its renewal extended. */
+  onLeaseReacquired?: () => void;
+
   /**
    * Offered the tenure's runtime when the tenure parks idle, in place of
    * disposing it (serving-loop.md §1, "Parking"). Returns the fenced
@@ -3542,19 +3546,15 @@ export class SpaceServer implements TransactionSealDestination {
       renewed = false;
     }
     if (renewed && lapsed && this.#active) {
-      // A push pass that ran inside the lapse judged this runtime's
-      // loopback session a former holder; the row is live again, so the
-      // memory server re-arms the session's exemption now, as it does
-      // after the reacquire below.
+      // The row is live again under the same tenure. The serving session's
+      // admission holds for the session's life, so nothing re-arms; the
+      // recovery is reported as the reacquire below is.
       this.#options.stats.lease.lapsesRecovered += 1;
       logger.warn("lease-lapse-recovered", () => [
         `space ${this.#options.space}: the lease lapsed with no successor ` +
         "and its renewal extended it; the tenure continues (serving-loop.md §2)",
       ]);
-      this.#options.server.noteLeaseReacquired({
-        space: this.#options.space,
-        principal: this.#options.serviceIdentity,
-      });
+      this.#options.onLeaseReacquired?.();
     }
     if (!renewed) {
       // Stop committing immediately (serving-loop.md §2's MUST): the
@@ -3583,18 +3583,8 @@ export class SpaceServer implements TransactionSealDestination {
         void this.park("lease-lost");
         return;
       }
-      // Survived the blip in-process. Any push pass that ran inside it
-      // judged this runtime's loopback session a FORMER holder and
-      // withheld or retracted its foreign instances (protocol.md §2's
-      // read row is live-lease admission); tell the co-hosted memory
-      // server the lease is live again so the session's exemption
-      // re-arms NOW — a full re-evaluation that re-delivers what the
-      // blip withheld — rather than on the next unrelated write (fan-out
-      // stage A's independent review, finding 1: the silent-stale half).
-      this.#options.server.noteLeaseReacquired({
-        space: this.#options.space,
-        principal: this.#options.serviceIdentity,
-      });
+      // Survived the blip in-process.
+      this.#options.onLeaseReacquired?.();
     }
   }
 
