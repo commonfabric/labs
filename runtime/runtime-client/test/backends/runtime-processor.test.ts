@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { stub } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -5038,6 +5038,84 @@ describe("runtime-processor", () => {
         expect(response.cell).toBeDefined();
         expect(worker.rootEnsures()).toBe(1);
         expect(housekeeping.starts()[0]).toBe(1);
+      });
+    });
+
+    describe("a Home whose every memory dial is refused", () => {
+      // The refusal is real: every dial, and every fetch of a pattern to
+      // create Home from, goes to a host that answers with a 403, so Home's
+      // memory session fails its first handshake on every attempt the client
+      // may make, and never opens.
+
+      /**
+       * A processor over a real runtime whose storage and API both reach a
+       * host that refuses everything it is asked.
+       */
+      async function refusedHomeWorker() {
+        const refuser = Deno.serve(
+          { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+          () => new Response(null, { status: 403 }),
+        );
+        const host = new URL(`http://127.0.0.1:${refuser.addr.port}/`);
+        const signer = await Identity.generate({ implementation: "noble" });
+        const storageManager = V2Storage.StorageManager.open({
+          as: signer,
+          memoryHost: host,
+        });
+        const runtime = new Runtime({ apiUrl: host, storageManager });
+        const processor = buildProcessor({
+          identity: signer,
+          runtime,
+          cc: new PiecesController(
+            { as: signer, space: signer.did() },
+            runtime,
+          ),
+          space: signer.did(),
+        });
+        return {
+          /** The Home bring-up's rejection, or `undefined` if it resolves. */
+          async bringUpFailure(existingOnly?: boolean): Promise<unknown> {
+            return await processor.handleEnsureHomePatternRunning({
+              type: RequestType.EnsureHomePatternRunning,
+              ...(existingOnly === undefined ? {} : { existingOnly }),
+            }).then(() => undefined, (error: unknown) => error);
+          },
+          async [Symbol.asyncDispose]() {
+            await runtime.dispose();
+            await storageManager.close();
+            await refuser.shutdown();
+          },
+        };
+      }
+
+      it("rejects the bring-up with the first handshake's failure, creating nothing", async () => {
+        await using worker = await refusedHomeWorker();
+        using housekeeping = stubHousekeeping();
+        using ensure = spy(PiecesController.prototype, "ensureDefaultPattern");
+
+        const failure = await worker.bringUpFailure();
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("failed its first handshake"),
+        });
+        expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
+        expect(ensure.calls.length).toBe(0);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+      });
+
+      it("rejects an existing-only bring-up with the first handshake's failure, rather than returning no Home", async () => {
+        await using worker = await refusedHomeWorker();
+        using housekeeping = stubHousekeeping();
+
+        const failure = await worker.bringUpFailure(true);
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("failed its first handshake"),
+        });
+        expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
       });
     });
 
