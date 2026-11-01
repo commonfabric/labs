@@ -31,6 +31,19 @@ carrying it. The read walk the join is built from, `forEachFlowObservation()`,
 still visits it and classifies it, which is what leaves every other consumer
 of that walk alone — the next section but two.
 
+The per-write read-prefix gate of
+[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), which
+checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
+against the reads before the write, leaves the class out as well
+(`buildGatedInputReads()` in the same file). A destination read precedes the
+write it is about, which is the position that gate quantifies over, but its
+result decides which writes are emitted and reaches no written value.
+Counted, it would gate a write on whatever label the destination holds: a
+store whose ceiling admits only public values, once a write stamps it with a
+clause an exchange rule opened, would refuse every later writer, even one
+writing a constant. A read the program makes of its destination carries no
+marker and still gates.
+
 **The type probe.** `CellImpl.set()` asks whether the cell holds a stream
 before choosing between delivering the value as an event and storing it. The
 stream marker is a scalar at one known key of the stored value, named by
@@ -255,7 +268,7 @@ existence channel is the neighboring disclosure, carried as SC-4 in
 
 ## What this does not change
 
-The exclusion is scoped to the flow join, and the marker changes nothing else
+Beyond the flow join and the per-write input gate, the marker changes nothing
 about either read. What each read is recorded as follows from the rest of its
 metadata, which this marker sits beside rather than replaces.
 
@@ -273,19 +286,6 @@ The type probe carries `ignoreReadForScheduling` and no attempted-write
 marker, so it is in neither of those logs, and it was in neither before this
 marker existed. What it has always been is a read the journal records for
 label purposes and the reactivity log does not.
-
-Of the three consumed sets CFC derives, the exclusion reaches two. The flow
-join is one. The per-write read-prefix gate of
-[`cfc-write-prefix-provenance.md`](./cfc-write-prefix-provenance.md), which
-checks a protected entry's `requiredIntegrity` and `maxConfidentiality`
-against the reads before the write, is the other: a destination read precedes
-the write it is about, which is the position that gate quantifies over, but
-it is not an input to the write, so it is no input the gate checks. Counting
-it gated a write on whatever label the destination already held, so a store
-whose ceiling admits only public values, once stamped with a clause an
-exchange rule had opened for the value written there, refused every later
-writer, even one writing a constant. A read the program makes of its
-destination carries no marker and still gates.
 
 The transaction-global consumed set the egress and sink ceilings read
 (`collectConsumedLabel`) still counts these reads. It can therefore gate a

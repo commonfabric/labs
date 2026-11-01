@@ -190,7 +190,8 @@ const wholeObjectWrite = async (
 
 describe("CFC write-destination reads", () => {
   // The write path reads the document it is about to write, to decide which
-  // sub-paths differ. Those reads leave the transaction's flow join, so a
+  // sub-paths differ. Those reads leave the transaction's flow join and the
+  // per-write input gate, so a
   // whole-object `set()` no longer carries one field's label onto the write
   // of a sibling that declares another. A read the calling program made is
   // not one of them and still joins.
@@ -706,15 +707,13 @@ describe("CFC write-destination reads", () => {
     });
   });
 
-  describe("a ceiling over a store whose stamp it does not admit", () => {
-    // A store can hold a clause its own ceiling does not admit: a release
-    // that an exchange rule opened at the write stamps the store with the
-    // clause it opened, since an exchanged label is not what persists. The
-    // write path's read of that store is not a read the program made, so a
-    // later write is gated on what the program read, not on that stamp.
-    // Here the stamp is left by a write that declared no ceiling, which
-    // stands in for the release. The dials are the pair a deployment ships
-    // with, under which that write lands and stamps what it read.
+  describe("a store holding a clause its own ceiling does not admit", () => {
+    // A release an exchange rule opened at the write can leave such a stamp.
+    // The write path's read of the store is not a read the program made, so
+    // a later write is gated on what the program read, not on that stamp.
+    // Here a write that declared no ceiling leaves the stamp. The dials are
+    // the pair a deployment ships with, under which that write lands and
+    // stamps what it read.
 
     const withStampedStore = async (
       name: string,
@@ -753,7 +752,7 @@ describe("CFC write-destination reads", () => {
       }
     };
 
-    it("commits a write that reads nothing over the stamped store", async () => {
+    it("commits a constant write into the stamped store", async () => {
       await withStampedStore("ceiling-rewrite", async (runtime) => {
         const tx = runtime.edit();
         runtime.getCell(space, "ceiling-rewrite", PUBLIC_SCHEMA, tx)

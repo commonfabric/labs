@@ -1222,7 +1222,8 @@ unobservability invariant, the runtime-private condition on a guard's control
 state, and the comment it requires at every marking site. §18.6.2 derives two things from the
 attempt's journal minus runtime-internal reads: the consumed set, and the
 conservative flow-path confidentiality. This entry proposes a fifth kind of
-runtime-internal read, and the runner subtracts it from the second alone —
+runtime-internal read, and the runner subtracts it from the second and from
+the per-write input gate, not from the egress and sink consumed set —
 the boundary at the end of this entry says so, and a runtime that adopts the
 amended list owes either the wider application or that boundary stated.
 §18.6.2 enumerates four kinds today: verifier-internal reads,

@@ -7387,7 +7387,11 @@ type InputReadSnapshot = {
 
 /**
  * The labeled reads a protected entry's input checks quantify over, built
- * from the input reads whose documents resolved to a label with values.
+ * from the input reads whose documents resolved to a label with values. The
+ * write path's own reads of its destination (`writeDestinationRead`,
+ * §18.6.2) are not among them: no program asked for them, and what they
+ * return decides which writes are emitted, never a written value. A read the
+ * program made of the same place carries no marker and still gates.
  * Returns what the per-entry checks consume: each read's gate path, its
  * effective label, and the labeled locations it consumed, resolved on first
  * ask.
@@ -7444,6 +7448,7 @@ const buildGatedInputReads = (
         ),
     }];
   }).filter((read) =>
+    !isWriteDestinationRead(read.meta) &&
     read.label !== undefined &&
     // A present-but-empty label ({} — no atoms) is the same trust level as
     // an absent one (excluded above); whether metadata materialized an
@@ -7920,15 +7925,10 @@ const verifyInputRequirements = (
     // exempting them stops the quantification from false-rejecting unrelated
     // protected writes (audit S7), now only ever needed for reads WITHIN the
     // prefix. Confidentiality- or endorsement-bearing reads stay, keeping
-    // the prompt-injection screen sound. The write path's own reads of its
-    // destination (`writeDestinationRead`, §18.6.2) are no input either: no
-    // program asked for them, and what they return decides which writes are
-    // emitted, never a written value. A read the program made of the same
-    // place carries no marker and still gates.
+    // the prompt-injection screen sound.
     const gating = protectedEntry
       ? gatedReadsOf().filter((read) =>
         read.journalIndex < bound &&
-        !isWriteDestinationRead(read.meta) &&
         !isProvenanceOnlyConsumedLabel(read.label!)
       )
       : [];
@@ -7940,9 +7940,7 @@ const verifyInputRequirements = (
     if (provenance !== undefined && protectedEntry) {
       let inPrefix = 0;
       for (const read of gatedReadsOf()) {
-        if (read.journalIndex < bound && !isWriteDestinationRead(read.meta)) {
-          inPrefix += 1;
-        }
+        if (read.journalIndex < bound) inPrefix += 1;
       }
       // Within-prefix reads excluded as provenance-only structural plumbing
       // — exactly where the S7 exemption still fires under D4.
