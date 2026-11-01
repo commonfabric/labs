@@ -137,9 +137,18 @@ async function producedSqliteCell(
     additionalProperties: true,
   });
   const produced = Promise.withResolvers<void>();
+  // A subscriber is first told what the handle holds, and a handle made from a
+  // context read earlier holds the field's link, which says nothing about the
+  // database. Only a later update, or what the pull below finds, does.
+  let subscribed = false;
   const cancel = database.subscribe((value) => {
-    if (value !== undefined) produced.resolve();
-  }, { onRefused: () => produced.resolve() });
+    if (subscribed && value !== undefined) produced.resolve();
+  }, {
+    onRefused: () => {
+      if (subscribed) produced.resolve();
+    },
+  });
+  subscribed = true;
   try {
     if (await database.pull() === undefined) await produced.promise;
   } catch (error) {
