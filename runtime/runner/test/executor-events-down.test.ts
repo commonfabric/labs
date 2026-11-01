@@ -3620,7 +3620,7 @@ describe("Phase 3 events-down (serving side)", () => {
         idleParkMs: 600_000,
         programClosureGraceMs: 600_000,
       }, { arg: "waited-closure-arg", result: "waited-closure-result" });
-      await eventDeferrals.reached(1);
+      await drainPasses.matching((queued) => queued >= 1);
 
       // More input than the deferral budget holds, each a wave the event
       // could be re-drained in.
@@ -3652,7 +3652,9 @@ describe("Phase 3 events-down (serving side)", () => {
       }, { arg: "late-closure-arg", result: "late-closure-result" });
       await awaitAdmitted(
         server,
-        () => entry()?.deliveryDeferral?.state === "failed",
+        () =>
+          entry()?.deliveryDeferral?.state === "failed" ||
+          entry()?.consequenced === true,
       );
       expect(entry()?.deliveryDeferral).toMatchObject({
         phase: "dispatch-load",
