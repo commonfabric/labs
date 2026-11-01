@@ -102,7 +102,9 @@ export function serveFromPort(
       }),
       createWaveCommitSink: (deps) => plane.createWaveCommitSink(deps),
       // The counters cross on the loop's own edges: every wave cycle, and
-      // each tenure's start and end.
+      // each tenure's start and end. The sink also posts them ahead of each
+      // wave commit, so the server's thread holds what a wave counted before
+      // it applies that wave's commit.
       onWaveCycle: () => plane.reportStats(host.stats()),
       onActivationSettled: (space, outcome) => {
         plane.reportActivationSettled(space, outcome);
