@@ -375,7 +375,7 @@ describe("piece source reconciliation", () => {
           const originalRef = getPatternIdentityRef(piece)!;
           await stampSource(piece, PARENT_SOURCE);
           expect(await reconcile(piece)).toBe(
-            mode === "entry-only host" ? "unavailable" : mode,
+            mode === "entry-only host" ? "mismatched" : mode,
           );
           const currentRef = getPatternIdentityRef(piece)!;
           if (mode !== "updated") expect(currentRef).toEqual(originalRef);
@@ -652,7 +652,7 @@ describe("piece source reconciliation", () => {
       const entryRef = manager.getArtifactEntryRef.bind(manager);
       manager.getArtifactEntryRef = () => undefined;
       try {
-        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("invalid");
       } finally {
         manager.getArtifactEntryRef = entryRef;
       }
@@ -713,7 +713,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("mismatched");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
     });
 
@@ -795,7 +795,7 @@ describe("piece source reconciliation", () => {
       expect(await runtime.start(piece)).toBe(true);
       await runtime.idle();
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("unapplied");
       await runtime.idle();
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect((await piece.pull())?.marker).toBe("v1");
@@ -815,7 +815,7 @@ describe("piece source reconciliation", () => {
       const originalRef = getPatternIdentityRef(piece);
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("unapplied");
       expect(getPatternIdentityRef(piece)).toEqual(originalRef);
       expect(getPieceSourceRevisions(piece)).toEqual([]);
     });
@@ -1556,10 +1556,31 @@ describe("piece source reconciliation", () => {
       });
     });
 
+    it("records as a refusal source that does not compile to the identity its origin advertised", async () => {
+      // The host says one thing and serves another, so what it serves is not
+      // the source that origin names. Serving it again changes nothing, so it
+      // is a refusal with its reason, not an origin out of reach.
+      const v2Identity = await identityFor(source("v2"));
+      const piece = await preparePiece(
+        servingFetch(() => v2Identity, () => source("v1")),
+      );
+      await stampSource(piece, PARENT_SOURCE);
+
+      expect(await reconcile(piece)).toBe("mismatched");
+
+      expect(getPieceReconciliation(piece)).toMatchObject({
+        outcome: "refused",
+        reason: "identity-mismatch",
+        origin: PARENT_SOURCE,
+        detail: "the source did not match the version its origin advertised",
+      });
+    });
+
     it("records why the write that adopts the origin's source did not commit", async () => {
-      // The origin answered and its source compiled, so a record saying only
-      // that it could not be reached would point a reader at the network. The
-      // commit's own reason is what says where the update stopped.
+      // The origin answered and its source compiled, so a record saying it
+      // could not be reached would point a reader at the network. The write
+      // that adopts the source is what did not land, and the commit's own
+      // reason is what says where the update stopped.
       const demanding = sourceWithRequiredInput("v2");
       const demandingIdentity = await identityFor(demanding);
       const piece = await preparePiece(
@@ -1567,10 +1588,10 @@ describe("piece source reconciliation", () => {
       );
       await stampSource(piece, PARENT_SOURCE);
 
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("unapplied");
 
       expect(getPieceReconciliation(piece)).toMatchObject({
-        outcome: "unreachable",
+        outcome: "unapplied",
         origin: PARENT_SOURCE,
         offered: { identity: demandingIdentity, symbol: SYMBOL },
       });
@@ -1593,13 +1614,13 @@ describe("piece source reconciliation", () => {
         () => Promise.resolve(() => false),
       );
       try {
-        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("unapplied");
       } finally {
         moved.restore();
       }
 
       expect(getPieceReconciliation(piece)).toMatchObject({
-        outcome: "unreachable",
+        outcome: "unapplied",
         origin: PARENT_SOURCE,
         offered: { identity: v2Identity, symbol: SYMBOL },
         detail: "the piece changed while its write was being prepared",
@@ -1979,12 +2000,12 @@ describe("piece source reconciliation", () => {
         const piece = await pieceOffered(source("v2"));
         using adoptions = refuseAdoptions(refusal);
 
-        expect(await reconcile(piece)).toBe("unavailable");
-        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("unapplied");
+        expect(await reconcile(piece)).toBe("unapplied");
 
         expect(adoptions.refusals).toBe(2);
         expect(getPieceReconciliation(piece)).toMatchObject({
-          outcome: "unreachable",
+          outcome: "unapplied",
         });
       });
     }
@@ -2001,8 +2022,8 @@ describe("piece source reconciliation", () => {
         reasons: [prose],
       });
 
-      expect(await reconcile(piece)).toBe("unavailable");
-      expect(await reconcile(piece)).toBe("unavailable");
+      expect(await reconcile(piece)).toBe("unapplied");
+      expect(await reconcile(piece)).toBe("unapplied");
 
       expect(adoptions.refusals).toBe(2);
     });
@@ -3973,7 +3994,7 @@ describe("piece source reconciliation", () => {
         return unchanged;
       };
       try {
-        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("unapplied");
       } finally {
         runtime.syncStoredSetupArgument = sync;
       }
@@ -3999,7 +4020,7 @@ describe("piece source reconciliation", () => {
         return setup(...args);
       }) as typeof runtime.setup;
       try {
-        expect(await reconcile(piece)).toBe("unavailable");
+        expect(await reconcile(piece)).toBe("unapplied");
       } finally {
         runtime.setup = setup;
       }

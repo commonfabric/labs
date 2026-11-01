@@ -2031,10 +2031,16 @@ export interface PieceSourceSnapshot {
   revisionId: string | null;
 }
 
-/** What the last attempt to follow a piece's active origin did. */
+/**
+ * What the last attempt to follow a piece's active origin did. `unreachable`
+ * never had a candidate to weigh; `unapplied` had one the piece could take,
+ * and the write adopting it did not land, so the next attempt proposes it
+ * again; `refused` had one the piece did not take, for the reason recorded.
+ */
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**
@@ -16826,7 +16832,7 @@ function isPieceReconciliationOutcome(
   value: unknown,
 ): value is PieceReconciliationOutcome {
   return value === "followed" || value === "unreachable" ||
-    value === "refused";
+    value === "unapplied" || value === "refused";
 }
 
 function isPieceReconciliationReason(

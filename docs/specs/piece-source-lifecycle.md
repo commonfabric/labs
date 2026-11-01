@@ -1358,6 +1358,12 @@ own.
 - **Could not reach the origin.** Resolution failed. The piece runs its last
   accepted source. This one may resolve itself on the next open, and the panel
   says so.
+- **New source not applied.** The origin resolved and offered source the piece
+  could take, and the write that adopts it did not land — it did not commit,
+  or the piece changed while the write was being prepared. The piece runs its
+  last accepted source, and the next open proposes the candidate again, which
+  the panel says. The panel names what the attempt reported, on a line of its
+  own.
 - **New source refused.** The origin resolved, and the piece did not adopt what
   it offered — the candidate is not an acceptable replacement for what the
   piece runs, its stored data does not satisfy the candidate's contract, the
@@ -1418,12 +1424,17 @@ These states are exhaustive because a refusal never separates a piece's
 pointer from the source its graph runs. The transition stages the candidate,
 so a refusal fails it whole, as the compatibility policy describes.
 
-Telling could-not-reach from refused needs the reconciliation to separate an
-origin it could not reach from one that resolved and offered source it could
-not use — a program that did not compile, one that did not produce the identity
-its origin advertised, one whose setup the piece's data refused, one whose
-adopting write was refused for good. The first may fix itself and the rest will
-not, so they do not share a state on the panel.
+Telling could-not-reach from not-applied from refused needs the
+reconciliation to separate three things: an origin it could not reach; one that
+resolved and offered source the piece could take, whose adopting write did not
+land this time; and one that resolved and offered source it could not use — a
+program that did not compile, one that did not produce the identity its origin
+advertised, one whose setup the piece's data refused, one whose adopting write
+was refused for good. The first may fix itself, the second is proposed again
+on the next open, and the rest will not change, so the three do not share a
+state on the panel. A reader of the second is told about the write, not about
+the origin: pointing them at the network for a write the store did not take
+sends them to the wrong place.
 
 A write is refused for good when the store refuses it as too large to admit, or
 when a stored envelope refuses its schema for changing or weakening a claim the
