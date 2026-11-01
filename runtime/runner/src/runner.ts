@@ -1688,6 +1688,14 @@ const pieceOwnedStores = (
  * deferred start is stamped here, before its first read, so none is stamped
  * without that trust. A start no serving loop stamps takes its trust from the
  * runtime it runs in, as its parent did.
+ *
+ * A start whose transaction carries a scope-key identity reads that
+ * principal's instances, and the stamp carries the same identity unless
+ * `info` names one, so that the wave seal addresses the start's scoped writes,
+ * the defaults setup seeds in the start's own transaction among them, to the
+ * instances the start read rather than to the serving runtime's own. The
+ * identity is addressing alone: a bookkeeping run acts as no principal
+ * (serving-loop.md §3d).
  */
 const stampDeferredStart = (
   runtime: Runtime,
@@ -1695,7 +1703,13 @@ const stampDeferredStart = (
   start: IExtendedStorageTransaction,
   info: Parameters<Runtime["stampServerRun"]>[1],
 ): void => {
-  runtime.stampServerRun(start, info);
+  const identity = start.tx.scopeKeyIdentity;
+  runtime.stampServerRun(
+    start,
+    identity === undefined || info.scopeKeyIdentity !== undefined
+      ? info
+      : { ...info, scopeKeyIdentity: identity },
+  );
   const trustSnapshot = from.getCfcState().trustSnapshot;
   if (waveRunContextOf(start) !== undefined && trustSnapshot !== undefined) {
     setCfcTrustSnapshot(start, trustSnapshot);
