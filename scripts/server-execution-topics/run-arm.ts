@@ -15,6 +15,7 @@ import {
 } from "../../tasks/ci-capabilities.ts";
 import {
   assertServerExecutionCiPosture,
+  SERVER_EXECUTION_POSTURE_VARIABLES,
   serverExecutionCiLane,
 } from "../../tasks/server-execution-ci.ts";
 
@@ -38,12 +39,12 @@ const capability: CapabilityId = role === "default"
   ? "toolshed-baked"
   : "toolshed-baked-opposite";
 /**
- * `env` carrying the lane's exact flag posture: the server-execution variable
- * only where this lane sets it, at its value.
+ * `env` carrying the lane's exact flag posture: none of the variables its
+ * posture check reads except the ones this lane sets, at its values.
  */
 function withLanePosture(env: Record<string, string>): Record<string, string> {
   const posture = { ...env };
-  delete posture.EXPERIMENTAL_SERVER_EXECUTION;
+  for (const name of SERVER_EXECUTION_POSTURE_VARIABLES) delete posture[name];
   return { ...posture, ...lane.environment };
 }
 

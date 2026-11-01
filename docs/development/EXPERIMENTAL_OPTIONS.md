@@ -602,8 +602,9 @@ flags it adopts from the deployment it runs against.
   A web runtime resolves
   `webViewScopedReplication ?? viewScopedReplication ?? true`, and only under
   `serverExecution: true` (`Runtime.viewScopedReplicationRequested`). An
-  explicit `false` in either flag turns it off, and an explicit web `false`
-  overrides a global `true`. Without server execution neither flag does
+  explicit web `false` turns it off, and so does a global `false` where the web
+  override is unset; an explicit web value outranks the global one either way.
+  Without server execution neither flag does
   anything, whatever its value: the runtime requests no view replication, and
   the memory server advertises `viewScopedReplicationV1` only under server
   execution. CI sets neither flag on either arm, so its ON arm runs the

@@ -79,10 +79,11 @@ ON arm is exercised with it while CI sets no variable for it on either arm.
 resolved value, label, record variant, runtime environment, baked shell define,
 and posture probe. Changing the first-party default therefore swaps which role
 is ON and which is OFF without rewriting workflow topology. Before each suite,
-the probe checks `/api/meta.experimental.serverExecution`, that on the ON arm
-neither `/api/meta.experimental.webViewScopedReplication` nor, where that is
-unset, `viewScopedReplication` is `false`, the shell define, and presence (ON)
-or absence (OFF) of
+the probe checks `/api/meta.experimental.serverExecution`, that the ON arm
+does not publish web view-scoped replication off (a `false`
+`/api/meta.experimental.webViewScopedReplication`, or a `false`
+`viewScopedReplication` with the web override unset; both unset mean on), the
+shell define, and presence (ON) or absence (OFF) of
 `/api/health/stats.servingLoop`; a mixed
 server/client/shell posture is never a valid arm exercise.
 

@@ -34,6 +34,17 @@ export interface ServerExecutionCiLane {
   readonly recordVariant?: "server-execution" | "server-execution-off";
 }
 
+/**
+ * The variables a lane's posture check reads. A lane removes each from the
+ * environment it inherits before applying its role's own, so that a value set
+ * where CI runs cannot put a lane on a posture its role does not name.
+ */
+export const SERVER_EXECUTION_POSTURE_VARIABLES: readonly string[] = [
+  "EXPERIMENTAL_SERVER_EXECUTION",
+  "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
+  "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+];
+
 /** Returns the two-arm CI posture for `role`. */
 export function serverExecutionCiLane(
   role: ServerExecutionCiRole,

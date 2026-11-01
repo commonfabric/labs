@@ -726,10 +726,16 @@ describe("opening a capability on a machine that answers", () => {
     const opposite = serverExecutionCiLane("opposite");
     const named = opposite.experimentalValue;
     const before = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
+    const beforeViewScoped = Deno.env.get(
+      "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+    );
     Deno.env.set(
       "EXPERIMENTAL_SERVER_EXECUTION",
       named === "true" ? "false" : "true",
     );
+    // The posture check reads this too, so an ambient value would put an ON
+    // lane on a posture its role does not name.
+    Deno.env.set("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION", "false");
     try {
       const source = machine({
         "index.ts": "listening (pid 999999). Logs: x\n",
@@ -737,6 +743,9 @@ describe("opening a capability on a machine that answers", () => {
       await open("toolshed", source);
       expect(envOf(source, "index.ts")?.EXPERIMENTAL_SERVER_EXECUTION)
         .toBeUndefined();
+      expect(
+        envOf(source, "index.ts")?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
+      ).toBeUndefined();
 
       const baked = await openBaked(
         "toolshed-baked",
@@ -761,11 +770,25 @@ describe("opening a capability on a machine that answers", () => {
         envOf(oppositeServer, "toolshed-baked-opposite")
           ?.EXPERIMENTAL_SERVER_EXECUTION,
       ).toBe(named);
+      for (const step of ["build-binaries", "toolshed-baked-opposite"]) {
+        expect(
+          envOf(oppositeServer, step)?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
+          step,
+        ).toBeUndefined();
+      }
     } finally {
       if (before === undefined) {
         Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
       } else {
         Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", before);
+      }
+      if (beforeViewScoped === undefined) {
+        Deno.env.delete("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION");
+      } else {
+        Deno.env.set(
+          "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+          beforeViewScoped,
+        );
       }
     }
   });

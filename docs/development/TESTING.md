@@ -591,9 +591,7 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
 function also checks the shell half of server execution, the define baked into
-the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
-view-scoped define the ON arm's shell bakes is not reported; the bake table in
-`cachedBinaries()` sets it, and the binary cache key covers that table.
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
