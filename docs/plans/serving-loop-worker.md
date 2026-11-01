@@ -130,9 +130,12 @@ as data, a structured clone on the port, so a verb hands back plain values: a
 cell read with no schema returns nested objects as proxies over the store,
 which the port cannot clone.
 
-**Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
-at the end of each wave cycle, at each activation and park, and on request;
-the main thread registers a stats provider that returns the latest copy, so
+**Stats cross on every cycle, and ahead of every commit.** The worker posts
+the host's `ServingLoopStats` at the end of each wave cycle, at each activation
+and park, on request, and immediately before each wave commit it sends, on the
+same port as the commit: a client that observes a commit's consequence and then
+reads the health route finds the counters that count that wave already posted.
+The main thread registers a stats provider that returns the latest copy, so
 `/api/health/stats` keeps its shape and waits on nothing. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
 request (`ServingLoopHandle.diagnostics()`), and a request waits for the

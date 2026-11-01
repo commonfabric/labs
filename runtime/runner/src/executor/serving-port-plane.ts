@@ -202,16 +202,25 @@ type WaveCommitSinkReads = Required<
 /**
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
- * this session, carrying the number this side's counter minted for it.
+ * this session, carrying the number this side's counter minted for it. The
+ * host's counters cross ahead of each commit, on the same port, so a reader
+ * the commit's consequence reaches finds the counters that count it already
+ * posted (`ServingPlane.reportStats`).
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
   readonly #reads: EngineWaveCommitSink;
+  readonly #postCounters: () => void;
 
-  constructor(endpoint: ServingPlaneEndpoint, deps: WaveCommitSinkDeps) {
+  constructor(
+    endpoint: ServingPlaneEndpoint,
+    deps: WaveCommitSinkDeps,
+    postCounters: () => void,
+  ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
+    this.#postCounters = postCounters;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -281,6 +290,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
+    this.#postCounters();
     try {
       const { result, homeRefused } = await this.#endpoint.request(
         "sink.commitWave",
@@ -303,6 +313,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     change: ServedAclChange,
   ): Promise<Result<{ seq?: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
+    this.#postCounters();
     try {
       return await this.#endpoint.request("sink.commitSpaceAccessChange", {
         sessionId: this.#deps.sessionId,
@@ -553,6 +564,7 @@ export class ServingPlane {
   readonly #server: HostMemoryServer;
   readonly #loopback: LoopbackPlane;
   #observer: ServerExecutionObserver | undefined;
+  #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
   #closed = false;
 
@@ -626,13 +638,20 @@ export class ServingPlane {
     this.#observer = observer;
   }
 
-  /** The tenure's sink; `ExecutorHostOptions.createWaveCommitSink`. */
+  /**
+   * The tenure's sink; `ExecutorHostOptions.createWaveCommitSink`. Each
+   * commit it sends is preceded by the host's counters, once `serve()` has
+   * named the host.
+   */
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
-    return new PlaneWaveCommitSink(this.#endpoint, deps);
+    return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
+      if (this.#host !== undefined) this.reportStats(this.#host.stats());
+    });
   }
 
   /** Installs what the server's thread may ask of the worker's host. */
   serve(host: ServingPlaneHost): void {
+    this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
     this.#endpoint.onRequest(
@@ -642,7 +661,12 @@ export class ServingPlane {
     this.#endpoint.onRequest("host.close", () => host.close());
   }
 
-  /** Posts the host's counters for the server's thread to keep. */
+  /**
+   * Posts the host's counters for the server's thread to keep. The health
+   * route answers with the copy posted last, so the counters are posted on
+   * the loop's own edges and ahead of each commit the loop sends: a commit's
+   * consequence never reaches a reader before the counters that count it.
+   */
   reportStats(stats: ServingLoopStats): void {
     this.#endpoint.notify("host.stats", { stats });
   }
