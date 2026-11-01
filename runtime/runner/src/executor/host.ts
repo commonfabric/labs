@@ -437,7 +437,10 @@ export class ExecutorHost {
     // argument link into the viewer's home space, whose pre-genesis
     // session that space's genesis ACL de-authorized. Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
-    // space, so the fan-out costs one map walk per ACL-doc admission.
+    // space, so the fan-out costs one map walk per ACL-doc admission. Only
+    // this server's admissions reach here; a list that changes on another
+    // process's owner reaches a serving runtime's replica of that space
+    // over its routed session, which watches the list itself.
     if (
       this.#spaces.size > 0 &&
       notice.writes.some((write) => write.id === `of:${notice.space}`)

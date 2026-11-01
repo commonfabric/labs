@@ -259,10 +259,15 @@ export async function startServingMemoryServer(
   const serviceIdentity = options.serviceIdentity ?? await Identity.generate();
   const worker = runsInWorker(options);
   const store = worker ? await temporaryStore() : undefined;
+  // The service identity is the server's one delegating principal, as a
+  // toolshed running server execution lists its own process identity, which
+  // is what admits the serving loop's named reads of a space it does not
+  // serve (protocol.md §2's read row).
   const server = newLoopbackServer({
     store: store?.url ??
       new URL(`memory://serving-memory-server-${crypto.randomUUID()}`),
     subscriptionRefreshDelayMs,
+    delegatingDids: [serviceIdentity.did()],
   });
   return await attachServingLoop({
     server,
@@ -350,6 +355,7 @@ const WORKER_REFUSED_OPTIONS = [
   "onEventDeferred",
   "onDrainInFlightSkip",
   "onEffectRetired",
+  "onLeaseReacquired",
 ] as const satisfies ReadonlyArray<keyof ServingMemoryServerOptions>;
 
 /**
