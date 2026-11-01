@@ -343,6 +343,163 @@ describe("v2-operation-codec", () => {
     );
   });
 
+  describe("integrate() with anchors", () => {
+    const codec = createDefaultOperationCodecRegistry().require(
+      CODEMIRROR_CHANGESET_CODEC,
+    );
+    const edit = (
+      clientId: string,
+      length: number,
+      from: number,
+      to: number,
+      insert: string,
+    ) => ({
+      updates: [{
+        clientId,
+        changes: ChangeSet.of({ from, to, insert }, length).toJSON(),
+      }],
+    });
+    const slices = (
+      text: unknown,
+      anchors: readonly { id: string; from: number; to: number }[] | undefined,
+    ) =>
+      anchors?.map((
+        { id, from, to },
+      ) => [id, (text as string).slice(from, to)]);
+
+    it("keeps an anchor on the text the submitted update inserts, after an edit integrated before it", () => {
+      const result = codec.integrate({
+        materialized: ">> world",
+        submitted: edit("alice", 5, 0, 0, "hello "),
+        intervening: [edit("bob", 5, 0, 0, ">> ")],
+        anchors: [{ id: "greeting", from: 0, to: 6 }, {
+          id: "w",
+          from: 6,
+          to: 11,
+        }],
+      });
+      expect(result.materialized).toBe(">> hello world");
+      expect(slices(result.materialized, result.anchors)).toEqual([
+        ["greeting", "hello "],
+        ["w", "world"],
+      ]);
+    });
+
+    it("maps anchors stated against the base when nothing is submitted", () => {
+      const result = codec.integrate({
+        materialized: ">> world",
+        submitted: { updates: [] },
+        intervening: [edit("bob", 5, 0, 0, ">> ")],
+        anchors: [{ id: "w", from: 0, to: 5 }],
+      });
+      expect(result.operations).toEqual([]);
+      expect(result.anchors).toEqual([{ id: "w", from: 3, to: 8 }]);
+    });
+
+    it("returns the anchors as given with nothing submitted and nothing intervening", () => {
+      expect(
+        codec.integrate({
+          materialized: "world",
+          submitted: { updates: [] },
+          intervening: [],
+          anchors: [{ id: "w", from: 0, to: 5 }],
+        }).anchors,
+      ).toEqual([{ id: "w", from: 0, to: 5 }]);
+    });
+
+    it("omits anchors from the result when the input carried none", () => {
+      expect(codec.integrate({
+        materialized: "world",
+        submitted: edit("alice", 5, 5, 5, "!"),
+        intervening: [],
+      })).not.toHaveProperty("anchors");
+    });
+
+    it("empties an anchor whose text an intervening edit deleted", () => {
+      const result = codec.integrate({
+        materialized: "hello ",
+        submitted: edit("alice", 11, 11, 11, "!"),
+        intervening: [edit("bob", 11, 6, 11, "")],
+        anchors: [{ id: "w", from: 6, to: 11 }],
+      });
+      expect(result.materialized).toBe("hello !");
+      expect(result.anchors).toEqual([{ id: "w", from: 6, to: 6 }]);
+    });
+
+    it("maps anchors past the client's already-integrated prefix", () => {
+      // Alice's first update landed; she resends it with a second one and an
+      // anchor on the text the second inserts, while Bob's edit came between.
+      const own = edit("alice", 2, 0, 0, "X");
+      const result = codec.integrate({
+        materialized: "--Xab",
+        submitted: {
+          updates: [...own.updates, ...edit("alice", 3, 3, 3, "Y").updates],
+        },
+        intervening: [own, edit("bob", 3, 0, 0, "--")],
+        anchors: [{ id: "y", from: 3, to: 4 }, { id: "x", from: 0, to: 1 }],
+      });
+      expect(result.materialized).toBe("--XabY");
+      expect(result.operations).toHaveLength(1);
+      expect(slices(result.materialized, result.anchors)).toEqual([
+        ["y", "Y"],
+        ["x", "X"],
+      ]);
+    });
+
+    it("maps anchors to the kept document when a submitted rewrite is deduplicated", () => {
+      const rewrite = replacement("alice", 5, 1, 4, "new", "title:old:new");
+      const first = codec.integrate({
+        materialized: "aoldb",
+        submitted: rewrite,
+        intervening: [],
+      });
+      const result = codec.integrate({
+        materialized: first.materialized,
+        submitted: {
+          updates: [{
+            clientId: "bob",
+            changes: ChangeSet.of({ from: 0, insert: "X" }, 5).toJSON(),
+          }, {
+            clientId: "bob",
+            changes: ChangeSet.of({ from: 2, to: 5, insert: "new" }, 6)
+              .toJSON(),
+            dedupeId: "title:old:new",
+          }, {
+            clientId: "bob",
+            changes: ChangeSet.of({ from: 6, insert: "!" }, 6).toJSON(),
+          }],
+        },
+        intervening: first.operations,
+        // Stated against Bob's document, "Xanewb!".
+        anchors: [{ id: "x", from: 0, to: 1 }, { id: "bang", from: 6, to: 7 }, {
+          id: "rewrite",
+          from: 2,
+          to: 5,
+        }],
+      });
+      expect(result.materialized).toBe("Xanewb!");
+      expect(slices(result.materialized, result.anchors)).toEqual([
+        ["x", "X"],
+        ["bang", "!"],
+        ["rewrite", ""],
+      ]);
+      // The dropped copy of the rewrite leaves its anchor a point where that
+      // copy was, after the kept one.
+      expect(result.anchors?.[2]).toEqual({ id: "rewrite", from: 5, to: 5 });
+    });
+
+    it("throws for a range beyond the document the submitted updates yield", () => {
+      expect(() =>
+        codec.integrate({
+          materialized: "world",
+          submitted: edit("alice", 5, 0, 0, "hello "),
+          intervening: [],
+          anchors: [{ id: "a", from: 0, to: 12 }],
+        })
+      ).toThrow("outside the field's 11 code units");
+    });
+  });
+
   describe("mapAnchors()", () => {
     const codec = createDefaultOperationCodecRegistry().require(
       CODEMIRROR_CHANGESET_CODEC,

@@ -10,7 +10,7 @@ handler's `applyChanges()`, moves the anchors because Memory does.
 
 The design is specified in
 [`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md)
-(§7.7.4 the `anchor-op` operation, §7.8 storage and the anchors document, §7.15
+(§7.7.4 anchors on an operation, §7.8 storage and the anchors document, §7.15
 annotations) and described for readers in
 [`../features/collaborative-fields.md`](../features/collaborative-fields.md).
 This plan carries what is left to build on top of Memory's part.
@@ -21,8 +21,10 @@ This plan carries what is left to build on top of Memory's part.
   operation log never loses one.
 - **Mapped** by the codec: start with association 1, end with association -1;
   a range an edit empties becomes a point and stays one.
-- **Written** by `anchor-op`, which maps the added ranges from the stated base
-  to the head; no version advance, no submission id.
+- **Written** by the `anchors` member of an `apply-op`, whose added ranges
+  are stated against the client's document, the base with the payload applied,
+  and mapped to the head; an operation whose payload changes nothing changes
+  anchors alone and advances no version.
 - **Delivered** on every operation snapshot and as the derived anchors
   document `of:op-anchors:<hash of { id, scope, path }>`, written in the same
   transaction whenever the set changes, in the field's own scope.
@@ -39,20 +41,20 @@ This plan carries what is left to build on top of Memory's part.
 
 ### WP1 — Memory: engine, codec, protocol, spec, inspector
 
-- [x] `FieldAnchor`, `AnchorOpOperation`, `AnchorOpResolution`,
-      `OperationFieldSnapshot.anchors`, `operationAnchorsDocId` in
-      `runtime/memory/v2.ts`.
-- [x] `OperationCodec.mapAnchors()` and the CodeMirror rule
-      (`runtime/memory/v2/operation-codec.ts`).
+- [x] `FieldAnchor`, `FieldAnchorChanges`, `ApplyOpOperation.anchors`,
+      `ApplyOpResolution.anchors`, `OperationFieldSnapshot.anchors`,
+      `operationAnchorsDocId` in `runtime/memory/v2.ts`.
+- [x] `OperationCodec.mapAnchors()`, the anchors `integrate()` maps across its
+      rebase, and the CodeMirror rule (`runtime/memory/v2/operation-codec.ts`).
 - [x] `anchors` and `anchors_seq` on `op_field_epoch`, `anchors` on
-      `op_checkpoint`, guarded migration.
-- [x] Integration maps the stored set; `anchor-op` activates, maps, merges,
-      restates the head-version checkpoint; the anchors document is written
-      when the set changes, deleted on release and entity deletion, and refused
-      to client writes.
+      `op_checkpoint` and `op_submission`, guarded migration.
+- [x] Integration maps the stored set and the carried adds, merges, restates
+      the head-version checkpoint; the anchors document is written when the
+      set changes, deleted on release and entity deletion, and refused to
+      client writes.
 - [x] Prune verifies the checkpoint's anchors against the head unless an
-      `anchor-op` restated the set after the checkpoint, and the anchors
-      document against the head always.
+      operation changed anchors in the checkpoint's commit or later, and the
+      anchors document against the head always.
 - [x] Snapshot carries `anchors`; resolutions are replayable.
 - [x] State inspector reports anchors, their checkpoint copies, the document
       id and a consistency check.
@@ -69,14 +71,14 @@ Completion gate: `deno task test` in `runtime/memory`,
       `addAnchor`/`removeAnchor` on `IWritable` in `base/api/index.ts`;
       regenerate `base/static/assets/types/commonfabric.d.ts`.
 - [ ] `Cell.addAnchor()` and `Cell.removeAnchor()` beside `applyChanges()`:
-      without `base`, a confirmed read of the field and a range check; with
-      `base`, no read. Both in `cellMethods`, `WRITER_METHODS` and
-      `WRITE_METHODS`.
-- [ ] `recordAnchorOps()` on the transaction, an `anchorOps` list on the
-      native commit emitted after `applyOps`, refused ahead of a seal and
-      omitted under the speculation overlay. An `addAnchor()` without `base`
-      followed by `applyChanges()` on the same field in one transaction is
-      refused: the runner keeps no mapping of its own.
+      without `base`, a confirmed read of the field and a range check against
+      the value the transaction's changes to the field yield; with `base`, no
+      read. Both in `cellMethods`, `WRITER_METHODS` and `WRITE_METHODS`.
+- [ ] `recordAnchorChanges()` on the transaction, folded into the field's
+      `apply-op` on the native commit, or into one with an empty payload when
+      the transaction changed no text, refused ahead of a seal and omitted
+      under the speculation overlay. An anchor added after the transaction's
+      text changes is stated against their result, which the runner holds.
 - [ ] `anchorsOf(content)` builtin returning a link to the anchors document,
       registered in the builtins, the builder, the transformer registry
       (`runtime-call`, reactive origin) and the replayable set.
@@ -125,3 +127,9 @@ browser test.
   document if that changes.
 - **A stale base epoch in a handler** is a refusal no re-run can fix, so it
   surfaces as a handler error rather than a retry.
+- **Anchoring text still pending in the editor.** An anchor rides the
+  `apply-op` that inserts its text, so the editor can anchor a selection over
+  text it has not yet confirmed by sending the anchor on its own next
+  submission, which needs the host to hand it the anchor id; the handler route
+  instead maps the selection back over pending edits, as WP3 states, and
+  cannot anchor the pending text. WP3 decides which the editor offers.

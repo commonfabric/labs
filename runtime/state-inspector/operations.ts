@@ -97,7 +97,10 @@ export interface OperationFieldInspection {
   retainedFrom: { epoch: number; version: number };
   /** The head's anchors, as the engine stores them: sorted by id. */
   anchors: FieldAnchor[];
-  /** Commit sequence of the last `anchor-op`; `null` when none ran. */
+  /**
+   * Commit sequence of the last operation that added or removed anchors;
+   * `null` when none did.
+   */
   anchorsCommitSeq: number | null;
   /** Id of the field's anchors document in the field's scope. */
   anchorsDocumentId: string;

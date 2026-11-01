@@ -1512,35 +1512,27 @@ describe("v2-operation-client", () => {
         localSeq: 2,
         reads: { confirmed: [], pending: [] },
         operations: [{
-          op: "anchor-op",
-          id: "of:anchored",
-          path: toValuePath(["body"]),
-          codec: CODEMIRROR_CHANGESET_CODEC,
-          base: null,
-          baselineHash: operationBaselineHash("hello world"),
-          add: [{ id: "w", from: 6, to: 11 }],
-        }, {
           op: "apply-op",
           id: "of:anchored",
           path: toValuePath(["body"]),
           codec: CODEMIRROR_CHANGESET_CODEC,
           submissionId: "writer:1",
+          base: null,
+          baselineHash: operationBaselineHash("hello world"),
           payload: {
             updates: [{
               clientId: "writer",
               changes: ChangeSet.of({ from: 0, insert: ">> " }, 11).toJSON(),
             }],
           },
+          // Stated against the writer's document, ">> hello world".
+          anchors: { add: [{ id: "w", from: 9, to: 14 }] },
         }],
       });
-      expect(applied.anchorResolutions).toMatchObject([{
-        operationIndex: 0,
-        cursor: { epoch: 1, version: 0 },
-        anchors: [{ id: "w", from: 6, to: 11 }],
-      }]);
       expect(applied.operationResolutions).toMatchObject([{
-        operationIndex: 1,
+        operationIndex: 0,
         to: { epoch: 1, version: 1 },
+        anchors: { added: [{ id: "w", from: 9, to: 14 }], removed: [] },
       }]);
       await server.flushSessions();
       const delivered = await syncs.next();
@@ -1629,12 +1621,14 @@ describe("v2-operation-client", () => {
         localSeq: 2,
         reads: { confirmed: [], pending: [] },
         operations: [{
-          op: "anchor-op",
+          op: "apply-op",
           id: "of:anchored",
           path: toValuePath(["body"]),
           codec: CODEMIRROR_CHANGESET_CODEC,
+          submissionId: "writer:2",
           base: { epoch: 1, version: 1 },
-          add: [{ id: "w", from: 6, to: 11 }],
+          payload: { updates: [] },
+          anchors: { add: [{ id: "w", from: 6, to: 11 }] },
         }],
       });
       await server.flushSessions();

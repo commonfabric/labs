@@ -150,15 +150,16 @@ covers it leaves a point (`from === to`) where the text was. Anchors survive
 history pruning, since they ride the field head and every checkpoint rather
 than the operation log.
 
-A client adds or removes anchors with the `anchor-op` transact operation
+A client adds or removes anchors on the `apply-op` that writes the field
 ([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
-§7.7.4). The ranges it adds are stated against the field at a base cursor, or
-against the value whose hash it carries, and Memory maps them through the
-operations integrated since before storing them: a client can anchor a
-selection it took at an older version without re-reading, and a stale base is
-refused the way a stale edit is. An `anchor-op` does not advance the field's
-version, and an anchor is not an operation: the submitted and integrated
-projections hold nothing for it.
+§7.7.4). The ranges it adds are stated against the document the client holds,
+the field at the operation's base with the operation's own edits applied, so
+an editor anchors text its user has just typed in the edit that inserts it,
+and Memory maps the ranges through the operations integrated since before
+storing them: a stale base is merged the way a stale edit is. An operation
+whose payload changes nothing is how a client changes anchors alone; it
+advances no version, and an anchor is not an operation: the submitted and
+integrated projections hold nothing for it.
 
 Anchors reach readers two ways. Every operation snapshot an editor receives
 carries the field's current set, which can change at a cursor the editor has

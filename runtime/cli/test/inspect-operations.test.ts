@@ -197,13 +197,13 @@ describe("cf inspect operations", () => {
               payload: {
                 updates: [{ clientId: "writer", changes: [11, [0, "!"]] }],
               },
-            }, {
-              op: "anchor-op",
-              id: "of:anchored",
-              path: toValuePath(["body"]),
-              codec: CODEMIRROR_CHANGESET_CODEC,
-              base: { epoch: 1, version: 1 },
-              add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
+              anchors: {
+                add: [{ id: "w", from: 6, to: 11 }, {
+                  id: "h",
+                  from: 0,
+                  to: 5,
+                }],
+              },
             }],
           },
         });

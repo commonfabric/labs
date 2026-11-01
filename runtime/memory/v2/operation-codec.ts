@@ -1,4 +1,4 @@
-import { rebaseUpdates, type Update } from "@codemirror/collab";
+import type { Update } from "@codemirror/collab";
 import {
   type ChangeDesc,
   ChangeSet,
@@ -15,11 +15,24 @@ export type OperationCodecInput = {
   materialized: FabricValue;
   submitted: FabricValue;
   intervening: readonly FabricValue[];
+
+  /**
+   * Anchors stated against the value `submitted` yields at its base, the
+   * document the submitting client holds, to be mapped to the value after the
+   * integration.
+   */
+  anchors?: readonly FieldAnchor[];
 };
 
 export type OperationCodecResult = {
   materialized: FabricValue;
   operations: FabricValue[];
+
+  /**
+   * The input's `anchors` stated against `materialized`; present when the
+   * input carried any.
+   */
+  anchors?: FieldAnchor[];
 };
 
 /**
@@ -40,8 +53,9 @@ export type OperationCodec = {
   /**
    * Maps `anchors` through integrated `operations`, in order, and returns
    * them stated against the value after. Deterministic: the same anchors and
-   * operations map to the same ranges in every process. Throws when an anchor
-   * lies outside the value it is stated against.
+   * operations map to the same ranges in every process, and `integrate` maps
+   * the anchors it is given by the same rule. Throws when an anchor lies
+   * outside the value it is stated against.
    */
   mapAnchors(input: OperationCodecAnchorInput): FieldAnchor[];
 };
@@ -190,9 +204,100 @@ const encodeUpdate = (
   })(),
 });
 
+/** Copies of `anchors`, each checked to lie within `length` code units. */
+const anchorsWithin = (
+  anchors: readonly FieldAnchor[],
+  length: number,
+): FieldAnchor[] =>
+  anchors.map((anchor) => {
+    if (
+      !Number.isSafeInteger(anchor.from) ||
+      !Number.isSafeInteger(anchor.to) ||
+      anchor.from < 0 || anchor.to < anchor.from || anchor.to > length
+    ) {
+      throw new Error(
+        `CodeMirror anchor ${anchor.id} lies outside the field's ${length} code units`,
+      );
+    }
+    return { ...anchor };
+  });
+
+/**
+ * `changes`, made one after another, rebased over `over`, made beside them
+ * from the same document; `over`'s insertions at a position one of `changes`
+ * inserts at come after it, as `rebase` orders a client's insertions before
+ * the ones it rebases them over.
+ */
+const rebaseDescs = (
+  changes: readonly ChangeDesc[],
+  over: ChangeDesc | undefined,
+): ChangeDesc[] => {
+  if (over === undefined) return [...changes];
+  let other = over;
+  return changes.map((change) => {
+    const rebased = change.mapDesc(other, true);
+    other = other.mapDesc(change);
+    return rebased;
+  });
+};
+
+/**
+ * `rebaseUpdates` from `@codemirror/collab`, kept here so that the other side
+ * of the rebase comes back with it: `foreign` is `over` without the updates
+ * `updates` already holds, rebased over `updates`, one change description per
+ * update. Applied to the document `updates` yields, they produce the document
+ * `rebased` yields over `over`'s, because a change mapped over another and
+ * that other mapped over it compose to one document (CodeMirror's
+ * `ChangeSet.map` contract).
+ */
+const rebase = (
+  updates: readonly Update[],
+  over: readonly Update[],
+): { rebased: Update[]; foreign: ChangeDesc[] } => {
+  let foreign: ChangeDesc[] = [];
+  let skip = 0;
+  for (const update of over) {
+    const own = skip < updates.length ? updates[skip] : undefined;
+    if (own !== undefined && own.clientID === update.clientID) {
+      foreign = rebaseDescs(foreign, own.changes.desc);
+      skip++;
+    } else {
+      foreign.push(update.changes.desc);
+    }
+  }
+  const remaining = updates.slice(skip);
+  if (foreign.length === 0) return { rebased: remaining, foreign };
+  let changes = foreign.reduce((composed, change) =>
+    composed.composeDesc(change)
+  );
+  const rebased = remaining.map((update) => {
+    const updateChanges = update.changes.map(changes);
+    changes = changes.mapDesc(update.changes, true);
+    return {
+      changes: updateChanges,
+      ...(update.effects === undefined
+        ? {}
+        : { effects: StateEffect.mapEffects(update.effects, changes) }),
+      clientID: update.clientID,
+    };
+  });
+  return {
+    rebased,
+    foreign: rebaseDescs(
+      foreign,
+      remaining.length === 0
+        ? undefined
+        : remaining.map((update) => update.changes.desc).reduce((
+          composed,
+          change,
+        ) => composed.composeDesc(change)),
+    ),
+  };
+};
+
 const codeMirrorChangeSetCodec: OperationCodec = {
   id: CODEMIRROR_CHANGESET_CODEC,
-  integrate({ materialized, submitted, intervening }) {
+  integrate({ materialized, submitted, intervening, anchors }) {
     if (typeof materialized !== "string") {
       throw new Error("CodeMirror operations require a string field");
     }
@@ -200,8 +305,11 @@ const codeMirrorChangeSetCodec: OperationCodec = {
     const seenDedupeIds = new Set(
       over.flatMap(({ dedupeId }) => dedupeId === undefined ? [] : [dedupeId]),
     );
-    const acceptedWithDuplicates = rebaseUpdates(
-      decodePayload(submitted).map(({ update }) => update),
+    const submittedUpdates = decodePayload(submitted).map(({ update }) =>
+      update
+    );
+    const { rebased: acceptedWithDuplicates, foreign } = rebase(
+      submittedUpdates,
       over.map(({ update }) => update),
     );
     const accepted: Update[] = [];
@@ -229,12 +337,35 @@ const codeMirrorChangeSetCodec: OperationCodec = {
     for (const update of accepted) {
       document = update.changes.apply(document);
     }
-    return {
+    const result: OperationCodecResult = {
       materialized: document.toString(),
       operations: accepted.map((update) => ({
         updates: [encodeUpdate(update)],
       })),
     };
+    if (anchors === undefined) return result;
+    // The anchors are stated against the submitting client's document: the
+    // base with every submitted update applied, whose length the last update
+    // ends at, or the base itself, which the first intervening update was
+    // made over, or the field when nothing was.
+    const clientLength = submittedUpdates.length > 0
+      ? submittedUpdates[submittedUpdates.length - 1].changes.newLength
+      : over.length > 0
+      ? over[0].update.changes.length
+      : materialized.length;
+    // The foreign changes, one at a time, take that document to the ordinary
+    // rebase result; the suppressed duplicates' inverse takes it to the kept
+    // document.
+    let mapped = anchorsWithin(anchors, clientLength);
+    for (const change of foreign) {
+      mapped = mapped.map((anchor) => mapAnchorRange(anchor, change));
+    }
+    if (!suppressed.empty) {
+      mapped = mapped.map((anchor) =>
+        mapAnchorRange(anchor, suppressed.invertedDesc)
+      );
+    }
+    return { ...result, anchors: mapped };
   },
   mapAnchors({ anchors, materialized, operations }) {
     if (typeof materialized !== "string") {
@@ -246,21 +377,10 @@ const codeMirrorChangeSetCodec: OperationCodec = {
     // The anchors are stated against the value before the operations: its
     // length is what the first change set was made over, and the field's
     // own length when there is nothing to map through.
-    const baseLength = changes.length === 0
-      ? materialized.length
-      : changes[0].length;
-    let mapped = anchors.map((anchor) => {
-      if (
-        !Number.isSafeInteger(anchor.from) ||
-        !Number.isSafeInteger(anchor.to) ||
-        anchor.from < 0 || anchor.to < anchor.from || anchor.to > baseLength
-      ) {
-        throw new Error(
-          `CodeMirror anchor ${anchor.id} lies outside the field's ${baseLength} code units`,
-        );
-      }
-      return { ...anchor };
-    });
+    let mapped = anchorsWithin(
+      anchors,
+      changes.length === 0 ? materialized.length : changes[0].length,
+    );
     // One change set at a time, as an editor maps through each transaction:
     // a range one change empties stays a point through the rest.
     for (const changeSet of changes) {

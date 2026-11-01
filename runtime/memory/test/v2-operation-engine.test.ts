@@ -34,10 +34,9 @@ import {
   OperationCodecRegistry,
 } from "../v2/operation-codec.ts";
 import {
-  type AnchorOpOperation,
   type ApplyOpOperation,
   encodeMemoryBoundary,
-  type FieldAnchor,
+  type FieldAnchorChanges,
   type Operation,
   operationAnchorsDocId,
   resetServerExecutionConfig,
@@ -2291,7 +2290,7 @@ describe("v2-operation-engine", () => {
     });
   });
 
-  describe("anchor-op", () => {
+  describe("anchors on apply-op", () => {
     const body = toValuePath(["body"]);
     const setup = (engine: Engine, id: string, text: string) =>
       applyCommit(engine, {
@@ -2306,7 +2305,8 @@ describe("v2-operation-engine", () => {
       id: string,
       submissionId: string,
       base: { epoch: number; version: number } | string,
-      changes: ReturnType<ChangeSet["toJSON"]>,
+      changes?: ReturnType<ChangeSet["toJSON"]>,
+      clientId = "alice",
     ): ApplyOpOperation => ({
       op: "apply-op",
       id,
@@ -2316,21 +2316,20 @@ describe("v2-operation-engine", () => {
       ...(typeof base === "string"
         ? { base: null, baselineHash: operationBaselineHash(base) }
         : { base }),
-      payload: { updates: [{ clientId: "alice", changes }] },
+      payload: {
+        updates: changes === undefined ? [] : [{ clientId, changes }],
+      },
     });
-    const anchorOp = (
+    const anchorsOp = (
       id: string,
+      submissionId: string,
       base: { epoch: number; version: number } | string,
-      edits: { add?: FieldAnchor[]; remove?: string[] },
-    ): AnchorOpOperation => ({
-      op: "anchor-op",
-      id,
-      path: body,
-      codec: CODEMIRROR_CHANGESET_CODEC,
-      ...(typeof base === "string"
-        ? { base: null, baselineHash: operationBaselineHash(base) }
-        : { base }),
-      ...edits,
+      anchors: FieldAnchorChanges,
+      changes?: ReturnType<ChangeSet["toJSON"]>,
+      clientId?: string,
+    ): ApplyOpOperation => ({
+      ...applyOp(id, submissionId, base, changes, clientId),
+      anchors,
     });
     const anchorsDoc = (id: string) =>
       operationAnchorsDocId({ id, path: ["body"] });
@@ -2354,11 +2353,11 @@ describe("v2-operation-engine", () => {
       try {
         setup(engine, "of:anchored", "hello world");
         const applied = commit(engine, [
-          anchorOp("of:anchored", "hello world", {
+          anchorsOp("of:anchored", "alice:1", "hello world", {
             add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
           }),
         ]);
-        expect(applied.anchorResolutions).toEqual([{
+        expect(applied.operationResolutions).toEqual([{
           operationIndex: 0,
           address: {
             branch: "",
@@ -2367,9 +2366,15 @@ describe("v2-operation-engine", () => {
             path: body,
           },
           codec: CODEMIRROR_CHANGESET_CODEC,
-          cursor: { epoch: 1, version: 0 },
-          anchors: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
-          removed: [],
+          submissionId: "alice:1",
+          from: { epoch: 1, version: 0 },
+          to: { epoch: 1, version: 0 },
+          operations: [],
+          duplicate: false,
+          anchors: {
+            added: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
+            removed: [],
+          },
         }]);
         expect(applied.revisions.map((revision) => revision.id)).toEqual([
           anchorsDoc("of:anchored"),
@@ -2421,13 +2426,14 @@ describe("v2-operation-engine", () => {
         ]);
         // Stated against "world" at version 0: "world" is 0..5 there.
         const applied = commit(engine, [
-          anchorOp("of:stale", { epoch: 1, version: 0 }, {
+          anchorsOp("of:stale", "bob:1", { epoch: 1, version: 0 }, {
             add: [{ id: "w", from: 0, to: 5 }],
           }),
         ]);
-        expect(applied.anchorResolutions?.[0]).toMatchObject({
-          cursor: { epoch: 1, version: 1 },
-          anchors: [{ id: "w", from: 6, to: 11 }],
+        expect(applied.operationResolutions?.[0]).toMatchObject({
+          from: { epoch: 1, version: 1 },
+          to: { epoch: 1, version: 1 },
+          anchors: { added: [{ id: "w", from: 6, to: 11 }], removed: [] },
         });
         expect(read(engine, { id: anchorsDoc("of:stale") })).toEqual({
           value: {
@@ -2442,12 +2448,72 @@ describe("v2-operation-engine", () => {
       }
     });
 
+    it("anchors text the payload inserts, across an edit integrated before it", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:typed", "world");
+        // Alice activates the field with an edit and an anchor on the text
+        // the edit inserts, stated against her own document "hello world".
+        const activated = commit(engine, [
+          anchorsOp(
+            "of:typed",
+            "alice:1",
+            "world",
+            { add: [{ id: "greeting", from: 0, to: 6 }] },
+            changes(5, 0, "hello "),
+          ),
+        ]);
+        expect(activated.operationResolutions?.[0]).toMatchObject({
+          to: { epoch: 1, version: 1 },
+          anchors: { added: [{ id: "greeting", from: 0, to: 6 }], removed: [] },
+        });
+        expect(activated.revisions.map((revision) => revision.id)).toEqual([
+          "of:typed",
+          anchorsDoc("of:typed"),
+        ]);
+        // The activation checkpoint records the field before the edit, which
+        // held no anchors; the head holds the one the edit carried.
+        expect(
+          engine.database.prepare(
+            `SELECT version, anchors FROM op_checkpoint`,
+          ).all(),
+        ).toEqual([{ version: 0, anchors: null }]);
+        // Bob, still at version 0, inserts at the start and anchors his own
+        // insertion, stated against his document ">> world".
+        const concurrent = commit(engine, [
+          anchorsOp(
+            "of:typed",
+            "bob:1",
+            { epoch: 1, version: 0 },
+            { add: [{ id: "marker", from: 0, to: 3 }] },
+            ChangeSet.of({ from: 0, insert: ">> " }, 5).toJSON(),
+            "bob",
+          ),
+        ]);
+        expect(concurrent.operationResolutions?.[0]).toMatchObject({
+          to: { epoch: 1, version: 2 },
+        });
+        const field = queryOperationField(engine, {
+          id: "of:typed",
+          path: body,
+        });
+        expect(field?.materialized).toBe("hello >> world");
+        const text = field?.materialized as string;
+        expect(
+          field?.anchors.map(({ id, from, to }) => [id, text.slice(from, to)]),
+        ).toEqual([["greeting", "hello "], ["marker", ">> "]]);
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
     it("moves the stored anchors in the transaction that integrates an edit", async () => {
       const { engine, path } = await openTestEngine();
       try {
         setup(engine, "of:moving", "hello world");
         commit(engine, [
-          anchorOp("of:moving", "hello world", {
+          anchorsOp("of:moving", "alice:0", "hello world", {
             add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
           }),
         ]);
@@ -2523,25 +2589,27 @@ describe("v2-operation-engine", () => {
       try {
         setup(engine, "of:merge", "hello world");
         commit(engine, [
-          anchorOp("of:merge", "hello world", {
+          anchorsOp("of:merge", "alice:1", "hello world", {
             add: [{ id: "w", from: 6, to: 11 }, { id: "h", from: 0, to: 5 }],
           }),
         ]);
         const applied = commit(engine, [
-          anchorOp("of:merge", { epoch: 1, version: 0 }, {
+          anchorsOp("of:merge", "alice:2", { epoch: 1, version: 0 }, {
             add: [{ id: "w", from: 6, to: 8 }],
             remove: ["h", "missing"],
           }),
         ]);
-        expect(applied.anchorResolutions?.[0]).toMatchObject({
-          anchors: [{ id: "w", from: 6, to: 8 }],
+        expect(applied.operationResolutions?.[0].anchors).toEqual({
+          added: [{ id: "w", from: 6, to: 8 }],
           removed: ["h"],
         });
         expect(queryOperationField(engine, { id: "of:merge", path: body }))
           .toMatchObject({ anchors: [{ id: "w", from: 6, to: 8 }] });
         // Removing the last anchor leaves the document holding an empty set.
         commit(engine, [
-          anchorOp("of:merge", { epoch: 1, version: 0 }, { remove: ["w"] }),
+          anchorsOp("of:merge", "alice:3", { epoch: 1, version: 0 }, {
+            remove: ["w"],
+          }),
         ]);
         expect(read(engine, { id: anchorsDoc("of:merge") })).toEqual({
           value: { epoch: 1, version: 0, anchors: [] },
@@ -2577,9 +2645,13 @@ describe("v2-operation-engine", () => {
         pruneOperationFieldHistory(engine, { id: "of:floor", path: body });
         const snapshot = () => ({
           field: engine.database.prepare(
-            `SELECT version, anchors, anchors_seq FROM op_field_epoch`,
+            `SELECT version, materialized, anchors, anchors_seq
+             FROM op_field_epoch`,
           ).get(),
           document: read(engine, { id: anchorsDoc("of:floor") }),
+          submissions: engine.database.prepare(
+            `SELECT submission_id FROM op_submission ORDER BY submission_id`,
+          ).all(),
         });
         const before = snapshot();
         const refused = (
@@ -2591,55 +2663,83 @@ describe("v2-operation-engine", () => {
           expect(attempt).toThrow(error);
           if (message !== undefined) expect(attempt).toThrow(message);
         };
+        const at = { epoch: 1, version: 2 };
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 1 }, {
+          anchorsOp("of:floor", "refused:1", { epoch: 1, version: 1 }, {
             add: [{ id: "a", from: 0, to: 1 }],
           }),
           OpHistoryUnavailableError,
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 3 }, {
+          anchorsOp("of:floor", "refused:2", { epoch: 1, version: 3 }, {
             add: [{ id: "a", from: 0, to: 1 }],
           }),
           OpCursorMismatchError,
           "in the future",
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {
+          anchorsOp("of:floor", "refused:3", at, {
             add: [{ id: "a", from: 2, to: 1 }],
           }),
           ProtocolError,
           "anchor is malformed",
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {
+          anchorsOp("of:floor", "refused:4", at, {
             add: [{ id: "a", from: 0, to: 1 }, { id: "a", from: 1, to: 2 }],
           }),
           ProtocolError,
-          "adds a twice",
+          "adds anchor a twice",
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {
+          anchorsOp("of:floor", "refused:5", at, {
             add: [{ id: "a", from: 0, to: 1 }],
             remove: ["a"],
           }),
           ProtocolError,
-          "both adds and removes a",
+          "both adds and removes anchor a",
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {}),
+          anchorsOp("of:floor", "refused:6", at, {}),
           ProtocolError,
-          "adds and removes nothing",
+          "add and remove nothing",
         );
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {
+          anchorsOp(
+            "of:floor",
+            "refused:7",
+            at,
+            {
+              add: [{ id: "a", from: 0, to: 1 }],
+              ids: [],
+            } as unknown as FieldAnchorChanges,
+          ),
+          ProtocolError,
+          "anchors are malformed",
+        );
+        refused(
+          anchorsOp("of:floor", "refused:8", at, {
             add: [{ id: "a", from: 0, to: 4 }],
           }),
           OpCodecError,
           "outside the field's 3 code units",
         );
+        // The range is checked against the document the payload yields,
+        // which is one code unit longer than the field; the edit is refused
+        // with the anchor.
         refused(
-          anchorOp("of:floor", { epoch: 1, version: 2 }, {
+          anchorsOp(
+            "of:floor",
+            "refused:9",
+            at,
+            { add: [{ id: "a", from: 0, to: 5 }] },
+            changes(3, 3, "d"),
+          ),
+          OpCodecError,
+          "outside the field's 4 code units",
+        );
+        refused(
+          anchorsOp("of:floor", "refused:10", at, {
             add: Array.from({ length: 1025 }, (_, index) => ({
               id: `a${index}`,
               from: 0,
@@ -2661,7 +2761,7 @@ describe("v2-operation-engine", () => {
       try {
         setup(engine, "of:released", "abc");
         commit(engine, [
-          anchorOp("of:released", "abc", {
+          anchorsOp("of:released", "alice:0", "abc", {
             add: [{ id: "a", from: 0, to: 1 }],
           }),
         ]);
@@ -2686,7 +2786,9 @@ describe("v2-operation-engine", () => {
 
         setup(engine, "of:deleted", "abc");
         commit(engine, [
-          anchorOp("of:deleted", "abc", { add: [{ id: "a", from: 0, to: 1 }] }),
+          anchorsOp("of:deleted", "alice:0", "abc", {
+            add: [{ id: "a", from: 0, to: 1 }],
+          }),
         ]);
         const deleted = commit(engine, [{ op: "delete", id: "of:deleted" }]);
         expect(deleted.revisions.map((revision) => [revision.id, revision.op]))
@@ -2728,7 +2830,7 @@ describe("v2-operation-engine", () => {
       try {
         setup(engine, "of:checkpointed", "ab");
         commit(engine, [
-          anchorOp("of:checkpointed", "ab", {
+          anchorsOp("of:checkpointed", "alice:0", "ab", {
             add: [{ id: "b", from: 1, to: 2 }],
           }),
         ]);
@@ -2782,8 +2884,8 @@ describe("v2-operation-engine", () => {
           },
         });
 
-        // An anchor-op after the checkpoint restates the set, which the
-        // checkpoint cannot know; pruning then trusts the head.
+        // An operation that adds an anchor after the checkpoint restates the
+        // set, which the checkpoint cannot know; pruning then trusts the head.
         commit(engine, [
           applyOp(
             "of:checkpointed",
@@ -2793,14 +2895,14 @@ describe("v2-operation-engine", () => {
           ),
         ]);
         commit(engine, [
-          anchorOp("of:checkpointed", { epoch: 1, version: 4 }, {
+          anchorsOp("of:checkpointed", "alice:5", { epoch: 1, version: 4 }, {
             add: [{ id: "all", from: 0, to: 6 }],
           }),
         ]);
         commit(engine, [
           applyOp(
             "of:checkpointed",
-            "alice:5",
+            "alice:6",
             { epoch: 1, version: 4 },
             changes(6, 6, "?"),
           ),
@@ -2828,7 +2930,7 @@ describe("v2-operation-engine", () => {
       }
     });
 
-    it("replays an anchor-op commit from its stored resolution", async () => {
+    it("replays a commit carrying anchors from its stored resolution", async () => {
       const { engine, path } = await openTestEngine();
       try {
         setup(engine, "of:replayed", "abc");
@@ -2838,7 +2940,7 @@ describe("v2-operation-engine", () => {
             localSeq: 7,
             reads: { confirmed: [], pending: [] },
             operations: [
-              anchorOp("of:replayed", "abc", {
+              anchorsOp("of:replayed", "alice:1", "abc", {
                 add: [{ id: "a", from: 0, to: 1 }],
               }),
             ],
@@ -2847,10 +2949,73 @@ describe("v2-operation-engine", () => {
         const first = applyCommit(engine, request);
         const again = applyCommit(engine, request);
         expect(again.replayed).toBe(true);
-        expect(again.anchorResolutions).toEqual(first.anchorResolutions);
+        expect(again.operationResolutions).toEqual(first.operationResolutions);
         expect(again.revisions.map((revision) => revision.id)).toEqual([
           anchorsDoc("of:replayed"),
         ]);
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("answers a resubmission with the anchors it stored and refuses one that carries others", async () => {
+      const { engine, path } = await openTestEngine();
+      try {
+        setup(engine, "of:resubmitted", "abc");
+        const first = commit(engine, [
+          anchorsOp(
+            "of:resubmitted",
+            "alice:1",
+            "abc",
+            { add: [{ id: "a", from: 0, to: 1 }] },
+            changes(3, 3, "d"),
+          ),
+        ]);
+        // Bob's edit moves the anchor before Alice sends the operation again;
+        // the answer is what it landed as, not where the anchor is now.
+        commit(engine, [
+          applyOp(
+            "of:resubmitted",
+            "bob:1",
+            { epoch: 1, version: 1 },
+            changes(4, 0, ">> "),
+            "bob",
+          ),
+        ]);
+        const again = commit(engine, [
+          anchorsOp(
+            "of:resubmitted",
+            "alice:1",
+            "abc",
+            { add: [{ id: "a", from: 0, to: 1 }] },
+            changes(3, 3, "d"),
+          ),
+        ]);
+        expect(again.operationResolutions?.[0]).toEqual({
+          ...first.operationResolutions?.[0],
+          duplicate: true,
+        });
+        expect(
+          queryOperationField(engine, { id: "of:resubmitted", path: body }),
+        )
+          .toMatchObject({ anchors: [{ id: "a", from: 3, to: 4 }] });
+        expect(() =>
+          commit(engine, [
+            anchorsOp(
+              "of:resubmitted",
+              "alice:1",
+              "abc",
+              { add: [{ id: "a", from: 1, to: 2 }] },
+              changes(3, 3, "d"),
+            ),
+          ])
+        ).toThrow(OpSubmissionMismatchError);
+        expect(() =>
+          commit(engine, [
+            applyOp("of:resubmitted", "alice:1", "abc", changes(3, 3, "d")),
+          ])
+        ).toThrow(OpSubmissionMismatchError);
       } finally {
         close(engine);
         await Deno.remove(path);
@@ -2862,11 +3027,13 @@ describe("v2-operation-engine", () => {
       try {
         setup(engine, "of:atomic", "abc");
         commit(engine, [
-          anchorOp("of:atomic", "abc", { add: [{ id: "a", from: 0, to: 1 }] }),
+          anchorsOp("of:atomic", "alice:1", "abc", {
+            add: [{ id: "a", from: 0, to: 1 }],
+          }),
         ]);
         expect(() =>
           commit(engine, [
-            anchorOp("of:atomic", { epoch: 1, version: 0 }, {
+            anchorsOp("of:atomic", "alice:2", { epoch: 1, version: 0 }, {
               add: [{ id: "b", from: 1, to: 2 }],
             }),
             {
@@ -2903,6 +3070,7 @@ describe("v2-operation-engine", () => {
         database.exec(`ALTER TABLE op_field_epoch DROP COLUMN anchors`);
         database.exec(`ALTER TABLE op_field_epoch DROP COLUMN anchors_seq`);
         database.exec(`ALTER TABLE op_checkpoint DROP COLUMN anchors`);
+        database.exec(`ALTER TABLE op_submission DROP COLUMN anchors`);
         database.close();
         const reopened = await open({ url: toFileUrl(path) });
         try {
@@ -2910,8 +3078,15 @@ describe("v2-operation-engine", () => {
             queryOperationField(reopened, { id: "of:migrated", path: body }),
           )
             .toMatchObject({ cursor: { epoch: 1, version: 1 }, anchors: [] });
+          // The submission from before the column answers a resubmission as
+          // one that carried no anchors.
+          expect(
+            commit(reopened, [
+              applyOp("of:migrated", "alice:1", "abc", changes(3, 3, "d")),
+            ]).operationResolutions?.[0],
+          ).toMatchObject({ duplicate: true });
           commit(reopened, [
-            anchorOp("of:migrated", { epoch: 1, version: 1 }, {
+            anchorsOp("of:migrated", "alice:2", { epoch: 1, version: 1 }, {
               add: [{ id: "d", from: 3, to: 4 }],
             }),
           ]);

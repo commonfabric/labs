@@ -517,14 +517,7 @@ describe("operation field inspection", () => {
             payload: {
               updates: [{ clientId: "alice", changes: append(2, "c") }],
             },
-          }, {
-            op: "anchor-op",
-            id: "of:mine",
-            scope: "user",
-            path: toValuePath(["body"]),
-            codec: CODEMIRROR_CHANGESET_CODEC,
-            base: { epoch: 1, version: 1 },
-            add: [{ id: "a", from: 0, to: 1 }],
+            anchors: { add: [{ id: "a", from: 0, to: 1 }] },
           }],
         },
       });

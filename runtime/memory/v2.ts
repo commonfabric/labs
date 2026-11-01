@@ -956,6 +956,16 @@ export type FieldAnchorsDocument = {
   anchors: FieldAnchor[];
 };
 
+/**
+ * Anchors an `apply-op` adds, replaces or removes. An `add` of an id the
+ * field holds replaces its range; a `remove` of an id it does not hold is a
+ * no-op. A member that is present adds or removes at least one.
+ */
+export type FieldAnchorChanges = {
+  add?: FieldAnchor[];
+  remove?: string[];
+};
+
 export type OperationFieldAddress = {
   id: EntityId;
   scope?: CellScope;
@@ -984,31 +994,23 @@ export type ApplyOpOperation = OperationFieldAddress & {
   baselineHash?: string;
 
   payload: FabricValue;
+
+  /**
+   * Anchors to add, replace or remove with this operation. The ranges in
+   * `add` are stated against the value the payload yields at the base: the
+   * document the client holds, text the payload inserts included. Memory maps
+   * them to the field head, across the operations integrated since the base,
+   * before storing them. A payload that integrates nothing is allowed, for an
+   * operation that changes anchors alone; anchors are not operations and
+   * advance no version.
+   */
+  anchors?: FieldAnchorChanges;
 };
 
 export type ReleaseOpFieldOperation = OperationFieldAddress & {
   op: "release-op-field";
   codec: string;
   cursor: OpCursor;
-};
-
-/**
- * Adds, replaces or removes anchors of a collaborative field. The ranges in
- * `add` are stated against the field's value at `base`, and Memory maps them
- * through the operations integrated after `base` before storing them, so a
- * client anchors text it read at an older version without re-reading. `base`
- * and `baselineHash` follow {@link ApplyOpOperation}'s contract. An
- * `anchor-op` on a field no editor has opened activates it. An `add` of an id
- * the field holds replaces its range; a `remove` of an id it does not hold is
- * a no-op. The field's version does not advance: anchors are not operations.
- */
-export type AnchorOpOperation = OperationFieldAddress & {
-  op: "anchor-op";
-  codec: string;
-  base?: OpCursor | null;
-  baselineHash?: string;
-  add?: FieldAnchor[];
-  remove?: string[];
 };
 
 export type IntegratedOperation = {
@@ -1030,23 +1032,15 @@ export type ApplyOpResolution = {
   to: OpCursor;
   operations: IntegratedOperation[];
   duplicate: boolean;
-};
 
-/**
- * What an `anchor-op` landed as: the field cursor its stored ranges are
- * stated at, the added anchors as stored (mapped from the operation's base to
- * that cursor), and the ids its `remove` found and removed.
- */
-export type AnchorOpResolution = {
-  operationIndex: number;
-  address: OperationFieldAddress & {
-    branch: BranchName;
-    scopeKey: string;
+  /**
+   * What the operation's `anchors` landed as, when it carried any: the added
+   * anchors as stored, stated at `to`, and the removed ids the field held.
+   */
+  anchors?: {
+    added: FieldAnchor[];
+    removed: string[];
   };
-  codec: string;
-  cursor: OpCursor;
-  anchors: FieldAnchor[];
-  removed: string[];
 };
 
 export type OperationFieldQuery = OperationFieldAddress & {
@@ -1068,8 +1062,9 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
 
   /**
    * The field's anchors at `cursor`, sorted by id; empty for an inactive
-   * field. An `anchor-op` changes this set without advancing the cursor, so a
-   * snapshot can carry new anchors at a cursor the client has already applied.
+   * field. An operation that changes anchors and integrates nothing changes
+   * this set without advancing the cursor, so a snapshot can carry new anchors
+   * at a cursor the client has already applied.
    */
   anchors: FieldAnchor[];
 
@@ -1098,7 +1093,6 @@ export type Operation =
   | PatchOperation
   | DeleteOperation
   | ApplyOpOperation
-  | AnchorOpOperation
   | ReleaseOpFieldOperation
   | SqliteOperation;
 
