@@ -922,9 +922,10 @@ function chainOnCommit(
  * before its first start of it (`EnsurePieceOptions.originFollowed`, which
  * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
  * opens a piece it serves, so the start is where the piece's source is
- * brought up to date. A start the follow is still owed is declined, and the
- * served event it was for is deferred to a later wave as any start that
- * could not happen yet defers it.
+ * brought up to date; the pieces its inputs come from are followed the same
+ * way before they start. A start a follow is still owed, the piece's own or
+ * an input source's, is declined, and the served event it was for is
+ * deferred to a later wave as any start that could not happen yet defers it.
  */
 function startEventPiece(
   runtime: Runtime,

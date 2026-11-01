@@ -1724,7 +1724,10 @@ demand pass's structure load and a served event's auto-start alike. Both
 start through `ensurePieceRunning`, whose `originFollowed` option the loop
 answers: a piece that records an origin the tenure has not followed is not
 started, its demand key stays pending and its served event defers, and the
-loop runs the follow BESIDE its cycles rather than inside one. The
+loop runs the follow BESIDE its cycles rather than inside one. The pieces
+an event's piece takes its inputs from, which its auto-start starts first
+(runtime-mapping.md), are answered the same way, and a follow still owed
+for one of them defers the event as the piece's own would. The
 reconciler's compile seals the candidate's closure into whatever wave is
 open when it finishes, and its adopting write is a direct commit (below)
 that would read that closure, so the reconciler waits for every wave open

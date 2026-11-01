@@ -3,9 +3,13 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { ensurePieceRunningVerdict } from "../src/ensure-piece-running.ts";
+import {
+  ensurePieceRunningVerdict,
+  type OwningRootAddress,
+} from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
 import { getMetaLink } from "../src/link-utils.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -115,10 +119,14 @@ describe("ensure-piece-running", () => {
   /**
    * Runs `program`'s piece with `value` 1, so the store holds `doubled` 2,
    * then stops it and moves `value` to 5 with nothing running to derive
-   * `doubled` again. Returns the nested stream and the enclosing instance's
-   * result document.
+   * `doubled` again. With `recordsOrigin`, the enclosing instance records a
+   * source origin, as a piece a client installed from a release does.
+   * Returns the nested stream and the enclosing instance's result document.
    */
-  const stopAfterInputChanges = async (program: RuntimeProgram) => {
+  const stopAfterInputChanges = async (
+    program: RuntimeProgram,
+    { recordsOrigin = false } = {},
+  ) => {
     const first = newRuntime();
     const compiled = await first.patternManager.compilePattern(program, {
       space,
@@ -137,6 +145,13 @@ describe("ensure-piece-running", () => {
       const tx = first.edit();
       argument.withTx(tx).set({ value: 1 });
       first.run(tx, compiled, argument, result);
+      if (recordsOrigin) {
+        result.withTx(tx).setMetaRaw(
+          "patternSource",
+          "system:system/probe/probe.tsx",
+          rawMetaWriteAuthorization,
+        );
+      }
       expect((await tx.commit().settled).error).toBeUndefined();
     }
     await result.pull();
@@ -198,6 +213,49 @@ describe("ensure-piece-running", () => {
     expect(client.runner.isRunning(client.getCellFromLink(enclosing))).toBe(
       false,
     );
+  });
+
+  it("declines the start as origin-pending until the origin of the piece its inputs come from is followed", async () => {
+    const { stream, enclosing } = await stopAfterInputChanges(PROGRAM, {
+      recordsOrigin: true,
+    });
+
+    const second = newRuntime();
+    const asked: string[] = [];
+    let followed = false;
+    const originFollowed = (root: OwningRootAddress) => {
+      asked.push(root.id);
+      return followed;
+    };
+    const declined = await ensurePieceRunningVerdict(second, stream, {
+      startInputSources: true,
+      originFollowed,
+      propagateErrors: true,
+    });
+
+    // The stream's own piece records no origin; the enclosing piece's is the
+    // one still owed, and nothing starts until it has been followed.
+    expect(declined.started).toBe(false);
+    expect(declined.reason).toBe("origin-pending");
+    expect(asked).toEqual([enclosing.id]);
+    const owner = getMetaLink(second.getCellFromLink(stream), "result")!;
+    expect(second.runner.isRunning(second.getCellFromLink(owner))).toBe(false);
+    expect(second.runner.isRunning(second.getCellFromLink(enclosing))).toBe(
+      false,
+    );
+
+    followed = true;
+    const started = await ensurePieceRunningVerdict(second, stream, {
+      startInputSources: true,
+      originFollowed,
+      propagateErrors: true,
+    });
+
+    expect(started.started).toBe(true);
+    expect(second.runner.isRunning(second.getCellFromLink(enclosing))).toBe(
+      true,
+    );
+    expect(second.runner.isRunning(second.getCellFromLink(owner))).toBe(true);
   });
 
   it("starts no nested piece whose argument's links cannot be read", async () => {

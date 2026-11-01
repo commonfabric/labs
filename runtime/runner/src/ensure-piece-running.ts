@@ -79,32 +79,46 @@ async function followResultCellChain(
  * enclosing instance's own argument starts it too, for that reason, though
  * the input it names is current without it. Each source's own sources start
  * first, so an instance nested more than one level deep starts from the
- * outermost. A source that cannot start leaves `owner` to start on its own,
- * but an argument whose links cannot be read fails `owner`'s start, as a
- * chain of its own that cannot be read does: a handler started without its
- * sources reads what they derived last.
+ * outermost. The caller's `admitStart` and `originFollowed` are asked about
+ * each source as about `owner`: a source the caller declines leaves `owner`
+ * to start on its own, and a source whose follow is still owed is not
+ * started, and its `origin-pending` verdict is returned so that `owner` waits
+ * for the follow too, rather than run against what the source derived from
+ * the source it had. Any other source that cannot start leaves `owner` to
+ * start on its own, but an argument whose links cannot be read fails
+ * `owner`'s start, as a chain of its own that cannot be read does: a handler
+ * started without its sources reads what they derived last.
  */
 async function startInputSources(
   runtime: Runtime,
   owner: OwningRootAddress,
-  signal: AbortSignal | undefined,
+  options: EnsurePieceOptions | undefined,
   visited: Set<string>,
-): Promise<void> {
+): Promise<EnsurePieceVerdict | undefined> {
+  const signal = options?.signal;
   const sources = await inputSourcesOf(runtime, owner, signal);
   for (const source of sources) {
     const key = rootKey(source);
     if (visited.has(key)) continue;
     visited.add(key);
     if (runtime.runner.isRunning(runtime.getCellFromLink(source))) continue;
-    // A source that cannot start leaves `owner` to start on its own.
-    await ensureVerdict(
+    const verdict = await ensureVerdict(
       runtime,
       source,
-      { startInputSources: true, signal },
+      {
+        startInputSources: true,
+        ...(signal !== undefined && { signal }),
+        ...(options?.admitStart !== undefined &&
+          { admitStart: options.admitStart }),
+        ...(options?.originFollowed !== undefined &&
+          { originFollowed: options.originFollowed }),
+      },
       visited,
     );
     signal?.throwIfAborted();
+    if (!verdict.started && verdict.reason === "origin-pending") return verdict;
   }
+  return undefined;
 }
 
 /**
@@ -222,8 +236,9 @@ export type EnsurePieceVerdict = {
     | "pattern-unloadable"
     /** The caller's `admitStart` declined to start the owning piece. */
     | "start-declined"
-    /** The caller's `originFollowed` has not yet followed the owning piece's
-     * origin; the caller starts the piece once it has. */
+    /** The caller's `originFollowed` has not yet followed the origin of the
+     * owning piece, or of a piece its inputs come from
+     * (`startInputSources()`); the caller starts the piece once it has. */
     | "origin-pending";
 
   /** Whether the started piece has a pattern graph installed AT THE
@@ -286,10 +301,12 @@ export type EnsurePieceOptions = {
    * `origin-pending` verdict and the root; the caller is following the origin
    * and asks for the start again once it has. Asked only for a piece that is
    * not running; a running piece was followed when it started, and the
-   * runtime's watcher swaps its pattern from there. A serving runtime asks
-   * this before its first start of a piece in a tenure, since nothing else
-   * opens the pieces it serves, and follows the origin between waves, where
-   * the adopting write can commit (serving-loop.md §3e).
+   * runtime's watcher swaps its pattern from there. Asked for the pieces
+   * the owning piece's inputs come from too, where `startInputSources` starts
+   * them, with the same consequence. A serving runtime asks this before its
+   * first start of a piece in a tenure, since nothing else opens the pieces
+   * it serves, and follows the origin between waves, where the adopting write
+   * can commit (serving-loop.md §3e).
    */
   originFollowed?: (root: OwningRootAddress) => boolean;
 
@@ -458,8 +475,25 @@ async function ensureVerdict(
         !runtime.runner.isRunning(resultCell)
       ) {
         visited.add(rootKey(root));
-        await startInputSources(runtime, root, signal, visited);
+        const pending = await startInputSources(
+          runtime,
+          root,
+          options,
+          visited,
+        );
         signal?.throwIfAborted();
+        // A source still owed its follow holds this piece back with it; the
+        // caller asks again once the follow has run, and the re-arm watches
+        // what the source's chain read as well as this one's.
+        if (pending !== undefined) {
+          return {
+            started: false,
+            reason: "origin-pending",
+            root,
+            observedDocIds: [...observedDocIds, ...pending.observedDocIds],
+            observedDocs: [...observedDocs, ...pending.observedDocs],
+          };
+        }
         // A source whose graph sets this piece up as its child has started
         // it there, which is how it runs when a client opens the source.
         // Starting it again here would give it a lifetime of its own.
