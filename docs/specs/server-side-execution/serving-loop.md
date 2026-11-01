@@ -1164,7 +1164,18 @@ fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving
 runtime via the installed observer — never be swallowed: a
 swallowed refusal leaves the piece silently running against setup
-writes that never landed. Its conflict class: bookkeeping writes
+writes that never landed. The runner stops the piece whose start
+failed, and the demand pass had already taken each of its demanded
+documents as started, so the observer also PARKS them: every demand
+key that resolves to the piece parks as a terminal one watching its
+own document and the piece's result doc, and the piece is held as
+one whose last start failed, so a key demanded later declines to
+start it (`ensurePieceRunning`'s `start-declined` verdict parks that
+key the same way) rather than fail the same way once per key. A
+commit to the piece's result doc releases the hold and re-arms the
+parked keys, as it re-arms a refused root (§7); one that a wave
+drained while the pass ran re-arms the key at once instead of
+parking it. Its conflict class: bookkeeping writes
 are advances that commute, so they REBASE like other
 non-re-derivable writes; a rebase that conflicts semantically DROPS
 the contribution whole — there is no event to requeue, and the loop
@@ -1995,7 +2006,10 @@ the number kept now; §1's Parking;
 that threw / could not land yet — never-a-piece id classes are EXCLUDED from
 piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
 counts a piece-start commit that failed AFTER its start resolved (the §3d
-piece-start site's surfaced fire-and-forget failure, stage P2-F);
+piece-start site's surfaced fire-and-forget failure, stage P2-F), whose
+demanded documents then park until a commit to the piece re-arms them, each
+counted in `structureLoadRearmed`, and no start of it is tried for another
+demanded document meanwhile;
 `structureLoadRefused` counts the loads a start refused because the piece's
 stored setup is a record of another build that numbered its cells holding state
 differently (`PieceStateMovedError`, `docs/specs/computed-cell-identity.md`), on

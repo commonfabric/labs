@@ -219,7 +219,9 @@ export type EnsurePieceVerdict = {
      * falls back to space scope; confirmation repeats that order. */
     | "no-pattern-meta"
     /** Meta present but `loadPatternByIdentity` found nothing. */
-    | "pattern-unloadable";
+    | "pattern-unloadable"
+    /** The caller's `admitStart` declined to start the owning piece. */
+    | "start-declined";
 
   /** Whether the started piece has a pattern graph installed AT THE
    * MOMENT THIS IS CALLED. `started` reports what the start walk did,
@@ -230,8 +232,8 @@ export type EnsurePieceVerdict = {
   graphIsInstalled?: () => boolean;
 
   /** The owning result doc (the chain terminus) where the chain
-   * resolved — present for `started`, `no-pattern-meta`, and
-   * `pattern-unloadable`. */
+   * resolved — present for `started`, `no-pattern-meta`,
+   * `pattern-unloadable`, and `start-declined`. */
   root?: OwningRootAddress;
 
   /** Every doc id the traversal read (the demanded root plus chain
@@ -263,6 +265,15 @@ export type EnsurePieceOptions = {
    * here, so a run the start releases at once already finds it.
    */
   onOwningRoot?: (root: OwningRootAddress) => void;
+
+  /**
+   * Asked, after `onOwningRoot`, whether to start the owning piece at all.
+   * `false` ends the walk with the `start-declined` verdict, the root and
+   * the documents read so far. A caller that knows a start of this piece
+   * would fail the way its last one did declines it here, rather than start
+   * it again to learn the same.
+   */
+  admitStart?: (root: OwningRootAddress) => boolean;
 
   /**
    * Start the pieces the owning piece's inputs come from before the owning
@@ -396,6 +407,16 @@ async function ensureVerdict(
       // per-instance run supply on it records the mapping here, so the
       // first run the start releases already finds it.
       options?.onOwningRoot?.(root);
+
+      if (options?.admitStart?.(root) === false) {
+        return {
+          started: false,
+          reason: "start-declined",
+          root,
+          observedDocIds,
+          observedDocs,
+        };
+      }
 
       if (
         options?.startInputSources === true &&

@@ -289,6 +289,70 @@ describe("ensurePieceRunning", () => {
     expect(order).toEqual([`root:${rootId}`, "start"]);
   });
 
+  it("returns the start-declined verdict with the owning root when the caller declines the start", async () => {
+    const pattern: Pattern = {
+      argumentSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+      },
+      resultSchema: { type: "object" },
+      result: {},
+      nodes: [],
+    };
+    const patternIdentity = {
+      identity: "test-ensure-piece-declined-start",
+      symbol: "default",
+    };
+    runtime.patternManager.associatePatternIdentity(
+      trustPattern(runtime, pattern),
+      patternIdentity,
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "declined start piece result",
+      pattern.resultSchema,
+      tx,
+    );
+    const argumentCell = getMetaCell(
+      resultCell,
+      "argument",
+      tx,
+      pattern.argumentSchema,
+    );
+    resultCell.setMetaRaw(
+      "patternIdentity",
+      patternIdentity,
+      rawMetaWriteAuthorization,
+    );
+    resultCell.setMetaRaw(
+      "argument",
+      argumentCell.getAsWriteRedirectLink(),
+      rawMetaWriteAuthorization,
+    );
+    setResultCell(argumentCell, resultCell);
+    argumentCell.set({ value: 5 });
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    const asked: string[] = [];
+    const verdict = await ensurePieceRunningVerdict(
+      runtime,
+      argumentCell.getAsNormalizedFullLink(),
+      {
+        admitStart: (root) => {
+          asked.push(root.id);
+          return false;
+        },
+      },
+    );
+    const rootId = resultCell.getAsNormalizedFullLink().id;
+    expect(asked).toEqual([rootId]);
+    expect(verdict.started).toBe(false);
+    expect(verdict.reason).toBe("start-declined");
+    expect(verdict.root?.id).toBe(rootId);
+    expect(runtime.runner.isRunning(resultCell)).toBe(false);
+  });
+
   it("should be idempotent - calling multiple times is safe", async () => {
     // Create a simple pattern
     let startCount = 0;

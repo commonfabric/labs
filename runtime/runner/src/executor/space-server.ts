@@ -942,6 +942,15 @@ export class SpaceServer implements TransactionSealDestination {
    * `of:` ids, which id classes cannot split. */
   readonly #terminalStructureLoads = new Map<string, ReadonlySet<string>>();
 
+  /**
+   * Result doc ids of the pieces whose last start's commit failed after the
+   * start resolved. The demand pass declines to start one again, since a
+   * start for another of its demanded documents would fail the same way,
+   * and parks its keys as terminal ones watching the piece. A commit to the
+   * piece's result doc clears it here and re-arms the keys.
+   */
+  readonly #failedStartRoots = new Set<string>();
+
   /** Consecutive deferral streak per demanded root (keyed by demand
    * key), feeding `stats.structureLoadStuck` and the
    * `structure-load-stuck` WARN once a streak crosses
@@ -1715,14 +1724,17 @@ export class SpaceServer implements TransactionSealDestination {
         // A refusal of a piece whose state moved, on a retry of its start's
         // commit; the runner has logged what moved.
         this.#options.stats.structureLoadRefused += 1;
-        return;
+      } else {
+        this.#options.stats.structureLoadFailures += 1;
+        logger.warn("piece-start-commit-failed", () => [
+          `piece-start commit ${actionId} failed on the serving runtime; ` +
+          "counted structureLoadFailures (stage P2-F, F1)",
+          error,
+        ]);
       }
-      this.#options.stats.structureLoadFailures += 1;
-      logger.warn("piece-start-commit-failed", () => [
-        `piece-start commit ${actionId} failed on the serving runtime; ` +
-        "counted structureLoadFailures (stage P2-F, F1)",
-        error,
-      ]);
+      if (this.#runtime === runtime) {
+        this.#parkKeysOfFailedStart(runtime, actionId);
+      }
     };
     // The shadow-flip WAKE (Phase 2's settle input barrier): a clamped
     // wave's floor lifts when the replica's parked promotion flips the
@@ -4139,6 +4151,11 @@ export class SpaceServer implements TransactionSealDestination {
       // safe for the creation race: a not-yet-created piece's
       // instantiation commit writes the demanded doc, re-arms it here,
       // and the retry then finds the meta (not-yet vs never).
+      if (this.#failedStartRoots.size > 0) {
+        for (const write of record.writes) {
+          this.#failedStartRoots.delete(write.id);
+        }
+      }
       if (this.#terminalStructureLoads.size > 0 && record.writes.length > 0) {
         for (const [key, observed] of this.#terminalStructureLoads) {
           if (!record.writes.some((write) => observed.has(write.id))) continue;
@@ -5645,6 +5662,34 @@ export class SpaceServer implements TransactionSealDestination {
                   stats,
                 );
               }
+            } else if (verdict.reason === "start-declined") {
+              // The piece's last start's commit failed, and a start for this
+              // key would fail the same way: park the key as the failed
+              // start parked the piece's other keys, watching the piece,
+              // unless a commit to it landed while this pass ran.
+              this.#pendingStructureLoads.delete(key);
+              this.#structureLoadDeferralStreaks.delete(key);
+              const watched = [...verdict.observedDocIds];
+              if (
+                verdict.root !== undefined && !watched.includes(verdict.root.id)
+              ) {
+                watched.push(verdict.root.id);
+              }
+              const invalidatedAt = this.#lowestMissedInput(
+                runtime,
+                changedDocs,
+                watched,
+              );
+              if (invalidatedAt !== Infinity) {
+                this.#noteRearmed(key, invalidatedAt);
+                this.#pendingStructureRetryWake = true;
+                continue;
+              }
+              this.#terminalStructureLoads.set(key, new Set(watched));
+              logger.info?.("structure-load-start-declined", () => [
+                `demanded root ${root.id} resolves to a piece whose last ` +
+                "start's commit failed; parked until a commit touches it",
+              ]);
             } else {
               // Not loadable YET for a non-terminal reason (a chain
               // cycle mid-write, an unloadable pattern awaiting its
@@ -6067,6 +6112,8 @@ export class SpaceServer implements TransactionSealDestination {
   ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
     const termini: OwningRootAddress[] = [];
+    const admitStart = (owning: OwningRootAddress) =>
+      !this.#failedStartRoots.has(owning.id);
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
       id: root.id as never,
@@ -6076,6 +6123,7 @@ export class SpaceServer implements TransactionSealDestination {
       propagateErrors: true,
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
+      admitStart,
     });
     if (verdict.root !== undefined) termini.push(verdict.root);
     if (
@@ -6093,6 +6141,7 @@ export class SpaceServer implements TransactionSealDestination {
       propagateErrors: true,
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
+      admitStart,
     });
     if (spaceVerdict.root !== undefined) termini.push(spaceVerdict.root);
     // Merge observed docs: the re-arm must watch both instances' reads.
@@ -6268,6 +6317,48 @@ export class SpaceServer implements TransactionSealDestination {
       runtime.storageManager.open(this.#options.space).replica
         .unappliedForeignSeqFloor?.() ?? Infinity,
     );
+  }
+
+  /**
+   * Helper for the piece-start commit failure observer, which parks every
+   * demand key of the piece `actionId` names once its start's commit has
+   * failed. The start resolved before the commit settled, so the pass took
+   * the keys as started; each parks as a terminal one watching its own
+   * document and the piece's result doc, and the piece joins
+   * `#failedStartRoots` so a later key does not start it again. A commit to
+   * the piece that a wave drained while a pass ran finds no parked key to
+   * re-arm, so such a key is re-armed here instead of parked.
+   */
+  #parkKeysOfFailedStart(runtime: Runtime, actionId: string): void {
+    const rootId = actionId.slice(actionId.indexOf("/") + 1);
+    const keys = new Set<string>([
+      ...(this.#keysByRootId.get(rootId) ?? []),
+      ...(this.#keysByResolvedRoot.get(rootId) ?? []),
+    ]);
+    let parked = false;
+    for (const key of keys) {
+      this.#pendingStructureLoads.delete(key);
+      this.#structureLoadDeferralStreaks.delete(key);
+      const watched = [key.slice(key.indexOf("\0") + 1), rootId];
+      const changedDocs = this.#structureLoadChangedDocs;
+      const invalidatedAt = changedDocs === undefined
+        ? Infinity
+        : this.#lowestMissedInput(runtime, changedDocs, watched);
+      if (invalidatedAt !== Infinity) {
+        this.#noteRearmed(key, invalidatedAt);
+        this.#pendingStructureRetryWake = true;
+        continue;
+      }
+      this.#terminalStructureLoads.set(key, new Set(watched));
+      parked = true;
+    }
+    if (parked) {
+      this.#failedStartRoots.add(rootId);
+      logger.info?.("structure-load-start-failed", () => [
+        `piece ${rootId}'s start commit failed; its ${keys.size} demanded ` +
+        "document(s) parked until a commit touches the piece",
+      ]);
+    }
   }
 
   /**
@@ -7858,6 +7949,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#structureLoadPass = undefined;
     this.#structureLoadChangedDocs = undefined;
     this.#terminalStructureLoads.clear();
+    this.#failedStartRoots.clear();
     this.#rearmedAwaitingSettle.clear();
     this.#pendingStructureRetryWake = false;
     // Phase 5: foreign engine resolutions die with the tenure (a

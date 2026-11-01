@@ -74,7 +74,10 @@ export type ServingLoopStats = {
   /** Demanded-structure loads that THREW (serving-loop.md §1: a value
    * the server cannot serve is counted AND surfaced here, not just
    * logged). Counted per attempt; the loop retries the root on each
-   * subsequent input-driven demand cycle until the load lands. */
+   * subsequent input-driven demand cycle until the load lands. Also
+   * counts a piece-start commit that failed after its start resolved;
+   * the piece's demanded documents then park until a commit touches
+   * the piece (serving-loop.md §3d). */
   structureLoadFailures: number;
 
   /** Demanded-structure loads REFUSED because the piece's stored setup is

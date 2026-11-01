@@ -47,6 +47,7 @@ import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
   getDerivedInternalCell,
+  getMetaCell,
   getMetaLink,
   parseLink,
 } from "../src/link-utils.ts";
@@ -1258,11 +1259,14 @@ describe("stage G SpaceServer recovery seams", () => {
     }
   });
 
-  // Sets up a piece at `rootName` whose record says another build numbered
-  // its writable one number further on, so a start of it is refused.
-  // `restore` stamps the record of this build, as a migration would, and
-  // `close` disposes of the runtime that set the piece up.
-  const setUpRefusedRoot = async (rootName: string) => {
+  /**
+   * A piece of a pattern with one writable and one computed field, run once
+   * by a creator runtime and stopped, as a client leaves a piece the serving
+   * loop later starts on demand. `argumentId` names the argument document,
+   * whose result backlink chains to the root; `touch()` commits a write to
+   * the root document.
+   */
+  const setUpStoppedPiece = async (rootName: string) => {
     const creatorManager = EmulatedStorageManager.connectTo(server, {
       as: spaceSigner,
     });
@@ -1284,24 +1288,57 @@ describe("stage G SpaceServer recovery seams", () => {
           ].join("\n"),
         }],
       }, { space });
-      const argument = creator.getCell<{ n: number }>(
-        space,
-        `${rootName}-arg`,
-        undefined,
-      );
-      const creatorRoot = creator.getCell<{ total?: number }>(
+      const root = creator.getCell<{ total?: number }>(
         space,
         rootName,
         undefined,
       );
-      await argument.sync();
-      await creatorRoot.sync();
+      await root.sync();
       const runTx = creator.edit();
-      argument.withTx(runTx).set({ n: 1 });
-      creator.run(runTx, compiled, argument, creatorRoot);
+      // A plain argument value: the runner then creates the argument document
+      // itself, with its result backlink to the root.
+      creator.run(runTx, compiled, { n: 1 }, root);
+      const argumentId = getMetaCell(root, "argument", runTx)
+        .getAsNormalizedFullLink().id;
       expect((await runTx.commit().settled).error).toBeUndefined();
       await creator.idle();
-      creator.runner.stop(creatorRoot);
+      creator.runner.stop(root);
+      return {
+        creator,
+        compiled,
+        root,
+        argumentId,
+        touch: async () => {
+          const tx = creator.edit();
+          root.withTx(tx).setMetaRaw(
+            "slug",
+            `${rootName}-touched`,
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await creator.storageManager.synced();
+        },
+        close: async () => {
+          await creator.dispose();
+          await creatorManager.close();
+        },
+      };
+    } catch (error) {
+      await creator.dispose();
+      await creatorManager.close();
+      throw error;
+    }
+  };
+
+  /**
+   * A stopped piece whose stored record says another build set it up with
+   * its writable one number further on, so a start of it is refused. `restore`
+   * stamps the record of the build itself, as a migration would.
+   */
+  const setUpRefusedRoot = async (rootName: string) => {
+    const piece = await setUpStoppedPiece(rootName);
+    try {
+      const { creator, compiled, root } = piece;
       const ref = creator.patternManager.getArtifactEntryRef(compiled)!;
       const own = storedSetupBuildOf(
         compiled,
@@ -1311,7 +1348,7 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(own.state.length).toBe(1);
       const stampRecord = async (record: typeof own) => {
         const tx = creator.edit();
-        creatorRoot.withTx(tx).setMetaRaw(
+        root.withTx(tx).setMetaRaw(
           "patternSetupBuild",
           fabricFromConvertibleJsValue(record as never),
           rawMetaWriteAuthorization,
@@ -1327,16 +1364,9 @@ describe("stage G SpaceServer recovery seams", () => {
           description,
         ]),
       });
-      return {
-        restore: () => stampRecord(own),
-        close: async () => {
-          await creator.dispose();
-          await creatorManager.close();
-        },
-      };
+      return { restore: () => stampRecord(own), close: piece.close };
     } catch (error) {
-      await creator.dispose();
-      await creatorManager.close();
+      await piece.close();
       throw error;
     }
   };
@@ -1590,6 +1620,85 @@ describe("stage G SpaceServer recovery seams", () => {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
       await creator.dispose();
       await creatorManager.close();
+    }
+  });
+
+  it("starts a piece whose start's commit failed once for all its demanded documents, parking them until a commit to the piece re-arms them", async () => {
+    // A start resolves before its commit settles, and the loop learns of
+    // the commit's failure through the runner's observer. Each document of
+    // the piece a client watches is a demand key of its own, and each
+    // resolves to the same piece: after the first start's commit has
+    // failed, a start for another key would fail the same way, so the keys
+    // park together, re-armed by a commit to the piece as a refused root is.
+    const stats = emptyServingLoopStats();
+    const rootName = "failed-start-root";
+    const { argumentId, touch, close } = await setUpStoppedPiece(rootName);
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    // The loop's own seal, refusing the piece's start commits while
+    // `refuseStarts` holds: the deterministic stand-in for a refusal of a
+    // start's writes at the wave.
+    const seal = created.seal.bind(created);
+    let refuseStarts = true;
+    const refusedStarts: string[] = [];
+    (created as { seal: typeof created.seal }).seal = (tx) => {
+      const actionId = waveRunContextOf(tx)?.actionId;
+      if (
+        refuseStarts && actionId !== undefined &&
+        actionId.startsWith("piece-") && actionId.endsWith(`/${rootId}`)
+      ) {
+        refusedStarts.push(actionId);
+        return Promise.resolve({
+          error: {
+            name: "StorageTransactionAborted" as const,
+            message: "test refusal of the piece's start commit",
+            reason: new Error("failed-start-test-refusal"),
+          },
+        });
+      }
+      return seal(tx);
+    };
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }, { id: argumentId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadFailures >= 1;
+      });
+      // Parked: the waves further input drives start nothing for either key.
+      for (let i = 0; i < 3; i++) {
+        created.noteDemandChanged();
+        await driveOneWave(`failed-start-probe-${i}`);
+      }
+      expect(refusedStarts.length).toBe(1);
+      expect(stats.structureLoadFailures).toBe(1);
+      expect(stats.structureLoadRefused).toBe(0);
+      expect(runtime.runner.isRunning(rootCell)).toBe(false);
+
+      refuseStarts = false;
+      await touch();
+      created.enqueueCommit({
+        space,
+        seq: Engine.serverSeq(engine),
+        class: "authored",
+        sessionId: "session:failed-start-restorer",
+        writes: [{ id: rootId, scopeKey: "space" }],
+      });
+      await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(stats.structureLoadRearmed).toBe(2);
+      expect(stats.structureLoadFailures).toBe(1);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await close();
     }
   });
 
