@@ -1892,15 +1892,55 @@ interface ServedAppendResult {
   seq?: number;
   deduped: boolean;
 }
+
+/** The body of a `commit`: a foreign wave batch in the memory boundary's
+ * encoding, and the sender's number for the commit it makes. */
+interface ServedCommitBody {
+  batch: string;
+  localSeq: number;
+}
+
+/** `ok` of a `commit`: the position the batch committed at. */
+interface ServedCommitResult {
+  seq: number;
+}
+
+/** The body of an `acl`: a served access-list change as the list of changes
+ * it applies, and the sender's number for the commit it makes. */
+interface ServedAclBody {
+  change: {
+    space: SpaceId;
+    actingPrincipal: string;
+    actingSession?: string;
+    capabilityRef: string;
+    sourceEvent: { space: SpaceId; sidecarId: string; eventId: string };
+    changes: Array<{ principal: string; level?: string; actor: string }>;
+  };
+  localSeq: number;
+}
+
+/** `ok` of an `acl`: the position the list's commit landed at, or nothing
+ * where the change left the list as it was. */
+interface ServedAclResult {
+  seq?: number;
+}
 ```
 
-The kinds are the serving loop's three crossings. An `append` is one
-delegated event append (`serving-loop.md` §5): its body is the entry the
-owner's `commitDelegatedAppend` takes, without the target space, which the
-session names, and without the session, which is the one the request came on.
-A `commit` is a foreign wave batch and an `acl` an access-list change
-(`protocol.md` §2b); a handler that serves neither yet refuses them as
-unavailable.
+The kinds are the serving loop's three crossings, and each body carries the
+sender's `localSeq`, the number the crossing's commit is keyed by on the
+session together with the session's id. An `append` is one delegated event
+append (`serving-loop.md` §5): its body is the entry the owner's
+`commitDelegatedAppend` takes, without the target space, which the session
+names, and without the session, which is the one the request came on. A
+`commit` is a foreign wave batch (`protocol.md` §2b), which the owner commits
+as the sender's own sink would have, under the same delegated admission and
+the same refusals, and reports to its own server as the warm authored commit
+that activates the space there. An `acl` is a served run's change to the
+session's space's access list, as the list of changes rather than the
+function that applies them; the owner rebuilds the function and commits the
+change as its own loop's would be (`Server.commitServedAclChange()`), under
+the carried actor. A batch or change for a space other than the session's is
+refused.
 
 Semantics:
 

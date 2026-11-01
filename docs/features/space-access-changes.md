@@ -176,7 +176,9 @@ change goes through the memory server instead:
    Each space's changes are one authored commit of the list, made under the
    run's delegated carriage (the event's actor and the grant), with the serving
    loop's session as its envelope (`commitServedAclChange()`), and checked again
-   there.
+   there: on the host's own memory server, or, where the host has a route to
+   each space's owner and the space is not the home, on that owner
+   ([owner routing](../plans/serving-loop-owner-routing.md)).
 
 So a member a served handler adds is in the list before anything the handler
 sent on reaches its target, which is what a target checking the sender's

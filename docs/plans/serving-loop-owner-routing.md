@@ -315,7 +315,7 @@ flag on and off.
    - Test: an event from X's loop on server A into Y, owned by B, is admitted by
      B, activates Y on B and not on A, is deduped on re-send, and a refused
      grant writes the failure notice in X.
-2. [ ] **R2: foreign batches, access-list changes and genesis.**
+2. [x] **R2: foreign batches, access-list changes and genesis.**
    - `commit` and `acl`.
    - The wave commit step awaits them.
    - Genesis goes through the route.
