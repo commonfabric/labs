@@ -275,6 +275,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+  type CfcDocumentAddress,
   type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
   type TrustSnapshot,
@@ -1692,11 +1693,43 @@ const stampDeferredStart = (
   runtime.stampServerRun(start, info);
   const trustSnapshot = from.getCfcState().trustSnapshot;
   if (
-    start.getCfcState().attributedInitialization &&
+    attributesInitialization(start) &&
     waveRunContextOf(start) !== undefined && trustSnapshot !== undefined
   ) {
     setCfcTrustSnapshot(start, trustSnapshot);
   }
+};
+
+/** Whether `tx` attributes any initialization to the acting principal. */
+const attributesInitialization = (tx: IExtendedStorageTransaction): boolean => {
+  const state = tx.getCfcState();
+  return state.attributedInitialization || state.attributedPieces.length > 0;
+};
+
+/**
+ * Hands `to`, the transaction a start deferred from `from` runs in, the
+ * attribution marks `from` carries, so the start initializes on `from`'s
+ * behalf to the extent `from` did: for every piece after a handler run, and
+ * for the pieces `from` brought into being after a creation.
+ */
+const carryAttributionMarks = (
+  from: IExtendedStorageTransaction,
+  to: IExtendedStorageTransaction,
+): void => {
+  const state = from.getCfcState();
+  if (state.attributedInitialization) {
+    to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    return;
+  }
+  for (const piece of state.attributedPieces) {
+    to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, piece);
+  }
+};
+
+/** The document a piece's attribution mark names: its result document. */
+const pieceAttributionScope = (resultCell: Cell<any>): CfcDocumentAddress => {
+  const { space, id, scope } = resultCell.getAsNormalizedFullLink();
+  return { space, id, ...(scope !== undefined && { scope }) };
 };
 
 /**
@@ -4910,17 +4943,21 @@ export class Runner {
     const { pattern, entryRef, resolvedPatternOrModule } = resolvedPattern;
     // A piece brought into being outside any scheduled action — a deploy, a
     // host creating one on the principal's behalf — is the acting principal's
-    // act, as a handler run is: what its setup initializes is attributed to
-    // them (`CfcTxState.attributedInitialization`). One a builtin instantiates
-    // is nobody's act: in an action, whose transaction names it, or from a
-    // continuation of one, which declines the mark. Nor is a run of a piece
-    // that is already there.
+    // act, as a handler run is: what its setup initializes in the piece's own
+    // documents is attributed to them (`CfcTxState.attributedPieces`), and
+    // what the transaction re-stages for another piece is not. One a builtin
+    // instantiates is nobody's act: in an action, whose transaction names it,
+    // or from a continuation of one, which declines the mark. Nor is a run of
+    // a piece that is already there.
     if (
       previousIdentityRef === undefined && patternOrModule !== undefined &&
       validationOptions.attributeInitialization !== false &&
       tx.tx.sourceAction === undefined
     ) {
-      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+      tx.markCfcAttributedInitialization(
+        runtimeWritePolicyAuthorization,
+        pieceAttributionScope(resultCell),
+      );
     }
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
@@ -7821,11 +7858,7 @@ export class Runner {
 
       const startTx = this.#runtime.edit();
       // A start deferred from a handler run initializes on that run's behalf.
-      if (tx.getCfcState().attributedInitialization) {
-        startTx.markCfcAttributedInitialization(
-          runtimeWritePolicyAuthorization,
-        );
-      }
+      carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
       // run; the deferred start's node wiring is piece machinery, stamped
       // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
@@ -8583,11 +8616,11 @@ export class Runner {
     );
     // Whether the setup is the principal's act was decided by the transaction
     // the run was asked in — a handler run's, or one outside any scheduled
-    // action that did not decline it — and the transaction it runs in once
-    // the family has landed carries that decision, not one of its own.
-    const attributed = tx.getCfcState().attributedInitialization ||
-      (tx.tx.sourceAction === undefined &&
-        options.attributeInitialization !== false);
+    // action that did not decline it, which attributes this piece's own
+    // initializations — and the transaction it runs in once the family has
+    // landed carries that decision, not one of its own.
+    const attributedOutsideAction = tx.tx.sourceAction === undefined &&
+      options.attributeInitialization !== false;
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -8615,9 +8648,11 @@ export class Runner {
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
         if (speculative) this.#callerOwnedSetupTransactions.add(startTx);
-        if (attributed) {
+        carryAttributionMarks(tx, startTx);
+        if (attributedOutsideAction) {
           startTx.markCfcAttributedInitialization(
             runtimeWritePolicyAuthorization,
+            pieceAttributionScope(resultCell),
           );
         }
         if (durableReads) markDurableReadTx(startTx);
@@ -9125,11 +9160,7 @@ export class Runner {
       const startTx = this.#runtime.edit();
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
-      if (tx.getCfcState().attributedInitialization) {
-        startTx.markCfcAttributedInitialization(
-          runtimeWritePolicyAuthorization,
-        );
-      }
+      carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — outside any scheduler run;
       // bookkeeping per serving-loop.md §3d, like the deferred start above (and
       // with the same §3d speculative-consequence stamp: a flag-ON client's

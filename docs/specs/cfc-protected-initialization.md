@@ -254,16 +254,22 @@ about the current principal — `RepresentsCurrentUser`, `AuthoredByCurrentUser`
 transaction of a handler run they invoked, a piece start deferred from one,
 and the transaction that brings a piece into being outside any action — a
 deploy, a host creating a piece on the principal's behalf. The runtime marks
-those transactions (`CfcTxState.attributedInitialization`, set through the
-runtime's authorization); the piece a handler creates, its cross-space
-children included, is initialized in the handler's own transaction, and a
-served creation carries the requester's trust snapshot. A builtin that
-instantiates a pattern from a continuation of its action declines the mark
-(`attributeInitialization: false`): the piece is nobody's act. A deferred
-piece start runs in a transaction of its own and takes the trust snapshot of
-the transaction it was deferred from, so the root a serving runtime's
-space-root ensure creates, under the snapshot of the owner it resolves, starts
-on that owner's behalf. A run under the serving runtime's own trust snapshot,
+those transactions through its authorization: a handler run's transaction
+whole (`CfcTxState.attributedInitialization`), and a creation's for the new
+piece's own documents (`CfcTxState.attributedPieces`): its result document,
+and the argument and internal documents its setup names for it. The piece a
+handler creates, its cross-space children included, is initialized in the
+handler's own transaction, and a served creation carries the requester's trust
+snapshot. A builtin that instantiates a pattern from a continuation of its
+action declines the mark (`attributeInitialization: false`): the piece is
+nobody's act. A deferred piece start runs in a transaction of its own, carries
+the marks of the transaction it was deferred from and takes that transaction's
+trust snapshot, so the root a serving runtime's space-root ensure creates,
+under the snapshot of the owner it resolves, starts on that owner's behalf. A
+creation's mark reaches no other piece: a projection the same transaction
+re-stages for a piece that already existed, when a release of its parent adds
+a child the next start brings into being, is initialized on nobody's behalf,
+as the next paragraph describes. A run under the serving runtime's own trust snapshot,
 which is what a served run that acts for no one keeps, is refused an
 initialization it would attribute, whether the claim would name the service
 or the service would become a field's owner, as any of its writes carrying

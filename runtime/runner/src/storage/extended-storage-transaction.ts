@@ -53,6 +53,8 @@ import {
   type CfcDenialCode,
   type CfcDereferenceTrace,
   cfcDereferenceTracesEqual,
+  type CfcDocumentAddress,
+  cfcDocumentKey,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
   type CfcExternalContentObservation,
@@ -737,6 +739,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
     attributedInitialization: false,
+    attributedPieces: [],
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -2296,13 +2299,31 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
     // The mark is what lets an initialization claim the acting principal, so
     // a call without the runtime's authorization changes nothing.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A transaction marked whole attributes every piece's initializations
+    // already.
     if (this.#cfcState.attributedInitialization) return;
+    if (piece === undefined) {
+      this.#cfcState.attributedInitialization = true;
+    } else {
+      const key = cfcDocumentKey(piece);
+      if (
+        this.#cfcState.attributedPieces.some((listed) =>
+          cfcDocumentKey(listed) === key
+        )
+      ) {
+        return;
+      }
+      this.#cfcState.attributedPieces = [
+        ...this.#cfcState.attributedPieces,
+        piece,
+      ];
+    }
     this.#noteCfcActivity();
-    this.#cfcState.attributedInitialization = true;
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("attributed-initialization-marked");
     }
@@ -4933,8 +4954,9 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
-    this.#wrapped.markCfcAttributedInitialization(authorization);
+    this.#wrapped.markCfcAttributedInitialization(authorization, piece);
   }
 
   recordCfcWritePolicyInput(

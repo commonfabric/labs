@@ -237,8 +237,12 @@ import {
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
+  CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
+  CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
+  type CfcDocumentAddress,
+  cfcDocumentKey,
   cfcEnforcementStrictness,
   type CfcLabelView,
   type CfcMetadata,
@@ -1997,7 +2001,7 @@ const writePolicyInputsForDocument = (
       address: { space: MemorySpace; id: string; scope?: CellScope },
       input: WritePolicyInput,
     ) => {
-      const key = documentKeyOf(address);
+      const key = cfcDocumentKey(address);
       const list = byDocument.get(key);
       if (list === undefined) byDocument.set(key, [input]);
       else if (list[list.length - 1] !== input) list.push(input);
@@ -2013,18 +2017,13 @@ const writePolicyInputsForDocument = (
     indexed = { length: inputs.length, byDocument };
     writePolicyInputIndexes.set(tx, indexed);
   }
-  return indexed.byDocument.get(documentKeyOf(target)) ?? [];
+  return indexed.byDocument.get(cfcDocumentKey(target)) ?? [];
 };
 
 const writePolicyInputIndexes = new WeakMap<
   IExtendedStorageTransaction,
   { length: number; byDocument: Map<string, WritePolicyInput[]> }
 >();
-
-const documentKeyOf = (
-  address: { space: MemorySpace; id: string; scope?: CellScope },
-): string =>
-  `${address.space}\0${address.id}\0${normalizeCellScope(address.scope)}`;
 
 /**
  * Whether `path` lies at or under a capture or binding the runtime staged in
@@ -2110,6 +2109,35 @@ const attemptsOnlyApplicationsAt = (
 };
 
 /**
+ * Whether the transaction attributes what it initializes at `target` to the
+ * acting principal: every document of a transaction marked whole
+ * (`CfcTxState.attributedInitialization`), and the documents of a piece it is
+ * marked for (`CfcTxState.attributedPieces`), which are the piece's result
+ * document and each store `inputs`, the write-policy inputs about `target`,
+ * show its setup naming for it in this transaction.
+ */
+const attributesInitializationAt = (
+  tx: IExtendedStorageTransaction,
+  target: CfcDocumentAddress,
+  inputs: readonly WritePolicyInput[],
+): boolean => {
+  const state = tx.getCfcState();
+  if (state.attributedInitialization) return true;
+  if (state.attributedPieces.length === 0) return false;
+  const key = cfcDocumentKey(target);
+  const pieces = new Set(state.attributedPieces.map(cfcDocumentKey));
+  return pieces.has(key) ||
+    inputs.some((input) =>
+      input.kind === "structural-provenance" &&
+      tx.isRuntimeWritePolicyInput(input) &&
+      (input.claim === CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE ||
+        input.claim === CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE) &&
+      cfcDocumentKey(input.target) === key &&
+      input.sources.length > 0 && pieces.has(cfcDocumentKey(input.sources[0]))
+    );
+};
+
+/**
  * Whether `path` lies at or under a value the runtime initialized on nobody's
  * behalf, so that a claim its schema would add about the current principal —
  * that the value represents or was authored by them — describes nothing the
@@ -2121,7 +2149,10 @@ const attemptsOnlyApplicationsAt = (
  * runtime constructed the cell chose nothing of it. The transaction of a
  * handler run is the exception (`CfcTxState.attributedInitialization`): the
  * principal invoked the handler, and what it initializes is theirs as any
- * write of theirs is.
+ * write of theirs is. So is the transaction that brings a piece into being on
+ * their behalf, for that piece's own documents (`CfcTxState.attributedPieces`)
+ * and no other piece's: a projection it re-stages for a piece that already
+ * existed is initialized on nobody's behalf.
  *
  * A preserved runtime output and a replayed argument slot leave their path as
  * it stands, in any transaction, and are nobody's act: the claim a stored
@@ -2150,7 +2181,7 @@ const pathHoldsUnattributedInitialization = (
     concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
   const inputs = writePolicyInputsForDocument(tx, target);
   if (
-    !tx.getCfcState().attributedInitialization &&
+    !attributesInitializationAt(tx, target, inputs) &&
     inputs.some((input) => {
       if (input.kind === "structural-provenance") {
         if (!tx.isRuntimeWritePolicyInput(input)) return false;

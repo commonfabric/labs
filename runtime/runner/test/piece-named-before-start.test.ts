@@ -776,7 +776,11 @@ describe("piece-named-before-start", () => {
 
     const starts = stamped.filter((tx) => tx !== runTx);
     expect(starts.length).toBe(1);
-    expect(starts[0].getCfcState().attributedInitialization).toBe(true);
+    // The run brings the card into being outside any action, so its start
+    // attributes the card's own initializations and no other piece's.
+    expect(starts[0].getCfcState().attributedInitialization).toBe(false);
+    expect(starts[0].getCfcState().attributedPieces.map(({ id }) => id))
+      .toEqual([cardB.getAsNormalizedFullLink().id]);
     expect(starts[0].getCfcState().trustSnapshot).toBe(asked);
   });
 

@@ -5,6 +5,7 @@ import type { Immutable } from "@commonfabric/js-values/types";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
+import { normalizeCellScope } from "../scope.ts";
 import type { Metadata } from "../storage/interface.ts";
 import type { ConsumedLocation } from "./access-integrity.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -508,6 +509,17 @@ export type CfcAddress = Immutable<{
   scope: CellScope;
   path: string[];
 }>;
+
+/** A document a CFC decision names: its space, id and scope, with no path. */
+export type CfcDocumentAddress = Immutable<{
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+}>;
+
+/** The key under which two addresses of one document compare equal. */
+export const cfcDocumentKey = (address: CfcDocumentAddress): string =>
+  `${address.space}\0${address.id}\0${normalizeCellScope(address.scope)}`;
 
 /**
  * The address a prepared-digest record binds, which carries exactly one of
@@ -1179,19 +1191,30 @@ export type CfcTxState = {
     identity?: ImplementationIdentity;
   };
   trustSnapshot?: TrustSnapshot;
-  // Whether a value the runtime initializes in this transaction — a
+  // Whether every value the runtime initializes in this transaction — a
   // constructed cell's seed, the reference exposing it, a new field's
   // default, a pattern's setup projection — is attributed to the acting
-  // principal: true for the transaction of a handler run they invoked, for
-  // one that brings a piece into being outside any scheduled action on their
-  // behalf, and for a start or result pattern deferred from either; false
-  // otherwise. Preparation mints the integrity a schema adds about the
-  // current principal, and binds an owner, for an initialization only when
-  // this is true. Set only through the privileged
+  // principal: true for the transaction of a handler run they invoked and
+  // for a start or result pattern deferred from one; false otherwise.
+  // Preparation mints the integrity a schema adds about the current
+  // principal, and binds an owner, for an initialization only when the
+  // transaction attributes it: through this, or through `attributedPieces`
+  // for the piece the target belongs to. Set only through the privileged
   // `markCfcAttributedInitialization` (runtime authorization); once set it
   // holds for the transaction, so a setup that must not be attributed runs
   // in a transaction of its own.
   attributedInitialization: boolean;
+  // The result documents of the pieces this transaction brings into being on
+  // the acting principal's behalf — outside any scheduled action, as a deploy
+  // or a host creating a piece for them does — and of the pieces a start
+  // deferred from such a transaction runs. What the transaction initializes
+  // in one of these documents, or in a store its setup named for the piece
+  // (`runtime.piece-setup-store`, `runtime.owned-store`), is attributed to
+  // the acting principal; a projection it re-stages for a piece that already
+  // existed is not. Set only through `markCfcAttributedInitialization` with
+  // the piece's result document; `attributedInitialization` covers every
+  // piece.
+  attributedPieces: readonly CfcDocumentAddress[];
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.

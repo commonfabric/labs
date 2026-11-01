@@ -79,6 +79,7 @@ import type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
@@ -2763,11 +2764,15 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. The mark takes the runtime's authorization,
-   * and a call without it does nothing.
+   * and a start deferred from one. With `piece`, the result document of a
+   * piece the transaction brings into being on the principal's behalf, the
+   * mark covers that piece's own documents alone
+   * (`CfcTxState.attributedPieces`). The mark takes the runtime's
+   * authorization, and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void;
 
   /**
