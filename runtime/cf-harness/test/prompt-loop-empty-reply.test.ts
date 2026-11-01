@@ -9,6 +9,7 @@ import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
+import type { HarnessRunState } from "../src/run-state.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 
 const sandbox: SandboxRuntime = {
@@ -31,7 +32,94 @@ const sandbox: SandboxRuntime = {
   },
 };
 
+/** Returns the empty-reply evidence files written by any invocation. */
+const emptyReplyPaths = async (runRoot: string): Promise<string[]> => {
+  const paths: string[] = [];
+  for await (const entry of Deno.readDir(runRoot)) {
+    if (
+      entry.name.startsWith("model-turn-") &&
+      entry.name.endsWith("-empty-reply.json")
+    ) {
+      paths.push(join(runRoot, entry.name));
+    }
+  }
+  return paths;
+};
+
 describe("prompt-loop-empty-reply", () => {
+  it("retains both empty replies when a resumed invocation repeats the turn number", async () => {
+    const root = await Deno.makeTempDir({ prefix: "empty-reply-resume-" });
+    try {
+      let runState: HarnessRunState | undefined;
+      let firstPath: string | undefined;
+      let firstContents: string | undefined;
+      let requests = 0;
+      const markers: string[] = [];
+      for (const marker of ["first-invocation", "resumed-invocation"]) {
+        const artifactStore = createFileSystemHarnessArtifactStore({
+          artifactRoot: root,
+          runId: "empty-reply-resume",
+        });
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: sandbox,
+          artifactStore,
+          runId: "empty-reply-resume",
+          model: "fixture-chat",
+          runState,
+        });
+        const loop = new CfHarnessPromptLoop({
+          engine,
+          apiKey: "fictional-key",
+          fetchFn: () => {
+            requests++;
+            return Promise.resolve(
+              new Response(JSON.stringify({
+                choices: [{
+                  message: { role: "assistant", content: "", marker },
+                }],
+              })),
+            );
+          },
+        });
+        await expect(loop.runTranscript({
+          transcript: [{ role: "user", content: "Continue." }],
+        })).rejects.toMatchObject({
+          code: "provider-unavailable",
+          message:
+            "The model returned an empty assistant response with no tool calls",
+        });
+        runState = engine.getRunState();
+        expect(runState.runId).toBe("empty-reply-resume");
+        expect(runState.status).toBe("failed");
+        const paths = await emptyReplyPaths(artifactStore.runRoot);
+        if (firstPath === undefined) {
+          expect(paths).toHaveLength(1);
+          firstPath = paths[0];
+          firstContents = await Deno.readTextFile(firstPath);
+        } else {
+          expect(paths).toHaveLength(2);
+          expect(await Deno.readTextFile(firstPath)).toBe(firstContents);
+          for (const path of paths) {
+            const artifact = JSON.parse(await Deno.readTextFile(path));
+            expect(artifact.modelTurn).toBe(1);
+            expect(artifact.modelAttemptSequence).toBe(1);
+            markers.push(
+              JSON.parse(artifact.diagnostic.responseBodyExcerpt).choices[0]
+                .message.marker,
+            );
+          }
+        }
+      }
+      expect(requests).toBe(2);
+      expect(markers.sort()).toEqual([
+        "first-invocation",
+        "resumed-invocation",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("preserves the empty-reply failure when diagnostic storage fails", async () => {
     const root = await Deno.makeTempDir({ prefix: "empty-reply-storage-" });
     try {
@@ -219,10 +307,6 @@ describe("prompt-loop-empty-reply", () => {
           });
           const loop = new CfHarnessPromptLoop({ engine, modelClient });
           const run = loop.runPrompt({ prompt: "Reply briefly." });
-          const path = join(
-            artifactStore.runRoot,
-            "model-turn-1-empty-reply.json",
-          );
           if (content.trim().length === 0) {
             await expect(run).rejects.toMatchObject({
               code: "provider-unavailable",
@@ -230,7 +314,9 @@ describe("prompt-loop-empty-reply", () => {
                 "The model returned an empty assistant response with no tool calls",
             });
             expect(engine.getRunState().status).toBe("failed");
-            const artifact = JSON.parse(await Deno.readTextFile(path));
+            const paths = await emptyReplyPaths(artifactStore.runRoot);
+            expect(paths).toHaveLength(1);
+            const artifact = JSON.parse(await Deno.readTextFile(paths[0]));
             expect(artifact.modelTurn).toBe(1);
             expect(artifact.modelAttemptSequence).toBe(1);
             expect(artifact.diagnostic.decision).toEqual({
@@ -261,9 +347,7 @@ describe("prompt-loop-empty-reply", () => {
             const result = await run;
             expect(result.finalAssistantText).toBe(content);
             expect(JSON.stringify(result)).not.toContain("private-marker");
-            await expect(Deno.stat(path)).rejects.toBeInstanceOf(
-              Deno.errors.NotFound,
-            );
+            expect(await emptyReplyPaths(artifactStore.runRoot)).toEqual([]);
           }
           expect(requests).toBe(1);
           for (

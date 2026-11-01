@@ -31,7 +31,7 @@ import type { ToolOutputId } from "./contracts/tool-result.ts";
 import type { HarnessCapabilitySnapshot } from "./diagnostics.ts";
 import type { HarnessEmptyReplyDiagnostic } from "./model/empty-reply.ts";
 
-/** Empty-reply evidence linked to its turn and run-report attempt sequence. */
+/** Empty-reply evidence linked to its invocation’s turn and attempt sequence. */
 export interface HarnessEmptyReplyArtifact {
   modelTurn: number;
   modelAttemptSequence?: number;
@@ -364,7 +364,7 @@ export class FileSystemHarnessArtifactStore implements HarnessArtifactStore {
     await ensureDir(this.runRoot);
     const path = join(
       this.runRoot,
-      `model-turn-${artifact.modelTurn}-empty-reply.json`,
+      `model-turn-${artifact.modelTurn}-${crypto.randomUUID()}-empty-reply.json`,
     );
     await writeJsonFile(path, artifact);
     return path;
