@@ -1271,16 +1271,16 @@ Each card is a flat row with a string `id` and these optional fields:
 - `tags` — a JSON string of the card's tags.
 
 A card is drawn where its `anchor` names the same cell as `$about`: same space,
-entity, and path, without following a cell that holds a link. A card with no
-`anchor` field, which has not been through intake, is anchored at the first
-link of its `about`, else at its `act_target`. A card with a null `anchor`, and
+entity, scope, and path, without following a cell that holds a link. A card
+with no `anchor` field, which has not been through intake, is anchored at the
+first link of its `about`, else at its `act_target`. A card with a null `anchor`, and
 a card without a string `id`, is never drawn inline. Cards draw at a fixed size,
 which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
 (at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no
 card, the element takes no room.
 
 The component performs no act. It emits two events for the host to bind, both
-with detail `{ id, card_revision, card }`. When `$items` is bound to a list,
+with detail `{ id, card_revision?, card }`. When `$items` is bound to a list,
 `card` is the link to the card's row that the list holds; when it is a plain
 array, `card` is the row itself:
 
