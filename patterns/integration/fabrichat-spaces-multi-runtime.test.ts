@@ -33,6 +33,14 @@ const PROGRAM_PATH = join(
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
+/** The CFC write gate's refusals in one runtime. */
+function writeRefusals(
+  counts: Record<string, Record<string, { total: number }> | number>,
+): number {
+  const cfc = counts.cfc;
+  return typeof cfc === "object" ? cfc["write-policy-gate"]?.total ?? 0 : 0;
+}
+
 // The reviewed action a start is admitted from, as
 // `../system/fabrichat/schemas.tsx` names it.
 const START_ACTION = { surface: "ChatStartSurface", action: "ChatStart" };
@@ -260,5 +268,55 @@ describe("fabrichat spaces across runtimes", () => {
       .toBe("direct");
     await expect(stranger.read(["about", "kind"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
+  });
+
+  it("lets an invited member send through the manager-created root room", async () => {
+    const refusalsBefore = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    await member.send("claimProfile", { name: "Invited member" }, {
+      surface: "FabriChatTestProfileSurface",
+      action: "FabriChatTestWriteProfile",
+    });
+    await member.client().call("selectProfile", { path: ["memberProfile"] });
+    await harness.settle();
+    expect(await member.read(["memberPrincipal"])).toBe(member.identity.did());
+    const room = await start("openDirect", {
+      requestId: "d-member-send",
+      counterpart: member.identity.did(),
+    });
+    expect(await member.read(["canSend"], { piece: room })).toBe(true);
+    await member.send(
+      "sendMessage",
+      {
+        body: "A message from the invited member",
+      },
+      { surface: "ChatSendSurface", action: "ChatSend" },
+      { piece: room },
+    );
+    await harness.settle();
+    expect(await member.read(["messages", "count"], { piece: room })).toBe(1);
+    expect(
+      await starter.read(["messages", "latest", "messages", 0, "body"], {
+        piece: room,
+      }),
+    ).toBe("A message from the invited member");
+    expect(
+      await member.link([
+        "messages",
+        "latest",
+        "messages",
+        0,
+        "authorProfile",
+      ], { piece: room }),
+    ).toEqual(await member.link(["memberProfile"]));
+    const refusalsAfter = await Promise.all(
+      [starter, member].map(async (session) =>
+        writeRefusals(await session.loggerCounts())
+      ),
+    );
+    expect(refusalsAfter).toEqual(refusalsBefore);
   });
 });
