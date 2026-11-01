@@ -772,13 +772,6 @@ type StreamEntryAddress = {
 };
 
 /**
- * One space's serving loop. The SpaceServer IS the seal destination — a
- * stable dispatcher over rotating wave accumulators, so an action tx
- * that commits between waves opens the next wave rather than erroring
- * (natural double-buffering: commits arriving mid-wave belong to the
- * NEXT wave, serving-loop.md §3).
- */
-/**
  * The key an origin follow is remembered by: the result document's address,
  * scope included, since a scoped instance of a piece is a document of its
  * own, with its own pattern pointer and origin where it carries them.
@@ -787,6 +780,13 @@ function originFollowKey(root: OwningRootAddress): string {
   return addressKey({ ...root, path: [] });
 }
 
+/**
+ * One space's serving loop. The SpaceServer IS the seal destination — a
+ * stable dispatcher over rotating wave accumulators, so an action tx
+ * that commits between waves opens the next wave rather than erroring
+ * (natural double-buffering: commits arriving mid-wave belong to the
+ * NEXT wave, serving-loop.md §3).
+ */
 export class SpaceServer implements TransactionSealDestination {
   readonly #options: SpaceServerOptions;
   readonly #holder: string;
