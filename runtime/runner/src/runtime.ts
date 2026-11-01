@@ -117,6 +117,7 @@ import {
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import type { OwningRootAddress } from "./ensure-piece-running.ts";
 import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
@@ -2385,6 +2386,30 @@ export class Runtime {
       refused?: true;
     }) => void)
     | undefined;
+
+  /**
+   * Whether a piece's origin has been followed, asked before a start of the
+   * piece this runtime makes on its own, as `EnsurePieceOptions.originFollowed`
+   * (the event auto-start's). The SpaceServer installs it at activation: the
+   * serving runtime is the opener of every piece it serves, so the piece's
+   * source is brought up to date before the tenure's first start of it, and
+   * the serving loop follows the origin between waves, where the adopting
+   * write can commit (serving-loop.md §3e). Undefined everywhere else: a
+   * client follows a piece's origin when it opens it.
+   */
+  pieceOriginFollowed: ((root: OwningRootAddress) => boolean) | undefined;
+
+  /**
+   * Resolves once every wave this runtime's seals have opened so far has
+   * finished committing: the state they staged is then the store's or
+   * withdrawn, and a transaction that commits directly (`directCommit`) may
+   * read it. The SpaceServer installs it on the serving runtime, where a
+   * sealed transaction's `commit()` resolves at the seal and the wave
+   * commits later; undefined everywhere else, where a committed transaction
+   * is durable on its own. A caller the loop awaits inside a cycle must not
+   * wait on it: the wave it waits for commits when that cycle ends.
+   */
+  sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
    * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the

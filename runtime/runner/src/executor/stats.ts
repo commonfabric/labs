@@ -92,6 +92,11 @@ export type ServingLoopStats = {
    * the park. A refusal on a commit's retry parks nothing. */
   structureLoadRefused: number;
 
+  /** Piece origins the serving loop followed before the tenure's first start
+   * of the piece (serving-loop.md §3e), counted per piece per tenure,
+   * whatever the follow found. */
+  originFollows: number;
+
   /** Demanded-structure ensure attempts that returned FALSE — the root
    * carried no loadable pattern identity yet, typically the creation
    * race (the demand cycle ran before the piece's instantiation
@@ -559,6 +564,16 @@ export type ServingLoopStats = {
      */
     arrivalHeldDeferrals: number;
 
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * piece's start waited on the loop's own follow of its origin
+     * (serving-loop.md §3e). Counted per deferral: an event that arrives
+     * while the follow compiles a new release defers once per scan the
+     * follow outlasts. A count that grows while `originFollows` does not
+     * names a follow that never completes.
+     */
+    originPendingDeferrals: number;
+
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
      * preflight parked on an in-flight replica load its closure reads
@@ -726,6 +741,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   derivedCommitsBySpaceDropped: 0,
   structureLoadFailures: 0,
   structureLoadRefused: 0,
+  originFollows: 0,
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
@@ -784,6 +800,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     handlerNotRunDeferrals: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
+    originPendingDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,

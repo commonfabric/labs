@@ -1264,9 +1264,13 @@ describe("stage G SpaceServer recovery seams", () => {
    * by a creator runtime and stopped, as a client leaves a piece the serving
    * loop later starts on demand. `argumentId` names the argument document,
    * whose result backlink chains to the root; `touch()` commits a write to
-   * the root document.
+   * the root document. `origin` records a source origin on the root, which a
+   * piece created from a served source carries.
    */
-  const setUpStoppedPiece = async (rootName: string) => {
+  const setUpStoppedPiece = async (
+    rootName: string,
+    options: { origin?: string } = {},
+  ) => {
     const creatorManager = EmulatedStorageManager.connectTo(server, {
       as: spaceSigner,
     });
@@ -1298,6 +1302,13 @@ describe("stage G SpaceServer recovery seams", () => {
       // A plain argument value: the runner then creates the argument document
       // itself, with its result backlink to the root.
       creator.run(runTx, compiled, { n: 1 }, root);
+      if (options.origin !== undefined) {
+        root.withTx(runTx).setMetaRaw(
+          "patternSource",
+          options.origin,
+          rawMetaWriteAuthorization,
+        );
+      }
       const argumentId = getMetaCell(root, "argument", runTx)
         .getAsNormalizedFullLink().id;
       expect((await runTx.commit().settled).error).toBeUndefined();
@@ -1698,6 +1709,61 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(stats.structureLoadFailures).toBe(1);
     } finally {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await close();
+    }
+  });
+
+  it("follows a demanded piece's origin once, before the tenure's first start of it", async () => {
+    // Two demand keys resolve to the same stopped piece. The pass that first
+    // reaches the piece declines its start and queues the follow, which the
+    // next cycle runs ahead of its serve step; that cycle's pass starts the
+    // piece for both keys, and no other key of the piece follows it again.
+    const stats = emptyServingLoopStats();
+    const rootName = "followed-origin-root";
+    const { argumentId, close } = await setUpStoppedPiece(rootName, {
+      origin: "system:system/probe/probe.tsx",
+    });
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    const followed: Array<{ id: string; running: boolean }> = [];
+    const reconciled = stub(
+      runtime.sourceReconciler,
+      "reconcile",
+      (cell) => {
+        followed.push({
+          id: cell.getAsNormalizedFullLink().id,
+          running: runtime.runner.isRunning(cell),
+        });
+        return Promise.resolve("current" as const);
+      },
+    );
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }, { id: argumentId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return runtime.runner.isRunning(rootCell);
+      });
+      for (let i = 0; i < 2; i++) {
+        created.noteDemandChanged();
+        await driveOneWave(`followed-origin-probe-${i}`);
+      }
+      // Followed once, while stopped, before the start.
+      expect(followed).toEqual([{ id: rootId, running: false }]);
+      expect(stats.originFollows).toBe(1);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      reconciled.restore();
       await close();
     }
   });

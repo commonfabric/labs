@@ -1585,6 +1585,14 @@ export class SourceReconciler {
     const ordered = origin.kind === "system";
     const loadable = ordered &&
       await this.#loadPattern(state.running, state.space) !== undefined;
+    // The transition reads the candidate's closure, which the compile above
+    // wrote back. A serving runtime sealed that write into a wave, and the
+    // direct commit a source update takes may read only state the store
+    // holds (serving-loop.md §3d), so it waits for that wave to commit.
+    if (sourceUpdate !== undefined) {
+      await runtime.sealsCommitted?.();
+      if (signal.aborted) return "unavailable";
+    }
     let overtaken = false;
     const failure = await this.#commit(resultCell, state, signal, (tx) => {
       overtaken = false;

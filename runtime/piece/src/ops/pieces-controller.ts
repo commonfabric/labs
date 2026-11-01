@@ -2747,6 +2747,20 @@ export class PiecesController<T = unknown> {
     root: Cell<NameSchema>,
     reconcileBeforeStart: boolean,
   ): Promise<PieceController<NameSchema>> {
+    // A client that replicates views runs no piece, the root included: the
+    // serving runtime follows the root's origin before it starts it, and
+    // repairs what its start finds. The start here only enables the view and
+    // syncs the root through it, as it does for any piece.
+    if (
+      this.runtime.viewScopedReplicationRequested &&
+      await this.runtime.viewReplication.enable(root.space)
+    ) {
+      await timePiecePhase(
+        "ensureDefaultPattern.startPiece",
+        () => this.startPiece(root),
+      );
+      return new PieceController<NameSchema>(this, root);
+    }
     let rootToStart = root;
     if (reconcileBeforeStart) {
       const outcome = await timePiecePhase(

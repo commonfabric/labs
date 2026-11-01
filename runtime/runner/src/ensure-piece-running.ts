@@ -221,7 +221,10 @@ export type EnsurePieceVerdict = {
     /** Meta present but `loadPatternByIdentity` found nothing. */
     | "pattern-unloadable"
     /** The caller's `admitStart` declined to start the owning piece. */
-    | "start-declined";
+    | "start-declined"
+    /** The caller's `originFollowed` has not yet followed the owning piece's
+     * origin; the caller starts the piece once it has. */
+    | "origin-pending";
 
   /** Whether the started piece has a pattern graph installed AT THE
    * MOMENT THIS IS CALLED. `started` reports what the start walk did,
@@ -233,7 +236,7 @@ export type EnsurePieceVerdict = {
 
   /** The owning result doc (the chain terminus) where the chain
    * resolved — present for `started`, `no-pattern-meta`,
-   * `pattern-unloadable`, and `start-declined`. */
+   * `pattern-unloadable`, `start-declined`, and `origin-pending`. */
   root?: OwningRootAddress;
 
   /** Every doc id the traversal read (the demanded root plus chain
@@ -274,6 +277,21 @@ export type EnsurePieceOptions = {
    * it again to learn the same.
    */
   admitStart?: (root: OwningRootAddress) => boolean;
+
+  /**
+   * Asked, after `admitStart` and only for a piece that records an origin,
+   * whether that origin has been followed, where a client's open of the
+   * piece follows it: the origin resolved and its current source adopted,
+   * so the pattern loaded next is the one the piece should now run. `false` ends the walk with the
+   * `origin-pending` verdict and the root; the caller is following the origin
+   * and asks for the start again once it has. Asked only for a piece that is
+   * not running; a running piece was followed when it started, and the
+   * runtime's watcher swaps its pattern from there. A serving runtime asks
+   * this before its first start of a piece in a tenure, since nothing else
+   * opens the pieces it serves, and follows the origin between waves, where
+   * the adopting write can commit (serving-loop.md §3e).
+   */
+  originFollowed?: (root: OwningRootAddress) => boolean;
 
   /**
    * Start the pieces the owning piece's inputs come from before the owning
@@ -378,6 +396,38 @@ async function ensureVerdict(
       await tx.commit().settled;
       signal?.throwIfAborted();
 
+      // The owning root is known before the piece runs: a caller keying
+      // per-instance run supply on it records the mapping here, so the
+      // first run the start releases already finds it.
+      options?.onOwningRoot?.(root);
+
+      if (options?.admitStart?.(root) === false) {
+        return {
+          started: false,
+          reason: "start-declined",
+          root,
+          observedDocIds,
+          observedDocs,
+        };
+      }
+
+      // A piece that records no origin follows nothing, so its start owes
+      // the caller no follow.
+      if (
+        options?.originFollowed !== undefined &&
+        !runtime.runner.isRunning(resultCell) &&
+        typeof resultCell.getMetaRaw("patternSource") === "string" &&
+        !options.originFollowed(root)
+      ) {
+        return {
+          started: false,
+          reason: "origin-pending",
+          root,
+          observedDocIds,
+          observedDocs,
+        };
+      }
+
       // Load the pattern by its content identity.
       const pattern = await runtime.patternManager.loadPatternByIdentity(
         identityRef.identity,
@@ -402,21 +452,6 @@ async function ensureVerdict(
       logger.debug("ensure-piece", () => [
         `Starting piece with pattern ${identityRef.identity} for result cell ${resultCell.getAsNormalizedFullLink().id}`,
       ]);
-
-      // The owning root is known before the piece runs: a caller keying
-      // per-instance run supply on it records the mapping here, so the
-      // first run the start releases already finds it.
-      options?.onOwningRoot?.(root);
-
-      if (options?.admitStart?.(root) === false) {
-        return {
-          started: false,
-          reason: "start-declined",
-          root,
-          observedDocIds,
-          observedDocs,
-        };
-      }
 
       if (
         options?.startInputSources === true &&

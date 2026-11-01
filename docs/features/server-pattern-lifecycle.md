@@ -293,8 +293,14 @@ is a conflict, and every document the transaction writes is held to the store
 seq the transaction was stamped at. A transaction that read state sealed into
 the open wave is refused, since the wave could still withdraw that state and a
 commit made durable over it could not be withdrawn with it; a caller stages such
-state in an earlier cycle. The replica takes the writes only once the store has
-accepted them, so no run reads them as pending state a refusal could roll back.
+state in an earlier cycle. A caller that runs beside the loop's cycles rather
+than inside one waits for that cycle instead: the source reconciler's follow of
+a piece's origin, which the loop runs before the tenure's first start of the
+piece, compiles the candidate's closure into the open wave and then awaits
+`Runtime.sealsCommitted` — resolved once every wave open at the call has
+committed — before its adopting direct commit reads it. The replica takes the
+writes only once the store has accepted them, so no run reads them as pending
+state a refusal could roll back.
 
 A wave open when the direct commit lands learns of it once the replica has
 applied it. Its commit step treats a document the direct commit wrote, sitting

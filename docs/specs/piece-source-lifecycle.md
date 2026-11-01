@@ -53,13 +53,17 @@ planned for deployment or included in the
 Cross-space history repoint is rejected until the checked source-replication
 path exists.
 
-Following an origin is ONE mechanism, triggered by opening a piece — which a
-user does for most pieces and the runtime does for the surfaces it supplies. No
-kind of piece has a path of its own, and nothing reconciles a piece nobody
-opened. Tenure activation owes a space the existence of its root without
-following the root's source. A served wish explicitly opens its runtime-supplied
-sidecars, so those pieces follow their origins on the serving runtime; the ON
-client only references the served sidecars. What that mechanism follows is a
+Following an origin is ONE mechanism, triggered by starting a piece — which a
+user's open does for most pieces on a client that runs them, the runtime does
+for the surfaces it supplies, and a serving runtime does before its first start
+of a piece in a tenure, whether a demanded document or a served event brought
+the piece up. No kind of piece has a path of its own, and nothing reconciles a
+piece nobody started. Tenure activation owes a space the existence of its root
+without following the root's source; the root's first start follows it. A
+client that replicates views under server execution runs no piece and follows
+nothing, the root included: the serving runtime is its pieces' opener. A served
+wish explicitly opens its runtime-supplied sidecars, so those pieces follow
+their origins on the serving runtime. What that mechanism follows is a
 `system:` ref and a
 fabric URL, and those are the only two things it will follow. The candidate a
 `system:` origin resolves to is adopted as it stands, because the release that
@@ -1477,13 +1481,16 @@ A refused candidate is worth surfacing beyond the panel, because a piece
 nobody opens says nothing at all and the owner of the origin is usually not
 the owner of the piece. How that reaches a person is open design work.
 
-Reconciliation is triggered by opening the piece — which a user does for most
-pieces, and the runtime does for the surfaces it instantiates for itself.
-Nothing reconciles a piece nobody opened. Tenure activation ensures root
-existence without following source; a served wish's explicit sidecar open
-invokes reconciliation just as another opener does. A root follows its
-origin on that same trigger and through that same sequence, and receives no
-narrower repair contract and skips no check when prior source is unavailable.
+Reconciliation is triggered by starting the piece — which a user's open does
+for most pieces on a client that runs them, the runtime does for the surfaces
+it instantiates for itself, and a serving runtime does before its first start
+of a piece in a tenure. Nothing reconciles a piece nobody started. Tenure
+activation ensures root existence without following source; a served wish's
+explicit sidecar open invokes reconciliation just as another opener does. A
+client that replicates views runs no piece and reconciles none. A root follows
+its origin on that same trigger and through that same sequence, and receives
+no narrower repair contract and skips no check when prior source is
+unavailable.
 Retained compatibility descriptors let this sequence replace an obsolete
 implementation without executing it first.
 
@@ -1656,7 +1663,7 @@ rejected without offering confirmation.
 | Use a UI affordance to push a known source URL into an owned space | **Fabric URL affordance required** | `RuntimeClient.createPiece(URL)`, `fetchProgram` with `compileAndRun`, and the omnibox's `fetchAndRunPattern` fetch and run a program from an arbitrary URL. None of them records an origin, and an arbitrary endpoint is no longer one, so they are one-shot instantiation rather than lifecycle operations. Nothing pushes a fabric URL into an owned space. |
 | Follow an immutable fabric URL | **Immutable URL follow required** | Following one resolves the pinned identity, adopts its source once, and can then never report a move again. Nothing follows a fabric origin at load today, and such an origin stores no export selector, so an implementation has either to store one or to choose the pinned source's normal entry export. |
 | Load or create from an immutable fabric URL | **Immutable URL flow required** | The source cache and fabric resolver can load verified `cf:pattern:<identity>` source and honor a trailing pin on an entity-FID reference. No product operation normalizes that URL and export symbol into immutable piece origin metadata or appends the required revision. |
-| Automatically refresh a mutable URL-origin piece when loaded | **Partial** | Opening a piece resolves its origin and adopts the source it names, before the piece starts, for every piece and through one mechanism. A `system:` ref resolves through the toolshed's `?identity` route, so an unchanged pattern costs one conditional request and no source download, and one whose compiled artifact this space no longer holds still compiles from source. A rooted path from before that scheme is re-stamped as the ref naming the same file. A mutable fabric entity resolves through the pattern identity it currently runs, and is observed while the follower runs; a content-addressed or pinned fabric URL resolves once and then has nothing to report. A running piece following a `system:` ref is reconciled again when its space's memory session is replaced, which a host restart causes. A `system:` candidate is not adopted when its host states an earlier release time than the running source's, which is the adopting revision's or a later one a release offering that same source has confirmed, or states none against one, unless the running pattern cannot load and the piece's history records no move to it from the candidate; a deployment that states no release time leaves its pieces following by identity alone. An adoption refused for good — by the store as too large, or by a stored envelope whose claim its schema changes or weakens — is recorded as a refusal and not prepared again in the same process while the candidate and the piece's source state stay as they were and, for a stored envelope's refusal, while the piece's argument and result documents store the envelopes it was refused over; that lasts until the space's memory session is replaced, and a refusal that arrives after its own space's session was replaced is not remembered. An accepted update changes the pattern, active origin, and guarded revision history atomically, and the piece's stored argument is guarded across it. Reconciliation resolves the current source rather than the complete accepted-manifest comparison specified below; a refusal is neither visible nor overridable; a failed resolution reaches no UI; and a piece nobody opens is never reconciled. |
+| Automatically refresh a mutable URL-origin piece when loaded | **Partial** | Opening a piece resolves its origin and adopts the source it names, before the piece starts, for every piece and through one mechanism. A `system:` ref resolves through the toolshed's `?identity` route, so an unchanged pattern costs one conditional request and no source download, and one whose compiled artifact this space no longer holds still compiles from source. A rooted path from before that scheme is re-stamped as the ref naming the same file. A mutable fabric entity resolves through the pattern identity it currently runs, and is observed while the follower runs; a content-addressed or pinned fabric URL resolves once and then has nothing to report. A running piece following a `system:` ref is reconciled again when its space's memory session is replaced, which a host restart causes. A `system:` candidate is not adopted when its host states an earlier release time than the running source's, which is the adopting revision's or a later one a release offering that same source has confirmed, or states none against one, unless the running pattern cannot load and the piece's history records no move to it from the candidate; a deployment that states no release time leaves its pieces following by identity alone. An adoption refused for good — by the store as too large, or by a stored envelope whose claim its schema changes or weakens — is recorded as a refusal and not prepared again in the same process while the candidate and the piece's source state stay as they were and, for a stored envelope's refusal, while the piece's argument and result documents store the envelopes it was refused over; that lasts until the space's memory session is replaced, and a refusal that arrives after its own space's session was replaced is not remembered. An accepted update changes the pattern, active origin, and guarded revision history atomically, and the piece's stored argument is guarded across it. Reconciliation resolves the current source rather than the complete accepted-manifest comparison specified below; a refusal is neither visible nor overridable; a failed resolution reaches no UI; and a piece nobody starts is never reconciled. |
 | Retain authored declaration files | **Implemented** | An authored declaration file is a module like any other. `computeModuleHashes` follows type-import edges and resolves them to a `.d.ts`, so editing one changes its importer's module identity and the entry identity. `persistableSourceFiles` keeps every rooted `.d.ts`, and both engine compile paths build the persisted module set from that same list, so a declaration-only change cannot reuse stale compiled bytes. Ambient, non-rooted declaration files are dropped, which is what distinguishes an authored declaration from the type environment the runtime injects. |
 | Publish explicit source subpaths | **Exports-map support required** | The `cf:` grammar parses a subpath. Compile resolution and the shared pin/update chase reject it before entry resolution, so current tooling cannot create a misleading subpath pin. There is no immutable authored-program manifest or exact public exports map. Entry imports continue to pin the entry identity. |
 | Record and propagate a runtime rebuild | **Provider and lifecycle required** | `computeModuleHashes` accepts `runtimeFingerprint`, and its unit test proves that changing the fingerprint changes a module with an external dependency. Production pattern compilation and source verification use the empty default. There is no authoritative executable-fingerprint provider. Source documents do not retain a non-empty identity fingerprint. The partial revision log has no runtime-neutral program digest, runtime-rebuild cause, owner-published propagation contract, or cross-runtime revert handling. |
