@@ -120,7 +120,9 @@ request alone waited for the server's thread's turn, however empty the list.
 verb as its name and its request, on either arm, and whichever thread runs the
 loop builds the verb's closures over a `PiecesController` from the same
 functions in `@commonfabric/piece`'s served lifecycle. The receipt comes back
-as data.
+as data, a structured clone on the port, so a verb hands back plain values: a
+cell read with no schema returns nested objects as proxies over the store,
+which the port cannot clone.
 
 **Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
 at the end of each wave cycle, at each activation and park, and on request;

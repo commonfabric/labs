@@ -19,9 +19,26 @@ import {
   publishExperimentalPosture,
 } from "@/lib/experimental-posture.ts";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import type {
+  ServedInstantiateReceipt,
+  ServedRegistrationPreparation,
+} from "@commonfabric/piece/ops";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];
+
+/** A pattern with one output and no inputs, for a served creation. */
+const LABEL_PROGRAM = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { pattern } from 'commonfabric';",
+      "export default pattern<{}, { label: string }>(() => ({ label: 'x' }));",
+      "",
+    ].join("\n"),
+  }],
+};
 
 describe("serverExecutionPolicyFromEnv", () => {
   // The Phase-6 env knobs (serving-loop.md §5) are the production
@@ -649,6 +666,66 @@ describe("startServerExecutionHost with the worker on", () => {
       });
     } finally {
       await connection.close();
+      await stopServerExecutionHost();
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("answers a registration's preparation from a Worker with the receipt the creation retained", async () => {
+    // The preparation hands back the receipt it read from the creation's
+    // record, and the worker posts it to this thread as a structured clone,
+    // which a value read as a proxy over the store cannot be. The space has
+    // no default pattern, so the preparation carries an error rather than a
+    // delivery.
+
+    const identity = await Identity.fromPassphrase("serving verb service");
+    const actingUser = (await Identity.fromPassphrase("serving verb user"))
+      .did();
+    const space = (await Identity.fromPassphrase("serving verb space"))
+      .did();
+    const directory = await Deno.makeTempDir({ prefix: "serving-verb-" });
+    const server = new MemoryServer({
+      store: toFileUrl(`${directory}/`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-serving-verb" },
+    });
+    const knobs: Record<string, string> = {
+      EXPERIMENTAL_SERVER_EXECUTION: "true",
+      SERVER_EXECUTION_WORKER: "true",
+      SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+    };
+    const loop = startServerExecutionHost({
+      server,
+      identity,
+      apiUrl: new URL(import.meta.url),
+      envGet: (name) => knobs[name],
+    });
+    try {
+      const created = (await loop!.runLifecycleVerb(space, {
+        name: "instantiate",
+        request: {
+          source: { program: LABEL_PROGRAM },
+          register: true,
+          actingUser,
+          start: false,
+        },
+      })).receipt as ServedInstantiateReceipt;
+      const prepared = (await loop!.runLifecycleVerb(space, {
+        name: "registration-prepare",
+        request: { receipt: created, actingUser },
+      })).receipt as ServedRegistrationPreparation;
+
+      expect(prepared).toEqual({
+        receipt: {
+          ...created,
+          registration: { status: "pending", attempt: 0 },
+        },
+        error:
+          "The space has no default pattern; install its root and retry this request key",
+      });
+    } finally {
       await stopServerExecutionHost();
       await server.close();
       await Deno.remove(directory, { recursive: true });
