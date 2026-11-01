@@ -304,7 +304,7 @@ flag on and off.
 
 ## Stages
 
-1. [ ] **R1: the routed plane and appends.**
+1. [x] **R1: the routed plane and appends.**
    - The flag and its registry entry.
    - The host's route input, under the worker too.
    - `served` with `append`, its admission and its handler installation.

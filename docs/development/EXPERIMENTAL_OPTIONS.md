@@ -63,6 +63,7 @@ was last checked against the code.
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
+| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | off | Bernhard Seefeld (serve each space from the process that owns it) | land the routed crossings stage by stage, turn the route on by default, then delete the knob and the in-process crossings | implemented for event appends, off by default |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -1784,6 +1785,18 @@ the per-epic implementation notes).
 >   session. Only the server advertises it; a client reads it from `hello.ok`
 >   and never offers it. A server that omits it parses as `false`, and
 >   `SpaceInviteClient` then sends administration over HTTP. It is permanent.
+> - **`servedRequests`** is a configuration-derived capability, neither an
+>   experimental toggle nor build-inherent. A memory server advertises it
+>   exactly while its host has installed a served-request handler through
+>   `Server.setServedRequestHandler()`, which toolshed does while it runs the
+>   serving loop ([`serverExecution`](#serverexecution) on). It advertises the
+>   `served` request of the memory protocol chapter's section 4.3.12, which
+>   delivers a crossing from another process's serving host to the space's
+>   owner
+>   ([`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing)).
+>   Only the server advertises it; a client reads it from `hello.ok` and never
+>   offers it. A server that omits it parses as `false`, and a host then keeps
+>   the crossing for a later attempt. It is permanent.
 > - **`watchRemoveV1`** is a build-inherent capability, hardwired to `true`.
 >   It advertises `session.watch.remove`, which removes watches by id and
 >   answers with only what changed (the memory protocol chapter's section
@@ -2119,6 +2132,45 @@ the per-epic implementation notes).
   worker's own unit tests.
 - **Path to removal.** Soak with the default on, then delete the knob and the
   in-process arm.
+
+### `SERVER_EXECUTION_OWNER_ROUTING`
+
+- **Toggle via.** The `SERVER_EXECUTION_OWNER_ROUTING` environment variable on
+  toolshed, read by the serving-host bootstrap
+  ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts)).
+  The literal `true` turns the route on; `false`, unset or empty leaves every
+  crossing on the process's own memory server, and other values warn and do
+  the same. The route is `MEMORY_URL`, the deployment's memory endpoint that
+  its proxy routes by space. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on). The serving memory server the
+  tests build takes a route as an option instead, and every test of a routed
+  arm sets it.
+- **Added by.** Bernhard Seefeld, in the change that serves each space from the
+  process that owns it.
+- **Purpose.** A deployment runs many toolshed processes over one memory store,
+  and its proxy routes each space's memory connections to one of them, the
+  space's owner. The serving loop's crossings into other spaces went through
+  the process's own memory server, whichever process owned the target, so the
+  owner learned of them only through the store. With the knob on, the loop
+  reaches a space other than the ones it serves through that space's owner: a
+  routed session per target space, open as the service identity on both
+  threads the loop can run on, carries the crossing as a `served` request of
+  the memory protocol (the memory protocol chapter's section 4.3.12), and the
+  owner admits it as its own host's call. The outbox's event appends and the
+  pattern-lifecycle handler's registration delivery go that way; the foreign
+  wave batches, access-list changes, provisioning and reads follow in the
+  plan's later stages.
+  [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
+  is the design and its stages.
+- **Current default and planned end state.** Off by default. The end state is
+  the route on without a knob, every crossing through the owner, and the lease
+  kept in memory rather than in the store.
+- **Status on 2026-10-31.** Implemented for event appends and the registration
+  delivery, off by default. The served request admits `append`; `commit` and
+  `acl` are refused as unavailable until their stage lands.
+- **Path to removal.** Land the remaining crossings, turn the route on by
+  default once a release with it has been deployed, then delete the knob and
+  the in-process crossings.
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 

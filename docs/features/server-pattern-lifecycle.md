@@ -237,7 +237,11 @@ caller must also have WRITE access to the stream's target space before any
 trusted observation or delivery, including when a root exports a foreign
 handler. An observer outside the serving wave watches the prepared stream's
 durable event sidecar, including a read after subscription to recover already
-completed replays. A separate serving wave reads the computed registry and
+completed replays. The event goes to the process's own memory server, except
+that a stream in a space other than the verb's, on a toolshed routing its
+crossings (`SERVER_EXECUTION_OWNER_ROUTING`), is appended to through that
+space's owner on a routed session, which the observer then watches for the
+stream's changes. A separate serving wave reads the computed registry and
 records `registration.status: "handled"`; its receipt is checked after the wave
 commits. The process needs delegation authority, without a READ or WRITE grant
 in the space: private reads and receipt writes use the serving runtime, and the
