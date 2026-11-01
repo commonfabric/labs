@@ -131,11 +131,15 @@ cell read with no schema returns nested objects as proxies over the store,
 which the port cannot clone.
 
 **Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
-at the end of each wave cycle, at each activation and park, and on request;
-the main thread registers a stats provider that returns the latest copy, so
-`/api/health/stats` keeps its shape and waits on nothing. The loop's own
-logger counts and timing statistics are the worker realm's, so they cross on
-request (`ServingLoopHandle.diagnostics()`), and a request waits for the
+at the end of each wave cycle, just ahead of each wave commit, at each
+activation and park, and on request; the main thread registers a stats
+provider that returns the latest copy, so `/api/health/stats` keeps its shape
+and waits on nothing. The post ahead of a commit travels on the port the
+commit does, whose messages the main thread handles in order, so a client
+that has seen a wave's commit reads counters that include what that wave
+counted. The loop's own logger counts and timing statistics are the worker
+realm's, so they cross on request (`ServingLoopHandle.diagnostics()`), and a
+request waits for the
 worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
 apart from `stats` so that a worker in a long settle, or one that is hung,
 delays only the caller who asked for its loggers. A test that reads a refusal
@@ -147,10 +151,7 @@ server-execution flag, which the memory server's admission of derived
 commits reads and which the host claims in its own realm, is claimed by the
 bridge for the server's realm while it serves. The serving-loop stats
 provider the health route reads is the bridge's, returning the counters the
-worker last posted. The worker posts them as each wave cycle ends and as each
-tenure starts and ends, and also just ahead of each wave commit on the same
-port, so a client that has seen a wave's commit reads counters that include
-what that wave counted. The pattern environment a served handler's `fetch`
+worker last posted. The pattern environment a served handler's `fetch`
 resolves against is the worker realm's own, set from the address the worker is
 started with, as the process sets its own from the same address.
 
