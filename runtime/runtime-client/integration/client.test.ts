@@ -1091,7 +1091,6 @@ export default pattern<unknown, ParentOutput>(() => {
             root.innerHTML.includes("Nested child rendered") &&
               root.innerHTML.includes("Sibling rendered"),
           ),
-        { timeout: 5000 },
       );
       assertEquals(
         root.innerHTML.includes('id="nested-child"'),
@@ -1146,7 +1145,6 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.includes("Value is 10")),
-        { timeout: 5000 },
       );
 
       cancel();
@@ -1201,7 +1199,6 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.includes("Result: number-42")),
-        { timeout: 15000 },
       );
       cancel();
     });
@@ -1293,7 +1290,6 @@ export default pattern<Input, Output>(({ question, myName }) => {
                   html.includes("body renders"),
               );
             },
-            { timeout: 15000 },
           );
 
           await nameCell.set("Alex");
@@ -1302,7 +1298,6 @@ export default pattern<Input, Output>(({ question, myName }) => {
               Promise.resolve(
                 root.innerHTML.includes("me is: &quot;Alex&quot;"),
               ),
-            { timeout: 5000 },
           );
         } finally {
           cancel();
@@ -1362,7 +1357,6 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.length > 0),
-        { timeout: 5000 },
       );
       assertEquals(await valueCell.sync(), 0);
 
@@ -1373,12 +1367,10 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         async () => await valueCell.sync() === 1,
-        { timeout: 5000 },
       );
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.includes(">1</span>")),
-        { timeout: 5000 },
       );
 
       cancel();
@@ -1436,7 +1428,6 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.length > 0),
-        { timeout: 5000 },
       );
       assertEquals(await valueCell.sync(), 0);
 
@@ -1447,12 +1438,10 @@ export default pattern<State>(({ value }) => {
 
       await waitFor(
         async () => await valueCell.sync() === 1,
-        { timeout: 5000 },
       );
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.includes(">1</span>")),
-        { timeout: 5000 },
       );
 
       cancel();
@@ -1513,7 +1502,6 @@ export default pattern<Record<string, never>>(() => {
 
       await waitFor(
         () => Promise.resolve(root.innerHTML.length > 0),
-        { timeout: 5000 },
       );
 
       const button = root.getElementsByTagName("button")[0] as any;
@@ -1521,21 +1509,10 @@ export default pattern<Record<string, never>>(() => {
 
       button.dispatchEvent({ type: "click", target: button });
 
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<string>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("timed out waiting for navigaterequest")),
-          5000,
-        );
-      });
-      const navigatedPieceId = await Promise.race([
-        navigation,
-        timeoutPromise,
-      ]).finally(() => {
-        if (timeout !== undefined) {
-          clearTimeout(timeout);
-        }
-      });
+      // The handler runs on the serving runtime under server execution, which
+      // takes as long as the machine makes it; a navigation that never comes
+      // fails at the runner's safety net rather than at a fixed deadline.
+      const navigatedPieceId = await navigation;
       assertExists(navigatedPieceId);
 
       cancel();
@@ -1613,7 +1590,6 @@ export default pattern<Record<string, never>>(() => {
 
         await waitFor(
           () => Promise.resolve(root.innerHTML.length > 0),
-          { timeout: 5000 },
         );
 
         const button = root.getElementsByTagName("button")[0] as any;
@@ -1708,7 +1684,6 @@ export default pattern<Record<string, never>>(() => {
         // the absence of the secret, which would pass vacuously pre-render.
         await waitFor(
           () => Promise.resolve(root.innerHTML.includes(BLOCKED_TEXT)),
-          { timeout: 10000 },
         );
         assertEquals(
           root.innerHTML.includes(SECRET_TEXT),
@@ -1733,7 +1708,6 @@ export default pattern<Record<string, never>>(() => {
       try {
         await waitFor(
           () => Promise.resolve(root.innerHTML.includes(SECRET_TEXT)),
-          { timeout: 10000 },
         );
         assertEquals(root.innerHTML.includes(BLOCKED_TEXT), false);
       } finally {

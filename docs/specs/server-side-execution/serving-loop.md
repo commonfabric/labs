@@ -1825,6 +1825,23 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's `eventId` horizon keeps processing exactly-once.
   This closes the crash window between wave commit and delivery
   that a process-local append queue could not survive.
+  **Delivery path.** Without a route, a row is delivered as a
+  delegated append on the host's own memory server. With the host
+  given a route to each space's owner
+  (`SERVER_EXECUTION_OWNER_ROUTING`,
+  [owner routing](../../plans/serving-loop-owner-routing.md)), a
+  row is delivered as a `served` `append` on the target's routed
+  session (04-protocol.md §4.3.12), which the owner admits exactly
+  as its own host's delegated append; the host keeps one such
+  session per target space for as long as a tenure uses it. The
+  owner's `refused` answer is LT4's deterministic rejection, which
+  writes the failure notice in the source; `unavailable`,
+  `internal` and a transport failure are transient, and the row is
+  kept for the next attempt. The pattern-lifecycle handler's
+  registration delivery into a space the verb did not run in takes
+  the same path, and watches the stream document on that session
+  for the event's outcome where it watched its own server's
+  admitted commits.
 - `.inSpace` provisioning rides NEITHER queue today: its foreign
   commits are SEQUENCED at the wave commit step — foreign-first,
   home-after-success, stop-at-first-failure (protocol.md §2b) — so

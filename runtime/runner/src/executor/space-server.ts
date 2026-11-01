@@ -67,6 +67,7 @@ import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
+import type { RoutedPlane } from "./routed-plane.ts";
 import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
@@ -492,6 +493,14 @@ export type SpaceServerOptions = {
    * `EngineWaveCommitSink` against its own engine.
    */
   createWaveCommitSink?: (deps: WaveCommitSinkDeps) => WaveCommitSink;
+
+  /**
+   * The host's routed plane (`serving-loop-owner-routing.md`): present, the
+   * tenure's outbox delivers each append to the target's owner through a
+   * scope of it, held for the tenure. Absent, the appends are delivered to
+   * this process's server.
+   */
+  route?: RoutedPlane;
 
   /** Fired on each successfully committed wave — the host's
    * failure-streak reset signal (real served progress, as opposed to an
@@ -1670,6 +1679,9 @@ export class SpaceServer implements TransactionSealDestination {
       engine,
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
+      ...(this.#options.route === undefined
+        ? {}
+        : { route: this.#options.route.scope() }),
       ...(this.#options.onEffectRetired !== undefined
         ? { onEffectRetired: this.#options.onEffectRetired }
         : {}),

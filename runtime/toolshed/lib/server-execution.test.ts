@@ -9,7 +9,9 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import {
   DEFAULT_MAX_OUTSTANDING_EFFECTS,
   ensureSpaceRootsFromEnv,
+  ownerRoutingFromEnv,
   serverExecutionPolicyFromEnv,
+  serverExecutionRoute,
   serverExecutionWorkerFromEnv,
   startServerExecutionHost,
   stopServerExecutionHost,
@@ -19,9 +21,26 @@ import {
   publishExperimentalPosture,
 } from "@/lib/experimental-posture.ts";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import type {
+  ServedInstantiateReceipt,
+  ServedRegistrationPreparation,
+} from "@commonfabric/piece/ops";
 
 const envOf = (values: Record<string, string | undefined>) => (name: string) =>
   values[name];
+
+/** A pattern with one output and no inputs, for a served creation. */
+const LABEL_PROGRAM = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { pattern } from 'commonfabric';",
+      "export default pattern<{}, { label: string }>(() => ({ label: 'x' }));",
+      "",
+    ].join("\n"),
+  }],
+};
 
 describe("serverExecutionPolicyFromEnv", () => {
   // The Phase-6 env knobs (serving-loop.md §5) are the production
@@ -525,6 +544,91 @@ describe("startServerExecutionHost with the store read-through on", () => {
   });
 });
 
+describe("ownerRoutingFromEnv()", () => {
+  it("is off when the knob is unset, empty or the literal false", () => {
+    const warnings: string[] = [];
+    for (
+      const env of [{}, { SERVER_EXECUTION_OWNER_ROUTING: "" }, {
+        SERVER_EXECUTION_OWNER_ROUTING: "false",
+      }]
+    ) {
+      expect(ownerRoutingFromEnv(envOf(env), (m) => warnings.push(m))).toBe(
+        false,
+      );
+    }
+    expect(warnings).toEqual([]);
+  });
+
+  it("is on for the literal true alone, and off with a warning for anything else", () => {
+    const warnings: string[] = [];
+    const routingWith = (value: string) =>
+      ownerRoutingFromEnv(
+        envOf({ SERVER_EXECUTION_OWNER_ROUTING: value }),
+        (m) => warnings.push(m),
+      );
+    expect(routingWith("true")).toBe(true);
+    expect(warnings).toEqual([]);
+    expect(routingWith("on")).toBe(false);
+    expect(routingWith("1")).toBe(false);
+    expect(warnings.length).toBe(2);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_OWNER_ROUTING");
+  });
+});
+
+describe("startServerExecutionHost with owner routing", () => {
+  const startWith = async (knobs: Record<string, string>) => {
+    const server = new MemoryServer({
+      store: new URL(`memory://owner-routing-${crypto.randomUUID()}`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-owner-routing" },
+    });
+    const loop = startServerExecutionHost({
+      server,
+      identity: await Identity.fromPassphrase("owner routing service"),
+      apiUrl: new URL("http://toolshed.test"),
+      memoryUrl: new URL("http://memory.test"),
+      envGet: (name) =>
+        ({
+          EXPERIMENTAL_SERVER_EXECUTION: "true",
+          SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+          ...knobs,
+        })[name],
+    });
+    expect(loop).toBeDefined();
+    return server;
+  };
+
+  it("keeps a routed plane for the lifecycle delivery while the loop runs, on either thread", async () => {
+    for (const worker of ["false", "true"]) {
+      const server = await startWith({
+        SERVER_EXECUTION_OWNER_ROUTING: "true",
+        SERVER_EXECUTION_WORKER: worker,
+      });
+      try {
+        // Opened lazily: no session dials the route until a delivery needs
+        // one, so the plane exists with no sessions.
+        expect(serverExecutionRoute()?.accessForTestingOnly.sessionSpaces)
+          .toEqual([]);
+      } finally {
+        await stopServerExecutionHost();
+        await server.close();
+      }
+      expect(serverExecutionRoute()).toBeUndefined();
+    }
+  });
+
+  it("keeps no routed plane with the knob off", async () => {
+    const server = await startWith({});
+    try {
+      expect(serverExecutionRoute()).toBeUndefined();
+    } finally {
+      await stopServerExecutionHost();
+      await server.close();
+    }
+  });
+});
+
 describe("startServerExecutionHost with the worker knob unset", () => {
   const startWith = async (store: URL) => {
     const server = new MemoryServer({
@@ -649,6 +753,66 @@ describe("startServerExecutionHost with the worker on", () => {
       });
     } finally {
       await connection.close();
+      await stopServerExecutionHost();
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("answers a registration's preparation from a Worker with the receipt the creation retained", async () => {
+    // The preparation hands back the receipt it read from the creation's
+    // record, and the worker posts it to this thread as a structured clone,
+    // which a value read as a proxy over the store cannot be. The space has
+    // no default pattern, so the preparation carries an error rather than a
+    // delivery.
+
+    const identity = await Identity.fromPassphrase("serving verb service");
+    const actingUser = (await Identity.fromPassphrase("serving verb user"))
+      .did();
+    const space = (await Identity.fromPassphrase("serving verb space"))
+      .did();
+    const directory = await Deno.makeTempDir({ prefix: "serving-verb-" });
+    const server = new MemoryServer({
+      store: toFileUrl(`${directory}/`),
+      subscriptionRefreshDelayMs: 0,
+      authorizeSessionOpen: authorizeLoopbackSessionOpen,
+      sessionOpenAuth: { audience: "did:key:z6Mk-serving-verb" },
+    });
+    const knobs: Record<string, string> = {
+      EXPERIMENTAL_SERVER_EXECUTION: "true",
+      SERVER_EXECUTION_WORKER: "true",
+      SERVER_EXECUTION_ENSURE_SPACE_ROOTS: "false",
+    };
+    const loop = startServerExecutionHost({
+      server,
+      identity,
+      apiUrl: new URL(import.meta.url),
+      envGet: (name) => knobs[name],
+    });
+    try {
+      const created = (await loop!.runLifecycleVerb(space, {
+        name: "instantiate",
+        request: {
+          source: { program: LABEL_PROGRAM },
+          register: true,
+          actingUser,
+          start: false,
+        },
+      })).receipt as ServedInstantiateReceipt;
+      const prepared = (await loop!.runLifecycleVerb(space, {
+        name: "registration-prepare",
+        request: { receipt: created, actingUser },
+      })).receipt as ServedRegistrationPreparation;
+
+      expect(prepared).toEqual({
+        receipt: {
+          ...created,
+          registration: { status: "pending", attempt: 0 },
+        },
+        error:
+          "The space has no default pattern; install its root and retry this request key",
+      });
+    } finally {
       await stopServerExecutionHost();
       await server.close();
       await Deno.remove(directory, { recursive: true });

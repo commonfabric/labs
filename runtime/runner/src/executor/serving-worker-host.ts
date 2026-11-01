@@ -88,6 +88,13 @@ export type ServingWorkerOptions = {
   /** The serving runtimes' experimental options. */
   experimental?: ExperimentalOptions;
 
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`). The worker
+   * dials it itself, signing its sessions with the key that crosses.
+   */
+  route?: URL;
+
   /** DIAGNOSTIC (tests): the worker's activation outcomes. */
   onActivationSettled?: (
     space: MemorySpace,
@@ -275,6 +282,7 @@ export class ServingWorker {
       policy: this.#options.policy,
       ensureSpaceRoots: this.#options.ensureSpaceRoots,
       experimental: this.#options.experimental,
+      route: this.#options.route?.href,
     };
     generation.ready = bridge.init(init).then(({ lifetimeLock }) => {
       generation.lifetimeLock = lifetimeLock;

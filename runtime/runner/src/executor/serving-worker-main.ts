@@ -20,6 +20,7 @@ import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
+import { webSocketRoute } from "./routed-plane.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
   LifecycleVerbDescriptor,
@@ -92,6 +93,13 @@ export function serveFromPort(
       ...(init.ensureSpaceRoots === undefined
         ? {}
         : { ensureSpaceRoots: init.ensureSpaceRoots }),
+      ...(init.route === undefined ? {} : {
+        route: webSocketRoute(
+          new URL(init.route),
+          identity,
+          options.clientBuild,
+        ),
+      }),
       createWaveCommitSink: (deps) => plane.createWaveCommitSink(deps),
       // The counters cross on the loop's own edges: every wave cycle, and
       // each tenure's start and end.
