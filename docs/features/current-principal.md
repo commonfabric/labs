@@ -114,8 +114,8 @@ They part in two places.
   an owner position, the result document's binding to an argument field,
   writes nothing of the value and is admitted the same way. A run of the serving loop's own that it attaches a principal's
   snapshot to, as the space-root ensure attaches the owner it resolves, acts
-  for that principal, and so does a piece start it defers that initializes on
-  its behalf. A demanded derivation with no actor carries its demander's
+  for that principal, and so does a piece start it defers, which takes that
+  run's snapshot. A demanded derivation with no actor carries its demander's
   snapshot for its reads but acts for no one, and is refused the same writes.
 - A host embedding the runtime can supply its own trust snapshot naming a
   different acting principal. The placeholder then resolves to that principal,

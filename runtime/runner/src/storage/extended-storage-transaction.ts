@@ -741,6 +741,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     attributedInitialization: false,
     attributedPieces: [],
     pieceCreators: [],
+    creatorRecordWrites: [],
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -1599,10 +1600,19 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     //
     // A write reaching the `creator` field is judged at commit preparation
     // whatever authorization it carries (`pieceCreatorRecordReasons` in
-    // cfc/prepare.ts), so it makes the transaction CFC-relevant on its own:
-    // a transaction writing nothing else would otherwise never be prepared.
+    // cfc/prepare.ts), which reads the documents recorded here rather than
+    // the write log, so it makes the transaction CFC-relevant on its own: a
+    // transaction writing nothing else would otherwise never be prepared.
     if (metaFieldsWritten(address.path, value).includes("creator")) {
       this.markCfcRelevant("creator-record-write");
+      this.#cfcState.creatorRecordWrites = [
+        ...this.#cfcState.creatorRecordWrites,
+        {
+          space: address.space,
+          id: address.id,
+          ...(address.scope !== undefined && { scope: address.scope }),
+        },
+      ];
     }
     if (!rawMetaWriteAuthorized(options)) {
       // Three shapes reach a meta field: an address naming the field, a

@@ -1227,6 +1227,11 @@ export type CfcTxState = {
   // record here names the document and the same principal. Set only through
   // `markCfcPieceCreator` (runtime authorization).
   pieceCreators: readonly CfcPieceCreatorRecord[];
+  // The documents whose `creator` meta field this transaction writes, recorded
+  // at the write chokepoint whatever authorization the write carries, so that
+  // preparation judges those writes (`pieceCreatorRecordReasons`) without
+  // scanning the write log of a transaction that makes none.
+  creatorRecordWrites: readonly CfcDocumentAddress[];
   // Attesting space -> transitive successor -> predecessor writer-authority
   // aliases, snapshotted from the Runtime when the transaction is created and
   // write-once pinned. Authorization consults only the target document's space.

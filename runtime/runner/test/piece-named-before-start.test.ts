@@ -753,8 +753,8 @@ describe("piece-named-before-start", () => {
   it("hands the named run's start the trust snapshot of the transaction that asked for the run", async () => {
     const { cardB, itemB, key } = locateCard(14);
     // B stamps its runs the way a serving loop does, so the start runs under
-    // a run context: a start that initializes on its parent's behalf then
-    // takes its parent's trust, not the runtime's own.
+    // a run context: a start deferred from a run then takes that run's
+    // trust, not the runtime's own.
     const stamped: IExtendedStorageTransaction[] = [];
     b.stampServerRun = (tx, info) => {
       stamped.push(tx);
@@ -776,11 +776,12 @@ describe("piece-named-before-start", () => {
 
     const starts = stamped.filter((tx) => tx !== runTx);
     expect(starts.length).toBe(1);
-    // The run brings the card into being outside any action, so its start
-    // attributes the card's own initializations and no other piece's.
+    // The run starts a card the host's run on another replica set up, so its
+    // start attributes nothing: a start of a piece found set up is nobody's
+    // act, however it was reached (cfc-protected-initialization.md,
+    // "Attribution of an initialized value").
     expect(starts[0].getCfcState().attributedInitialization).toBe(false);
-    expect(starts[0].getCfcState().attributedPieces.map(({ id }) => id))
-      .toEqual([cardB.getAsNormalizedFullLink().id]);
+    expect(starts[0].getCfcState().attributedPieces).toEqual([]);
     expect(starts[0].getCfcState().trustSnapshot).toBe(asked);
   });
 

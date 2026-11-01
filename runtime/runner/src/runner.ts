@@ -1676,15 +1676,18 @@ const pieceOwnedStores = (
 /**
  * Stamps `start`, the transaction a deferred piece start runs in, with the run
  * context `info` gives it (`Runtime.stampServerRun()`), and hands it the trust
- * snapshot of `from`, the transaction it was deferred from, when it
- * initializes on that transaction's behalf. The start runs in a transaction of
- * its own, and on a serving runtime the stamp leaves it the runtime's ambient
- * snapshot, which names the service. A run the serving loop attached a
- * principal's snapshot to, such as the owner the space-root ensure resolves,
- * would otherwise hand the start's initializations to the service rather than
- * to that principal. Every deferred start is stamped here, before its first
- * read, so none is stamped without that trust. A start no serving loop stamps
- * takes its trust from the runtime it runs in, as its parent did.
+ * snapshot of `from`, the transaction it was deferred from: the start runs on
+ * behalf of whoever asked for the run, and what it may read and whom a claim
+ * it mints names follow from that snapshot, while whether it attributes an
+ * initialization follows from the marks `carryAttributionMarks` hands it. The
+ * start runs in a transaction of its own, and on a serving runtime the stamp
+ * leaves it the runtime's ambient snapshot, which names the service. A run
+ * the serving loop attached a principal's snapshot to, such as the owner the
+ * space-root ensure resolves, would otherwise hand the start's
+ * initializations to the service rather than to that principal. Every
+ * deferred start is stamped here, before its first read, so none is stamped
+ * without that trust. A start no serving loop stamps takes its trust from the
+ * runtime it runs in, as its parent did.
  */
 const stampDeferredStart = (
   runtime: Runtime,
@@ -1694,18 +1697,9 @@ const stampDeferredStart = (
 ): void => {
   runtime.stampServerRun(start, info);
   const trustSnapshot = from.getCfcState().trustSnapshot;
-  if (
-    attributesInitialization(start) &&
-    waveRunContextOf(start) !== undefined && trustSnapshot !== undefined
-  ) {
+  if (waveRunContextOf(start) !== undefined && trustSnapshot !== undefined) {
     setCfcTrustSnapshot(start, trustSnapshot);
   }
-};
-
-/** Whether `tx` attributes any initialization to the acting principal. */
-const attributesInitialization = (tx: IExtendedStorageTransaction): boolean => {
-  const state = tx.getCfcState();
-  return state.attributedInitialization || state.attributedPieces.length > 0;
 };
 
 /**

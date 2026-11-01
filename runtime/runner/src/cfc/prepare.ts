@@ -6337,7 +6337,10 @@ const pieceCreatorRecordReasons = (
 ): string[] => {
   const state = tx.getCfcState();
   const reasons: string[] = [];
-  for (const space of getTransactionWrittenSpaces(tx)) {
+  // The chokepoint recorded every such write, so a transaction that made none
+  // costs no pass over its write log.
+  const spaces = new Set(state.creatorRecordWrites.map(({ space }) => space));
+  for (const space of spaces) {
     const details = [...(tx.getWriteDetails?.(space) ?? [])];
     for (const detail of details) {
       const { path, id, scope } = detail.address;
