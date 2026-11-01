@@ -1658,7 +1658,8 @@ that wrote it, as it does a row-label refusal; a foreign batch's
 refusal takes the ordinary foreign-failure path (home withheld, every
 event requeued). A served `.inSpace()` target's genesis is untouched by
 all of this: `Runtime.createSpace` signs it as the new space's own key
-over an ordinary session of its own, never through a wave.
+over an ordinary session of its own, which reaches the space's owner
+where the host has a route (protocol.md §2b), never through a wave.
 
 **A handler changes an access list through the memory server.** The
 one sanctioned path from a served run to an access list is
@@ -1681,7 +1682,9 @@ batch, so the outbox rows the home batch writes are delivered after
 the change. Each is an authored commit of the list alone under the
 run's delegated carriage, enveloped by the holder session and checked
 again by the memory server (`commitServedAclChange()`, through the
-sink's `commitSpaceAccessChange()`). A change refused there, for a
+sink's `commitSpaceAccessChange()`): the host's own, or, with a route
+and a space other than the home, the owner of that space, as a
+`served` `acl` (04-protocol.md §4.3.12). A change refused there, for a
 list changed since the seal, requeues its event, and the replay's seal
 decides it afresh. A change that landed stands whatever the wave does
 next, as a landed foreign provisioning commit does; the replay finds
@@ -1846,7 +1849,9 @@ the durable rows of §5 carry APPENDS, never effect state).
   commits are SEQUENCED at the wave commit step — foreign-first,
   home-after-success, stop-at-first-failure (protocol.md §2b) — so
   a crash between the halves leaves the event unconsequenced and
-  the deterministic replay converges. Outbox carriage is its
+  the deterministic replay converges. With a route, each foreign
+  commit is a `served` `commit` the target's owner applies and
+  reports (§2b), awaited at that same step. Outbox carriage is its
   sharded-future form only (§2b's closing note).
 - At-least-once; for effects, idempotence comes from the builtins'
   request-hash guards — the claim-time completed-request check (a

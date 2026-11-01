@@ -67,7 +67,8 @@ import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 
 import type { HostMemoryServer } from "./host-memory-server.ts";
-import type { RoutedPlane } from "./routed-plane.ts";
+import type { RoutedPlane, RouteOptions } from "./routed-plane.ts";
+import { routedWaveCommitSink } from "./routed-wave-sink.ts";
 import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
@@ -422,6 +423,15 @@ export type RuntimeFactoryContext = {
    * runtime's manager either way; a factory run with none builds a manager
    * that refuses every foreign scoped read until one is installed. */
   foreignScopedReadGrant?: ForeignScopedReadGrant;
+
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop-owner-routing.md`), present while the host has one, for
+   * a factory to hand its storage manager: a session the manager opens as a
+   * space's own key, the genesis of a space the serving runtime creates,
+   * then dials that space's owner instead of this process's server.
+   */
+  route?: RouteOptions;
 };
 
 export type SpaceServerOptions = {
@@ -1668,7 +1678,17 @@ export class SpaceServer implements TransactionSealDestination {
             ...envelope,
           }),
       });
-    this.#sink = this.#options.decorateWaveCommitSink?.(sink, space) ?? sink;
+    // With a route, the tenure's crossings into other spaces go through
+    // that scope, from the sink and the outbox alike; the outbox disposes
+    // it when the tenure ends, and a batch still in flight at a park then
+    // fails foreign, since a disposed scope refuses every call, and the
+    // event replays on the next tenure.
+    const routeScope = this.#options.route?.scope();
+    const routed = routeScope === undefined
+      ? sink
+      : routedWaveCommitSink(sink, routeScope, space);
+    this.#sink = this.#options.decorateWaveCommitSink?.(routed, space) ??
+      routed;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
     // threads the per-space egress budgets (§5's outstanding-effect cap
     // + egress rate) from the policy.
@@ -1679,9 +1699,7 @@ export class SpaceServer implements TransactionSealDestination {
       engine,
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
-      ...(this.#options.route === undefined
-        ? {}
-        : { route: this.#options.route.scope() }),
+      ...(routeScope === undefined ? {} : { route: routeScope }),
       ...(this.#options.onEffectRetired !== undefined
         ? { onEffectRetired: this.#options.onEffectRetired }
         : {}),
@@ -7311,12 +7329,19 @@ export class SpaceServer implements TransactionSealDestination {
    * rolls a landed foreign commit back, and the host activates a parked,
    * sessionless target on the notice so the staged setup derives
    * (serving-loop.md §1's third activation trigger). A sink that reports
-   * its commits itself has reported them.
+   * its commits itself has reported them, and so has the owner of a batch
+   * that went through the route: it reported the commit to its own server,
+   * and a notice here would activate the space on this host as well.
    */
   #reportForeignCommits(outcome: WaveCommitOutcome): void {
     for (const foreign of outcome.foreignCommits) {
       this.#options.stats.warmRequests += 1;
-      if (this.#sink?.reportsCommits === true) continue;
+      if (
+        this.#sink?.reportsCommits === true ||
+        this.#options.route !== undefined
+      ) {
+        continue;
+      }
       this.#options.server.noteExecutorCommit({
         space: foreign.space,
         seq: foreign.seq,

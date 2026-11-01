@@ -71,7 +71,12 @@ keys the session's commits stays with the worker, because the outbox's own
 writes draw from the same counter under the same session: each commit crosses
 with the number the worker minted for it, and the main thread's sink is handed
 that number. The served-ACL-change commit crosses the same way, as the list of
-changes it applies; the main thread rebuilds the function from the list.
+changes it applies; the main thread rebuilds the function from the list. With
+a route to each space's owner
+([owner routing](serving-loop-owner-routing.md)), a foreign batch and a
+change to another space's list leave the worker for that space's owner over
+the worker's own routed session instead, and only the home batch and the
+home's changes cross the port.
 
 **The serving runtime's storage plane crosses as frames.** The serving runtime's
 `StorageManager` connects to the memory server through `LoopbackStorageManager`,

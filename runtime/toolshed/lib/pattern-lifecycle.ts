@@ -38,7 +38,7 @@ import {
   type LifecyclePhaseTiming,
   LifecycleVerbFailure,
 } from "@commonfabric/runner/executor/lifecycle-verb";
-import type { RoutedPlane } from "@commonfabric/runner/executor/routed-plane";
+import type { RoutedScope } from "@commonfabric/runner/executor/routed-plane";
 import {
   authorizeSpaceWriter,
   type SpaceAuthorityDeps,
@@ -96,6 +96,16 @@ const lifecycleBodies = {
   }).refine(oneSource, oneSourceMessage),
 };
 
+/**
+ * The part of a routed scope a registration delivery uses: the append into
+ * the stream's space and the watch on its document, and the release of the
+ * session when the delivery is done.
+ */
+export type RegistrationDeliveryScope = Pick<
+  RoutedScope,
+  "append" | "watchDocument" | "dispose"
+>;
+
 export interface LifecycleDeps {
   /** What the writer check reads the space's ACL through. */
   authority: SpaceAuthorityDeps;
@@ -111,10 +121,11 @@ export interface LifecycleDeps {
 
   /**
    * The routed plane to other spaces' owners while the process routes its
-   * crossings (docs/plans/serving-loop-owner-routing.md); `undefined` while
-   * it does not, and then every delivery goes to this process's own server.
+   * crossings (docs/plans/serving-loop-owner-routing.md), as the scope
+   * members a delivery uses; `undefined` while it does not, and then every
+   * delivery goes to this process's own server.
    */
-  route?: () => Pick<RoutedPlane, "scope"> | undefined;
+  route?: () => { scope(): RegistrationDeliveryScope } | undefined;
 
   /** Trusted event ingress once the caller is authorized as a writer. */
   append: Server["commitDelegatedAppend"];
