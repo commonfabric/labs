@@ -101,7 +101,9 @@ classification.
 
 ## The ruling
 
-The body of the specs pull request, in the form the procedure requires.
+The body of [specs pull request 87](https://github.com/commonfabric/specs/pull/87),
+in the form the procedure requires, as drafted here; the filed body adds the
+child, served-host and legacy cases the built stages settled.
 
 **Question.** When a source update installs a new field whose schema declares
 a placeholder `ownerPrincipal`, which principal does the field belong to?
@@ -263,8 +265,10 @@ repoint; this one gives it something to consult.
 
 Stages 1, 3, 4, 5 and 6 are built, behind the `pieceCreatorRecord`
 experimental option where they persist something new. Stage 2, the ruling,
-is open: the two `SPEC-PENDING` markers name no pull request yet. Three
-things differ from the design below. The binding is made where the label is
+is filed as [specs pull request 87](https://github.com/commonfabric/specs/pull/87),
+stacked on pull request 64, and the three `SPEC-PENDING` markers in
+`prepare.ts` and `piece-creator-evidence.ts` name it; the flag and the markers
+go when it merges. Three things differ from the design below. The binding is made where the label is
 persisted (`labelMintOptionsAt` and `derivePersistedLabel` in `prepare.ts`),
 which resolves the owning piece through the setup provenance that names an
 argument or internal document for it or through the `result` back-link, rather

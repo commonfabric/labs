@@ -2291,7 +2291,7 @@ const labelMintOptionsAt = (
  * would belong to whoever first wrote it. The piece's creator chose the origin
  * and with it delegated every later release, so the field is theirs.
  */
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/87
 const updateAddedOwnerCreator = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -6331,7 +6331,7 @@ const currentPrincipalIntegrityReason = (
  * runtime recorded creators, which moves `patternIdentity` and finds the field
  * absent (`piece-creator-evidence.ts` says what such a record is made from).
  */
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/87
 const pieceCreatorRecordReasons = (
   tx: IExtendedStorageTransaction,
 ): string[] => {

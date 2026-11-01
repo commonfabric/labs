@@ -1052,9 +1052,11 @@ holds the measurements and the conditions for revisiting.
   `EXPERIMENTAL_PIECE_CREATOR_RECORD=true` or pass
   `RuntimeOptions.experimental.pieceCreatorRecord: true` to record creators.
   The record and its admission rule are spec text under the CFC
-  correspondence procedure, so they land behind a `SPEC-PENDING` marker in
-  `runtime/runner/src/cfc/prepare.ts` naming the ruling's specs pull request.
-  Once that ruling merges, the record becomes unconditional and the flag is
+  correspondence procedure, so they land behind `SPEC-PENDING` markers in
+  `runtime/runner/src/cfc/prepare.ts` and
+  `runtime/runner/src/cfc/piece-creator-evidence.ts` naming the ruling,
+  [specs pull request 87](https://github.com/commonfabric/specs/pull/87). Once
+  that ruling merges, the record becomes unconditional and the flag is
   deleted.
 - **Status on 2026-11-01.** Implemented and off. The record and the writes
   refused are covered by `runtime/runner/test/cfc-piece-creator.test.ts`, the

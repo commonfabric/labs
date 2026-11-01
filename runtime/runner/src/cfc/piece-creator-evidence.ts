@@ -24,7 +24,7 @@ import { cfcSchemaEntries } from "./schema-label-view.ts";
  * fields name two principals, or none, offers no evidence and stays without a
  * record; so does one whose stored envelope this build cannot read.
  */
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/<n>
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/87
 export const legacyPieceCreatorEvidence = (
   tx: IExtendedStorageTransaction,
   documents: readonly NormalizedFullLink[],
