@@ -193,7 +193,8 @@ rebasing semantics from `@codemirror/collab`.
 - The anchors a submission carries are stated against the client's document,
   the base with the whole submitted batch applied. The codec maps them through
   the other side of its rebase: the intervening changes the batch does not
-  already hold, rebased over the batch, one at a time by the rule above, and
+  already hold, composed and rebased over the batch as the rebase itself
+  composes and maps them, as one change description by the rule above, and
   then through the inverse of any rewrite it suppressed as a duplicate. An
   anchor on text the submitted batch inserts stays on that text; one on a
   suppressed duplicate's text becomes a point where that copy was.

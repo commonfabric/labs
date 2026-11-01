@@ -223,76 +223,46 @@ const anchorsWithin = (
   });
 
 /**
- * `changes`, made one after another, rebased over `over`, made beside them
- * from the same document; `over`'s insertions at a position one of `changes`
- * inserts at come after it, as `rebase` orders a client's insertions before
- * the ones it rebases them over.
- */
-const rebaseDescs = (
-  changes: readonly ChangeDesc[],
-  over: ChangeDesc | undefined,
-): ChangeDesc[] => {
-  if (over === undefined) return [...changes];
-  let other = over;
-  return changes.map((change) => {
-    const rebased = change.mapDesc(other, true);
-    other = other.mapDesc(change);
-    return rebased;
-  });
-};
-
-/**
  * `rebaseUpdates` from `@codemirror/collab`, kept here so that the other side
- * of the rebase comes back with it: `foreign` is `over` without the updates
- * `updates` already holds, rebased over `updates`, one change description per
- * update. Applied to the document `updates` yields, they produce the document
- * `rebased` yields over `over`'s, because a change mapped over another and
- * that other mapped over it compose to one document (CodeMirror's
- * `ChangeSet.map` contract).
+ * of the rebase comes back with it. `complement` is the one change
+ * description that takes the document `updates` yields to the document
+ * `rebased` yields over `over`'s: `over` without the updates `updates`
+ * already holds, composed and mapped as the library maps them, so the two
+ * sides stay the two sides of one rebase (CodeMirror's `ChangeSet.map`
+ * contract). It is absent when nothing in `over` is foreign to `updates`.
  */
 const rebase = (
   updates: readonly Update[],
   over: readonly Update[],
-): { rebased: Update[]; foreign: ChangeDesc[] } => {
-  let foreign: ChangeDesc[] = [];
+): { rebased: Update[]; complement: ChangeDesc | undefined } => {
+  let changes: ChangeDesc | undefined;
   let skip = 0;
   for (const update of over) {
     const own = skip < updates.length ? updates[skip] : undefined;
     if (own !== undefined && own.clientID === update.clientID) {
-      foreign = rebaseDescs(foreign, own.changes.desc);
+      if (changes !== undefined) changes = changes.mapDesc(own.changes, true);
       skip++;
     } else {
-      foreign.push(update.changes.desc);
+      changes = changes === undefined
+        ? update.changes.desc
+        : changes.composeDesc(update.changes);
     }
   }
   const remaining = updates.slice(skip);
-  if (foreign.length === 0) return { rebased: remaining, foreign };
-  let changes = foreign.reduce((composed, change) =>
-    composed.composeDesc(change)
-  );
+  if (changes === undefined) return { rebased: remaining, complement: changes };
+  let complement = changes;
   const rebased = remaining.map((update) => {
-    const updateChanges = update.changes.map(changes);
-    changes = changes.mapDesc(update.changes, true);
+    const updateChanges = update.changes.map(complement);
+    complement = complement.mapDesc(update.changes, true);
     return {
       changes: updateChanges,
       ...(update.effects === undefined
         ? {}
-        : { effects: StateEffect.mapEffects(update.effects, changes) }),
+        : { effects: StateEffect.mapEffects(update.effects, complement) }),
       clientID: update.clientID,
     };
   });
-  return {
-    rebased,
-    foreign: rebaseDescs(
-      foreign,
-      remaining.length === 0
-        ? undefined
-        : remaining.map((update) => update.changes.desc).reduce((
-          composed,
-          change,
-        ) => composed.composeDesc(change)),
-    ),
-  };
+  return { rebased, complement };
 };
 
 const codeMirrorChangeSetCodec: OperationCodec = {
@@ -308,7 +278,7 @@ const codeMirrorChangeSetCodec: OperationCodec = {
     const submittedUpdates = decodePayload(submitted).map(({ update }) =>
       update
     );
-    const { rebased: acceptedWithDuplicates, foreign } = rebase(
+    const { rebased: acceptedWithDuplicates, complement } = rebase(
       submittedUpdates,
       over.map(({ update }) => update),
     );
@@ -353,12 +323,12 @@ const codeMirrorChangeSetCodec: OperationCodec = {
       : over.length > 0
       ? over[0].update.changes.length
       : materialized.length;
-    // The foreign changes, one at a time, take that document to the ordinary
-    // rebase result; the suppressed duplicates' inverse takes it to the kept
+    // The rebase's complement takes that document to the ordinary rebase
+    // result; the suppressed duplicates' inverse takes it to the kept
     // document.
     let mapped = anchorsWithin(anchors, clientLength);
-    for (const change of foreign) {
-      mapped = mapped.map((anchor) => mapAnchorRange(anchor, change));
+    if (complement !== undefined) {
+      mapped = mapped.map((anchor) => mapAnchorRange(anchor, complement));
     }
     if (!suppressed.empty) {
       mapped = mapped.map((anchor) =>

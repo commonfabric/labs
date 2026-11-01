@@ -1,4 +1,5 @@
-import { ChangeSet } from "@codemirror/state";
+import { rebaseUpdates, type Update } from "@codemirror/collab";
+import { ChangeSet, Text } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
@@ -201,6 +202,58 @@ describe("v2-operation-codec", () => {
 
     expect(integrated.materialized).toBe("aXYbc");
     expect(integrated.operations).toHaveLength(1);
+  });
+
+  it("rebases a stale batch past its integrated prefix as the library does, under overlapping remote edits", () => {
+    const codec = createDefaultOperationCodecRegistry().require(
+      CODEMIRROR_CHANGESET_CODEC,
+    );
+    const own = (changes: ChangeSet): Update => ({
+      clientID: "alice",
+      changes,
+    });
+    const remote = (changes: ChangeSet): Update => ({
+      clientID: "bob",
+      changes,
+    });
+    const apply = (text: string, updates: readonly Update[]) => {
+      let document = Text.of([text]);
+      for (const update of updates) document = update.changes.apply(document);
+      return document.toString();
+    };
+    const payload = (update: Update) => ({
+      updates: [{
+        clientId: update.clientID,
+        changes: update.changes.toJSON(),
+      }],
+    });
+    // Alice's batch over "abcdef": "aAdef", then "B".
+    const batch = [
+      own(ChangeSet.of({ from: 1, to: 3, insert: "A" }, 6)),
+      own(ChangeSet.of({ from: 0, to: 5, insert: "B" }, 5)),
+    ];
+    // The field integrated Bob's overlapping replacements around the first
+    // update of the batch: "abCCCf", "DDDCf", "DDDCAf", "EEAf".
+    const integrated = [
+      remote(ChangeSet.of({ from: 2, to: 5, insert: "CCC" }, 6)),
+      remote(ChangeSet.of({ from: 0, to: 4, insert: "DDD" }, 6)),
+      own(ChangeSet.of({ from: 4, insert: "A" }, 5)),
+      remote(ChangeSet.of({ from: 0, to: 4, insert: "EE" }, 6)),
+    ];
+    const head = apply("abcdef", integrated);
+    expect(head).toBe("EEAf");
+    const library = rebaseUpdates(batch, integrated);
+    expect(apply(head, library)).toBe("EEB");
+
+    const result = codec.integrate({
+      materialized: head,
+      submitted: { updates: batch.map((update) => payload(update).updates[0]) },
+      intervening: integrated.map(payload),
+      anchors: [{ id: "b", from: 0, to: 1 }],
+    });
+    expect(result.materialized).toBe("EEB");
+    expect(result.operations).toEqual(library.map(payload));
+    expect(result.anchors).toEqual([{ id: "b", from: 2, to: 3 }]);
   });
 
   it("accepts a later rewrite after its earlier dedupe horizon", () => {
@@ -563,6 +616,16 @@ describe("v2-operation-codec", () => {
         materialized: "abc",
         operations: [],
       })).toEqual([anchor(0, 3)]);
+    });
+
+    it("throws for a field that is not a string", () => {
+      expect(() =>
+        codec.mapAnchors({
+          anchors: [anchor(0, 1)],
+          materialized: 5,
+          operations: [],
+        })
+      ).toThrow("require a string field");
     });
 
     it("throws for a range beyond the value the anchors are stated against", () => {
