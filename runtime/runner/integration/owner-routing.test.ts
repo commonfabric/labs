@@ -290,8 +290,12 @@ const RESULT_SCHEMA = {
   required: ["write"],
 } as const satisfies JSONSchema;
 
-/** A toolshed's health stats: the spaces its memory server has recorded a
- * commit in, and the crossings its serving loop sent through the route. */
+/**
+ * A toolshed's health stats: the spaces its memory server has recorded a
+ * commit in, and the crossings its serving loop sent through the route. A
+ * toolshed reporting no serving loop is a failure, not a loop that sent
+ * nothing.
+ */
 async function healthStats(toolshed: URL): Promise<{
   committedSpaces: string[];
   routed: { appends: number; batches: number; aclChanges: number };
@@ -303,12 +307,14 @@ async function healthStats(toolshed: URL): Promise<{
       routed: { appends: number; batches: number; aclChanges: number };
     };
   };
+  if (stats.servingLoop === undefined) {
+    throw new Error(`${toolshed.href} reports no serving loop`);
+  }
   return {
     committedSpaces: (stats.commitRates?.spaces ?? []).map((entry) =>
       entry.space
     ),
-    routed: stats.servingLoop?.routed ??
-      { appends: 0, batches: 0, aclChanges: 0 },
+    routed: stats.servingLoop.routed,
   };
 }
 
