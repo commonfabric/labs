@@ -129,9 +129,9 @@ type SqliteOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
  */
 async function producedSqliteCell(
   source: CellHandle<unknown>,
-  signal: AbortSignal | undefined,
+  signal: AbortSignal,
 ): Promise<CellHandle<unknown>> {
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   // Held only to keep the producer demanded, as an operation's is.
   const cancelDemand = source.asSchema({ asCell: ["sqlite"] }).subscribe(
     () => {},
@@ -144,7 +144,7 @@ async function producedSqliteCell(
   const produced = Promise.withResolvers<void>();
   const aborted = Promise.withResolvers<void>();
   const abandon = () => aborted.resolve();
-  signal?.addEventListener("abort", abandon);
+  signal.addEventListener("abort", abandon);
   // A subscriber is first told what the handle holds, and a handle made from a
   // context read earlier holds the field's link, which says nothing about the
   // database. Only a later update, or what the pull below finds, does.
@@ -168,11 +168,11 @@ async function producedSqliteCell(
   } catch (error) {
     if (!(error instanceof CellReadRefusedError)) throw error;
   } finally {
-    signal?.removeEventListener("abort", abandon);
+    signal.removeEventListener("abort", abandon);
     cancel();
     cancelDemand();
   }
-  signal?.throwIfAborted();
+  signal.throwIfAborted();
   return await source.resolveAsCell();
 }
 
@@ -578,14 +578,16 @@ export function createCellContextBridge(context: object): FabricBridge {
  * A name `resourceKinds` alone gives is a resource only where the context
  * holds a link under it, so a name the context does not hold grants nothing.
  * A SQLite resource is granted once its producer has written the database, so
- * this waits for each one the context holds. An abort of `signal` ends those
- * waits, and the bridge then rejects with the signal's reason.
+ * this waits for each one the context holds. A wait keeps the producer
+ * demanded, and ends when the bridge fails or `signal` aborts. Once `signal`
+ * has aborted, the bridge rejects with its reason.
  */
 export async function resolveCellContextBridge(
   context: CellHandle<Record<string, unknown>>,
   resourceKinds: Readonly<Record<string, CellContextResourceKind>> = {},
   signal?: AbortSignal,
 ): Promise<FabricBridge> {
+  signal?.throwIfAborted();
   // A context whose read is refused still names its fields, each of which
   // answers for its own reads.
   const contextNames = await fieldNames(context);
@@ -597,6 +599,11 @@ export async function resolveCellContextBridge(
     ...await fieldNames(root),
   ]);
   const names = new Set([...listed, ...Object.keys(resourceKinds)]);
+  // A failed resource rejects the bridge, which ends the other waits.
+  const failed = new AbortController();
+  const waits = signal === undefined
+    ? failed.signal
+    : AbortSignal.any([signal, failed.signal]);
   const entries = await Promise.all([...names].map(async (name) => {
     const source = context.key(name);
     const kindHint = Object.hasOwn(resourceKinds, name)
@@ -619,7 +626,7 @@ export async function resolveCellContextBridge(
       }
     }
     if (declaredKind === "sqlite") {
-      cell = await producedSqliteCell(source, signal);
+      cell = await producedSqliteCell(source, waits);
     }
     cell ??= await source.resolveAsCell();
     const resolvedSchema = cell.ref().schema;
@@ -643,7 +650,11 @@ export async function resolveCellContextBridge(
         runSqliteOperation,
       ),
     ] as const;
-  }));
+  })).catch((error) => {
+    failed.abort();
+    throw error;
+  });
+  signal?.throwIfAborted();
   return createFabricBridge(
     Object.fromEntries(entries.filter((entry) => entry !== undefined)),
   );

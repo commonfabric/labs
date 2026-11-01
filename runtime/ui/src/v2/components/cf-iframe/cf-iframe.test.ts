@@ -179,6 +179,55 @@ describe("CFIframe", () => {
     expect(templateValues(element)[1]).toBe("<p>ready</p>");
   });
 
+  it("keeps a resolved context's bridge and source, sending nothing, when disconnected and connected again", async () => {
+    // Resolving the context again would hand the sandbox a new bridge, which
+    // reloads the guest.
+
+    const ref: CellRef = {
+      id: "of:context" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "object", properties: {} },
+    };
+    let requests = 0;
+    const runtime = {
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) => {
+          requests++;
+          return request.type === RequestType.CellResolveAsCell
+            ? Promise.resolve({
+              cell: { ...ref, id: "of:resolved" as CellRef["id"] },
+            })
+            : Promise.resolve({ value: {} });
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    } as unknown as RuntimeClient;
+    const element = new HeadlessIframe();
+    element.connectedCallback();
+    element.src = "<p>ready</p>";
+    element.context = new CellHandle(runtime, ref);
+    const updated = Promise.withResolvers<void>();
+    element.requestUpdate = () => updated.resolve();
+    internals(element).willUpdate(contextChange());
+    await updated.promise;
+    const [bridge] = templateValues(element);
+    const sent = requests;
+
+    element.disconnectedCallback();
+    element.connectedCallback();
+
+    expect(requests).toBe(sent);
+    expect(templateValues(element).slice(0, 2)).toEqual([
+      bridge,
+      "<p>ready</p>",
+    ]);
+  });
+
   it("lets an explicit bridge load independently of context resolution", () => {
     const element = new CFIframe();
     const bridge: FabricBridge = { resources: {} };
