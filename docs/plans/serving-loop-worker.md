@@ -147,7 +147,10 @@ server-execution flag, which the memory server's admission of derived
 commits reads and which the host claims in its own realm, is claimed by the
 bridge for the server's realm while it serves. The serving-loop stats
 provider the health route reads is the bridge's, returning the counters the
-worker last posted. The pattern environment a served handler's `fetch`
+worker last posted. The worker posts them as each wave cycle ends and as each
+tenure starts and ends, and also just ahead of each wave commit on the same
+port, so a client that has seen a wave's commit reads counters that include
+what that wave counted. The pattern environment a served handler's `fetch`
 resolves against is the worker realm's own, set from the address the worker is
 started with, as the process sets its own from the same address.
 

@@ -203,15 +203,22 @@ type WaveCommitSinkReads = Required<
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it.
+ * `reportStats` runs just before each commit is posted.
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
+  readonly #reportStats: () => void;
   readonly #reads: EngineWaveCommitSink;
 
-  constructor(endpoint: ServingPlaneEndpoint, deps: WaveCommitSinkDeps) {
+  constructor(
+    endpoint: ServingPlaneEndpoint,
+    deps: WaveCommitSinkDeps,
+    reportStats: () => void,
+  ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
+    this.#reportStats = reportStats;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -281,6 +288,11 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
+    // The counters cross ahead of the commit on the same port, whose messages
+    // the server's thread handles in order, so it holds what this wave
+    // counted before it applies the commit. A client that has seen the commit
+    // then reads counters that include it.
+    this.#reportStats();
     try {
       const { result, homeRefused } = await this.#endpoint.request(
         "sink.commitWave",
@@ -558,6 +570,7 @@ export class ServingPlane {
   readonly #server: HostMemoryServer;
   readonly #loopback: LoopbackPlane;
   #observer: ServerExecutionObserver | undefined;
+  #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
   #closed = false;
 
@@ -633,11 +646,14 @@ export class ServingPlane {
 
   /** The tenure's sink; `ExecutorHostOptions.createWaveCommitSink`. */
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
-    return new PlaneWaveCommitSink(this.#endpoint, deps);
+    return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
+      if (this.#host !== undefined) this.reportStats(this.#host.stats());
+    });
   }
 
   /** Installs what the server's thread may ask of the worker's host. */
   serve(host: ServingPlaneHost): void {
+    this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
     this.#endpoint.onRequest(
