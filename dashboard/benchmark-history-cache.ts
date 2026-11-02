@@ -332,6 +332,12 @@ const isRefreshManifest = (
     (result === undefined || REFRESH_RESULTS.some((known) => known === result));
 };
 
+/**
+ * Orders runs by creation time, and runs created together by run and attempt.
+ */
+const byTime = (a: CachedBenchmarkRun, b: CachedBenchmarkRun): number =>
+  a.at - b.at || a.runId - b.runId || a.runAttempt - b.runAttempt;
+
 const runKey = (runId: number, runAttempt: number): string =>
   `${runId}-${runAttempt}`;
 
@@ -746,7 +752,7 @@ export class BenchmarkHistoryStore {
         latest.set(run.runId, run);
       }
     }
-    return [...latest.values()].sort((a, b) => a.at - b.at);
+    return [...latest.values()].sort(byTime);
   }
 
   /**
@@ -1075,7 +1081,7 @@ export class BenchmarkHistoryStore {
       if (!run) return null;
       runs.push(run);
     }
-    return runs.sort((a, b) => a.at - b.at);
+    return runs.sort(byTime);
   }
 
   #prune(now: number): void {

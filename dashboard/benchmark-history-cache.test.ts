@@ -1315,7 +1315,7 @@ Deno.test("runtime benchmark history shares benchmark names and releases unused 
   try {
     const store = new BenchmarkHistoryStore(history);
     await store.load();
-    store.set(measured(1031, now, ["a", "b"]));
+    store.set(measured(1031, now - 1_000, ["a", "b"]));
     store.set(measured(1032, now, ["a", "b"]));
     assertEquals(store.accessForTestingOnly.nameLists, 1);
     store.set(
@@ -1437,6 +1437,26 @@ Deno.test("runtime benchmark history reads a legacy file that spans many reads",
         Object.entries(run.metrics).map(([key, value]) => [key, row(value)]),
       );
     }
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("runtime benchmark history orders runs created together by run number", async () => {
+  const directory = await Deno.makeTempDir({ prefix: "benchmark-history-" });
+  const history = `${directory}/history`;
+  const now = Date.now();
+  try {
+    const store = new BenchmarkHistoryStore(history);
+    await store.load();
+    const later = store.set(localRun(1052, now));
+    const earlier = store.set(localRun(1051, now));
+    assertEquals(store.list().map((run) => run.runId), [1051, 1052]);
+    store.markRefreshed(now, [later, earlier]);
+    assertEquals(
+      store.refreshedRuns()?.map((run) => run.runId),
+      [1051, 1052],
+    );
   } finally {
     await Deno.remove(directory, { recursive: true });
   }
