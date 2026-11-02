@@ -12,6 +12,7 @@ import { diffSource } from "../lib/view/diffedit.ts";
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import type { Line } from "../lib/view/model.ts";
 import { Session } from "../lib/view/session.ts";
+import { gitBlobName } from "./view-helpers.ts";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {
@@ -27,8 +28,16 @@ function type(s: Session, text: string): void {
 
 /** A diff session over `diffText` whose files do not resolve on disk (read-only,
  * but still a diff, so the jump list is offered). */
-function diffSession(diffText: string, height = 20): Session {
-  const ws: DiffWorkspace = { resolve: () => null, read: () => null };
+function diffSession(
+  diffText: string,
+  height = 20,
+  blobs: ReadonlyMap<string, string> = new Map(),
+): Session {
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    readBlob: (object) => blobs.get(object) ?? null,
+  };
   const model = parseDiff(diffText)!;
   const { doc, edit } = buildDiffDocument(diffText, model, ws);
   return new Session(
@@ -358,6 +367,38 @@ Deno.test("jumplist: file visibility keys remain active while browsing", () => {
       line.spans.some((span) => span.cls !== "comment")
     ),
   );
+});
+
+Deno.test("jumplist: C toggles comment-only files while browsing", () => {
+  const s = diffSession(
+    [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -1 +1 @@",
+      "-run(1);",
+      "+run(2);",
+      "diff --git a/b.ts b/b.ts",
+      `index ${gitBlobName("// old\n")}..${gitBlobName("// new\n")} 100644`,
+      "--- a/b.ts",
+      "+++ b/b.ts",
+      "@@ -1 +1 @@",
+      "-// old",
+      "+// new",
+      "",
+    ].join("\n"),
+    20,
+    new Map([[gitBlobName("// old\n"), "// old\n"]]),
+  );
+  const hidden = (row: number) =>
+    s.view().overlay!.lines[row].spans.every((span) => span.cls === "comment");
+  press(s, "i", "C");
+  assert(!hidden(0), "the code change stays shown");
+  assert(hidden(1), "the comment-only file is hidden");
+  assertEquals(summaryText(s)[1], "All files +2 −2 · Shown files +1 −1");
+
+  press(s, "C");
+  assert(!hidden(1), "C shows the comment-only file again");
 });
 
 Deno.test("jumplist: the summary reports all and shown file counts", () => {

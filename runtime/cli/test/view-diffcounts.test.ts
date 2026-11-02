@@ -4,15 +4,20 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  commentOnlyFiles,
   type DiffCountFileContext,
   diffCounts,
 } from "../lib/view/diffcounts.ts";
 import { parseDiff } from "../lib/view/diff.ts";
+import { gitBlobName } from "./view-helpers.ts";
 import {
   buildDiffDocument,
   type DiffFileLanguages,
 } from "../lib/view/diffdoc.ts";
-import { languageForFile } from "../lib/view/languages/language.ts";
+import {
+  languageForFile,
+  prepareLanguages,
+} from "../lib/view/languages/language.ts";
 
 function contextLines(path: string, lines: readonly string[]) {
   return languageForFile(path).highlightLines(lines.join("\n"), path);
@@ -41,6 +46,42 @@ function countsFor(
     whitespace: diffCounts(text, doc.lines, "whitespace", contexts),
     comments: diffCounts(text, doc.lines, "comments", contexts),
   };
+}
+
+interface Side {
+  readonly path: string;
+  readonly before: readonly string[];
+  readonly after: readonly string[];
+  readonly header?: readonly string[];
+}
+
+/**
+ * Decides each file of a diff that replaces every line of `before` with
+ * `after`, judged with both complete sides in view.
+ */
+async function commentOnly(...files: Side[]): Promise<boolean[]> {
+  const languages = files.map((file) => languageForFile(file.path));
+  await prepareLanguages(languages);
+  const diff = files.flatMap(({ path, before, after, header }) => [
+    `diff --git a/${path} b/${path}`,
+    ...(header ?? []),
+    `index ${gitBlobName([...before, ""].join("\n"))}..${
+      gitBlobName([...after, ""].join("\n"))
+    }`,
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -1,${before.length} +1,${after.length} @@`,
+    ...before.map((line) => `-${line}`),
+    ...after.map((line) => `+${line}`),
+  ]);
+  return commentOnlyFiles(
+    [...diff, ""].join("\n"),
+    files.map(({ path, before, after }) => ({
+      languages: sideLanguages(path),
+      oldLines: contextLines(path, [...before, ""]),
+      newLines: contextLines(path, [...after, ""]),
+    })),
+  );
 }
 
 describe("diffcounts", () => {
@@ -877,5 +918,321 @@ describe("diffcounts", () => {
       { adds: 0, dels: 0 },
       { adds: 0, dels: 0 },
     ]);
+  });
+
+  describe("commentOnlyFiles", () => {
+    it("returns true for files whose changes touch only comments", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "comments.ts",
+            before: ["// old explanation", "run();", "check(); // before"],
+            after: [
+              "// new explanation",
+              "  /* added */  ",
+              "run();",
+              "check(); // after",
+            ],
+          },
+          {
+            path: "trailing.ts",
+            before: ["go(); // x"],
+            after: ["go(); // longer"],
+          },
+          {
+            path: "inline.ts",
+            before: ["call(/* a */ b);"],
+            after: ["call(/* longer */ b);"],
+          },
+          {
+            path: "script.sh",
+            before: ["# old note", "run  # why"],
+            after: ["# new note", "run  # because"],
+          },
+          {
+            path: "config.toml",
+            before: ["# a", "key = 1"],
+            after: ["# b", "# c", "key = 1"],
+          },
+          {
+            path: "tool.py",
+            before: ["# a", "x = 1"],
+            after: ["# b", "x = 1"],
+          },
+          {
+            path: "layout.xml",
+            before: ["<!-- a -->", "<a>x<!-- b -->y</a>"],
+            after: ["<!-- c -->", "<a>x<!-- d -->y</a>"],
+          },
+        ),
+      ).toEqual([true, true, true, true, true, true, true]);
+    });
+
+    it("returns false for files whose changes alter code or whitespace", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "edited.ts",
+            before: ["run(1); // same"],
+            after: ["run(2); // same"],
+          },
+          {
+            path: "swapped.ts",
+            before: ["first();", "second();"],
+            after: ["second();", "first();"],
+          },
+          { path: "glued.ts", before: ["return/**/x;"], after: ["returnx;"] },
+          { path: "spaced.ts", before: ["f(/**/x);"], after: ["f( x);"] },
+          { path: "added.ts", before: ["go();"], after: ["go(); // why"] },
+          { path: "nul.ts", before: ["a(/**/);"], after: ["a(\0);"] },
+          { path: "crlf.ts", before: ["x(); // a\r"], after: ["x(); // a"] },
+          { path: "value.mk", before: ["X = a # c"], after: ["X = a"] },
+          {
+            path: "text.plist",
+            before: ["<string>a", "<!-- note -->", "b</string>"],
+            after: ["<string>a", "b</string>"],
+          },
+          {
+            path: "text.xml",
+            before: ["<a>x<!-- c -->y</a>"],
+            after: ["<a>x y</a>"],
+          },
+          {
+            path: "blank.ts",
+            before: ["a();", "b();"],
+            after: ["a();", "", "b();"],
+          },
+          { path: "trailing.ts", before: ["go();"], after: ["go();  "] },
+          { path: "line-end.sh", before: ["run"], after: ["run\r"] },
+          {
+            path: "indent.py",
+            before: ["if ready:", "    go()"],
+            after: ["if ready:", "go()"],
+          },
+        ),
+      ).toEqual(Array(14).fill(false));
+    });
+
+    it("returns false when whitespace changes inside a multiline literal", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "blank.ts",
+            before: ["const s = `", "a", "b", "`;"],
+            after: ["const s = `", "a", "", "b", "`;"],
+          },
+          {
+            path: "spaces.ts",
+            before: ["const s = `", "a", "`;"],
+            after: ["const s = `", "a  ", "`;"],
+          },
+          {
+            path: "block.yaml",
+            before: ["k: |", "  a", "  b"],
+            after: ["k: |", "", "  a", "  b"],
+          },
+          {
+            path: "heredoc.sh",
+            before: ["cat <<EOF", "a", "$HOME", "EOF"],
+            after: ["cat <<EOF", "a", "", "$HOME", "EOF"],
+          },
+        ),
+      ).toEqual([false, false, false, false]);
+    });
+
+    it("returns false when a comment follows a line continuation", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "continued.sh",
+            before: ["echo a \\", "  b"],
+            after: ["echo a \\", "# note", "  b"],
+          },
+          {
+            path: "continued.py",
+            before: ["x = 1 + \\", "  2"],
+            after: ["x = 1 + \\", "# note", "  2"],
+          },
+          {
+            path: "crlf.py",
+            before: ["x = 1 + \\\r", "  2\r"],
+            after: ["x = 1 + \\\r", "# note\r", "  2\r"],
+          },
+          {
+            path: "argument.sh",
+            before: ["cmd --a=\\", "#b"],
+            after: ["cmd --a=\\", "#c"],
+          },
+        ),
+      ).toEqual([false, false, false, false]);
+    });
+
+    it("returns false when comment markers change what unchanged lines are", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "commented.ts",
+            before: ["foo();"],
+            after: ["/*", "foo();", "*/"],
+          },
+          {
+            path: "uncommented.ts",
+            before: ["/*", "foo();", "*/"],
+            after: ["foo();"],
+          },
+          {
+            path: "template.ts",
+            before: ["const glob = `", "src/*.ts", "`;", "run(1);"],
+            after: ["const glob = `", "src/*.ts", "`;", "run(2);"],
+          },
+        ),
+      ).toEqual([false, false, false]);
+    });
+
+    it("returns false when a comment line is content in the language", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "scalar.yaml",
+            before: ["k: a", "  b"],
+            after: ["k: a", "  # c", "  b"],
+          },
+          {
+            path: "strict.json",
+            before: ["{", '  "a": 1', "}"],
+            after: ["{", "  // note", '  "a": 1', "}"],
+          },
+          {
+            path: "edited.yaml",
+            before: ["# a", "k: 1"],
+            after: ["# b", "k: 1"],
+          },
+        ),
+      ).toEqual([false, false, true]);
+    });
+
+    it("returns false for languages whose highlighting marks no comments", async () => {
+      expect(
+        await commentOnly(
+          { path: "README.md", before: ["<!-- a -->"], after: ["<!-- b -->"] },
+          { path: "main.go", before: ["// a"], after: ["// b"] },
+        ),
+      ).toEqual([false, false]);
+    });
+
+    it("returns false for files whose headers record more than a content change", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "run.sh",
+            header: ["old mode 100644", "new mode 100755"],
+            before: ["# a"],
+            after: ["# b"],
+          },
+          {
+            path: "created.ts",
+            header: ["new file mode 100644"],
+            before: ["// a"],
+            after: ["// b"],
+          },
+          { path: "note.ts", before: ["// a"], after: ["// b"] },
+        ),
+      ).toEqual([false, false, true]);
+    });
+
+    it("returns false for renamed files and files without the diff's complete sides", () => {
+      const index = `index ${gitBlobName("// a\n")}..${gitBlobName("// b\n")}`;
+      const comment = ["@@ -1 +1 @@", "-// a", "+// b"];
+      const renamed = [
+        "diff --git a/before.ts b/after.ts",
+        "similarity index 90%",
+        "rename from before.ts",
+        "rename to after.ts",
+        index,
+        "--- a/before.ts",
+        "+++ b/after.ts",
+        ...comment,
+        "",
+      ].join("\n");
+      const plain = (header: string) =>
+        [
+          "diff --git a/a.ts b/a.ts",
+          header,
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          ...comment,
+          "",
+        ].join("\n");
+      const sides = {
+        languages: sideLanguages("a.ts"),
+        oldLines: contextLines("a.ts", ["// a", ""]),
+        newLines: contextLines("a.ts", ["// b", ""]),
+      };
+
+      expect(commentOnlyFiles(renamed, [sides])).toEqual([false]);
+      expect(commentOnlyFiles(plain(index), [])).toEqual([false]);
+      expect(commentOnlyFiles(plain(index), [{ languages: sides.languages }]))
+        .toEqual([false]);
+      expect(commentOnlyFiles(plain("index 1234567..89abcde"), [sides]))
+        .toEqual([false]);
+      expect(commentOnlyFiles(plain(index), [sides])).toEqual([true]);
+      // Highlighting whose spans leave part of a line out.
+      expect(commentOnlyFiles(plain(index), [{
+        ...sides,
+        oldLines: [{ text: "// a", spans: [] }, { text: "", spans: [] }],
+      }])).toEqual([false]);
+    });
+
+    it("returns false when the hunks leave out part of the change", () => {
+      // As `git diff -w` writes it: the reindented line is not in the hunk.
+      const before = ["# c1", "if x:", "    a()", "b()", ""];
+      const after = ["# c2", "if x:", "    a()", "    b()", ""];
+      const diff = [
+        "diff --git a/w.py b/w.py",
+        `index ${gitBlobName(before.join("\n"))}..${
+          gitBlobName(after.join("\n"))
+        } 100644`,
+        "--- a/w.py",
+        "+++ b/w.py",
+        "@@ -1,2 +1,2 @@",
+        "-# c1",
+        "+# c2",
+        " if x:",
+        "",
+      ].join("\n");
+      const rebuilt = ["# c2", "if x:", "    a()", "b()", ""];
+
+      expect(commentOnlyFiles(diff, [{
+        languages: sideLanguages("w.py"),
+        oldLines: contextLines("w.py", before),
+        newLines: contextLines("w.py", rebuilt),
+      }])).toEqual([false]);
+    });
+
+    it("compares the byte order marks of the two sides", () => {
+      // The complete sides hold their text without the mark.
+      const diff = (before: string, after: string) =>
+        [
+          "diff --git a/a.ts b/a.ts",
+          `index ${gitBlobName(`${before}\n`)}..${gitBlobName(`${after}\n`)}`,
+          "--- a/a.ts",
+          "+++ b/a.ts",
+          "@@ -1 +1 @@",
+          `-${before}`,
+          `+${after}`,
+          "",
+        ].join("\n");
+      const context = (before: string, after: string) => [{
+        languages: sideLanguages("a.ts"),
+        oldLines: contextLines("a.ts", [before.replace("\uFEFF", ""), ""]),
+        newLines: contextLines("a.ts", [after.replace("\uFEFF", ""), ""]),
+      }];
+      const both = ["\uFEFFrun(); // a", "\uFEFFrun(); // b"] as const;
+      const removed = ["\uFEFFrun(); // a", "run(); // a"] as const;
+
+      expect(commentOnlyFiles(diff(...both), context(...both))).toEqual([true]);
+      expect(commentOnlyFiles(diff(...removed), context(...removed)))
+        .toEqual([false]);
+    });
   });
 });

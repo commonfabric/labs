@@ -4,6 +4,10 @@
  * that leave source text unchanged after comments and whitespace are removed.
  */
 
+import { sha1 } from "@noble/hashes/legacy.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 import { type DiffFile, type DiffLine, parseDiff } from "./diff.ts";
 import { type DiffFileLanguages, diffLanguages } from "./diffdoc.ts";
 import type { Language } from "./languages/language.ts";
@@ -147,6 +151,128 @@ export function diffCounts(
     totals: sumDiffLineCounts(counts),
     files: counts,
   };
+}
+
+/**
+ * Whether each file, by diff-file index, changes lines without changing its
+ * code, judged from the complete files of both sides in `contexts`. A file
+ * qualifies only when both complete sides are the Git objects that its diff's
+ * `index` line names, and when its header records nothing more than its path
+ * and those objects, so that a rename, a mode change, or a new file does not.
+ */
+export function commentOnlyFiles(
+  text: string,
+  contexts: readonly DiffCountFileContext[],
+): boolean[] {
+  const model = parseDiff(text);
+  if (!model) return [];
+
+  const raw = text.split("\n");
+  return model.files.map((file, fileIndex) => {
+    const [hunk] = file.hunks;
+    const context = contexts[fileIndex];
+    if (
+      !hunk || !context?.oldLines || !context.newLines ||
+      file.oldObject === undefined || file.newObject === undefined ||
+      file.oldPath !== file.newPath ||
+      !raw.slice(file.headerLine, hunk.headerLine).every((line) =>
+        /^(?:diff |index |--- |\+\+\+ )/.test(line)
+      )
+    ) {
+      return false;
+    }
+    const oldMark = byteOrderMark(context.oldLines, file.oldObject);
+    if (
+      oldMark === undefined ||
+      oldMark !== byteOrderMark(context.newLines, file.newObject)
+    ) {
+      return false;
+    }
+    const { oldLanguage, newLanguage } = context.languages;
+    const oldCode = sideCode(context.oldLines, oldLanguage);
+    return oldCode !== undefined &&
+      oldCode === sideCode(context.newLines, newLanguage);
+  });
+}
+
+/**
+ * The byte order mark that makes `lines`, as a file's text, the Git blob whose
+ * SHA-1 or SHA-256 object name starts with `object`: `""` when the blob has
+ * none, and undefined when the lines are not that blob either way.
+ */
+function byteOrderMark(
+  lines: readonly Line[],
+  object: string,
+): string | undefined {
+  const text = lines.map((line) => line.text).join("\n");
+  const encoder = new TextEncoder();
+  return ["", "\uFEFF"].find((mark) => {
+    const content = encoder.encode(mark + text);
+    const header = encoder.encode(`blob ${content.length}\0`);
+    const blob = new Uint8Array(header.length + content.length);
+    blob.set(header);
+    blob.set(content, header.length);
+    return [sha1, sha256].some((hash) =>
+      bytesToHex(hash(blob)).startsWith(object)
+    );
+  });
+}
+
+/**
+ * What a comment reads as in a side's code: a character that text sources do
+ * not hold, so that removing a comment between two tokens, or between two runs
+ * of text, changes the code. The whitespace that ends a comment's span, such
+ * as a carriage return, follows it.
+ */
+const COMMENT_CODE = "\0";
+
+/**
+ * The code of one complete file side: its lines with each comment read as
+ * {@link COMMENT_CODE}, leaving out lines that held only comments and
+ * whitespace where the language says such lines are inert. A line that follows
+ * one ending with a backslash continues it, so it is kept exactly as written.
+ * Undefined when a line holds {@link COMMENT_CODE} itself, or when its
+ * highlighting does not cover its text.
+ */
+function sideCode(
+  lines: readonly Line[],
+  language: Language,
+): string | undefined {
+  const code: string[] = [];
+  let continued = false;
+  for (const line of lines) {
+    if (
+      line.text.includes(COMMENT_CODE) ||
+      line.spans.map((span) => span.text).join("") !== line.text
+    ) {
+      return undefined;
+    }
+    const wasContinued = continued;
+    continued = /\\\r?$/.test(line.text);
+    if (wasContinued) {
+      code.push(line.text);
+      continue;
+    }
+    const comments = new Set(
+      line.spans.filter((span) => isCommentSpan(span.cls, span.text)),
+    );
+    if (
+      language.commentLinesAreInert && comments.size > 0 &&
+      line.spans.every((span) =>
+        comments.has(span) || span.cls === "whitespace"
+      )
+    ) {
+      continue;
+    }
+    code.push(
+      line.spans.map((span) =>
+        comments.has(span)
+          ? COMMENT_CODE + span.text.slice(span.text.trimEnd().length)
+          : span.text
+      ).join(""),
+    );
+  }
+  return code.join("\n");
 }
 
 /** Short label for a count policy in the jump-list summary. */

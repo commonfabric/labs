@@ -69,6 +69,7 @@ import {
   sourceColumnOf,
 } from "./display.ts";
 import {
+  commentOnlyFiles,
   DIFF_COUNT_MODES,
   type DiffCountMode,
   diffCountModeLabel,
@@ -2376,8 +2377,10 @@ export class Session {
         this.#cycleLineNumbers();
         return;
       case "c":
-      case "C":
         this.#cycleDisplayMode();
+        return;
+      case "C":
+        this.#toggleCommentOnlyFiles();
         return;
       case "f":
         this.#toggleCurrentFile();
@@ -2595,6 +2598,19 @@ export class Session {
     this.#message = `${expand ? "Showing" : "Hid"} ${changed} ${label} file${
       changed === 1 ? "" : "s"
     }.`;
+  }
+
+  /** Toggle the files whose changes touch only comments. */
+  #toggleCommentOnlyFiles(): void {
+    let commentOnly: readonly boolean[] | undefined;
+    this.#toggleFileCategory(
+      (file) =>
+        (commentOnly ??= commentOnlyFiles(
+          this.#sourceDoc.text,
+          this.#source?.diffCountContexts?.(this.#sourceDoc.text) ?? [],
+        ))[file.index],
+      "comment-only",
+    );
   }
 
   //
@@ -5269,6 +5285,10 @@ export class Session {
         this.#toggleFileCategory((file) => file.isMarkdown, "Markdown");
         this.#rebuildJumpEntries();
         return;
+      case "C":
+        this.#toggleCommentOnlyFiles();
+        this.#rebuildJumpEntries();
+        return;
       case "D":
         this.#cycleJumpCountMode();
         return;
@@ -5614,6 +5634,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  F / E", "hide all files / show all files"],
     ["  T", "hide / show test and test-support files"],
     ["  M", "hide / show Markdown files"],
+    ["  C", "hide / show files with only comment changes"],
     ["  i", "list the diff's files and commits, jump to one"],
     ...commitRows,
     ["", ""],
@@ -5658,7 +5679,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ["  #", "line numbers: off / input position / file or message line"],
     ["  B", "blame: when each line last changed, and who changed it"],
     ["  \\", "line wrapping: off / hard / word"],
-    ["  C", "cycle non-printables: pictures / ANSI color / hidden"],
+    ["  c", "cycle non-printables: pictures / ANSI color / hidden"],
     ["  ?", "this help   ·   Q  quit"],
   ];
   const info: Line[] = rows.map(([k, v]) => {

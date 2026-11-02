@@ -611,7 +611,7 @@ Printable keys enter text while a filter is active.
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, and `M` file-visibility keys remain
+and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
 active. On a commit row, `f` hides all of that commit's files. Pressing it again
 shows them. Each commit row reports its total added and removed lines under the
 selected count policy. The list's summary reports added and removed lines for
@@ -628,6 +628,23 @@ whose text differs only in whitespace. The third also removes lines containing
 only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
+
+Press `C` in a diff or in its list to hide the files whose changes touch only
+comments, and press it again to show them. `C` compares the complete file before
+and after the change, using the comments that syntax highlighting finds. It
+therefore selects only files in a language whose highlighting marks comments, in
+a diff whose `index` line names both versions of the file (as `git diff` does),
+and only when the versions the viewer rebuilds from the repository or the
+working tree are the ones named. Editing a comment's text, or adding or removing
+a line that holds only comments and whitespace, leaves the code as it was. Where
+such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
+adding or removing it changes the file too. A line that follows one ending with
+a backslash continues it, so it is read exactly as written. Adding or removing a
+comment on a line that holds anything else changes the code, and so does a
+change to blank lines or other whitespace. Each side is read on its own, so a
+comment marker that turns unchanged lines into a comment changes the code. `C`
+never selects a renamed or new file, a file whose mode changes, or a file whose
+byte order mark is added or removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
@@ -670,6 +687,9 @@ file still holds the hunk's added and context lines where the hunk places them.
 Removed lines show nothing. The column fills in as `git blame` finishes for each
 file in view. When git cannot blame a file, the status line says why, and the
 viewer does not try that file again.
+
+Press `c` to cycle how non-printable characters are shown: as control-picture
+glyphs, in ANSI color, or hidden.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
