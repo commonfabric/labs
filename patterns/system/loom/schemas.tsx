@@ -72,6 +72,12 @@ export interface PublishedDocument {
  * `addedBy` the root never wrote: the value is its writer's claim, and a label
  * entry there names the writer, not the principal the value names. A panel
  * with neither names no adder.
+ *
+ * A copy also holds, at `admission`, the name its event gave that admission
+ * (see {@link PanelAdmission}). This type does not declare it, because a new
+ * field here narrows the open schema of every panel a root already holds, and an
+ * upgrade over such a root is then refused. A caller looking for its copy reads
+ * the field under a schema of its own. It says nothing about who added the panel.
  */
 export type Panel =
   | {
@@ -262,12 +268,19 @@ export interface PanelAdder {
  * handler that writes a panel's adder, so all three take this shape:
  * `addPiece` requires `piece`, and `addPanel` and `duplicatePanel` require
  * `panel` and accept `before`. `addPanel` with `as` adds a copy of `panel`,
- * never recording the profile on the document passed.
+ * never recording the profile on the document passed. `admission` is the
+ * caller's own name for this admission, which a copy keeps, so that a caller
+ * whose reply was lost can find the copy whatever has happened to its fields
+ * since. Any other occurrence ignores it. Its type accepts anything so that the
+ * handler sees what was sent and refuses a name that is not one: a string type
+ * would drop such a value before the handler runs.
  */
 export interface PanelAdmission extends PanelAdder {
   piece?: Writable<unknown>;
   panel?: Writable<Panel>;
   before?: Writable<Panel>;
+  // deno-lint-ignore no-explicit-any
+  admission?: any;
 }
 
 /**

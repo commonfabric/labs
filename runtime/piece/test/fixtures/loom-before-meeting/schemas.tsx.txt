@@ -192,6 +192,8 @@ export interface PanelAdmission extends PanelAdder {
   piece?: Writable<unknown>;
   panel?: Writable<Panel>;
   before?: Writable<Panel>;
+  // deno-lint-ignore no-explicit-any
+  admission?: any;
 }
 
 /**

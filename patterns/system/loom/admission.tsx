@@ -116,6 +116,20 @@ export function validatePanel(panel: Panel): void {
   }
 }
 
+/**
+ * Validate the name an event gives a copy's admission. Only a new name is held
+ * to this: a panel's schema is open, so a source may hold anything at this key,
+ * and a copy takes its event's name in its place.
+ */
+function validateAdmissionName(name: unknown): void {
+  if (
+    name !== undefined &&
+    (typeof name !== "string" || name.length === 0 || name.length > 200)
+  ) {
+    throw new Error("A panel's admission must be 1 to 200 characters");
+  }
+}
+
 /** Compare piece membership by complete link identity, including scope and space. */
 function containsPiece(
   list: readonly Writable<Panel>[],
@@ -243,6 +257,7 @@ function copyOf(source: Panel, event: PanelAdmission): Panel {
       ? {}
       : { titleOverride: source.titleOverride }),
     ...adderFields(event),
+    ...(event.admission === undefined ? {} : { admission: event.admission }),
   };
   return source.kind === "piece"
     ? { kind: "piece", piece: source.piece, ...fields }
@@ -263,6 +278,7 @@ function admitCopy(
   source: Panel,
   event: PanelAdmission,
 ): void {
+  validateAdmissionName(event.admission);
   const copy = copyOf(source, event);
   validatePanel(copy);
   const occurrence = new Writable<Panel>();
