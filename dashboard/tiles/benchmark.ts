@@ -380,7 +380,7 @@ export function subscribeBenchmarkProgress(
 // How many of a run's product benchmarks match the selection. Zero means the
 // run measured nothing the tile trends, whatever else its artifact holds.
 const productMetricCount = (
-  run: { metrics: Map<string, Stats> },
+  run: { metrics: ReadonlyMap<string, Stats> },
   select: (key: string) => boolean = () => true,
 ): number => {
   let count = 0;
@@ -518,7 +518,7 @@ function currentBenchmarkRun(run: Run): CachedBenchmarkRun | undefined {
     : undefined;
 }
 
-function currentRunMetrics(run: Run): Map<string, Stats> | undefined {
+function currentRunMetrics(run: Run): ReadonlyMap<string, Stats> | undefined {
   const cached = currentBenchmarkRun(run);
   return cached?.cpu === undefined ? undefined : cached.metrics;
 }
