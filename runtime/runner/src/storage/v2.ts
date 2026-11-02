@@ -1676,6 +1676,7 @@ export class StorageManager implements IStorageManager {
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
+  #spaceAnswerObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionReplacedObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionErrorObservers = new Set<
     (space: MemorySpace, error: Error) => void
@@ -2693,6 +2694,15 @@ export class StorageManager implements IStorageManager {
             }
           }
         },
+        onSessionAnswered: () => {
+          for (const observer of [...this.#spaceAnswerObservers]) {
+            try {
+              observer(space);
+            } catch (cause) {
+              console.error("space-answer subscriber threw:", cause);
+            }
+          }
+        },
         eventAppendQueueStore: this.#eventAppendQueueStore,
         eventAppendPacing: this.#eventAppendPacing,
       });
@@ -3077,11 +3087,35 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  spaceAnswered(space: MemorySpace): boolean | undefined {
+    if (this.#storeReadThroughs.has(space)) return undefined;
+    if (this.#spaceAccessErrors.has(space)) return true;
+    return this.#providers.get(space)?.sessionAnswered() ?? false;
+  }
+
+  /** @inheritDoc */
+  async awaitSpaceAnswer(space: MemorySpace): Promise<void> {
+    if (this.spaceAnswered(space) !== false) return;
+    try {
+      await this.#openProvider(space).ensureSession();
+    } catch (error) {
+      // A refusal is an answer, and is recorded before the open rejects.
+      if (this.spaceAnswered(space) !== true) throw error;
+    }
+  }
+
+  /** @inheritDoc */
   subscribeSpaceAccessLoss(
     observer: (space: MemorySpace, error: Error) => void,
   ): Cancel {
     this.#spaceAccessObservers.add(observer);
     return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAnswer(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAnswerObservers.add(observer);
+    return () => this.#spaceAnswerObservers.delete(observer);
   }
 
   /** @inheritDoc */
@@ -4363,6 +4397,12 @@ type ProviderOptions = {
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
 
+  /**
+   * Called when the memory server answers an open of the session, admitting
+   * or refusing it, after the answer is recorded.
+   */
+  onSessionAnswered?: () => void;
+
   /** Registers operation writes with the manager's durability barrier. */
   trackPendingCommit?: (promise: Promise<unknown>) => void;
 
@@ -4992,6 +5032,11 @@ class Provider
 
   authorizationError(): Error | undefined {
     return this.replica.authorizationError();
+  }
+
+  /** See SpaceReplica.sessionAnswered. */
+  sessionAnswered(): boolean {
+    return this.replica.sessionAnswered();
   }
 
   ensureSession(): Promise<void> {
@@ -5739,6 +5784,7 @@ export class SpaceReplica
   #lastAuthorizationError: IAuthorizationError | null = null;
   #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
+  #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
@@ -5774,6 +5820,7 @@ export class SpaceReplica
       (() => false);
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
+    this.#onSessionAnswered = options.onSessionAnswered;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -6214,6 +6261,16 @@ export class SpaceReplica
       return closeError;
     }
     return undefined;
+  }
+
+  /**
+   * Whether the memory server has answered for this replica's space: it has
+   * admitted a session this replica opened, or refused one, as
+   * `authorizationError()` reports.
+   */
+  sessionAnswered(): boolean {
+    return this.#sessionSession !== undefined ||
+      this.authorizationError() !== undefined;
   }
 
   /** The terminal error of the remote subscription supplying this replica. */
@@ -12489,6 +12546,7 @@ export class SpaceReplica
           this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
+          this.#onSessionAnswered?.();
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {
@@ -12543,6 +12601,7 @@ export class SpaceReplica
               !MemoryV2Client.isClientUpdateRequiredError(error)
             ) {
               this.#onAccessChange?.(error);
+              this.#onSessionAnswered?.();
             }
             this.#onSessionError?.(error);
           } else {

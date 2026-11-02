@@ -852,6 +852,31 @@ discards what it wrote, and runs it again, and that next run gets the DID.
 [`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
 details.
 
+### Telling a deleted space
+
+`spaceDeleted(target)` returns whether a space is deleted, so a pattern that
+keeps a list of spaces can put away an entry whose space is gone. `target` is a
+cell, naming the space its value lives in, or the space's own DID.
+
+```tsx
+// Shown at module scope.
+const SavedRooms = pattern<{ rooms: DID[] }>(({ rooms }) => {
+  const live = computed(() =>
+    rooms.filter((room) => spaceDeleted(room) !== true)
+  );
+  return { live };
+});
+```
+
+`true` means the memory server refuses the space because it is deleted, which
+it is for good, and `false` that it admits the runtime there or refuses it for
+another reason. `undefined` means there is no answer yet: a computation runs
+again once the server answers, and a handler is run again with the answer in
+place, unless its event was sent with `retries: false`. Call it where
+`spaceAccess(target)` can be called.
+[`space-access.md`](../../features/space-access.md#a-deleted-space) has the
+details.
+
 ## Mapping Shared Lists
 
 `map` is the normal way to render shared lists. Pass object references or cell

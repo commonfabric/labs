@@ -196,4 +196,103 @@ describe("storage of a deleted space", () => {
       }
     });
   });
+
+  describe("spaceAnswered()", () => {
+    it("returns `false` for a space whose session has not opened, and `true` once the server admits it", async () => {
+      const { space, manager, close } = await refusingManager("admitted");
+      try {
+        expect(manager.spaceAnswered(space)).toBe(false);
+        await manager.awaitSpaceAnswer(space);
+        expect(manager.spaceAnswered(space)).toBe(true);
+        expect(manager.spaceAccessError(space)).toBeUndefined();
+      } finally {
+        await close();
+      }
+    });
+
+    it("returns `true` once the server refuses the space", async () => {
+      const { space, manager, control, close } = await refusingManager(
+        "refused",
+      );
+      try {
+        control.refuse = deletedRefusal(space);
+        await manager.awaitSpaceAnswer(space);
+        expect(manager.spaceAnswered(space)).toBe(true);
+        expect(manager.spaceAccessError(space)).toMatchObject({
+          deleted: true,
+        });
+      } finally {
+        await close();
+      }
+    });
+
+    it("returns `undefined` for a space whose reads a store supplies", async () => {
+      const { space, manager, control, close } = await refusingManager(
+        "read-through",
+      );
+      try {
+        manager.installStoreReadThrough(space, () => undefined);
+        expect(manager.spaceAnswered(space)).toBeUndefined();
+        await manager.awaitSpaceAnswer(space);
+        expect(control.opens).toBe(0);
+      } finally {
+        await close();
+      }
+    });
+  });
+
+  describe("subscribeSpaceAnswer()", () => {
+    it("reports the server's answer to each open, an admission and a refusal alike", async () => {
+      const { space, manager, control, close } = await refusingManager(
+        "answer-notice",
+      );
+      const answered: MemorySpace[] = [];
+      manager.subscribeSpaceAnswer((target) => answered.push(target));
+      try {
+        control.refuse = plainRefusal(space);
+        await manager.awaitSpaceAnswer(space);
+        expect(answered).toEqual([space]);
+        expect(manager.spaceAccessError(space)).toBeDefined();
+
+        // The reopen a retry makes after a refused open is answered and
+        // noticed like the first open.
+        control.refuse = undefined;
+        await manager.retrySpaceAccess(space);
+        expect(manager.spaceAccessError(space)).toBeUndefined();
+        expect(answered).toEqual([space, space]);
+      } finally {
+        await close();
+      }
+    });
+
+    it("reports nothing for an open that ends with no answer", async () => {
+      const { space, manager, close } = await refusingManager(
+        "answer-notice-none",
+        { failOpen: new Error("no connection for this space") },
+      );
+      const answered: MemorySpace[] = [];
+      manager.subscribeSpaceAnswer((target) => answered.push(target));
+      try {
+        await manager.awaitSpaceAnswer(space).catch(() => {});
+        expect(answered).toEqual([]);
+      } finally {
+        await close();
+      }
+    });
+  });
+
+  describe("awaitSpaceAnswer()", () => {
+    it("rejects when the space's open fails with no answer", async () => {
+      const failure = new Error("no connection for this space");
+      const { space, manager, close } = await refusingManager("open-fails", {
+        failOpen: failure,
+      });
+      try {
+        await expect(manager.awaitSpaceAnswer(space)).rejects.toBe(failure);
+        expect(manager.spaceAnswered(space)).toBe(false);
+      } finally {
+        await close();
+      }
+    });
+  });
 });

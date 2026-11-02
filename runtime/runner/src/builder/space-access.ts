@@ -8,6 +8,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { isDID, isWellFormedDID } from "@commonfabric/identity/did";
 import { aclDocId, ANYONE_USER, isACL } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 
 import { type Cell, unwrapCell } from "../cell.ts";
 import { spaceReaderRole, type SpaceRole } from "../cfc/space-membership.ts";
@@ -238,6 +239,85 @@ export function spaceOf(
 }
 
 /**
+ * Returns whether the space `target` names is deleted
+ * (`docs/features/space-access.md`, "A deleted space"): `true` once the memory
+ * server has refused this runtime the space with the `deleted` marker, and
+ * `false` once it has admitted the runtime there or refused it without one.
+ * `target` is a cell, naming the space its value lives in as
+ * {@link spaceAccess} does, or a well-formed DID naming the space itself.
+ *
+ * A call about a space the runtime has not opened opens it, by reading the
+ * space's access list through the call's transaction, as {@link spaceAccess}
+ * does. Until the server answers, a reactive computation gets `undefined`, and
+ * runs again when the answer arrives, through `runtime.spaceAccessWatch`,
+ * whether or not the space has a list to deliver. A handler gets `undefined`
+ * too. A runtime no memory server answers for the space returns `undefined`,
+ * as does a `target` passed as `undefined`.
+ *
+ * Deletion is the same for every principal, so the answer does not depend on
+ * who asks, and a call in a computation leaves its read scope as it is. It can
+ * be called where {@link spaceAccess} can.
+ *
+ * @throws If called outside a handler or a reactive computation, with no
+ *   `target`, or with a `target` that is neither a cell, a well-formed DID,
+ *   nor `undefined`.
+ */
+export function spaceDeleted(
+  // Optional here, though the declared API requires it, so that the runtime
+  // check below has a case to catch from untyped callers.
+  ...args: [target?: unknown]
+): boolean | undefined {
+  const frame = topFrame();
+  const kind = frame?.frameKind;
+  if (kind !== "lift" && kind !== "handler") {
+    throw new Error(
+      "`spaceDeleted(target)` can only be called from a handler or a " +
+        "reactive computation.",
+    );
+  }
+  const { runtime, tx } = frame!;
+  if (runtime === undefined || tx === undefined) {
+    throw new Error("`spaceDeleted(target)` requires an executing runtime.");
+  }
+  if (args.length === 0) {
+    throw new Error(
+      "`spaceDeleted()` requires a `target`: a cell in the space to ask " +
+        "about, or the space's DID.",
+    );
+  }
+  const [target] = args;
+
+  if (target === undefined) return undefined;
+  let space: MemorySpace;
+  if (typeof target === "string") {
+    if (!isWellFormedDID(target)) {
+      throw new Error(
+        "`spaceDeleted(target)` takes a cell or a space's DID; " +
+          debugStr`got $quote${target}.`,
+      );
+    }
+    space = target;
+  } else {
+    space = spaceOfTarget(target, "spaceDeleted(target)");
+  }
+
+  const action = runtime.scheduler.executingAction;
+  if (kind === "lift" && action !== null) {
+    runtime.spaceAccessWatch.rerunOnChange(space, action);
+  }
+  aclOf(runtime, tx, space);
+
+  const refusal = refusalOf(runtime, space);
+  if (refusal !== undefined) return isDeletedSpaceError(refusal);
+  const answered = runtime.storageManager.spaceAnswered?.(space);
+  if (answered !== false) return answered === undefined ? undefined : false;
+  if (kind === "lift" && action !== null) {
+    runtime.spaceAccessWatch.rerunOnAnswer(space, action);
+  }
+  return undefined;
+}
+
+/**
  * Returns the space the value of the cell `target` lives in, after following
  * any links it holds. `call` names the call `target` was passed to, for the
  * error.
@@ -354,15 +434,18 @@ function accessLevel(
 
   const acl = aclOf(runtime, tx, space);
 
-  if (sessionIsPrincipal && isRefused(runtime, space)) return "none";
+  if (sessionIsPrincipal && refusalOf(runtime, space) !== undefined) {
+    return "none";
+  }
   if (acl === undefined) return undefined;
   const role = spaceReaderRole(isACL(acl) ? acl : undefined, principal);
   return role === null ? "none" : LEVEL_OF_ROLE[role];
 }
 
 /**
- * Helper for {@link accessLevel} and {@link spaceMembers}, which returns the
- * value of `space`'s access list, read through `tx`: `undefined` while it has
+ * Helper for {@link accessLevel}, {@link spaceMembers} and
+ * {@link spaceDeleted}, which returns the value of `space`'s access list, read
+ * through `tx`: `undefined` while it has
  * not arrived, and for a space that has none.
  */
 function aclOf(
@@ -378,11 +461,12 @@ function aclOf(
 }
 
 /**
- * Helper for {@link accessLevel}, which returns whether the memory server has
- * refused this runtime's session `space` for good.
+ * Helper for {@link accessLevel} and {@link spaceDeleted}, which returns the
+ * memory server's refusal of this runtime's session `space` for good, or
+ * `undefined` when it has not refused it.
  */
-function isRefused(runtime: Runtime, space: MemorySpace): boolean {
+function refusalOf(runtime: Runtime, space: MemorySpace): Error | undefined {
   const storage = runtime.storageManager;
-  return (storage.spaceAccessError?.(space) ??
-    storage.authorizationError?.(space)) !== undefined;
+  return storage.spaceAccessError?.(space) ??
+    storage.authorizationError?.(space);
 }
