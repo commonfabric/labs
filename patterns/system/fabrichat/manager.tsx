@@ -1136,10 +1136,15 @@ const performManagerAct = (
       });
       return;
     }
+    // This user is offered nothing, so their own profiles are left out before
+    // any inbox pointer is read: their pointer can carry a label, such as
+    // their own `PersonalSpace`, that the room's space doesn't admit, and a
+    // transaction's writes are held to the labels of everything it reads.
+    const others = named.filter(({ recipient }) => recipient !== self);
     // An offer goes to an inbox, so profiles of two people pointing at one
     // inbox would hand each the other's offer. No setup makes them, so the
     // request is refused whole, before anything is created.
-    const inboxes = named.map(({ recipient, profile }) => ({
+    const inboxes = others.map(({ recipient, profile }) => ({
       recipient,
       pointer: inboxPointerOf(profile),
     }));
@@ -1162,9 +1167,9 @@ const performManagerAct = (
     // Each other member named by profile is offered the room through every
     // profile naming them, each inbox once, and added to its participants
     // once.
-    const offerTo = named.reduce<OfferedMember[]>(
+    const offerTo = others.reduce<OfferedMember[]>(
       (found, { recipient, profile }) => {
-        if (!isPrincipalDID(recipient) || recipient === self) return found;
+        if (!isPrincipalDID(recipient)) return found;
         const known = found.find((each) => each.recipient === recipient);
         return known === undefined
           ? [...found, { recipient, profiles: [profile] }]

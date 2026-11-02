@@ -690,7 +690,12 @@ loop's duty).
   independently of the storage-manager lifetime. Only successful settlement
   of a new generation for that same document is positive recovery evidence;
   starting the generation is not. A successful load after storage-manager
-  recreation can therefore wake one recovery attempt.
+  recreation can therefore wake one recovery attempt. A
+  `program-unavailable` checkpoint (§5's program-closure wait, above)
+  names the closure's entry document instead, and the commit that writes
+  that document into the space is its positive recovery evidence. A
+  tenure that replays such a checkpoint and finds the document already
+  in the store takes that as the evidence.
 - A current-ACL authorization denial is immediately permanent only when
   its typed verdict carries the durable ACL revision and distinguishes the
   denial from a revoked or missing session. A required-load denial uses the
@@ -837,6 +842,38 @@ loop's duty).
   entry always spends the budget, so an event addressing a piece that
   nothing creates still hardens into this drop once the events ahead
   of it have their consequences.
+
+  A served event's piece can also name a pattern whose program closure
+  the space does not hold yet. A piece placed in a space of its own (an
+  `inSpace` child, such as a FabriChat room or a Home profile) runs a
+  program that the creating runtime replicates into that space after
+  the run that creates the piece (module-loading.md). The space's own
+  serving runtime cannot observe that replication, only its commit
+  landing. A not-loadable verdict reached while the space's store lacks
+  the closure's entry document is the run racing that replication, so
+  this predicate does not apply to it, and the earliest pending entry
+  does not spend the budget for it either. The wait has two phases:
+
+  - For a grace of ten seconds (`PROGRAM_CLOSURE_GRACE_MS`) the deferral
+    is settlement, like a replica load in flight: it spends no deferral
+    budget, writes no checkpoint, and arms no backstop.
+  - Past the grace, the absence is a typed delivery failure in
+    `dispatch-load` of class `program-unavailable`, under the
+    failed-state budget below. A closure that never arrives therefore
+    ends in the `needs-attention` notice, never in this drop.
+
+  In both phases the commit that writes the closure's entry document
+  into the space wakes the event, and in the second it is the positive
+  recovery evidence that wakes the failure's one retry. In both phases
+  the event holds §2's arrival-order barrier, so later same-space
+  arrivals wait behind it. The grace is an explicit exception to the
+  repository's no-timeout rule. Nothing else can end a wait for a
+  replication this runtime cannot see; the wait ends in the
+  delivery-failure handling below rather than a drop; it cancels
+  nothing in flight; and it is held in memory only, so a restart or a
+  lease handoff starts it afresh. A store that holds the closure's
+  entry when the load fails is not this case, and that deferral spends
+  the budget as any other does.
 
   With server execution off, a CLIENT event — one with no served
   carriage, so no durable entry for a later pass to re-drain, and no

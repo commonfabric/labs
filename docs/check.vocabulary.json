@@ -46,6 +46,7 @@
     "linksOf",
     "nameBlob",
     "navigateTo",
+    "parseDID",
     "pattern",
     "principalOf",
     "principalsOf",

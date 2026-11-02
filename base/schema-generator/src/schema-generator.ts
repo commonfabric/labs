@@ -49,7 +49,10 @@ import {
   unsupportedIntersectionSchema,
   withoutDocumentation,
 } from "./formatters/intersection-formatter.ts";
-import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
+import {
+  isDefaultLibrarySourceFile,
+  isWellKnownSymbol,
+} from "./typescript/default-library.ts";
 import {
   denotesSameType,
   getTypeAliasDeclaration,
@@ -85,6 +88,7 @@ import {
   resolveWrapperNode,
   soleNonNullishMember,
   type TypeWithInternals,
+  withoutTypeNode,
 } from "./type-utils.ts";
 import { extractDocFromType } from "./doc-utils.ts";
 import {
@@ -98,6 +102,7 @@ import {
 } from "./schema-origins.ts";
 import {
   reportRecursiveAliasOfAny,
+  reportSymbolType,
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
@@ -917,6 +922,54 @@ function wholeValueKeywordsOf(
 }
 
 /**
+ * `read`, the schema `reference` reads as. Where it is an intersection that
+ * fell back, its constituents state what `reference` states of its whole value
+ * beside the reference: its scope, its default, and its restrictions, which
+ * join those a constituent states. A value of `PerUser<A & B>` is a value of
+ * `PerUser<A>` and of `PerUser<B>`, so reopening the fallback would otherwise
+ * lose them. Its evidence is not stated of them, as evidence goes only where
+ * the labeled payload's data must be, and a constituent is not that payload. A
+ * fallback's own labels are not stated of them either, being those it kept of
+ * its constituents.
+ */
+function withConstituentsStatingBeside(
+  read: MutableJSONSchema,
+  reference: MutableJSONSchemaObj,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const origin = isObjectOrArray(read)
+    ? context.schemaOrigins?.get(read)
+    : undefined;
+  const { scope, default: value } = reference;
+  const { restrictions } = isObjectOrArray(reference.ifc)
+    ? restrictionsAndEvidence(reference.ifc)
+    : {};
+  if (
+    origin?.kind !== "intersection" ||
+    (scope === undefined && value === undefined && restrictions === undefined)
+  ) {
+    return read;
+  }
+  context.schemaOrigins?.set(read as MutableJSONSchemaObj, {
+    kind: "intersection",
+    parts: () =>
+      origin.parts().map((part) => {
+        const stated: MutableJSONSchemaObj = {
+          ...(isObjectOrArray(part) ? part : {}),
+          ...(scope !== undefined ? { scope } : {}),
+          ...(value !== undefined ? { default: value } : {}),
+        };
+        return part === false ? part : withOriginOf(
+          restrictions ? withIfcLabels(stated, restrictions) : stated,
+          part,
+          context,
+        );
+      }),
+  });
+  return read;
+}
+
+/**
  * `schema` read through local references with the keywords written beside
  * each reference in place of the definition's, as resolving a reference
  * reads them, except its labels, which join the definition's: while a schema
@@ -927,8 +980,10 @@ function wholeValueKeywordsOf(
  * reference holds what the definition denotes, so it reads as that cell, with
  * no record of the definition's source (`schemaOrigins`), as a cell written
  * around it in place does, though the keys its index signature applies to
- * (`GenerationContext.indexKeys`) stay true of it. A schema that is no
- * reference is returned as it came.
+ * (`GenerationContext.indexKeys`) stay true of it. A fallback's constituents
+ * state the keywords written beside a reference to it
+ * (`withConstituentsStatingBeside()`). A schema that is no reference is returned
+ * as it came.
  */
 function withBesideKeywords(
   schema: MutableJSONSchema,
@@ -957,7 +1012,11 @@ function withBesideKeywords(
   return withBesideKeywords(
     "asCell" in beside
       ? withIndexKeysOf(labeled, resolved, context)
-      : withOriginOf(labeled, resolved, context),
+      : withConstituentsStatingBeside(
+        withOriginOf(labeled, resolved, context),
+        schema,
+        context,
+      ),
     context,
     followed,
   );
@@ -2341,12 +2400,11 @@ export class SchemaGenerator {
     // inherit the parent's typeNode which leads to mismatched type/node pairs.
     // A printed node is not read as a node, and the hints attached to it apply.
     const {
-      typeNode: _,
-      hintsNode: __,
-      instantiatedAs: ___,
-      carriersRead: ____,
+      hintsNode: _,
+      instantiatedAs: __,
+      carriersRead: ___,
       ...unplaced
-    } = context;
+    } = withoutTypeNode(context);
     const baseContext: GenerationContext = instantiatedAs
       ? { ...unplaced, instantiatedAs }
       : unplaced;
@@ -3387,6 +3445,14 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
+    // The schema dialect has no symbol type, so a symbol reads as `false`,
+    // which a union drops. A well-known symbol is never stored, so nothing
+    // more is needed. Any other symbol could be a registered one, which the
+    // runtime stores, so it is also refused (`reportSymbolType()`).
+    if ((type.flags & ts.TypeFlags.ESSymbolLike) !== 0) {
+      if (!isWellKnownSymbol(type, context)) reportSymbolType(context, type);
+      return false;
+    }
     context = this.#withGenericBindings(type, context);
     // Alternatives that share a type remain separate readings. Their type
     // identity cannot name either reading or mark one as a cycle of the other.
@@ -3850,13 +3916,12 @@ export class SchemaGenerator {
     // own, and what reading it only for its labels leaves unread is no
     // problem to report.
     const {
-      typeNode: _,
-      hintsNode: __,
-      arrayItemsOverride: ___,
-      boundTypeParameters: ____,
-      uninterpretedTypeNodes: _____,
+      hintsNode: _,
+      arrayItemsOverride: __,
+      boundTypeParameters: ___,
+      uninterpretedTypeNodes: ____,
       ...rest
-    } = context;
+    } = withoutTypeNode(context);
     return this.#labelsOf(narrowedFrom.type, narrowedFrom.typeNode, {
       ...rest,
       onDiagnostic: () => {},
@@ -4555,6 +4620,10 @@ export class SchemaGenerator {
         return { type: "unknown" };
       case ts.SyntaxKind.VoidKeyword:
         return PrimitiveFormatter.getSchemaType(checker.getVoidType(), context);
+      case ts.SyntaxKind.SymbolKeyword:
+        // Refused as the type is (`#formatType()`), not guessed at.
+        reportSymbolType({ ...context, typeNode }, checker.getESSymbolType());
+        return false;
       case ts.SyntaxKind.AnyKeyword:
         // Accept any value
         return true;

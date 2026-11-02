@@ -144,10 +144,13 @@ command or policy, has a place beside it. A runtime loads every profile's
 delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
 under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
-A profile created before profiles owned themselves names its creator as owner
-and has no delegation; it keeps opening on the creator's grant. The wildcard
-WRITE is there because a runtime showing a profile writes into the profile's
-space, so a visitor needs more than READ. CFC owner-protects the
+The creating runtime holds the delegation from the moment the key signs it, so
+the commit that places the profile and the copy of its pattern into the space
+are made under the profile's grant too, and creation needs nothing from the
+wildcard. A profile created before profiles owned themselves names its creator
+as owner and has no delegation; it keeps opening on the creator's grant. The
+wildcard WRITE is there because a runtime showing a profile writes into the
+profile's space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
 a visitor (a *named* `inSpace(name)` would put every
@@ -416,8 +419,9 @@ pattern is a version without the field, `wish({ query: "#agent_queue" })`
 resolves to nothing; where there is no home pattern yet, a headless wish
 resolves to nothing too, and any other resolves through the empty slot. A write
 through that cell is refused with a `SpaceRootMissingError`. When the write is a
-handler's on a client runtime and the refusal escapes the handler, the home
-pattern is created and the handler runs again; a serving runtime creates none.
+handler's and the refusal escapes the handler, the handler runs again once the
+home pattern exists: a client runtime creates it, and a serving runtime waits
+for the home space's own server to create it and link it.
 [Built-in Targets](wish.md#built-in-targets) describes both.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.

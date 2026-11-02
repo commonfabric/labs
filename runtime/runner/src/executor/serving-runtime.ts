@@ -104,6 +104,7 @@ export function servingRuntimeFactory(
       ...(context.foreignScopedReadGrant === undefined
         ? {}
         : { foreignScopedReadGrant: context.foreignScopedReadGrant }),
+      ...(context.route === undefined ? {} : { route: context.route }),
     });
     // Installed ahead of the runtime, so no read this factory could ever
     // perform reaches the session.

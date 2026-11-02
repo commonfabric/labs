@@ -5,6 +5,7 @@ import {
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import {
   applyPieceSourceTransition,
@@ -64,6 +65,7 @@ import {
   schemaPathSelection,
   setCell,
   setPieceReconciliation,
+  speculationSettledFor,
 } from "@commonfabric/runner";
 import { storedArgumentRefusalDetail } from "@commonfabric/runner/shared";
 import {
@@ -3278,7 +3280,7 @@ class PiecePropIo implements PieceCellIo {
       | { eventId: string; session: string }
       | undefined;
 
-    const { ok, error } = await pieces.runtime.editWithRetry((tx) => {
+    const attempt = (tx: IExtendedStorageTransaction) => {
       // Each attempt decides afresh what it wrote: a retry can resolve the
       // same path to a durable destination where the attempt before it found
       // a stream.
@@ -3835,7 +3837,28 @@ class PiecePropIo implements PieceCellIo {
         setTerminalValue(value);
       }
       return { wrote: true };
-    });
+    };
+    let { ok, error } = await pieces.runtime.editWithRetry(attempt);
+    // Under server execution this runtime previews server-owned derivations
+    // in speculation layers that exist only in its own process, and a commit
+    // whose read basis names one is refused for good (speculation.md §6). The
+    // write's reads can reach such a value: validating a supplied link reads
+    // its source's producer metadata, and write-destination validation reads
+    // the destination's whole root, derived outputs included. So a write
+    // refused for that waits until those values settle and writes again,
+    // reading what the server settled.
+    for (
+      let settled = speculationSettledFor(
+        pieces.runtime,
+        pieces.getSpace(),
+        error,
+      );
+      settled !== undefined;
+      settled = speculationSettledFor(pieces.runtime, pieces.getSpace(), error)
+    ) {
+      await settled;
+      ({ ok, error } = await pieces.runtime.editWithRetry(attempt));
+    }
     if (error) throw commitFailure(error);
     // A committed decision not to write leaves nothing to pull.
     if (ok !== undefined && !ok.wrote) return { wrote: false };
@@ -4545,7 +4568,7 @@ export class PieceController<T = unknown> {
         if (committed) {
           return {
             status: "applied",
-            executionWarning: pieceSourceErrorMessage(error),
+            executionWarning: describeFailure(error),
           };
         }
         throw pinnedSourceMoved(error, proved);
@@ -4723,7 +4746,7 @@ export class PieceController<T = unknown> {
           if (action.kind === "adopt") {
             await this.#recordReconciliation(expected, origin, {
               outcome: "unreachable",
-              detail: pieceSourceErrorMessage(error),
+              detail: describeFailure(error),
             });
           }
           throw error;
@@ -4924,13 +4947,13 @@ export class PieceController<T = unknown> {
           : error;
         return {
           status: "applied",
-          executionWarning: pieceSourceErrorMessage(cause),
+          executionWarning: describeFailure(cause),
         };
       }
       const waivedSchema = reviewed?.waivedSchema;
       if (
         reviewed !== undefined && waivedSchema !== undefined &&
-        pieceSourceErrorMessage(error).includes(PIECE_RELEASE_OVERTAKEN)
+        describeFailure(error).includes(PIECE_RELEASE_OVERTAKEN)
       ) {
         // The candidate stopped being the later release while it was set
         // up, so the comparison its review left out applies after all.
@@ -5235,7 +5258,7 @@ export class PieceController<T = unknown> {
         const cause = error instanceof PatternSetupPostCommitError
           ? error.cause
           : error;
-        const warning = pieceSourceErrorMessage(cause);
+        const warning = describeFailure(cause);
         console.warn(
           "Piece source was saved, but refreshing the running piece failed:",
           cause,
@@ -5525,7 +5548,7 @@ function pieceSourceArgumentEvidence(
         })) ?? null,
       };
     } catch (error) {
-      return { path: suppliedLink.path, error: pieceSourceErrorMessage(error) };
+      return { path: suppliedLink.path, error: describeFailure(error) };
     }
   });
   return taggedHashStringOf({ raw, links });
@@ -5664,7 +5687,7 @@ async function pieceSourceCompatibilityReview(
       candidate,
     );
   } catch (error) {
-    issues.argument = pieceSourceErrorMessage(error);
+    issues.argument = describeFailure(error);
   }
 
   try {
@@ -5870,10 +5893,6 @@ function isOverridableArgumentCompatibilityError(error: unknown): boolean {
   return error.message.includes(
     "updated arguments do not match the candidate schema:",
   ) || error.message.includes(RETAINED_INPUT_COMPATIBILITY_PREFIX);
-}
-
-function pieceSourceErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

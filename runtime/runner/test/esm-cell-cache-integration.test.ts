@@ -19,7 +19,6 @@ import type {
 import {
   compiledDocKey,
   compiledDocWriteSchema,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   setCompileCacheRuntimeVersionForTesting,
@@ -27,15 +26,10 @@ import {
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
-const coverageRuntimeVersion = `${runtimeVersion}/pattern-coverage`;
 
 describe("ESM compile via content-addressed cell cache", () => {
   // Step 5: PatternManager drives the content-addressed cell cache on the ESM
@@ -45,6 +39,9 @@ describe("ESM compile via content-addressed cell cache", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
   let tx: IExtendedStorageTransaction;
+  // The versions the runtimes here compile under, without and with coverage.
+  let runtimeVersion: string;
+  let coverageRuntimeVersion: string;
 
   const PROGRAM: RuntimeProgram = {
     main: "/main.tsx",
@@ -71,10 +68,14 @@ describe("ESM compile via content-addressed cell cache", () => {
       ...(patternCoverage === undefined ? {} : { patternCoverage }),
     });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = newRuntime();
     tx = runtime.edit();
+    runtimeVersion = await compileCacheVersionOf(runtime);
+    coverageRuntimeVersion = await compileCacheVersionOf(runtime, {
+      patternCoverage: true,
+    });
   });
 
   afterEach(async () => {
@@ -144,11 +145,12 @@ describe("ESM compile via content-addressed cell cache", () => {
               { repairCache: false },
             );
           }
+          const readerVersion = await compileCacheVersionOf(reader);
           const readCache = async () => {
             const readTx = reader.edit();
             try {
               return await loadCompiledClosure(reader, space, identity, {
-                runtimeVersion: version,
+                runtimeVersion: readerVersion,
               }, readTx);
             } finally {
               readTx.abort();
@@ -849,7 +851,7 @@ describe("ESM compile cache — Pattern.inSpace A → B routing", () => {
     });
     const tx = runtime.edit();
     const cacheOpts = {
-      runtimeVersion,
+      runtimeVersion: await compileCacheVersionOf(runtime),
     };
     try {
       // The entry identity is loader-internal; recover it via a no-cache compile.

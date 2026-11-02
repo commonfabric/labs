@@ -25,3 +25,40 @@ export function lineIndexOf(lineStarts: number[], offset: number): number {
   }
   return lo;
 }
+
+/**
+ * The code-point column of an offset into a text, given the line the offset
+ * is on: what `cpLen()` counts from the start of that line to the offset.
+ */
+export type ColumnOf = (line: number, offset: number) => number;
+
+/**
+ * Returns the {@link ColumnOf} for `text`, whose line starts are
+ * `lineStarts`. Each call costs two binary searches, however long the line.
+ */
+export function codePointColumns(
+  text: string,
+  lineStarts: number[],
+): ColumnOf {
+  // `cpLen()` counts every UTF-16 unit except a low surrogate, so a column is
+  // the distance in units less the low surrogates in between.
+  const lowSurrogates: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xdc00 && c <= 0xdfff) lowSurrogates.push(i);
+  }
+  const before = (offset: number): number => {
+    let lo = 0;
+    let hi = lowSurrogates.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (lowSurrogates[mid] < offset) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  return (line, offset) => {
+    const start = lineStarts[line];
+    return offset - start - (before(offset) - before(start));
+  };
+}

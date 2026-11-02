@@ -117,6 +117,8 @@ import {
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import type { OwningRootAddress } from "./ensure-piece-running.ts";
+import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -421,7 +423,10 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
-  /** Global default for server-selected view replication. Defaults to off. */
+  /**
+   * Global default for server-selected view replication, which only a web
+   * client under server execution requests. Unset, such a client requests it.
+   */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
@@ -452,6 +457,18 @@ export interface ExperimentalOptions {
    * not write changes. Defaults to off.
    */
   localFold?: boolean | undefined;
+
+  /**
+   * Record the principal a piece was created for on its result document, in
+   * the `creator` meta field, when a setup brings the piece into being, and
+   * give a piece from before the record one at its next source transition,
+   * from the owner its space's access list names for a space root and from
+   * the principal its owner-protected fields represent for any other piece
+   * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
+   * what binds a field a later release adds to the piece's creator. Defaults
+   * to off; off, no record is written and a stored one is left as it is.
+   */
+  pieceCreatorRecord?: boolean | undefined;
 
   /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
@@ -1996,19 +2013,10 @@ export class Runtime {
       }
     }
 
-    // These flags are consumed from this Runtime instance. Normalize their
+    // Some flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
     // appear as an explicit override.
-    this.experimental.computedCellIds ??= true;
-    this.experimental.plainResultReceipts ??= true;
-    this.experimental.lazyMaterialization ??= true;
-    this.experimental.agentBuiltin ??= true;
-    this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a runtime whose naming mode
-    // differs from a space's data is kept away from that space;
-    // `instance-naming-modes.test.ts` pins what one does to it until then.
-    this.experimental.instanceNames ??= false;
-    this.experimental.localSessionDocuments ??= false;
+    applyLocalExperimentalDefaults(this.experimental);
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2393,6 +2401,30 @@ export class Runtime {
       refused?: true;
     }) => void)
     | undefined;
+
+  /**
+   * Whether a piece's origin has been followed, asked before a start of the
+   * piece this runtime makes on its own, as `EnsurePieceOptions.originFollowed`
+   * (the event auto-start's). The SpaceServer installs it at activation: the
+   * serving runtime is the opener of every piece it serves, so the piece's
+   * source is brought up to date before the tenure's first start of it, and
+   * the serving loop follows the origin between waves, where the adopting
+   * write can commit (serving-loop.md §3e). Undefined everywhere else: a
+   * client follows a piece's origin when it opens it.
+   */
+  pieceOriginFollowed: ((root: OwningRootAddress) => boolean) | undefined;
+
+  /**
+   * Resolves once every wave this runtime's seals have opened so far has
+   * finished committing: the state they staged is then the store's or
+   * withdrawn, and a transaction that commits directly (`directCommit`) may
+   * read it. The SpaceServer installs it on the serving runtime, where a
+   * sealed transaction's `commit()` resolves at the seal and the wave
+   * commits later; undefined everywhere else, where a committed transaction
+   * is durable on its own. A caller the loop awaits inside a cycle must not
+   * wait on it: the wave it waits for commits when that cycle ends.
+   */
+  sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
    * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the
@@ -2982,12 +3014,16 @@ export class Runtime {
     return this.#viewReplication ??= new ViewReplicationClient(this);
   }
 
-  /** Whether this client requests view replication, subject to session support. */
+  /**
+   * Whether this client requests view replication, subject to session
+   * support: a web client under server execution does unless the web
+   * override, or else the global default, is `false`.
+   */
   get viewScopedReplicationRequested(): boolean {
     return this.#clientClass === "web" &&
       this.experimental.serverExecution === true && !this.servingPosture &&
       (this.experimental.webViewScopedReplication ??
-        this.experimental.viewScopedReplication ?? false);
+        this.experimental.viewScopedReplication ?? true);
   }
 
   /** DIAGNOSTIC (tests): the lazily-created speculation overlay, if this

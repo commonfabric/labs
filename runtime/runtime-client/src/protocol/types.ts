@@ -2968,6 +2968,7 @@ export type PiecePatternRefView = {
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**

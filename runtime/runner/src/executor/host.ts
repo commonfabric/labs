@@ -38,6 +38,7 @@ import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
@@ -151,6 +152,15 @@ export type ExecutorHostOptions = {
    * `SpaceServerOptions.createWaveCommitSink`. */
   createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop-owner-routing.md`). Present, the host sends every
+   * crossing into a space other than the one a tenure serves through that
+   * space's owner, over a routed plane it keeps for its life; absent, every
+   * crossing goes through this process's server.
+   */
+  route?: RouteOptions;
+
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
   onWaveCycle?: (space: MemorySpace) => void;
@@ -172,6 +182,10 @@ export type ExecutorHostOptions = {
   /** DIAGNOSTIC (tests): each tenure's park, with the space and the
    * reason. The host's own `onParked` handling is unaffected. */
   onSpaceParked?: (space: MemorySpace, reason: string) => void;
+
+  /** DIAGNOSTIC (tests): a tenure's same-process reacquire after a renewal
+   * blip it survived, with the space. */
+  onLeaseReacquired?: (space: MemorySpace) => void;
 
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds — see `SpaceServerOptions`. */
@@ -246,11 +260,18 @@ export class ExecutorHost {
   readonly #parkedDisposals = new Set<Promise<void>>();
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
+
+  /** The routed plane, while the host has a route. */
+  readonly #route: RoutedPlane | undefined;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
   constructor(options: ExecutorHostOptions) {
     this.#options = options;
+    this.#route = options.route === undefined
+      ? undefined
+      : new RoutedPlane(options.route);
     // The host is a PROCESS-level flag ENABLER: while it lives, the
     // ambient flag stays on (the memory server's per-class admission
     // reads it), whatever individual runtimes construct or dispose. The
@@ -293,10 +314,22 @@ export class ExecutorHost {
     return { failureParkStreaks: this.#failureParkStreaks };
   }
 
+  /** The `events` block of {@link stats}, alone and in its own copy. */
+  eventStats(): ServingLoopStats["events"] {
+    refreshDeliveryCheckpointStats(this.#stats);
+    return {
+      ...this.#stats.events,
+      needsAttention: {
+        ...this.#stats.events.needsAttention,
+        byPhase: { ...this.#stats.events.needsAttention.byPhase },
+      },
+    };
+  }
+
   /** The §7 counters, live: static counts merged with per-space state
    * (activeSpaces and watermarkLag read the current SpaceServers). */
   stats(): ServingLoopStats {
-    refreshDeliveryCheckpointStats(this.#stats);
+    const events = this.eventStats();
     let watermarkLag = 0;
     let activeSpaces = 0;
     for (const server of this.#spaces.values()) {
@@ -310,13 +343,7 @@ export class ExecutorHost {
       // the top-level spread shares its reference (the same reason as
       // NIT-1's settle-series copy below).
       derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events: {
-        ...this.#stats.events,
-        needsAttention: {
-          ...this.#stats.events.needsAttention,
-          byPhase: { ...this.#stats.events.needsAttention.byPhase },
-        },
-      },
+      events,
       demand: { ...this.#stats.demand },
       settle: {
         // NIT-1: deep-copy the entries — a series row stays live after it
@@ -333,6 +360,7 @@ export class ExecutorHost {
         })),
       },
       memo: { ...this.#stats.memo },
+      routed: { ...this.#stats.routed },
       outbox: { ...this.#stats.outbox },
       lease: { ...this.#stats.lease },
       lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
@@ -416,7 +444,10 @@ export class ExecutorHost {
     // argument link into the viewer's home space, whose pre-genesis
     // session that space's genesis ACL de-authorized. Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
-    // space, so the fan-out costs one map walk per ACL-doc admission.
+    // space, so the fan-out costs one map walk per ACL-doc admission. Only
+    // this server's admissions reach here; a list that changes on another
+    // process's owner reaches a serving runtime's replica of that space
+    // over its routed session, which watches the list itself.
     if (
       this.#spaces.size > 0 &&
       notice.writes.some((write) => write.id === `of:${notice.space}`)
@@ -638,7 +669,12 @@ export class ExecutorHost {
           const parked = this.#takeParkedRuntime(space, engine);
           return parked !== undefined
             ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, context);
+            : this.#options.createRuntime(space, {
+              ...context,
+              ...(this.#options.route === undefined
+                ? {}
+                : { route: this.#options.route }),
+            });
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
@@ -655,6 +691,10 @@ export class ExecutorHost {
         ...(this.#options.createWaveCommitSink !== undefined
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
+        ...(this.#route === undefined ? {} : { route: this.#route }),
+        ...(this.#options.onLeaseReacquired === undefined ? {} : {
+          onLeaseReacquired: () => this.#options.onLeaseReacquired?.(space),
+        }),
         onParked: (reason) => {
           parked = true;
           try {
@@ -975,6 +1015,9 @@ export class ExecutorHost {
       this.#discardParkedRuntime(space);
     }
     await Promise.allSettled([...this.#parkedDisposals]);
+    // Every tenure has released its scope by now; what closes here is a
+    // session a park left behind.
+    await this.#route?.close();
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();

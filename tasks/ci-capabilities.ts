@@ -18,9 +18,13 @@
 
 import * as path from "@std/path";
 
+import {
+  awaitReadyMarker,
+  BACKGROUND_LOG_ENV,
+} from "../runtime/toolshed/background.ts";
 import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
-  SERVER_EXECUTION_ON_ENVIRONMENT,
+  SERVER_EXECUTION_POSTURE_VARIABLES,
   serverExecutionCiLane,
   type ServerExecutionCiRole,
   verifyServerExecutionPosture,
@@ -65,6 +69,29 @@ export interface ExecOptions {
   clearEnv?: boolean;
 }
 
+/**
+ * Starting a command that keeps running, as a capability does it: its
+ * standard output is piped back, and its standard input and error are
+ * connected to the null device.
+ */
+export type Spawn = (
+  command: string,
+  args: readonly string[],
+  options?: ExecOptions,
+) => SpawnedProcess;
+
+/** A process a capability started. */
+export interface SpawnedProcess {
+  /** What the process writes to its standard output. */
+  readonly stdout: ReadableStream<Uint8Array>;
+
+  /** Settles once the process has exited. */
+  readonly status: Promise<Deno.CommandStatus>;
+
+  /** Sends the process a signal. Throws once the process has exited. */
+  kill(signal: Deno.Signal): void;
+}
+
 /** What a capability was given to work with. */
 export interface CapabilityContext {
   /** The repository root, absolute. */
@@ -90,6 +117,13 @@ export interface CapabilityContext {
    * without a machine that has neither.
    */
   exec?: Exec;
+
+  /**
+   * How a capability starts a process it keeps running, the way `exec`
+   * runs one to completion. A test supplies one to stand in for the real
+   * process.
+   */
+  spawn?: Spawn;
 
   /**
    * The GitHub token the lane took out of its own environment, for the
@@ -129,7 +163,11 @@ export interface OpenCapability {
    */
   logs?: readonly string[];
 
-  /** Shuts it down. Called once, in the reverse of the opening order. */
+  /**
+   * Shuts it down. Called once, in the reverse of the opening order.
+   * Settles once what it opened has stopped, and rejects where it failed
+   * to stop.
+   */
   close(): Promise<void>;
 }
 
@@ -251,12 +289,9 @@ function exported(env: Record<string, string>): OpenCapability {
  */
 const run: Exec = async (command, args, options = {}) => {
   const result = await new Deno.Command(command, {
-    args: [...args],
+    ...commandOptions(args, options),
     stdout: "piped",
     stderr: "piped",
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    ...(options.env === undefined ? {} : { env: options.env }),
-    ...(options.clearEnv === undefined ? {} : { clearEnv: options.clearEnv }),
   }).output();
   const stdout = new TextDecoder().decode(result.stdout);
   if (result.success) return stdout;
@@ -266,6 +301,27 @@ const run: Exec = async (command, args, options = {}) => {
   );
 };
 
+const spawn: Spawn = (command, args, options = {}) =>
+  new Deno.Command(command, {
+    ...commandOptions(args, options),
+    stdin: "null",
+    stdout: "piped",
+    stderr: "null",
+  }).spawn();
+
+/** The arguments and `ExecOptions` of a command, as `Deno.Command` takes them. */
+function commandOptions(
+  args: readonly string[],
+  options: ExecOptions,
+): Deno.CommandOptions {
+  return {
+    args: [...args],
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.clearEnv === undefined ? {} : { clearEnv: options.clearEnv }),
+  };
+}
+
 /** How this context runs commands. */
 function execOf(context: CapabilityContext): Exec {
   const exec = context.exec ?? run;
@@ -273,6 +329,20 @@ function execOf(context: CapabilityContext): Exec {
     context.report?.(`ci-lane: running ${[command, ...args].join(" ")}`);
     return exec(command, args, options);
   };
+}
+
+/** How this context starts commands it keeps running. */
+function spawnOf(context: CapabilityContext): Spawn {
+  const start = context.spawn ?? spawn;
+  return (command, args, options) => {
+    context.report?.(`ci-lane: starting ${[command, ...args].join(" ")}`);
+    return start(command, args, options);
+  };
+}
+
+/** What a thrown value says, whether or not it is an `Error`. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -500,9 +570,8 @@ const githubApi: Capability = {
 
 /**
  * The environment a Toolshed at `role` runs under: the ambient environment
- * carrying the server-execution define the role names, and carrying none
- * where the role names none, with the ON arm's other flags set on that arm
- * and unset on the other.
+ * without the variables the posture check reads, carrying the server-execution
+ * define the role names, and carrying none where the role names none.
  *
  * An unset define is a third state rather than a synonym for `false`. It
  * follows the first-party default, which is what the default role's posture
@@ -512,10 +581,7 @@ function serverExecutionEnv(
   role: ServerExecutionCiRole,
 ): Record<string, string> {
   const env = Deno.env.toObject();
-  delete env.EXPERIMENTAL_SERVER_EXECUTION;
-  for (const name of Object.keys(SERVER_EXECUTION_ON_ENVIRONMENT)) {
-    delete env[name];
-  }
+  for (const name of SERVER_EXECUTION_POSTURE_VARIABLES) delete env[name];
   return { ...env, ...serverExecutionEnvironment(role) };
 }
 
@@ -570,20 +636,25 @@ export async function logTail(
   ].join("\n");
 }
 
-/** The process identifier a background launch reports having detached. */
-export function pidOfBackgroundLaunch(output: string): number | undefined {
-  const match = /\(pid (\d+)\)/.exec(output);
-  return match === null ? undefined : Number(match[1]);
+/** How a process ended, in words. */
+function exitOf(status: Deno.CommandStatus): string {
+  return status.signal === null
+    ? `exited with code ${status.code}`
+    : `was killed by ${status.signal}`;
 }
 
 /**
  * Starts a Toolshed server and exports the addresses the suites reach it
- * at. `--background` is what makes this a single call: the launcher waits
- * for the server to report over a pipe that it has bound its port, then
- * detaches and prints the server's process identifier, so there is
- * nothing here to poll and nothing to wait a fixed time for. Killing that
- * process is the close, so a lane that opened a server leaves nothing
- * listening behind it.
+ * at.
+ *
+ * The server is this process's own child, started as the server half of a
+ * `--background` launch: it writes its logs to the file the environment
+ * names, and writes one line to its standard output once it has bound its
+ * port, so there is nothing here to poll and nothing to wait a fixed time
+ * for. Being its parent is what lets the close wait for it: closing sends
+ * the server SIGTERM and settles once it has exited, so the lane that
+ * opened it leaves nothing listening on the port and nothing writing into
+ * the work directory.
  */
 async function startToolshed(
   context: CapabilityContext,
@@ -605,12 +676,7 @@ async function startToolshed(
   if (context.dryRun) return exported(env);
   const [command, ...args] = options.command;
   const logFile = path.join(context.workDir, `toolshed-${port}.log`);
-  const output = await execOf(context)(command!, [
-    ...args,
-    `--port=${port}`,
-    "--background",
-    `--log-file=${logFile}`,
-  ], {
+  const server = spawnOf(context)(command!, [...args, `--port=${port}`], {
     cwd: options.cwd,
     // The environment below is the whole of it, so that a name
     // `serverExecutionEnv()` removed is unset rather than inherited.
@@ -622,43 +688,51 @@ async function startToolshed(
       CFTS_AI_GATEWAY_URL: "",
       CFTS_AI_LLM_ANTHROPIC_API_KEY: "fake",
       ...env,
+      [BACKGROUND_LOG_ENV]: logFile,
     },
   });
-  const pid = pidOfBackgroundLaunch(output);
-  if (pid === undefined) {
-    throw new Error(`the toolshed launch named no process:\n${output}`);
-  }
-  const stop = () => {
+  // Sends the server SIGTERM unless it has already exited, and returns its
+  // exit status once it has.
+  const stop = async (): Promise<Deno.CommandStatus> => {
     try {
-      Deno.kill(pid, "SIGTERM");
+      server.kill("SIGTERM");
     } catch {
-      // Already gone, which is the state this was after.
+      // It has exited, and its status says how.
     }
+    return await server.status;
   };
   try {
+    if (!await awaitReadyMarker(server.stdout)) {
+      throw new Error(
+        `the toolshed server ${exitOf(await stop())} before it bound its port`,
+      );
+    }
     await verifyServerExecutionPosture(
       options.role,
       url,
       context.fetch ?? fetch,
     );
   } catch (error) {
-    stop();
-    // The server started and then failed its posture check, so its own log
-    // is the account of why. Nothing is holding the path at this point --
-    // the capability never opened -- so the log is carried in the throw or
-    // it goes with the work directory unread.
+    await stop();
+    // The server's own log is the account of why it failed. Nothing is
+    // holding the path at this point -- the capability never opened -- so
+    // the log is carried in the throw or it goes with the work directory
+    // unread.
     throw new Error(
-      `${error instanceof Error ? error.message : String(error)}\n` +
-        `toolshed log:\n${await logTail(logFile)}`,
+      `${messageOf(error)}\ntoolshed log:\n${await logTail(logFile)}`,
       { cause: error },
     );
   }
   return {
     env,
     logs: [logFile],
-    close: () => {
-      stop();
-      return Promise.resolve();
+    close: async () => {
+      const status = await stop();
+      if (!status.success) {
+        throw new Error(
+          `the toolshed server ${exitOf(status)}; its log is \`${logFile}\``,
+        );
+      }
     },
   };
 }
@@ -898,7 +972,10 @@ export interface OpenedCapabilities {
   /** Every log the opened capabilities named, in the order they opened. */
   logs: Array<{ capability: CapabilityId; path: string }>;
 
-  /** Closes them all, in the reverse of the order they opened. */
+  /**
+   * Closes them all, in the reverse of the order they opened. Settles once
+   * every one has closed, and rejects naming each that failed to.
+   */
   close(): Promise<void>;
 }
 
@@ -916,16 +993,21 @@ export async function openCapabilities(
   const exported = new Map<CapabilityId, Record<string, string>>();
   const timings: Array<{ capability: CapabilityId; seconds: number }> = [];
   const logs: Array<{ capability: CapabilityId; path: string }> = [];
-  const opened: OpenCapability[] = [];
+  const opened: Array<{ id: CapabilityId; open: OpenCapability }> = [];
+  // One that fails to close does not keep the rest open.
   const close = async (): Promise<void> => {
-    for (const capability of opened.reverse()) {
+    const failures: string[] = [];
+    for (const { id, open } of opened.reverse()) {
       try {
-        await capability.close();
+        await open.close();
       } catch (error) {
-        console.warn(`ci-lane: closing a capability failed: ${error}`);
+        failures.push(`${id} failed to close: ${messageOf(error)}`);
       }
     }
     opened.length = 0;
+    if (failures.length > 0) {
+      throw new Error(failures.join("\n"));
+    }
   };
   try {
     for (const id of resolveCapabilities(requested, registry)) {
@@ -933,7 +1015,7 @@ export async function openCapabilities(
       context.report?.(`ci-lane: opening ${id}: ${capability.description}`);
       const startedAt = performance.now();
       const open = await capability.open(context);
-      opened.push(open);
+      opened.push({ id, open });
       exported.set(id, open.env);
       const seconds = (performance.now() - startedAt) / 1000;
       timings.push({ capability: id, seconds });
@@ -943,7 +1025,13 @@ export async function openCapabilities(
       }
     }
   } catch (error) {
-    await close();
+    try {
+      await close();
+    } catch (closing) {
+      throw new Error(`${messageOf(error)}\n${messageOf(closing)}`, {
+        cause: error,
+      });
+    }
     throw error;
   }
   return {

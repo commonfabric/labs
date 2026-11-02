@@ -125,27 +125,23 @@ export type SessionState = {
   viewSupportReplaced: boolean;
 
   /** Set once this session was admitted an explicit `entity_scope_key`
-   * read (protocol.md §2's read row — lease holders only), and STICKY
-   * for the session's life: it selects the session's WIRE VOCABULARY
-   * (fan-out stage A, protocol.md §3) — every upsert, remove, and
-   * snapshot to it carries the instance key from then on, so an
-   * instance delivered KEYED is always retracted KEYED (an unkeyed
-   * remove names the session's OWN instance in its replica: the
-   * former-holder wipe, fan-out stage A's independent review, finding
-   * 1). Whether FOREIGN instances are DELIVERED is a separate, per-pass
-   * question answered against the LIVE lease
-   * (`Server.#currentLeaseHolderExemption`); this bit alone never
-   * admits one. */
+   * read (protocol.md §2's read row — the space's serving session, or the
+   * service identity under a grant), and STICKY for the session's life:
+   * it selects the session's WIRE VOCABULARY (fan-out stage A, protocol.md
+   * §3) — every upsert, remove, and snapshot to it carries the instance
+   * key from then on, so an instance delivered KEYED is always retracted
+   * KEYED (an unkeyed remove names the session's OWN instance in its
+   * replica: fan-out stage A's independent review, finding 1) — and the
+   * instances it named are delivered to it for as long as it lives: the
+   * admission is the session's, not the lease's. */
   leaseHolderReads?: boolean;
 
-  /** Set by a push pass (or a resume catch-up) that found
-   * `leaseHolderReads` armed but no live lease: that pass withheld or
-   * retracted the session's foreign instances. The first pass that
-   * finds the lease live again RE-ARMS by running a FULL watch
-   * evaluation, which re-delivers every instance the lapse withheld —
-   * a renewal blip the SpaceServer survives in-process must not leave
-   * its serving replica silently stale. Cleared by that pass. */
-  leaseHolderReadsLapsed?: boolean;
+  /** Whether the session's latest open declared the serving binding
+   * (`SessionDescriptor.actingAs: "space-owner"`): a serving runtime's
+   * session, whose unnamed scoped read of a space it does not serve on
+   * this server is refused (protocol.md §2's grant-scoped read). Fresh
+   * per open, in every access-list mode. */
+  servingBinding?: true;
 
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
@@ -405,9 +401,6 @@ export class SessionRegistry {
       ...(existing?.leaseHolderReads === true
         ? { leaseHolderReads: true }
         : {}),
-      ...(existing?.leaseHolderReadsLapsed === true
-        ? { leaseHolderReadsLapsed: true }
-        : {}),
       ...(session.client === undefined
         ? {}
         : { client: { ...session.client } }),
@@ -431,6 +424,9 @@ export class SessionRegistry {
       // open's resolution against the current ACL; an open without the
       // marker carries none (fail-closed toward less authority).
       ...(actingPrincipal !== undefined ? { actingPrincipal } : {}),
+      ...(session.actingAs === "space-owner"
+        ? { servingBinding: true as const }
+        : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(elidedVerdicts ? { elidedVerdicts: true } : {}),

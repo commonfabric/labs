@@ -6,22 +6,17 @@ import { Runtime } from "../src/runtime.ts";
 import type { Engine } from "../src/harness/engine.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import {
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 const signer = await Identity.fromPassphrase(
   "fabric imports pattern manager test",
 );
 const space = signer.did();
 const otherSpace = "did:key:z6MkFabricImportsPatternManagerOther";
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 describe("PatternManager fabric imports", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -213,7 +208,7 @@ describe("PatternManager fabric imports", () => {
         runtime,
         space,
         importer.entryIdentity,
-        { runtimeVersion },
+        { runtimeVersion: await compileCacheVersionOf(runtime) },
         readTx,
       );
       readTx.abort?.();

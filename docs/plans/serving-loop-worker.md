@@ -71,7 +71,12 @@ keys the session's commits stays with the worker, because the outbox's own
 writes draw from the same counter under the same session: each commit crosses
 with the number the worker minted for it, and the main thread's sink is handed
 that number. The served-ACL-change commit crosses the same way, as the list of
-changes it applies; the main thread rebuilds the function from the list.
+changes it applies; the main thread rebuilds the function from the list. A
+foreign batch and a change to another space's list leave the worker for that
+space's owner over the worker's own routed session
+([owner routing](serving-loop-owner-routing.md), on by default), and only the
+home batch and the home's changes cross the port; a host given no route sends
+them across the port with the home's.
 
 **The serving runtime's storage plane crosses as frames.** The serving runtime's
 `StorageManager` connects to the memory server through `LoopbackStorageManager`,
@@ -102,7 +107,7 @@ mirror from it and serves the three lookups the loop makes without waiting,
 registry would. The worker asks the main thread for `demandForSessions`,
 `viewInterestsForSpace`, `setViewSelection`, `foreignWriteAuthorityFor`,
 `checkServedAclChange`, `commitDelegatedAppend`, `idle` and `flushSessions`, and
-tells it of `noteExecutorCommit` and `noteLeaseReacquired` without waiting. The
+tells it of `noteExecutorCommit` without waiting. The
 demand set crosses as shares per session, read once and kept on the worker
 (`DemandShareCache`) until the server's `demandChanged` names that session
 again, so a demand pass hands the space server's mirror the objects it compared
@@ -116,16 +121,26 @@ interest's generation itself.
 A publish over unchanged interests then asks the server nothing, where the
 request alone waited for the server's thread's turn, however empty the list.
 
-**Lifecycle verbs run in the worker, from a descriptor.** The route sends a
-verb as its name and its request, on either arm, and whichever thread runs the
+**Lifecycle verbs run in the worker, from a descriptor.** The toolshed's
+`pattern.lifecycle` handler sends a verb as its name and its request, on
+either arm, and whichever thread runs the
 loop builds the verb's closures over a `PiecesController` from the same
 functions in `@commonfabric/piece`'s served lifecycle. The receipt comes back
-as data.
+as data, a structured clone on the port, so a verb hands back plain values: a
+cell read with no schema returns nested objects as proxies over the store,
+which the port cannot clone.
 
 **Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
 at the end of each wave cycle, at each activation and park, and on request;
 the main thread registers a stats provider that returns the latest copy, so
-`/api/health/stats` keeps its shape and waits on nothing. The loop's own
+`/api/health/stats` keeps its shape and waits on nothing. Just ahead of each
+wave commit the worker also posts the `events` block alone, which the main
+thread merges into that copy: the whole counters, settle series included,
+cost about as much to post as a commit. The events post travels on the port
+the commit does, whose messages the main thread handles in order, so a client
+that has seen a wave's commit reads event counters that include what that
+wave's drain counted, and a later full post, never older than an events post
+before it, replaces the merged block with everything else. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
 request (`ServingLoopHandle.diagnostics()`), and a request waits for the
 worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
@@ -244,7 +259,8 @@ between the two.
 3. [x] **Toolshed wiring under `SERVER_EXECUTION_WORKER`.** The bootstrap
    (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
-   is `true`, the in-process host otherwise, and hands the routes a
+   is `true`, or is unset or empty over a file memory store, and the
+   in-process host otherwise. It hands the rest of the process a
    `ServingLoop` either way; the pattern-lifecycle verbs cross as the
    descriptors `@commonfabric/piece`'s `served-lifecycle-verbs.ts` names on
    both paths; the health route reads the relayed stats through the
@@ -257,18 +273,11 @@ between the two.
    one says `worker: false`. Under that variable, the suites built on it
    pass: its own, the watermark and reviewed-send tests, the CLI's
    agent-connections test, and the pattern integration tests the
-   `MultiRuntimeHarness` drives, with one open exception. The private-inbox
-   test, whose pieces span several spaces, fails or stalls under the worker
-   with the basis race below closed:
-   the home space's serving runtime attempts foreign scoped reads and
-   foreign writes from `map` runs that in-process it never attempts, so the
-   append it waits for is refused or never derives. The evidence points at
-   the home runtime materializing a foreign space's derivations itself while
-   that space's own loop lags behind it, which the in-process ordering never
-   let happen; the cause is not yet pinned. The fabrichat room-principals
-   test, where a runtime one space refuses reads a list the loop derives
-   across it, fails the same way on some runs. A lane running the ON arm under
-   the worker is a question for stage 6, with the default.
+   `MultiRuntimeHarness` drives. A serving runtime runs no child placed in a
+   space other than the one it serves, which the private-inbox and FabriChat
+   tests rely on under the worker: the loop of the child's space is the one
+   that derives it, and in a worker that loop can start after the home
+   space's next events have run.
 5. [x] **Measure.** The vote probe and the Topics seed under the worker against
    the in-process loop on the same box: client watch-add latency, the
    per-vote and per-topic client cost, and the serving loop's own wave
@@ -278,6 +287,8 @@ between the two.
    holds the numbers, and the wave basis race the measurement exposed, which
    the ordering section above now covers.
 6. [ ] **Spec and default.** `serving-loop.md` §1's component diagram names the
-   worker (done); after a soak, and once stage 4's open exception is closed,
-   the worker becomes the default and the in-process path goes, with the
-   flag.
+   worker (done). The toolshed runs the loop in a worker by default wherever
+   its memory store is a file, the one store a worker opens, and
+   `SERVER_EXECUTION_WORKER=false` keeps it on the request thread (done).
+   After a soak, the in-process path goes, with the flag, and a lane runs the
+   ON arm under the worker.

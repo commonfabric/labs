@@ -634,8 +634,12 @@ process:
   loop's worker included; `heapTotal`, `heapUsed` and `external` cover the thread
   that answers the request, so they leave a worker's heap out. Reading `rss`
   here measures the server at the address queried, however many other servers
-  the machine runs; `runtime/runner/integration/derive_array_leak.test.ts`
-  measures its server this way.
+  the machine runs. `rss` also moves with when the collector last ran and with
+  which pages the operating system has compressed, by hundreds of megabytes on
+  a busy server, so a growth in it smaller than that says nothing about a
+  leak. `runtime/runner/integration/derive_array_leak.test.ts` measures its
+  server this way, and measures its own isolate after forcing a full
+  collection, a reading that moves by only a few megabytes without a leak.
 - `documentCaches` — the memory server's decoded-document cache, one entry per
   open space (`Engine.documentCache` in `runtime/memory/v2/engine.ts`) under
   the server's `totalBudgetBytes` (beside it the total `bytes`, and

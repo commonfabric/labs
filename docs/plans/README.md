@@ -32,6 +32,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   reads the store on its own SQLite connections, sends wave commits and
   everything else it needs from the memory server over a `MessagePort`, and
   the request thread stops waiting behind waves.
+- [Serving each space from the process that owns it](serving-loop-owner-routing.md)
+  routes every serving-loop action on another space (event appends, foreign
+  wave batches, access-list changes, space creation, and reads) to the
+  process that space's memory socket reaches, so that a deployment with several
+  toolsheds over one store serves each space from one process. It then moves
+  the execution lease into memory, with a worker heartbeat as its only timer.
 - [Memory router security requirements](memory-router-security-requirements.md)
   defines the authentication, authorization, isolation, and public-ingress
   gates for multiplexed Memory WebSockets routed to toolsheds.
@@ -54,6 +60,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   taken from the code's own module, not the graph's data, so a rule that guards
   on the identity rests on it. It needs a narrow specs ruling first, and it
   parks a per-item threshold drawn from a policy key.
+- [A piece's creator owns the fields an update adds](piece-creator-owns-update-added-fields.md)
+  records, once and by the runtime alone, the principal a piece was created
+  for, and binds a placeholder-owner field that a source update installs to
+  that record instead of to its first writer. It carries the ruling text for
+  the specs pull request, scopes the attribution mark to the new piece's own
+  documents as the rapids fix, and says how pieces created before the record
+  gain one.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
   the piece the shuffle does not yet have: a shuffle inside this repository's
@@ -307,6 +320,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the verb flags and result shapes that offer none, the source `--space` needs
   before any of it is reachable by name, and the gate that keeps completion
   from falling behind the command tree again.
+- [Turning instance names on](instance-names-on.md) sequences what comes
+  before the `instanceNames` flag turns on: a one-way mark on each space,
+  recorded at the first commit from a naming runtime and only where the
+  deployment names instances, after which the memory server admits no
+  positional runtime to it; then the flag's env mapping, the tests that assume
+  its default, the flip, and the flag's removal.
 - [Handler-callable egress](handler-callable-egress.md) records the capability
   a pattern does not have: a network request a handler can issue and await,
   which the runtime records and gates the way it records and gates a node

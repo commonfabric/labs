@@ -23,7 +23,6 @@ import webhooks from "@/routes/webhooks/webhooks.index.ts";
 import ingest from "@/routes/ingest/ingest.index.ts";
 import ingestChannels from "@/routes/ingest-channels/ingest-channels.index.ts";
 import ingestPush from "@/routes/ingest-push/ingest-push.index.ts";
-import patternLifecycle from "@/routes/pattern-lifecycle/pattern-lifecycle.index.ts";
 
 import meetingRooms from "@/routes/meeting-rooms/meeting-rooms.index.ts";
 import spaceInvites from "@/routes/space-invites/space-invites.index.ts";
@@ -57,7 +56,6 @@ const routes = [
   ingestPush,
   spaceInvites,
   meetingRooms,
-  patternLifecycle,
 ];
 
 routes.forEach((route) => {

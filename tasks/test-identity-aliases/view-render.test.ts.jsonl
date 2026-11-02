@@ -1,0 +1,2 @@
+{"date":"2026-10-29","from":{"k":"unit","s":"cli","n":"renderFrame: repeated prefixes retain search highlighting"},"to":{"k":"unit","s":"cli","n":"renderFrame: word-wrap indentation is blank and unhighlighted"}}
+{"date":"2026-10-29","from":{"k":"unit","s":"cli","n":"renderFrame: repeated prefixes retain selection highlighting"},"to":{"k":"unit","s":"cli","n":"renderFrame: word-wrap indentation does not take the selection background"}}

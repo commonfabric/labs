@@ -941,6 +941,34 @@ label):
 </cf-toast-provider>
 ```
 
+### cf-suggestions
+
+**Purpose**: Draws the ranked suggestion cards anchored at one thing, at a fixed
+size. A card is drawn where its `anchor` link names `$about`; a card with no
+`anchor` field falls back to the first link in its `about`, then its
+`act_target`, and a null `anchor` is drawn on no thing. The component performs
+no act; the host binds its events. **Tag**: `<cf-suggestions>`
+
+**Bindings**:
+
+- `$items` - the ranked cards, best first. Each is a flat row
+  `{ id, card_revision?, title?, body?, source?, anchor?, act_target?, about?, tags? }`,
+  where `about` and `tags` are JSON strings
+- `$about` - the thing whose cards to draw
+
+**Properties**:
+
+- `tags` - draw only cards carrying at least one of these tags
+
+**Events**:
+
+- `cf-suggestion-take` - detail: `{ id, card_revision?, card }`; a trusted click
+  on the **Take** button of a card at least half on screen and, where the
+  browser tracks occlusion, unobscured, for at least half a second. Carries no
+  gesture provenance; treat a repeated take as a no-op.
+- `cf-suggestion-seen` - detail: `{ id, card_revision?, card }`; once per card
+  per element, when it is first shown
+
 ### cf-custody-seal
 
 **Purpose**: The trusted host confirmation that seals the actor's draft into a

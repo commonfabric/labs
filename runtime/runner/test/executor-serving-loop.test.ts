@@ -169,6 +169,7 @@ describe("stage F serving loop", () => {
           throw new Error("activation observer failure (test-injected)");
         }
       },
+      onLeaseReacquired: () => reacquires.record(),
       onSpaceParked: (parkedSpace, reason) => {
         parks.record({ space: parkedSpace, reason });
         if (parkObserverThrows) {
@@ -220,11 +221,6 @@ describe("stage F serving loop", () => {
     activations = new ArrivalLog();
     parks = new ArrivalLog();
     reacquires = new ArrivalLog();
-    const noteLeaseReacquired = server.noteLeaseReacquired.bind(server);
-    server.noteLeaseReacquired = (notice) => {
-      reacquires.record();
-      return noteLeaseReacquired(notice);
-    };
     const engineForSpace = server.engineForSpace.bind(server);
     server.engineForSpace = (openedSpace) => {
       if (engineOpenFailures === 0) return engineForSpace(openedSpace);
@@ -1561,9 +1557,9 @@ describe("stage F serving loop", () => {
     // fails (tenure ends) and the same-process reacquire succeeds
     // (tenure bumps) — while the sealed wave is still gated open.
     releaseExecutionLease(engine, { space, holder: spaceServer.holder });
-    // The reacquire reports itself to the memory server, and the failed
-    // tick and the restored row are what produced it. The renew arm is
-    // timer-driven, so this notice is the only edge it has.
+    // The failed tick and the restored row are what produced the
+    // reacquire. The renew arm is timer-driven, so the host's observer is
+    // the only edge it has.
     await reacquires.reached(1);
     expect(host.stats().lease.lost).toBeGreaterThanOrEqual(1);
     expect(liveExecutionLeaseHolder(engine, space)).toBe(spaceServer.holder);

@@ -1,5 +1,6 @@
 import type {
   CellScope,
+  FabricPlainObject,
   FabricValue,
   SchemaPathSelector,
   TextChange,
@@ -23,6 +24,7 @@ import {
   type URI,
   type Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -40,6 +42,7 @@ import type {
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
+  PatternLifecycleVerb,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
@@ -56,10 +59,12 @@ import type {
   ViewPlan,
 } from "@commonfabric/memory/v2";
 import type {
+  InviteAdministration,
   PresenceEvent,
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
@@ -75,6 +80,7 @@ import type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
@@ -165,20 +171,8 @@ export class ReplicaLoadFailureError extends Error {
     readonly failure: ReplicaLoadFailure,
     cause: unknown,
   ) {
-    super(loadFailureMessage(cause), { cause });
+    super(describeFailure(cause), { cause });
   }
-}
-
-/**
- * Returns the message a load failure's cause carries. A pull reports its
- * failure as a plain result object rather than an `Error`, so the message is
- * read off any object that has one; a cause without one is stringified.
- */
-function loadFailureMessage(cause: unknown): string {
-  return typeof cause === "object" && cause !== null && "message" in cause &&
-      typeof cause.message === "string"
-    ? cause.message
-    : String(cause);
 }
 
 export const toReplicaLoadFailureError = (
@@ -530,6 +524,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   serverFlags?(
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined>;
+
+  /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
 
   /**
    * The serving manager's HOME space (a serving runtime's storage
@@ -912,14 +923,41 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
+   * Runs pattern-lifecycle verb `verb` with `body` in `space`, on this
+   * manager's memory session there and as its principal, and returns the
+   * verb's receipt. The memory server behind that session owns the space, so
+   * the verb runs where the space is served. Absent from a manager with no
+   * memory sessions; errors are the memory client's
+   * `runPatternLifecycle()`'s.
+   */
+  runPatternLifecycle?(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /**
+   * Administers `space`'s invitations on this manager's memory session
+   * there, as its principal, and returns what the invitation service
+   * returns. Absent from a manager with no memory sessions; errors are the
+   * memory client's `administerInvites()`'s.
+   */
+  administerInvites?(
+    space: MemorySpace,
+    invite: InviteAdministration,
+  ): Promise<FabricValue>;
+
+  /**
    * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
    * `space`'s ACL document. A space session this manager holds — revoked or
    * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
    * it, because the ACL is the only input that decision has. Never widens
    * authority: a genuine de-authorization is refused again at `session.open`.
    * Implemented by the v2 StorageManager; the serving loop's host is its only
-   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
-   * such commit.
+   * caller, for the commits its own memory server admits. The other trigger
+   * is `retrySpaceAccess()`, for a host that sees no such commit. A serving
+   * runtime's grant verdicts on another space's actors do not depend on it:
+   * its replica of that space watches the list over its own session.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 
@@ -2717,11 +2755,28 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. The mark takes the runtime's authorization,
-   * and a call without it does nothing.
+   * and a start deferred from one. With `piece`, the result document of a
+   * piece the transaction brings into being on the principal's behalf, the
+   * mark covers that piece's own documents alone
+   * (`CfcTxState.attributedPieces`). The mark takes the runtime's
+   * authorization, and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
+  ): void;
+
+  /**
+   * Records that the runtime names `creator` as the creator of the piece
+   * whose result document is `piece` (`CfcTxState.pieceCreators`), so that
+   * preparation admits the transaction's write of the `creator` meta field
+   * there. The mark takes the runtime's authorization, and a call without it
+   * does nothing.
+   */
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
   ): void;
 
   /**
@@ -2946,8 +3001,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * authenticated, and the document to sit in that principal's own space.
    * Removes every stored clause at the path that `input.keep` does not name,
    * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. Writes
-   * nothing when there is nothing to remove.
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
    *
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
@@ -3807,6 +3863,15 @@ export interface ISpaceReplica extends ISpace {
     sidecarId: string,
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
+
+  /** Like `IStorageManager.runPatternLifecycle()`, for this replica's space. */
+  runPatternLifecycle?(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /** Like `IStorageManager.administerInvites()`, for this replica's space. */
+  administerInvites?(invite: InviteAdministration): Promise<FabricValue>;
 
   /** Pending (undischarged) event intents — the offline event queue's
    * live content (speculation.md §5), bounded by pending-intent count. */

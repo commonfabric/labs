@@ -13,6 +13,7 @@ import {
 } from "@commonfabric/test-support/records";
 import { maxOf } from "@commonfabric/collections/math";
 import {
+  type Capability,
   CAPABILITY_LOG_TAIL_LINES,
   type CapabilityId,
   COMPILE_CACHE_FILE,
@@ -2909,6 +2910,60 @@ describe("the lane's own housekeeping", () => {
     await Deno.remove(root, { recursive: true });
   });
 
+  it("fails a lane whose capability fails to close", async () => {
+    // A server that did not stop cleanly may have left its work undone,
+    // and its log is the one place that says so.
+    const root = await Deno.makeTempDir({ prefix: "lane-close-" });
+    const suites = [suite({
+      id: "workspace-unit",
+      needs: ["cf"],
+      units: ["packages/bakery/glaze.test.ts"],
+      locate: () => ({
+        level: "unit" as const,
+        unit: "packages/bakery/glaze.test.ts",
+      }),
+      command: (_units, context) => {
+        const record = JSON.stringify({
+          line: "record",
+          test: { k: "unit", s: "bakery", n: "glaze > sets" },
+          outcome: "pass",
+          durationMs: 1,
+        });
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `Deno.writeTextFileSync(
+              Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+              ${JSON.stringify(record + "\n")},
+            )`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    })];
+    const closing = (close: () => Promise<void>) =>
+      new Map<CapabilityId, Capability>([["cf", {
+        id: "cf",
+        description: "a capability that closes as told",
+        open: () => Promise.resolve({ env: {}, close }),
+      }]]);
+    try {
+      expect(await onlyLane(root, suites, {}, closing(() => Promise.resolve())))
+        .toBe(true);
+      expect(
+        await onlyLane(
+          root,
+          suites,
+          {},
+          closing(() => Promise.reject(new Error("still running"))),
+        ),
+      ).toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("runs a lane that was given no share of the work", async () => {
     // The whole path, with nothing in it: no capability is opened, no
     // batch runs, and the directory the lane made for itself goes.
@@ -2990,6 +3045,7 @@ describe("the lane's own housekeeping", () => {
     root: string,
     suites: Suite[],
     env: Record<string, string | undefined> = {},
+    capabilities?: ReadonlyMap<CapabilityId, Capability>,
   ): Promise<boolean> {
     const restore = setEnv({ RUNNER_TEMP: undefined, ...env });
     const log = console.log;
@@ -3010,6 +3066,7 @@ describe("the lane's own housekeeping", () => {
           manifest: ({ at }) =>
             Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
           spool: () => undefined,
+          ...(capabilities === undefined ? {} : { capabilities }),
         },
       );
     } finally {

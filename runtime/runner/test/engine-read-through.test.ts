@@ -950,7 +950,7 @@ describe("engine-read-through", () => {
     }
   });
 
-  it("reads another principal's instance under an expired lease only through the same-process reacquire, while a space-scoped read renews nothing", async () => {
+  it("reads another principal's instance under an expired lease only once the renew arm has recovered the lapse, while a space-scoped read renews nothing", async () => {
     await instantiatePiece();
     host = newHost({
       flushDeadlineMs: 5_000,
@@ -988,13 +988,14 @@ describe("engine-read-through", () => {
     expect(liveExecutionLeaseHolder(engine, space)).toBeUndefined();
 
     // Another principal's instance is served only to a live holder: the
-    // read runs the renew arm first — the lease is lost and reacquired
-    // in-process, the same step the renew timer takes — and is served
-    // under the new tenure.
+    // read runs the renew arm first — the row still names this holder and
+    // nobody took it, so the renewal recovers the lapse, the same step the
+    // renew timer takes — and is served under the continuing tenure.
     expect(
       replica.getDocument(id, "user", clientIdentity)?.value,
     ).toEqual({ draft: "A" });
-    expect(host.stats().lease.lost).toBe(1);
+    expect(host.stats().lease.lost).toBe(0);
+    expect(host.stats().lease.lapsesRecovered).toBe(1);
     expect(liveExecutionLeaseHolder(engine, space)).toBe(spaceServer.holder);
     expect(spaceServer.active).toBe(true);
     // Held now: later reads of the instance never reach the row again.
@@ -1002,7 +1003,7 @@ describe("engine-read-through", () => {
     expect(
       replica.getDocument(id, "user", clientIdentity)?.value,
     ).toEqual({ draft: "A" });
-    expect(host.stats().lease.lost).toBe(1);
+    expect(host.stats().lease.lapsesRecovered).toBe(1);
   });
 
   it("withholds another principal's instance while a rival holds the lease, and parks the space", async () => {

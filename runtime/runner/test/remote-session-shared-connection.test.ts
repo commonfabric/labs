@@ -14,8 +14,10 @@ import {
 } from "../src/storage/memory-socket.ts";
 import {
   createStorageAddressResolver,
+  MEMORY_DIALS_PER_HOST,
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
+import { drivableSockets } from "./storage/drivable-web-socket.ts";
 
 const SPACES = [
   "did:key:z6Mk-shared-connection-one",
@@ -142,6 +144,44 @@ describe("RemoteSessionFactory connection sharing", () => {
       } finally {
         await Promise.all(opened.map(({ client }) => client.close()));
       }
+    });
+
+    it("dials a host's next space once a socket opening before it closes", async () => {
+      const sockets = drivableSockets();
+      const factory = new RemoteSessionFactory(
+        createStorageAddressResolver(new URL("http://memory.test")),
+        user,
+        sockets.createSocket,
+      );
+      factories.push(factory);
+      const spaces = Array.from(
+        { length: MEMORY_DIALS_PER_HOST + 1 },
+        (_, i) => `did:key:z6Mk-dial-limit-${i}` as MemorySpace,
+      );
+      // A create reaches its dial before it first waits. A create whose
+      // socket closes before opening dials again, so the case ends every
+      // create through its signal.
+      const controller = new AbortController();
+      const creates = spaces.map((space) =>
+        factory.create(space, user, {}, controller.signal).then(
+          () => "opened",
+          (error) => error,
+        )
+      );
+      const dialedSpaces = () =>
+        sockets.dials.map((dial) =>
+          new URL(dial.url).searchParams.get("space")
+        );
+      expect(dialedSpaces()).toEqual(spaces.slice(0, -1));
+      sockets.dials[0].close();
+      await sockets.dialed(MEMORY_DIALS_PER_HOST + 1);
+      expect(dialedSpaces().slice(0, MEMORY_DIALS_PER_HOST + 1)).toEqual(
+        spaces,
+      );
+      controller.abort(new Error("dials observed"));
+      expect(await Promise.all(creates)).toMatchObject(
+        spaces.map(() => ({ message: "dials observed" })),
+      );
     });
   });
 

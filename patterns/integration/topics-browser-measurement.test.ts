@@ -474,7 +474,9 @@ describe("topics-browser-measurement", () => {
       // cases ran first. What the replaced client reports is read before any
       // cleanup: a listener on it counts the telemetry markers that work
       // delivers, and its graph snapshot says whether any run of the work kept
-      // a read sample, since a run without accounting clears its node's.
+      // a read sample, since a run without accounting clears its node's. On a
+      // served page its action-run trace says, too, which kind of action each
+      // run was.
 
       const fresh = await openFreshSession();
       try {
@@ -488,7 +490,7 @@ describe("topics-browser-measurement", () => {
         ).rejects.toThrow("The runtime client was replaced");
         expect(await samplesLeftInPage(fresh.page)).toEqual([]);
 
-        const runCounts = await fresh.page.evaluate(async () => {
+        const runCounts = await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as ReplacementGlobal;
           const client = scope.__cfReplacedClient!;
           const counter = { count: 0, stop: () => {} };
@@ -498,36 +500,52 @@ describe("topics-browser-measurement", () => {
           client.on("telemetry", listener);
           counter.stop = () => client.off("telemetry", listener);
           scope.__cfReplacedClientMarkers = counter;
+          if (served) await client.setActionRunTraceEnabled(true);
           const graph = await client.getGraphSnapshot();
           return Object.fromEntries(
             graph.nodes.map((node) => [node.id, node.stats?.runCount ?? 0]),
           );
-        });
+        }, { args: [servedViews] });
         await openTopmostTopic(fresh);
         await returnToBoard(fresh);
         const reported = await fresh.page.evaluate(
-          async (runCounts: Record<string, number>) => {
+          async (runCounts: Record<string, number>, served: boolean) => {
             const scope = globalThis as ReplacementGlobal;
-            const graph = await scope.__cfReplacedClient!.getGraphSnapshot();
+            const client = scope.__cfReplacedClient!;
+            const graph = await client.getGraphSnapshot();
             const ran = graph.nodes.filter((node) =>
               (node.stats?.runCount ?? 0) > (runCounts[node.id] ?? 0)
             );
+            const computations = served
+              ? (await client.getActionRunTrace())
+                .filter((run) => run.actionType === "computation")
+                .map((run) => run.actionId)
+              : [];
+            if (served) await client.setActionRunTraceEnabled(false);
             return {
               ran: ran.length,
               withReadSample: ran.filter((node) =>
                 node.stats?.lastRunReads !== undefined
               ).length,
               markers: scope.__cfReplacedClientMarkers!.count,
+              computations,
             };
           },
-          { args: [runCounts] },
+          { args: [runCounts, servedViews] },
         );
 
         if (servedViews) {
-          // A served page runs nothing of its own, so what the replaced
-          // client reports is that nothing ran and no marker arrived; that
-          // accounting was turned off on it has no run here to show it by.
-          expect(reported).toEqual({ ran: 0, withReadSample: 0, markers: 0 });
+          // A served page's worker computes nothing over this operation, so
+          // the replaced client reports no computation run. It can report
+          // runs of the view's render subscriptions: each runs again when
+          // the server commits a value it reads, and opening a topic in a new
+          // session has the server write that session's `Writable.perSession`
+          // drafts, a commit that can reach the page while the topic is
+          // still shown. Those runs keep no read sample and deliver no
+          // marker, since accounting was turned off on the client.
+          expect(reported.computations).toEqual([]);
+          expect(reported.withReadSample).toBe(0);
+          expect(reported.markers).toBe(0);
         } else {
           expect(reported.ran).toBeGreaterThan(0);
           expect(reported.withReadSample).toBe(0);
@@ -545,13 +563,21 @@ describe("topics-browser-measurement", () => {
       // A browser of its own, in which no other case has opened a topic, so
       // the timed interval runs work in the worker whichever cases ran first.
       // An operation already run in a page can run nothing, and a count of
-      // delivered markers over it would be zero whatever the sampler did. A
-      // served page's worker runs nothing either, so there the operation is
-      // declared to run nothing, and the sample records that it did.
+      // delivered markers over it would be zero whatever the sampler did.
+      //
+      // A served page's worker computes nothing over this operation, so there
+      // the operation is declared to run nothing and the sample records that
+      // it did. The worker's run count still covers the view's render
+      // subscriptions, each of which runs again when the server commits a
+      // value it reads: opening a topic in a new session has the server write
+      // that session's `Writable.perSession` drafts, and that commit can reach
+      // the page while the topic is still shown. So on a served page the
+      // action-run trace, rather than the run count, shows that no run was a
+      // computation.
 
       const fresh = await openFreshSession();
       try {
-        await fresh.page.evaluate(async () => {
+        await fresh.page.evaluate(async (served: boolean) => {
           const scope = globalThis as typeof globalThis & {
             commonfabric?: { rt?: RuntimeClient };
             __cfLeftOnRuns?: { count: number; stop: () => void };
@@ -568,7 +594,8 @@ describe("topics-browser-measurement", () => {
           scope.__cfLeftOnRuns = counter;
           await rt.setTelemetryEnabled(true);
           await rt.setReadStatsEnabled(true);
-        });
+          if (served) await rt.setActionRunTraceEnabled(true);
+        }, { args: [servedViews] });
         const sample = await timeTopicsOperation(fresh.page, {
           label: "open topic and return, timed",
           posture,
@@ -578,19 +605,30 @@ describe("topics-browser-measurement", () => {
           },
           mayRunNothing: servedViews,
         });
-        const delivered = await fresh.page.evaluate(() => {
-          const scope = globalThis as typeof globalThis & {
-            __cfLeftOnRuns?: { count: number; stop: () => void };
-          };
-          scope.__cfLeftOnRuns!.stop();
-          return scope.__cfLeftOnRuns!.count;
-        });
+        const { delivered, computations } = await fresh.page.evaluate(
+          async (served: boolean) => {
+            const scope = globalThis as typeof globalThis & {
+              commonfabric?: { rt?: RuntimeClient };
+              __cfLeftOnRuns?: { count: number; stop: () => void };
+            };
+            scope.__cfLeftOnRuns!.stop();
+            const rt = scope.commonfabric!.rt!;
+            const computations = served
+              ? (await rt.getActionRunTrace())
+                .filter((run) => run.actionType === "computation")
+                .map((run) => run.actionId)
+              : [];
+            if (served) await rt.setActionRunTraceEnabled(false);
+            return { delivered: scope.__cfLeftOnRuns!.count, computations };
+          },
+          { args: [servedViews] },
+        );
 
         checkSample(sample, () => {
           expect(sample.readAccounting).toBe(false);
           expect(sample.accountingTurnedOff).toBe(true);
           expect(sample.mayRunNothing).toBe(servedViews);
-          if (servedViews) expect(sample.workerRuns).toBe(0);
+          if (servedViews) expect(computations).toEqual([]);
           else expect(sample.workerRuns).toBeGreaterThan(0);
           expect(delivered).toBe(0);
           expect(sample.elapsedMs).toBeGreaterThan(0);

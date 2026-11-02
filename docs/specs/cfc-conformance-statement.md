@@ -493,7 +493,37 @@ stated, its recommended refusal of a request the path would still show an
 unkept clause after included; the request is an authenticated host command
 and the record a create-only receipt
 ([`cfc-persisted-declassification.md`](cfc-persisted-declassification.md)
-§3.3).
+§3.3). A release at a link slot lowers the link-carried component stored
+there, and its refusal reads the path without the link's target, whose content
+labels §8.12.8 excludes from that component.
+
+Whether a release at a path holding a write redirect conforms is an open
+question pending a ruling. By default the release follows the redirect, as a
+write follows it, and lowers the document it leads to; it addresses the link
+slot itself only when the request asks for that. Route 2c requires the
+document and path to come from the request "and from nothing a computation
+derived", and a write redirect stored at the path is data a computation wrote,
+so the default lets that data choose the document a release lowers. This
+statement does not claim the default conforms.
+
+A release path holding a `*` segment reaches every stored position the segment
+matches at its depth, the wildcard entry there and each concrete position's
+entries, in one release whose receipt names each position. The pinned route
+removes clauses "from exactly the one path", and does not say whether a
+wildcard entry's path is one a request may name. This implements the proposal
+in [specs#86](https://github.com/commonfabric/specs/pull/86), which the pin
+does not incorporate.
+Against the pin it errs toward under-taint: it lowers clauses at positions no
+release under the pin reaches, since the route's recommended refusal reads a
+wildcard entry and the concrete positions it matches as labeling each other,
+so a release of either alone refuses while the other holds the clause. Every
+clause removed still passes the route's home-space and
+`canReleaseStoredClause` gates. It runs at strict without a default-off dial
+or a separate `SPEC-PENDING` marker; the three slots are occupied. This is a
+nonconforming semantic gap and does not satisfy the correspondence procedure's
+step 4. @danfuzz's authorization to proceed ahead of unresolved specs
+dependencies does not supply a ruling; the gap still needs one and a
+reconciled pin.
 
 **Residuals, with direction.**
 

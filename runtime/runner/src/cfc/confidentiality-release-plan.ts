@@ -8,7 +8,10 @@
  *
  * The route reaches every component at the path — declared, derived (`shape`
  * and `value` entries alike, the existence entry §8.12.8 otherwise freezes),
- * and link-carried — and nothing at any other path.
+ * and link-carried — and nothing at any other path. A `*` segment in the path
+ * stands for any segment, so a path holding one reaches every position it
+ * matches at its depth: the wildcard entry that labels each of them, and the
+ * entries of each one.
  */
 
 import { debugStr } from "@commonfabric/data-model";
@@ -40,6 +43,9 @@ export const CONFIDENTIALITY_RELEASE_WRITER = "cfc-confidentiality-release";
 export interface ConfidentialityReleasePlan {
   /** The stored clauses the release removes, each once, as stored. */
   readonly released: readonly CfcConfClause[];
+
+  /** The positions the release removes a clause at, each once. */
+  readonly paths: readonly (readonly string[])[];
 
   /** The document's payload label-map entries without the released clauses. */
   readonly entries: readonly LabelMapEntry[];
@@ -128,12 +134,30 @@ export const clauseReleasableBy = (
 };
 
 /**
+ * Whether `path`, the path a release names, names the stored position
+ * `position`: the two are of one depth, and each segment of `path` is `*` or
+ * the segment of `position` beside it.
+ */
+const pathNames = (
+  path: readonly string[],
+  position: readonly string[],
+): boolean =>
+  position.length === path.length &&
+  path.every((segment, index) =>
+    segment === "*" || segment === position[index]
+  );
+
+/**
  * Helper for {@link planConfidentialityRelease}, which returns `schema` with
- * the clauses `released` selects taken out of the `ifc` at `path`, reached
- * through `properties` alone. An `ifc` left declaring nothing goes, and an
+ * the clauses `released` selects taken out of the `ifc` at each position
+ * `path` names, reached through the positions `cfcSchemaEntries()` reports: a
+ * named property, a tuple position of `prefixItems`, and, for a `*` segment,
+ * every one of those besides `items` and the `additionalProperties` of a
+ * schema naming no property. An `ifc` left declaring nothing goes, and an
  * `observes` class with no label beside it goes with it. Returns `undefined`
- * where `path` leads through anything else, such as a reference or a
- * branch.
+ * where a concrete segment leads through anything else, such as a reference or
+ * a branch; a `*` segment leaves such a child as it is, for the caller's check
+ * of the result to find.
  */
 const lowerSchemaAt = (
   schema: JSONSchema,
@@ -143,14 +167,52 @@ const lowerSchemaAt = (
   if (!isObjectNotArray(schema) || schema.$ref !== undefined) return undefined;
   if (path.length > 0) {
     const [head, ...rest] = path;
-    const properties = schema.properties;
-    if (!isObjectNotArray(properties) || !Object.hasOwn(properties, head)) {
-      return undefined;
+    const lowerChild = (child: JSONSchema) =>
+      lowerSchemaAt(child, rest, released);
+    const properties = isObjectNotArray(schema.properties)
+      ? schema.properties
+      : undefined;
+    const prefixItems = Array.isArray(schema.prefixItems)
+      ? schema.prefixItems
+      : undefined;
+    if (head === "*") {
+      const lowerOrKeep = (child: JSONSchema) => lowerChild(child) ?? child;
+      const recordOnly = properties === undefined ||
+        Object.keys(properties).length === 0;
+      return {
+        ...schema,
+        ...(properties === undefined ? {} : {
+          properties: Object.fromEntries(
+            Object.entries(properties).map((
+              [key, child],
+            ) => [key, lowerOrKeep(child)]),
+          ),
+        }),
+        ...(prefixItems === undefined
+          ? {}
+          : { prefixItems: prefixItems.map(lowerOrKeep) }),
+        ...(schema.items === undefined
+          ? {}
+          : { items: lowerOrKeep(schema.items) }),
+        ...(!recordOnly || schema.additionalProperties === undefined ? {} : {
+          additionalProperties: lowerOrKeep(schema.additionalProperties),
+        }),
+      };
     }
-    const child = lowerSchemaAt(properties[head], rest, released);
+    if (properties !== undefined && Object.hasOwn(properties, head)) {
+      const child = lowerChild(properties[head]);
+      return child === undefined
+        ? undefined
+        : { ...schema, properties: { ...properties, [head]: child } };
+    }
+    const index = prefixItems === undefined
+      ? -1
+      : prefixItems.findIndex((_, at) => String(at) === head);
+    if (prefixItems === undefined || index < 0) return undefined;
+    const child = lowerChild(prefixItems[index]);
     return child === undefined
       ? undefined
-      : { ...schema, properties: { ...properties, [head]: child } };
+      : { ...schema, prefixItems: prefixItems.with(index, child) };
   }
   const { ifc, ...withoutIfc } = schema;
   if (ifc?.confidentiality === undefined) return schema;
@@ -171,17 +233,21 @@ const lowerSchemaAt = (
  * (§8.12.7), less the home-space check its caller makes. The clauses stored at a path are those of every
  * payload label-map entry at exactly that path, whatever its origin or
  * observation class, together with those the stored schema declares there.
- * Clauses at other paths, an ancestor's that covers this one among them, are
- * not touched, and neither are the label-metadata templates that guard the
- * labels themselves.
+ * A `*` segment of `path` names every position of its depth, so a path
+ * holding one stores the clauses of each position it matches, a wildcard
+ * entry's among them (`pathNames()`). Clauses at other paths, an ancestor's
+ * that covers this one among them and a wildcard entry's that covers a path
+ * naming a concrete segment in its place, are not touched, and neither are
+ * the label-metadata templates that guard the labels themselves.
  *
  * An entry left with no label is dropped; one that keeps integrity stays,
  * with that integrity alone.
  *
  * @throws If `keep` names a clause the path does not store; if `actor` may not
  *   release a clause the plan would remove ({@link clauseReleasableBy}); or if
- *   the stored schema declares a released clause other than through
- *   `properties`, where the position may describe other paths too.
+ *   the stored schema declares a released clause at a position the path names
+ *   through a reference or an `allOf`, `anyOf` or `oneOf` branch, where the
+ *   declaration may describe other paths too.
  */
 export const planConfidentialityRelease = (input: {
   readonly actor: string;
@@ -193,7 +259,7 @@ export const planConfidentialityRelease = (input: {
   const path = canonicalizeLogicalPath(input.path);
   const location = path.length === 0 ? "<root>" : path.join("/");
   const atPath = (entryPath: readonly string[]) =>
-    deepEqual(canonicalizeLogicalPath(entryPath), path);
+    pathNames(path, canonicalizeLogicalPath(entryPath));
   const schemaEntries = input.schema === undefined
     ? []
     : cfcSchemaEntries(input.schema);
@@ -233,10 +299,26 @@ export const planConfidentialityRelease = (input: {
     }
   }
   if (released.length === 0) {
-    return { released, entries: input.entries, schema: input.schema };
+    return {
+      released,
+      paths: [],
+      entries: input.entries,
+      schema: input.schema,
+    };
   }
   const isReleased = (clause: CfcConfClause) =>
     released.some((gone) => sameClause(gone, clause));
+  const paths: (readonly string[])[] = [];
+  for (const entry of [...input.entries, ...schemaEntries]) {
+    const position = canonicalizeLogicalPath(entry.path);
+    if (
+      atPath(position) &&
+      (entry.label.confidentiality ?? []).some(isReleased) &&
+      !paths.some((known) => deepEqual(known, position))
+    ) {
+      paths.push(position);
+    }
+  }
   const lowered = (label: IFCLabel) =>
     nonEmptyLabel(
       label.confidentiality?.filter((clause) => !isReleased(clause)),
@@ -254,12 +336,13 @@ export const planConfidentialityRelease = (input: {
       (entry.label.confidentiality ?? []).some(isReleased)
     )
   ) {
-    return { released, entries, schema: input.schema };
+    return { released, paths, entries, schema: input.schema };
   }
-  // The walk reaches the declaration through `properties` alone, and what it
-  // changed is then held to what it was meant to change: every declaration
-  // the schema makes, with the released clauses gone from this path and
-  // nothing else different.
+  // The walk reaches declarations through `properties`, `prefixItems`,
+  // `items` and `additionalProperties` alone, and what it changed is then
+  // held to what it was meant to change: every declaration the schema makes, with the
+  // released clauses gone from the positions the path names and nothing else
+  // different.
   const schema = lowerSchemaAt(input.schema, path, isReleased);
   const declarations = (
     entries: ReturnType<typeof cfcSchemaEntries>,
@@ -287,7 +370,7 @@ export const planConfidentialityRelease = (input: {
         "release does not rewrite.",
     );
   }
-  return { released, entries, schema };
+  return { released, paths, entries, schema };
 };
 
 /** The document path an owner's release lowers, and the clauses it keeps. */
@@ -301,7 +384,11 @@ export interface CfcConfidentialityReleaseInput {
   /** The document's instance; absent means the space instance. */
   readonly scope?: CellScope;
 
-  /** Payload path whose stored confidentiality is lowered. */
+  /**
+   * Payload path whose stored confidentiality is lowered. A `*` segment
+   * stands for any segment, so the path names every position it matches at
+   * its depth.
+   */
   readonly path: readonly string[];
 
   /**
@@ -318,6 +405,9 @@ export interface CfcConfidentialityRelease {
 
   /** The stored clauses removed, each once, as stored. */
   readonly released: readonly CfcConfClause[];
+
+  /** The positions a clause was removed at, each once. */
+  readonly paths: readonly (readonly string[])[];
 
   /** The canonical clause digest of each of `.released`, in its order. */
   readonly releasedDigests: readonly string[];

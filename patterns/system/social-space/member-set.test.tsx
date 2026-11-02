@@ -7,8 +7,10 @@
  * READ, never joins. Dave, whom the list leaves out, joins anyway. The members
  * are Alice, Bob and Carol, sorted by DID: Alice with two profiles in roster
  * order, Bob with one, and Carol with none, while the two profiles that are no
- * one's and Dave's count toward no one. Once Alice revokes Bob, Bob is no
- * longer a member, though Bob's profile stays on the roster.
+ * one's and Dave's count toward no one. A roster listing every profile twice,
+ * as one joined from two that share their profiles does, gives each member
+ * each of their profiles once. Once Alice revokes Bob, Bob is no longer a
+ * member, though Bob's profile stays on the roster.
  */
 import {
   action,
@@ -190,6 +192,12 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const members = computed(() =>
     memberSet(rosterProfiles(setup.roster), spaceMembers(setup.roster))
   );
+  const fromTwice = computed(() =>
+    memberSet(
+      [...rosterProfiles(setup.roster), ...rosterProfiles(setup.roster)],
+      spaceMembers(setup.roster),
+    )
+  );
   const fromAnyoneOnly = computed(() =>
     memberSet(rosterProfiles(setup.roster), {
       principals: {},
@@ -288,6 +296,22 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
               0,
             ) === 3
         ),
+      },
+      // Each profile listed twice counts once, in the order it is first
+      // listed.
+      {
+        assertion: assert(() => {
+          const own = fromTwice?.find((member) =>
+            member.principal === setup.aliceDid.get()
+          )?.profiles ?? [];
+          return fromTwice?.length === 3 && own.length === 2 &&
+            equals(own[0], workProfile) && equals(own[1], profile) &&
+            fromTwice.reduce(
+                (count, member) =>
+                  count + member.profiles.length,
+                0,
+              ) === 3;
+        }),
       },
       // A list whose only entry is `"*"` names no one, so it has no members,
       // which is an empty list rather than none.

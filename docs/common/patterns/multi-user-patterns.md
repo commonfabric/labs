@@ -403,6 +403,10 @@ const addFan = action(({ fan }: { fan: unknown }) => {
 - It reads nothing but its argument, so it works anywhere: in an action or
   handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
   call on a reactive value is lifted like a call to any other function.
+- To take a DID apart, call `parseDID()`, also exported from `commonfabric`,
+  rather than splitting the string. It returns the DID's `method` and its
+  method-specific `id`, or `undefined` for a value that does not start with
+  `did:`, and it can be called anywhere `isWellFormedDID()` can.
 
 ### The principal a profile or record names
 

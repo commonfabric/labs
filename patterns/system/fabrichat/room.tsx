@@ -11,6 +11,10 @@
  * room in some other social space, which isn't its space's root, lists that
  * space's participants as the root lists them (`wish("#default")`), then those
  * who joined the room itself. The room shows every author alongside them.
+ * Its members are its space's: each principal the space's access list names,
+ * with the participants whose profiles are theirs (`memberSet()`, in
+ * `../social-space/member-set.ts`), read the way every social space reads
+ * them.
  *
  * `FabriChatRoomCore` takes the viewer's profile as an input, so a test can
  * supply a stand-in. The default export, `FabriChatRoom`, resolves the real
@@ -35,6 +39,7 @@ import {
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
+  spaceMembers,
   spaceOf,
   Stream,
   UI,
@@ -57,6 +62,7 @@ import {
   type ParticipantRosterCell,
   rosterProfiles,
 } from "../loom/participants.tsx";
+import { memberSet, type SpaceMember } from "../social-space/member-set.ts";
 import {
   type ShownIn,
   threadExcerpt,
@@ -161,42 +167,14 @@ export const participantsOf = (
     [],
   );
 
-/** A participant, with the principal their profile attests. */
+/** One of a member's profiles, with the member's principal. */
 export interface ParticipantEntry {
-  /** The participant's profile. */
+  /** One of the member's own profiles. */
   profile: ProfileCell;
 
-  /**
-   * The principal whose own profile it is (`profileOwnerOf()`); absent when
-   * it is no one's, or when its label can't be read where the entry is
-   * derived.
-   */
+  /** The member's principal, whose own profile `profile` is. */
   principal?: string;
 }
-
-/**
- * One entry for each of `participants`, in their order, each with the
- * principal its profile attests where that can be read.
- */
-export const participantEntriesOf = (
-  participants: readonly ProfileCell[],
-): ParticipantEntry[] =>
-  participants.map((profile) => ({
-    profile,
-    principal: profileOwnerOf(profile),
-  }));
-
-/** The principals `entries` attest, each once, in the order of `entries`. */
-export const principalsOf = (
-  entries: readonly ParticipantEntry[],
-): string[] =>
-  entries.reduce<string[]>(
-    (found, { principal }) =>
-      principal === undefined || found.includes(principal)
-        ? found
-        : [...found, principal],
-    [],
-  );
 
 /** What joining a room asks: the profile to add to its participants. */
 export interface JoinRoomEvent {
@@ -672,8 +650,11 @@ export interface AddMemberInput {
    */
   manager?: RoomManager;
 
-  /** The principals of those already in the room, whom the picker leaves out. */
-  present: PerUser<string[]>;
+  /**
+   * The room's space's members, whom the picker leaves out; absent while the
+   * viewer can't read its access list.
+   */
+  members?: PerUser<SpaceMember[]>;
 }
 
 /** What the control adding a member to a room provides. */
@@ -715,7 +696,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       requests,
       self,
       manager,
-      present,
+      members,
     },
   ) => {
     const latest = new Writable.perSession<LatestAdd | undefined>(undefined);
@@ -760,17 +741,19 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const outcomeDisplay = computed((): ChatDisplay =>
       shown === "" ? "none" : "block"
     );
-    // Each person the manager lists who isn't in the room, by the first
-    // profile attesting them, per user, as the manager's people are. The
-    // binding's name is the value's cause, the identity of the document that
-    // stores it, so renaming it moves its data.
+    // Each person the manager lists who isn't a member of the room's space, by
+    // the first profile attesting them, per user, as the manager's people are,
+    // and no one while the space's members aren't known. The binding's name is
+    // the value's cause, the identity of the document that stores it, so
+    // renaming it moves its data.
     const candidatesForUser = computed((): PerUser<ProfileCell[]> =>
-      Object.entries(manager?.people ?? {}).flatMap(
-        ([principal, profiles]): ProfileCell[] =>
-          present.includes(principal) || profiles[0] === undefined
+      members === undefined ? [] : Object.entries(manager?.people ?? {})
+        .flatMap(([principal, profiles]): ProfileCell[] =>
+          members.some((member) => member.principal === principal) ||
+            profiles[0] === undefined
             ? []
-            : [profiles[0]],
-      )
+            : [profiles[0]]
+        )
     );
     const candidatesDisplay = computed((): ChatDisplay =>
       candidatesForUser.length === 0 ? "none" : "block"
@@ -1118,16 +1101,34 @@ export interface ChatRoomView {
   roster: ProfileCell[];
 
   /**
-   * One entry for each of `participants`, in their order: the profile, and the
-   * principal whose own profile it is (`profileOwnerOf()`), absent where it is
-   * no one's or its label can't be read where the list is derived. Like
-   * `participants`, it is not proof of access.
+   * The members of the room's space (`memberSet()`): one for each principal
+   * its access list names, sorted by DID, with the level the list grants
+   * them, and those of the profiles `participants` lists ahead of the authors
+   * that are their own, in that order. The list's `"*"` entry adds no member,
+   * and a profile that is no one's, or whose owner the list doesn't name,
+   * counts toward no one. So does a profile the reader can't read, so it is
+   * derived for each reader. Absent while the reader can't read the list.
+   */
+  members?: PerUser<SpaceMember[]>;
+
+  /**
+   * One entry for each of the profiles `members` holds, in the order
+   * `members` holds them, each with its member's principal.
+   *
+   * @deprecated A room's membership is its space's: read `members`, the
+   * member set its space's social-space root offers, which for a room that is
+   * its space's root is the room's own. This will be retired once clients
+   * read that instead.
    */
   participantEntries: PerUser<ParticipantEntry[]>;
 
   /**
-   * The principals `participantEntries` holds, each once, in the order of
-   * `participants`.
+   * The principals `members` holds, in its order.
+   *
+   * @deprecated A room's membership is its space's: read `members`, the
+   * member set its space's social-space root offers, which for a room that is
+   * its space's root is the room's own. This will be retired once clients
+   * read that instead.
    */
   participantPrincipals: PerUser<string[]>;
 
@@ -1539,17 +1540,24 @@ export const FabriChatRoomCore = pattern<
     ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
   );
   const participants = computed(() => participantsOf(listed, facts.authors));
-  // A profile lives in its owner's own space, and attests no one to a reader
-  // that space refuses. That access is the reader's principal's, so the
-  // entries, and the principals taken from them, are derived per user: one
-  // instance for every reader is one their runtimes hold differently. Each
-  // binding's name is its value's cause, the identity of the document that
-  // stores it, so renaming one moves its data.
+  // Only a member may read the space's access list, and a profile lives in
+  // its owner's own space, which may refuse a reader. Both are the reader's
+  // principal's, so the members are derived per user: one instance for every
+  // reader is one their runtimes hold differently. The binding's name is its
+  // value's cause, the identity of the document that stores it, so renaming
+  // it moves its data.
+  const membersForUser = computed((): PerUser<SpaceMember[]> | undefined =>
+    memberSet(listed, spaceMembers(messages))
+  );
+  // The membership `members` holds, in the shapes clients read before it.
+  // Each binding's name is its value's cause, so renaming one moves its data.
   const participantEntriesForUser = computed((): PerUser<ParticipantEntry[]> =>
-    participantEntriesOf(participants)
+    (membersForUser ?? []).flatMap(({ principal, profiles }) =>
+      profiles.map((profile) => ({ profile, principal }))
+    )
   );
   const participantPrincipalsForUser = computed((): PerUser<string[]> =>
-    principalsOf(participantEntriesForUser)
+    (membersForUser ?? []).map(({ principal }) => principal)
   );
   const join = addParticipant({ roster });
   // What the room says about its reader, and every value derived from it, is
@@ -1571,7 +1579,7 @@ export const FabriChatRoomCore = pattern<
     requests: addRequests,
     self,
     manager,
-    present: participantPrincipalsForUser,
+    members: membersForUser,
   });
   // The composers' `disabled`. It defaults to `true`, which is what a
   // composer renders until this has computed: without a default the prop is
@@ -1877,6 +1885,7 @@ export const FabriChatRoomCore = pattern<
     replyShape: CHAT_REPLY_SHAPE,
     participants,
     roster: joined,
+    members: membersForUser,
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
     addParticipant: join,
@@ -2238,6 +2247,7 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
       replyShape: room.replyShape,
       participants: room.participants,
       roster: room.roster,
+      members: room.members,
       participantEntries: room.participantEntries,
       participantPrincipals: room.participantPrincipals,
       addParticipant: room.addParticipant,

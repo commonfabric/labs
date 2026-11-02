@@ -73,6 +73,14 @@ const toAddress = (
   path: [...path],
 });
 
+/**
+ * Whether `path`, relative to a document's root, is the document's CFC
+ * envelope: the reserved `cfc` member that holds its schema hash and label
+ * map.
+ */
+export const isCfcEnvelopePath = (path: readonly string[]): boolean =>
+  path.length === 1 && path[0] === "cfc";
+
 const comparePaths = (
   left: readonly string[],
   right: readonly string[],
@@ -107,6 +115,20 @@ const collectChangedPaths = (
 
   if (before === undefined || after === undefined) {
     pushChangedPath(paths, currentPath, depth);
+    return;
+  }
+
+  // A document's CFC envelope changes as one value. Its readers decode the
+  // envelope whole, and the trigger index wakes every read at, above or below
+  // a changed path, so one change here wakes exactly the readers a change per
+  // leaf would. The label map inside is an array whose entries shift when a
+  // labeled list grows anywhere but its end, so per leaf it would cost one
+  // change per entry, each walking the trigger index again.
+  if (depth === 1 && isCfcEnvelopePath(currentPath.slice(0, 1))) {
+    const equal = isFabricObjectOrArray(before) && isFabricObjectOrArray(after)
+      ? valueEqualByWalk(before, after)
+      : valueEqual(before, after);
+    if (!equal) pushChangedPath(paths, currentPath, depth);
     return;
   }
 

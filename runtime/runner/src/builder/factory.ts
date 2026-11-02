@@ -20,7 +20,7 @@ import {
   fabricPrimitiveClassesByName,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
-import { isWellFormedDID } from "@commonfabric/identity/did";
+import { isWellFormedDID, parseDID } from "@commonfabric/identity/did";
 import {
   all as rowLabelAll,
   any as rowLabelAny,
@@ -297,8 +297,10 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     resultOwnerOf,
     linksOf,
     eventKey,
-    // The DID Core syntax guard the runtime itself decides by.
+    // The DID Core syntax guard the runtime itself decides by, and the one
+    // way the runtime takes a DID apart.
     isWellFormedDID,
+    parseDID,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):

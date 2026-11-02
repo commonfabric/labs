@@ -8,6 +8,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   ensurePieceRunning,
   ensurePieceRunningVerdict,
+  type OwningRootAddress,
 } from "../src/ensure-piece-running.ts";
 import { trustPattern } from "./support/trusted-builder.ts";
 import { getDerivedInternalCell, getMetaCell } from "../src/link-utils.ts";
@@ -287,6 +288,187 @@ describe("ensurePieceRunning", () => {
     }
     const rootId = resultCell.getAsNormalizedFullLink().id;
     expect(order).toEqual([`root:${rootId}`, "start"]);
+  });
+
+  it("declines to start the owning piece until the caller has followed its origin, and asks nothing once it runs", async () => {
+    const pattern: Pattern = {
+      argumentSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+      },
+      resultSchema: {
+        type: "object",
+        properties: { doubled: { type: "number" } },
+      },
+      result: {
+        doubled: { $alias: { partialCause: "doubled", path: [] } },
+      },
+      nodes: [
+        {
+          module: {
+            type: "javascript",
+            implementation: (value: number) => value * 2,
+          },
+          inputs: { $alias: { cell: "argument", path: ["value"] } },
+          outputs: { $alias: { partialCause: "doubled", path: [] } },
+        },
+      ],
+    };
+    const patternIdentity = {
+      identity: "test-ensure-piece-follow-origin",
+      symbol: "default",
+    };
+    runtime.patternManager.associatePatternIdentity(
+      trustPattern(runtime, pattern),
+      patternIdentity,
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "followed origin piece result",
+      pattern.resultSchema,
+      tx,
+    );
+    resultCell.setMetaRaw(
+      "patternSource",
+      "system:system/probe/probe.tsx",
+      rawMetaWriteAuthorization,
+    );
+    const argumentCell = getMetaCell(
+      resultCell,
+      "argument",
+      tx,
+      pattern.argumentSchema,
+    );
+    const doubledCell = getDerivedInternalCell(resultCell, {
+      partialCause: "doubled",
+    }, tx);
+    resultCell.setRaw({ doubled: doubledCell.getAsWriteRedirectLink() });
+    resultCell.setMetaRaw(
+      "patternIdentity",
+      patternIdentity,
+      rawMetaWriteAuthorization,
+    );
+    resultCell.setMetaRaw(
+      "argument",
+      argumentCell.getAsWriteRedirectLink(),
+      rawMetaWriteAuthorization,
+    );
+    setResultCell(argumentCell, resultCell);
+    setResultCell(doubledCell, resultCell);
+    argumentCell.set({ value: 5 });
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    const order: string[] = [];
+    let followed = false;
+    const originFollowed = (root: OwningRootAddress) => {
+      order.push(`asked:${root.id}`);
+      return followed;
+    };
+    const originalStart = runtime.start.bind(runtime);
+    runtime.start = (cell) => {
+      order.push("start");
+      return originalStart(cell);
+    };
+    try {
+      const declined = await ensurePieceRunningVerdict(
+        runtime,
+        argumentCell.getAsNormalizedFullLink(),
+        { originFollowed, propagateErrors: true },
+      );
+      expect(declined.started).toBe(false);
+      expect(declined.reason).toBe("origin-pending");
+      expect(declined.root?.id).toBe(resultCell.getAsNormalizedFullLink().id);
+      expect(runtime.runner.isRunning(resultCell)).toBe(false);
+      followed = true;
+      const started = await ensurePieceRunningVerdict(
+        runtime,
+        argumentCell.getAsNormalizedFullLink(),
+        { originFollowed, propagateErrors: true },
+      );
+      expect(started.started).toBe(true);
+      const again = await ensurePieceRunningVerdict(
+        runtime,
+        argumentCell.getAsNormalizedFullLink(),
+        { originFollowed, propagateErrors: true },
+      );
+      expect(again.started).toBe(true);
+    } finally {
+      runtime.start = originalStart;
+    }
+    const rootId = resultCell.getAsNormalizedFullLink().id;
+    // Asked before each start attempt of the stopped piece; the third ask
+    // finds the piece running and leaves its origin to the watcher.
+    expect(order).toEqual([
+      `asked:${rootId}`,
+      `asked:${rootId}`,
+      "start",
+      "start",
+    ]);
+  });
+
+  it("returns the start-declined verdict with the owning root when the caller declines the start", async () => {
+    const pattern: Pattern = {
+      argumentSchema: {
+        type: "object",
+        properties: { value: { type: "number" } },
+      },
+      resultSchema: { type: "object" },
+      result: {},
+      nodes: [],
+    };
+    const patternIdentity = {
+      identity: "test-ensure-piece-declined-start",
+      symbol: "default",
+    };
+    runtime.patternManager.associatePatternIdentity(
+      trustPattern(runtime, pattern),
+      patternIdentity,
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "declined start piece result",
+      pattern.resultSchema,
+      tx,
+    );
+    const argumentCell = getMetaCell(
+      resultCell,
+      "argument",
+      tx,
+      pattern.argumentSchema,
+    );
+    resultCell.setMetaRaw(
+      "patternIdentity",
+      patternIdentity,
+      rawMetaWriteAuthorization,
+    );
+    resultCell.setMetaRaw(
+      "argument",
+      argumentCell.getAsWriteRedirectLink(),
+      rawMetaWriteAuthorization,
+    );
+    setResultCell(argumentCell, resultCell);
+    argumentCell.set({ value: 5 });
+    await tx.commit().settled;
+    tx = runtime.edit();
+
+    const asked: string[] = [];
+    const verdict = await ensurePieceRunningVerdict(
+      runtime,
+      argumentCell.getAsNormalizedFullLink(),
+      {
+        admitStart: (root) => {
+          asked.push(root.id);
+          return false;
+        },
+      },
+    );
+    const rootId = resultCell.getAsNormalizedFullLink().id;
+    expect(asked).toEqual([rootId]);
+    expect(verdict.started).toBe(false);
+    expect(verdict.reason).toBe("start-declined");
+    expect(verdict.root?.id).toBe(rootId);
+    expect(runtime.runner.isRunning(resultCell)).toBe(false);
   });
 
   it("should be idempotent - calling multiple times is safe", async () => {

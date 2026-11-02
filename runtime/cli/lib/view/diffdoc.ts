@@ -36,7 +36,12 @@ import {
   renderedLinesFor,
 } from "./languages/language.ts";
 import { plainTextLanguage } from "./languages/plain-text/language.ts";
-import { computeLineStarts, lineIndexOf } from "./lines.ts";
+import {
+  codePointColumns,
+  type ColumnOf,
+  computeLineStarts,
+  lineIndexOf,
+} from "./lines.ts";
 import type {
   Definition,
   Document,
@@ -1004,6 +1009,7 @@ export function buildDiffDocument(
   }
   const rawLines = text.split("\n");
   const diffLineStarts = computeLineStarts(text);
+  const diffColumnOf = codePointColumns(text, diffLineStarts);
   const lines: MutableLine[] = rawLines.map((t) => ({ text: t, spans: [] }));
   const structure: StructureNode[] = [];
   const definitions = new Map<string, Definition[]>();
@@ -1103,6 +1109,7 @@ export function buildDiffDocument(
         modelLines: model.lines,
         lines,
         diffLineStarts,
+        diffColumnOf,
         fileDoc,
         fileText,
         fileLineStarts,
@@ -1218,6 +1225,7 @@ interface HunkCtx {
   modelLines: DiffModel["lines"];
   lines: MutableLine[];
   diffLineStarts: number[];
+  diffColumnOf: ColumnOf;
   fileDoc: Document | null;
   fileText: string | null;
   fileLineStarts: number[];
@@ -1514,6 +1522,7 @@ function buildHunk(hunk: DiffHunk, ctx: HunkCtx): StructureNode {
       sourceLineStarts: source.lineStarts,
       hunkEnd: hunk.endLine,
       diffLineStarts,
+      diffColumnOf: ctx.diffColumnOf,
       rawLines,
       definitions: ctx.definitions,
     });

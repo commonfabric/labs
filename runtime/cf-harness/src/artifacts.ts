@@ -29,6 +29,14 @@ import {
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
 import type { ToolOutputId } from "./contracts/tool-result.ts";
 import type { HarnessCapabilitySnapshot } from "./diagnostics.ts";
+import type { HarnessEmptyReplyDiagnostic } from "./model/empty-reply.ts";
+
+/** Empty-reply evidence linked to its invocation’s turn and attempt sequence. */
+export interface HarnessEmptyReplyArtifact {
+  modelTurn: number;
+  modelAttemptSequence?: number;
+  diagnostic: HarnessEmptyReplyDiagnostic;
+}
 
 const sanitizeArtifactName = (input: string): string =>
   input.replace(/[^A-Za-z0-9._-]+/g, "_");
@@ -153,6 +161,10 @@ export interface HarnessArtifactStore {
   persistRunReport(
     report: HarnessRunReport,
   ): Promise<string>;
+
+  /** Writes raw empty-reply evidence beside the run's other artifacts. */
+  persistEmptyReply?(artifact: HarnessEmptyReplyArtifact): Promise<string>;
+
   persistRunManifest?(manifest: HarnessRunManifest): Promise<string>;
   persistSkillRegistry?(
     registry: HarnessSkillRegistry,
@@ -342,6 +354,19 @@ export class FileSystemHarnessArtifactStore implements HarnessArtifactStore {
     await ensureDir(this.runRoot);
     const path = join(this.runRoot, "run-manifest.json");
     await writeJsonFile(path, manifest);
+    return path;
+  }
+
+  /** @inheritDoc */
+  async persistEmptyReply(
+    artifact: HarnessEmptyReplyArtifact,
+  ): Promise<string> {
+    await ensureDir(this.runRoot);
+    const path = join(
+      this.runRoot,
+      `model-turn-${artifact.modelTurn}-${crypto.randomUUID()}-empty-reply.json`,
+    );
+    await writeJsonFile(path, artifact);
     return path;
   }
 

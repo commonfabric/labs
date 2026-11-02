@@ -12,12 +12,7 @@ import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
-import {
-  createSession,
-  type Identity,
-  legacySpaceDid,
-  Session,
-} from "@commonfabric/identity";
+import { createSession, legacySpaceDid, Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
@@ -104,6 +99,7 @@ import {
   redactCaveatSourcesForDisplay,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
+  type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
@@ -158,6 +154,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  type LifecycleClientConfig,
   ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
@@ -336,7 +333,9 @@ export function parseCellCfcLabelUpdate(
 
 /**
  * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
+ * reader — the doc the selected path lands in once its links are followed, or,
+ * with `lastNode: "top"`, the doc holding a link stored at the path, without
+ * the labels of where that link leads.
  *
  * Each command needs that doc for its own reason. An INSPECTION read must not
  * answer "none" for a value carrying a label behind a link the path crosses
@@ -347,8 +346,12 @@ export function parseCellCfcLabelUpdate(
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -1735,13 +1738,24 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
     .serverExecution === true;
 }
 
-async function lifecycleClient(
-  config: SpaceConfig,
-  deps: PieceOperationDependencies,
-): Promise<{ apiUrl: URL; identity: Identity }> {
+/**
+ * The client a served verb is sent with: it sends the verb on `pieces`'
+ * memory session for its space, so the verb reaches the process serving that
+ * space and runs as the identity the connection was opened as.
+ */
+function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
+  const storageManager = (pieces.runtime as Runtime | undefined)
+    ?.storageManager;
   return {
-    apiUrl: new URL(config.apiUrl),
-    identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
+    session: (space, verb, body) => {
+      if (storageManager?.runPatternLifecycle === undefined) {
+        throw new Error(
+          "This connection's storage manager has no memory sessions to send " +
+            `the \`${verb}\` verb on`,
+        );
+      }
+      return storageManager.runPatternLifecycle(space, verb, body);
+    },
   };
 }
 
@@ -1775,7 +1789,6 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1791,7 +1804,7 @@ async function createWithReceipt(
           "newPiece.create.instantiate",
           () =>
             (deps.instantiatePieceOnServer ?? instantiatePieceOnServer)(
-              client,
+              lifecycleClient(pieces),
               {
                 ...request,
                 space: pieces.getSpace(),
@@ -1806,27 +1819,27 @@ async function createWithReceipt(
         }
         return served;
       }
+      const actingUser =
+        (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did();
       const created = await timeCliPhase(
         "newPiece.create.instantiate",
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
             source: { program },
-            actingUser: client.identity.did(),
+            actingUser,
           }),
         trace,
       );
       return await timeCliPhase(
         "newPiece.create.register",
-        () =>
-          completeServedRegistration(pieces, created, client.identity.did()),
+        () => completeServedRegistration(pieces, created, actingUser),
         trace,
       );
     } catch (error) {
       if (
         error instanceof ServedLifecycleRefusal ||
-        (error instanceof ServedLifecycleError && error.status >= 400 &&
-          error.status < 500 && error.status !== 408)
+        (error instanceof ServedLifecycleError && error.refused)
       ) {
         throw error;
       }
@@ -2169,7 +2182,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, deps), {
+    setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,
@@ -5060,16 +5073,30 @@ const confidentialityToKeep = (
  * With `lowerConfidentiality`, the update is instead an owner's release
  * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
  * path that `input.confidentiality` does not name is removed from every label
- * there, which rewrites the stored metadata. The input then holds
- * `confidentiality` alone, naming only clauses the path already stores.
+ * there, which rewrites the stored metadata. A `*` segment of the path names
+ * every stored position it matches at its depth, the wildcard entry there
+ * among them. The input then holds `confidentiality` alone, naming only
+ * clauses the path already stores. A write redirect at the path is followed
+ * to the labels where it leads, unless `linkSlot`, which lowers the labels of
+ * the link stored at the path itself.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
   addressedPath: (string | number)[],
   input: unknown,
-  options: { input?: boolean; lowerConfidentiality?: boolean } = {},
+  options: {
+    input?: boolean;
+    lowerConfidentiality?: boolean;
+    linkSlot?: boolean;
+  } = {},
   deps: PieceOperationDependencies = {},
 ): Promise<CfcLabelView | null> {
+  if (options.linkSlot === true && options.lowerConfidentiality !== true) {
+    throw new Error(
+      "`--link-slot` applies to a lowering alone: pass it with " +
+        "`--dangerously-allow-lowering-confidentiality`.",
+    );
+  }
   const update = parseCellCfcLabelUpdate(input);
   const keep = options.lowerConfidentiality === true
     ? confidentialityToKeep(update)
@@ -5097,19 +5124,34 @@ export async function setCellCfcLabel(
   // the update silently REPLACED a value-class entry with a class-less one,
   // and the command returned null while having written a label.
   const currentView = cfcLabelViewForCommand(targetCell, path);
-  const value = targetCell.getRaw();
+  // A lowering's `*` segment names the stored positions it matches rather
+  // than a value, so what has to be present is the value it sits in.
+  const wildcard = keep === undefined ? -1 : path.indexOf("*");
+  const value = wildcard < 0
+    ? targetCell.getRaw()
+    : rootCell.key(...path.slice(0, wildcard)).getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);
   }
 
   if (keep !== undefined) {
-    const release = await releaseCellConfidentiality(targetCell, keep);
+    const release = await releaseCellConfidentiality(
+      targetCell,
+      keep,
+      options.linkSlot === true ? { linkSlot: true } : {},
+    );
     if (release.receipt !== undefined) {
       await pieces.synced();
       noteWroteTo(release.receipt.space);
     }
-    return cfcLabelViewForCommand(targetCell, path);
+    // A lowering of a link slot reports the slot it lowered, not the labels
+    // where the link leads.
+    return cfcLabelViewForCommand(
+      targetCell,
+      path,
+      options.linkSlot === true ? { lastNode: "top" } : {},
+    );
   }
 
   const { observes: requestedObserves, ...label } = update;

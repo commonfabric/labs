@@ -22,7 +22,6 @@ type ServerMembers = Pick<
   | "idle"
   | "flushSessions"
   | "noteExecutorCommit"
-  | "noteLeaseReacquired"
   | "checkServedAclChange"
   | "commitServedAclChange"
   | "commitDelegatedAppend"

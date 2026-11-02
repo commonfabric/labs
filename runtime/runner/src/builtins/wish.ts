@@ -14,6 +14,7 @@ import { favoriteListSchema } from "@commonfabric/home-schemas";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { extractHashtags } from "../hashtags.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import {
   isObjectNotArray,
@@ -444,11 +445,11 @@ function findHomeRootCell(ctx: WishContext): Cell<any> | undefined {
  * and otherwise the space cell's empty `defaultPattern` slot itself. A wish
  * creates no root. A read through the empty slot finds nothing, and a write
  * through it is refused unless the root exists by then
- * (`SpaceRootMissingError`); on a client runtime, when a handler's write there
- * is refused and the refusal escapes the handler, the root is brought up and
- * the handler runs again (`bringUpHomeRootForRefusedWrite`). A headless wish
- * hands out nothing over an empty slot, and throws `NoHomeRootError`, so it
- * resolves to nothing.
+ * (`SpaceRootMissingError`); when a handler's write there is refused and the
+ * refusal escapes the handler, the handler runs again once the root exists,
+ * which a client runtime creates and a serving runtime waits for
+ * (`bringUpHomeRootForRefusedWrite`). A headless wish hands out nothing over
+ * an empty slot, and throws `NoHomeRootError`, so it resolves to nothing.
  */
 function getHomeRootCell(ctx: WishContext): Cell<any> {
   const found = findHomeRootCell(ctx);
@@ -1635,8 +1636,6 @@ function resolveSpaceTarget(
     "#mentionable": ["defaultPattern", "backlinksIndex", "mentionable"],
     "#summaryIndex": ["defaultPattern", "summaryIndex"],
     "#knowledgeGraph": ["defaultPattern", "knowledgeGraph"],
-
-    "#suggestions": ["defaultPattern", "suggestionHistory"],
   };
 
   const registryTarget = parsed.key === "#pieceRegistry";
@@ -1854,9 +1853,7 @@ function createSharedHashtagResolver(
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
+      const errorMessage = describeFailure(error);
       stateCell.set({
         result: undefined,
         candidates: [],
@@ -2106,10 +2103,6 @@ export const wishSidecarDiagnostics = {
 
 function errorUI(message: string): VNode {
   return h("span", { style: "color: red" }, `⚠️ ${message}`);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function cellLinkUI(cell: Cell<unknown>): VNode {
@@ -2981,7 +2974,7 @@ export function wish(
           return;
         }
         if (disposition === "retry") continue;
-        await commitPatternErrorUI(resultCell, errorMessage(error));
+        await commitPatternErrorUI(resultCell, describeFailure(error));
         return;
       }
     }
@@ -3277,7 +3270,7 @@ export function wish(
         if (!cancelled && slot.resultCell) {
           commitPatternErrorUI(
             slot.resultCell,
-            errorMessage(error),
+            describeFailure(error),
           );
         }
       });

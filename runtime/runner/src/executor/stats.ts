@@ -74,7 +74,10 @@ export type ServingLoopStats = {
   /** Demanded-structure loads that THREW (serving-loop.md §1: a value
    * the server cannot serve is counted AND surfaced here, not just
    * logged). Counted per attempt; the loop retries the root on each
-   * subsequent input-driven demand cycle until the load lands. */
+   * subsequent input-driven demand cycle until the load lands. Also
+   * counts a piece-start commit that failed after its start resolved;
+   * the piece's demanded documents then park until a commit touches
+   * the piece (serving-loop.md §3d). */
   structureLoadFailures: number;
 
   /** Demanded-structure loads REFUSED because the piece's stored setup is
@@ -88,6 +91,11 @@ export type ServingLoopStats = {
    * commit landing while the refusing pass ran re-arms the root in place of
    * the park. A refusal on a commit's retry parks nothing. */
   structureLoadRefused: number;
+
+  /** Piece origins the serving loop followed before the tenure's first start
+   * of the piece (serving-loop.md §3e), counted per piece per tenure,
+   * whatever the follow found. */
+  originFollows: number;
 
   /** Demanded-structure ensure attempts that returned FALSE — the root
    * carried no loadable pattern identity yet, typically the creation
@@ -556,6 +564,26 @@ export type ServingLoopStats = {
      */
     arrivalHeldDeferrals: number;
 
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * piece's start waited on the loop's own follow of its origin
+     * (serving-loop.md §3e). Counted per deferral: an event that arrives
+     * while the follow compiles a new release defers once per scan the
+     * follow outlasts. A count that grows while `originFollows` does not
+     * names a follow that never completes.
+     */
+    originPendingDeferrals: number;
+
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * event's piece names a pattern whose program closure the space does not
+     * hold yet, within the grace the loop gives the closure to arrive
+     * (events.md §5). Counted per deferral. A count that grows while
+     * `processed` does not names a closure that is not arriving; past the
+     * grace the event becomes a `program-unavailable` delivery failure.
+     */
+    programWaitDeferrals: number;
+
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
      * preflight parked on an in-flight replica load its closure reads
@@ -631,6 +659,15 @@ export type ServingLoopStats = {
     dropped: number;
   };
   memo: { hits: number; misses: number; inflight: number };
+
+  /** The crossings this process sent to another space's owner through the
+   * deployment's route (`serving-loop-owner-routing.md`), by kind, each
+   * counted once the owner answered: the outbox's event appends, the
+   * wave's foreign batches, and its access-list changes into other
+   * spaces. Zero with the route off, and zero on a process every
+   * crossing of which stays home, so a deployment reads here whether
+   * routing is carrying its crossings. */
+  routed: { appends: number; batches: number; aclChanges: number };
   outbox: {
     queued: number;
     completed: number;
@@ -645,7 +682,13 @@ export type ServingLoopStats = {
     /** Completions that wrote nothing because their request was superseded. */
     superseded: number;
   };
-  lease: { held: number; lost: number };
+  /**
+   * `lost` counts renewals that found the row naming another holder or
+   * gone; `lapsesRecovered` counts renewals that found the holder's own row
+   * expired with no successor, as a renewal driver that synchronous work
+   * held past the TTL does, and extended it (serving-loop.md §2).
+   */
+  lease: { held: number; lost: number; lapsesRecovered: number };
 
   /** OW45 arm-B server-ensure stage 1 (design PR #6209 §10): the
    * SpaceServer's space-root ensure — one lease-guarded owed step per
@@ -723,6 +766,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   derivedCommitsBySpaceDropped: 0,
   structureLoadFailures: 0,
   structureLoadRefused: 0,
+  originFollows: 0,
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
@@ -781,6 +825,8 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     handlerNotRunDeferrals: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
+    originPendingDeferrals: 0,
+    programWaitDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,
@@ -802,6 +848,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     dropped: 0,
   },
   memo: { hits: 0, misses: 0, inflight: 0 },
+  routed: { appends: 0, batches: 0, aclChanges: 0 },
   outbox: {
     queued: 0,
     completed: 0,
@@ -809,7 +856,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     budgetDeferrals: 0,
     superseded: 0,
   },
-  lease: { held: 0, lost: 0 },
+  lease: { held: 0, lost: 0, lapsesRecovered: 0 },
   rootEnsure: {
     runs: 0,
     created: 0,

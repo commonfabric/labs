@@ -21,12 +21,19 @@ interface ChatRoomOutput {
   /** Those who joined the room itself, in the order they joined. */
   roster: Cell<ChatProfile>[];
 
-  /** Each participant's profile, with the principal it attests. */
+  /** The members of the room's space, with their own profiles. */
+  members?: PerUser<{
+    principal: string;
+    level: "OWNER" | "WRITE" | "READ";
+    profiles: Cell<ChatProfile>[];
+  }[]>;
+
+  /** Deprecated: each of `members`' profiles, with its member's principal. */
   participantEntries: PerUser<
     { profile: Cell<ChatProfile>; principal?: string }[]
   >;
 
-  /** The principals `participantEntries` holds, once each. */
+  /** Deprecated: the principals `members` holds. */
   participantPrincipals: PerUser<string[]>;
 
   /** Adds a profile to those who joined the room, once. */
@@ -154,8 +161,10 @@ it.
 ## Membership
 
 The room space's access list is the room's membership, and a member is any
-principal it admits. Every action on a room appends an event in the room's
-space, which needs WRITE. A member with only READ can read the messages, which
+principal it admits. The room lists as [`members`](#facts) each principal the
+list names, read the way every social space reads its members (see
+[social spaces](README.md#social-spaces)). Every action on a room appends an
+event in the room's space, which needs WRITE. A member with only READ can read the messages, which
 needs no event, but can't send or react.
 
 A room keeps no membership of its own. Who is in its space, and with what
@@ -171,7 +180,7 @@ an existing social space reads them from that space's root
 The two can disagree:
 a member who has never joined has no entry, and an entry whose principal has
 lost access stays until it's cleaned up. A consumer MUST NOT treat an entry as
-proof of access.
+proof of access, and reads `members` to learn who the members are.
 
 A direct room's space is meant to keep its two members. Nothing in the room adds
 anyone, but the room can't stop its space's OWNER from granting someone else
@@ -220,23 +229,33 @@ space.
   who is in each of its user's rooms (see
   [`ChatIndexEntry`](ChatIndexEntry.md#fields)). Like `participants`, it is a
   claim, not proof of access.
-- **`participantEntries`** pairs each of `participants` with the principal it
-  stands for: one entry per participant, in the order of `participants`,
-  holding its `profile` and, as `principal`, the principal whose own profile
-  it is (`profileOwnerOf()`). An entry has no `principal` when its profile is
-  no one's, as one whose `name` links outside its own documents is, or when
-  its label can't be read where the list is
-  derived, as when the profile's space refuses the reader, so two readers can
-  read different principals for the same participant. It is derived for each
-  reader and is best effort, not an access list, and like `participants` it is
-  a claim, not proof of access. A client uses it to name each participant and
-  to tell which of them is the reader, whose entry holds the reader's own
-  principal.
-- **`participantPrincipals`** is derivable from `participantEntries`: each
-  `principal` the entries hold, once, in the order of `participants`. Like the
-  entries, it is a best-effort list of who is already in the room, not an
-  access list. A client uses it to leave the people already in the room out of
-  its own add control.
+- **`members`** are the room space's members: one for each principal the
+  space's access list names, sorted by DID, holding the `principal`, the
+  `level` the list grants it, and, as `profiles`, those of the participants'
+  profiles, as [membership](#membership) lists them and without the authors,
+  that are that principal's own (`profileOwnerOf()`), in that order. The
+  list's `"*"` entry names no one, so it adds no member, and a profile that is
+  no one's, as one whose `name` links outside its own documents is, or whose
+  owner the list doesn't name, counts toward no member. A member who has never joined has no profiles. A profile
+  whose label can't be read where the list is derived, as when the profile's
+  space refuses the reader, counts toward no one either, so two readers can
+  read different profiles for the same member. `members` is absent while the
+  reader can't read the access list: before it arrives, and to a reader the
+  list doesn't admit. A client uses it to name each member, by their first
+  profile, to tell which of them is the reader, whose `principal` is the
+  reader's own, and to leave the members out of its own add control. For a
+  room that is its space's root, `members` is the member set the space offers;
+  a room in an existing social space derives the same set from that space's
+  access list and the participants it lists.
+- **`participantEntries`** and **`participantPrincipals`** are deprecated, and
+  will be retired once clients read `members` instead: a room's membership is
+  its space's, and a client asks the space, through the member set its root
+  offers, which for a room in a space of its own is the room's `members`. They
+  hold the same members in the shapes clients read before `members`.
+  `participantEntries` holds one entry for each profile `members` holds, in
+  the order `members` holds them, each with its member's `principal`, and
+  `participantPrincipals` each member's principal, in the order of `members`.
+  A member who has never joined has a principal and no entry.
 - **`messages`** is a [`ChatMessageList`](ChatMessageList.md): how many messages
   the room holds, the span of their times, `latest`, the newest messages of
   the main conversation, and `threads`, each thread's reply count and latest
@@ -253,11 +272,11 @@ space.
   profile links to find the reader among `participants`; a message can retain
   a different profile the reader sent under. Its `principal` is the
   principal whose own profile that is (`profileOwnerOf()`), absent where it is
-  no one's or its label can't be read, as for `participantEntries`. Its
+  no one's or its label can't be read, as for `members`. Its
   `role` is the reader's access to the room's space, as the space's access
   list grants it (`OWNER`, `WRITE`, `READ`, or `none`), absent while that
-  isn't known. Like `participantEntries`, the profile and the principal are
-  claims, not proof of access.
+  isn't known. The profile and the principal are claims, not proof of
+  access.
 - **`messageRights`** says what the reader may do to each of the room's
   messages: one entry per message, oldest first, holding the `message`, as the
   link to its own cell that every field of the room naming it holds, and
@@ -307,12 +326,13 @@ and the difference matters to a client:
   and passing the link around, to another component or another person, passes
   the room.
 - **`PerUser`**: one instance per user, which follows them across sessions.
-  That is `participantEntries` and `participantPrincipals`, which each user
-  derives under their own access, and `addRequests`, `titleRequests` and
-  `threadTitleRequests`, the outcomes of the reader's own adds and retitles.
-  Read access is a property of the principal, so every session of one user
-  derives the same entries and principals. Passing the room's link to someone
-  else passes none of these: they read their own.
+  That is `members`, and the deprecated `participantEntries` and
+  `participantPrincipals` derived from it, which each user derives under their
+  own access, and `addRequests`, `titleRequests` and `threadTitleRequests`,
+  the outcomes of the reader's own adds and retitles. Read access is a
+  property of the principal, so every session of one user derives the same
+  members. Passing the room's link to someone else passes none of these: they
+  read their own.
 - **`PerSession`**: one instance per session. That is `canSend`, `canAdd`,
   `viewer`, and `messageRights`, which each session derives from the reader's
   own access and profile, and the room's `#profile` wish, which finds that

@@ -17,7 +17,6 @@ import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
   DemandChangeReason,
-  ServedAclChange,
   ServedAclChangeVerdict,
   Server,
   SessionDemand,
@@ -28,9 +27,9 @@ import {
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
-import type { SpaceAccessChange } from "../builder/types.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
@@ -60,15 +59,6 @@ export type PortLike = {
     listener: (event: MessageEvent) => void,
   ): void;
   start?(): void;
-};
-
-/**
- * A served access-list change as it crosses the port: the function that
- * applies it replaced by the list of changes it applies, from which the other
- * side rebuilds the function.
- */
-export type ServedAclChangeData = Omit<ServedAclChange, "change"> & {
-  readonly changes: readonly SpaceAccessChange[];
 };
 
 /** The entry `Server.commitDelegatedAppend()` takes. */
@@ -129,6 +119,13 @@ export type ServingWorkerInit = {
 
   /** The serving runtimes' experimental options. */
   readonly experimental: ExperimentalOptions | undefined;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`); absent, the
+   * host crosses through the process's own server.
+   */
+  readonly route: string | undefined;
 };
 
 /** What the worker asks of the thread that holds the memory server. */
@@ -229,11 +226,15 @@ export type PlaneNotices = {
   "worker.ready": null;
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
-  "server.noteLeaseReacquired": {
-    notice: { space: string; principal: string };
-  };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
+
+  /**
+   * The `events` block of the counters alone, posted ahead of each wave
+   * commit. It updates the copy the last `host.stats` left, which the next
+   * `host.stats` replaces whole.
+   */
+  "host.eventStats": { events: ServingLoopStats["events"] };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";
@@ -330,8 +331,8 @@ const faultOf = (error: unknown): PortFault => {
  * The error a fault stands for on this side. An untimed `ProtocolError`
  * keeps its class: the outbox classifies delegated-append refusals by it.
  * Lifecycle failures instead retain their timing envelope and reconstruct
- * the underlying error as its cause. Lifecycle routes classify those
- * failures by name and code, which the envelope also keeps.
+ * the underlying error as its cause. A lifecycle verb's caller classifies
+ * those failures by name and code, which the envelope also keeps.
  */
 const errorOf = (fault: PortFault): Error => {
   const error = fault.name === "ProtocolError"

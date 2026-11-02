@@ -42,9 +42,11 @@ import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
+  acquireExecutionLease,
   EXECUTION_LEASE_TTL_MS,
   ExecutionLeaseCycle,
   executionLeaseHolder,
+  releaseExecutionLease,
 } from "@commonfabric/memory/v2/execution-lease";
 import { selectSchedulerBasisRows } from "@commonfabric/memory/v2/scheduler-basis";
 import {
@@ -2363,11 +2365,16 @@ describe("stage D seal-into-wave", () => {
     expect((await tx.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
 
-    // The lease expires (a pause outlived the TTL) and the same process
-    // reacquires: a NEW tenure. The renewal failure is the
-    // stop-committing signal; the in-flight wave aborts (§2's MUST).
+    // The lease expires (a pause outlived the TTL), a rival takes the
+    // space meanwhile and leaves it, and the same process reacquires: a
+    // NEW tenure. The renewal failure is the stop-committing signal; the
+    // in-flight wave aborts (§2's MUST).
     now += EXECUTION_LEASE_TTL_MS + 1;
-    expect(cycle.renew()).toBe(false);
+    const rival = executionLeaseHolder(`service:${space}`, "other-process");
+    expect(acquireExecutionLease(engine, { space, holder: rival, now }))
+      .toBe(true);
+    releaseExecutionLease(engine, { space, holder: rival });
+    expect(cycle.renew()).toBe("lost");
     expect(cycle.acquire()).toBe(true);
 
     const seqBefore = Engine.serverSeq(engine);
