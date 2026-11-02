@@ -634,7 +634,7 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
 
 Deno.test("benchmark: a future refresh marker cannot suppress discovery", async () => {
   const directory = await Deno.makeTempDir({ prefix: "benchmark-future-" });
-  const file = `${directory}/fabric-wall-benchmark-history.json`;
+  const file = `${directory}/fabric-wall-benchmark-history`;
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
@@ -3032,7 +3032,7 @@ Deno.test("/bench runtime graphs ignore two values at each end when twenty are s
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
   try {
     const store = new BenchmarkHistoryStore(
-      `${directory}/fabric-wall-benchmark-history.json`,
+      `${directory}/fabric-wall-benchmark-history`,
     );
     await store.load();
     const cached = values.map((value, index) =>
@@ -3298,7 +3298,7 @@ Deno.test("benchmark: a fresh marker then an unreachable direct read grays with 
   // run list directly for itself — and when that direct read is unreachable, it grays
   // with the reason rather than throwing.
   const directory = await Deno.makeTempDir({ prefix: "benchmark-fresh-offline-" });
-  const file = `${directory}/fabric-wall-benchmark-history.json`;
+  const file = `${directory}/fabric-wall-benchmark-history`;
   const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
   const originalFetch = globalThis.fetch;
   Deno.env.set("DASHBOARD_CACHE_DIR", directory);
