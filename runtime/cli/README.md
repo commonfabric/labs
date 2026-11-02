@@ -684,7 +684,8 @@ column per character. The ANSI color mode applies color escape sequences to the
 text that follows them instead of showing them. It also advances each tab to the
 next column that is a multiple of 4, measured in the columns drawn. Other
 control characters still appear as control pictures. The hidden mode drops every
-escape sequence and shows each run of other control characters as one `…`.
+escape sequence that starts with `ESC [`, and shows each run of other control
+characters, including the escape characters of other sequences, as one `…`.
 Editing always uses the first mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI

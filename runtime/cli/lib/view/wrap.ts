@@ -530,11 +530,22 @@ function wordBoundary(
     }
     boundary = Math.min(i, hardEnd);
   }
-  return boundary >= 0 ? boundary : hardEnd;
+  const end = boundary >= 0 ? boundary : hardEnd;
+  // A row does not end partway through the cells of one character, such as an
+  // expanded tab, unless that character starts the row.
+  let start = end;
+  while (
+    start > offset && (characterClasses[start] & CONTINUATION_CELL) !== 0
+  ) {
+    start--;
+  }
+  return start > offset ? start : end;
 }
 
 const PREFIX_CHARACTER = 1;
 const BREAK_WHITESPACE = 2;
+/** A cell drawn for the same character as the cell before it. */
+const CONTINUATION_CELL = 4;
 const WHITE_SPACE_CHARACTER = /^\p{White_Space}$/u;
 const ASCII_PUNCTUATION =
   /^[\u0021-\u002f\u003a-\u0040\u005b-\u0060\u007b-\u007e]$/u;
@@ -564,6 +575,7 @@ function classifyDisplayCells(
     ) {
       if (!isPrefixCharacter(codePoint)) classes[d] &= ~PREFIX_CHARACTER;
       if (isBreakWhitespaceCharacter(codePoint)) classes[d] |= BREAK_WHITESPACE;
+      if (d > displayCol) classes[d] |= CONTINUATION_CELL;
     }
     sourceCol++;
   }
@@ -656,9 +668,12 @@ function wordWrapDiffersFromHard(
   prepareRow();
   let displayCol = 0;
   let differs = false;
+  let previousStart = -1;
   visitDisplayCellSources(text, mode, (start, end) => {
     while (displayCol >= hardEnd) {
-      if (continues && sawBreak && !lastWasBreak) {
+      // Word wrapping moves a row's end back to the start of a character whose
+      // cells the row's hard end would split.
+      if (continues && (sawBreak && !lastWasBreak || start === previousStart)) {
         differs = true;
         return false;
       }
@@ -676,6 +691,7 @@ function wordWrapDiffersFromHard(
         (classifySourceRange(text, start, end) & BREAK_WHITESPACE) !== 0;
       sawBreak ||= lastWasBreak;
     }
+    previousStart = start;
     displayCol++;
     return true;
   });

@@ -330,6 +330,43 @@ Deno.test("word wrap plan: a break after a tab follows all of its cells", () => 
   );
 });
 
+Deno.test("word wrap plan: a row ends before a tab its end would split", () => {
+  // The tab draws cells 5 to 7; a row of six source cells would end after
+  // cell 5, so it ends before the tab instead.
+  const doc = parseDocument("abcde\tfghij");
+  const plan = buildWrapPlan(
+    doc.lines,
+    "ansi",
+    7,
+    new Map(),
+    "word",
+  );
+
+  assertEquals(
+    Array.from(plan.wordRows?.[0]?.offsets ?? []),
+    [0, 5, 8],
+  );
+});
+
+Deno.test("word wrap plan: a tab wider than its row still wraps forward", () => {
+  const doc = parseDocument("ab\tc");
+  const plan = buildWrapPlan(
+    doc.lines,
+    "ansi",
+    2,
+    new Map(),
+    "word",
+  );
+
+  assertEquals(
+    Array.from(
+      { length: plan.rowCount },
+      (_, row) => wrappedRowAt(plan, row)?.offset,
+    ),
+    [0, 1, 2, 3],
+  );
+});
+
 Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {
   const doc = parseDocument("\x1b[31m# alpha beta");
   const plan = buildWrapPlan(
