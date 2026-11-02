@@ -387,6 +387,22 @@ session-scoped client act. The wiring:
   identity is not. Anticipated: per-user server-generated keys with
   user-delegated authority graduate attribution to acting-key
   signatures, envelope model unchanged.
+- **Read identity**: the service identity is the envelope principal of
+  derived WRITES, and it is NOT who a served run reads as. A served run
+  READS under a USER's identity (RULED 2026-08-19;
+  verification-coverage.md OW31): the
+  serving runtime's loopback sessions carry the delegated READ binding
+  (`actingAs: "space-owner"`), the memory server makes their READ-class
+  decisions as the space's ACL owner, and the service identity itself
+  reads a space's ACL only (protocol.md §2b's "read a foreign doc" row).
+  So a served run never has LESS access than a member of the space it
+  reads. What it lacks is
+  INSTANCES, which is scope and not access: scoped reads and writes
+  resolve against the run's acting principal — the event's actor, or the
+  demander (scopes.md §5) — so a run reaches no other user's or session's
+  instance, and a serving runtime refuses every user- or session-scoped
+  read of a space other than the one it serves (protocol.md §2's
+  fail-closed interim).
 - **Multi-tenancy**: one executor host serves many spaces. Per-space
   budgets (CPU time per wave, outstanding LLM calls, egress rate) are part
   of the executor contract from day one — a runaway pattern (an LLM
