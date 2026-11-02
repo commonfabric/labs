@@ -167,6 +167,7 @@ describe("compile-cache-withdrawn-writeback", () => {
     });
     await serving.sealsCommitted!();
     await serving.patternManager.flushCompileCacheWrites();
+    await serving.patternManager.compileCacheWriteOutcomesSettled();
     return serving.patternManager.getArtifactEntryRef(compiled)!;
   };
 
@@ -180,6 +181,7 @@ describe("compile-cache-withdrawn-writeback", () => {
     );
     await serving.patternManager.flushCompileCacheWrites();
     await serving.sealsCommitted!();
+    await serving.patternManager.compileCacheWriteOutcomesSettled();
   };
 
   /** The head of the entry source document in the home space's store. */
