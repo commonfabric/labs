@@ -1447,7 +1447,7 @@ it.
 | `COMMON_FABRIC_URL` | production | override the public-site URL (e.g. the `www` host if the apex redirects). |
 | `DASHBOARD_REPO` | CI tiles, github users | which repo the CI tiles read. Its owner is the organization the **github users** tile reads (default `commonfabric/labs`). |
 | `GITHUB_WEBHOOK_RELAY` | GitHub tiles | the `host:port` of the GitHub webhook relay's subscriber listener (default `github-webhooks.stage.commonfabric.dev:8081`). An empty value turns the relay off, and the dashboard then reads GitHub on its intervals alone. See [Following the GitHub webhook relay](#following-the-github-webhook-relay). |
-| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. The first time a process takes the lock on the CI run index, a run-list file, the GitHub rate-limit ledger, or the test-records history, it removes the temporary files beside that file that interrupted writes left behind. |
+| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. The first time a process takes the lock on the CI run index, a run-list file, the GitHub rate-limit ledger, the test-records history, or the runtime benchmark history, it removes the temporary files beside that file that interrupted writes left behind. |
 | `SIGNOZ_UI_URL` | prod errors, dau | browser-facing SigNoz URL for the explorer pop-outs: **prod errors** links to `/logs/logs-explorer` and **dau** to `/traces-explorer` under it. Defaults to `SIGNOZ_URL` when that is a public `https://` URL. An in-cluster `http://` URL, which a browser cannot reach, leaves both tiles with no pop-out at all, so set this whenever the server reaches SigNoz over one. |
 | `PROD_SERVICE` | prod errors, dau | the `service.name` production reports under in SigNoz, which both trace-reading tiles scope to. Defaults to `toolshed-production`. A name outside `[A-Za-z0-9._-]` is ignored, since it lands inside a query expression. |
 | `DAU_EXCLUDE_DIDS` | dau | comma-separated identity DIDs to leave out of the count — the server's own identity, `MEMORY_SERVICE_DIDS`, background services. Until it is set the count is an upper bound. See [dau](#dau) below. |
@@ -1807,8 +1807,9 @@ Notes:
     When the cache directory also holds a `fabric-wall-benchmark-history.json`
     file, the dashboard reads it one run at a time, and the next save moves its
     runs into the directory and deletes it. Loads and saves delete temporary
-    files that an interrupted write left in the directory, and loads also
-    delete those left beside the JSON file.
+    files that an interrupted write left in the directory. The first time a
+    process takes the store's lock, it also deletes those left beside the JSON
+    file.
     Successful reads and definitive empty results are retained for 60 days. A
     failed read remains uncached so a later scheduled collection can establish
     whether the artifact exists. Dashboard processes that share the cache

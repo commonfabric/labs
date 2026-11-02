@@ -16,6 +16,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 type Environment = (name: string) => string | undefined;
 
+const encoder = new TextEncoder();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function dashboardCacheDirectory(
@@ -156,21 +157,10 @@ export class CacheFile<T = never> {
    * The caller holds the lock.
    */
   async write(text: string, value?: T): Promise<void> {
-    const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
-    try {
-      await Deno.writeTextFile(temporary, text);
-      const version = versionOf(await Deno.stat(temporary));
-      await Deno.rename(temporary, this.#path);
-      this.#version = version;
-      this.#value = value;
-    } catch (error) {
-      try {
-        await Deno.remove(temporary);
-      } catch {
-        // Ignore cleanup when no temporary file remains.
-      }
-      throw error;
-    }
+    this.#version = versionOf(
+      await replaceFile(this.#path, encoder.encode(text)),
+    );
+    this.#value = value;
   }
 
   /** Helper for `isUnchanged()` and `read()`. */
@@ -211,6 +201,32 @@ export class CacheFile<T = never> {
     this.#version = version;
     this.#value = decoded;
     return decoded;
+  }
+}
+
+/**
+ * Replaces the file at `path` with `bytes` through a temporary file, as the
+ * top of this module describes, and returns what `Deno.stat()` says of the new
+ * file. The caller holds the lock that every process writing the file holds.
+ * The temporary file is removed when the write fails.
+ */
+export async function replaceFile(
+  path: string,
+  bytes: Uint8Array,
+): Promise<Deno.FileInfo> {
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  try {
+    await Deno.writeFile(temporary, bytes, { createNew: true });
+    const info = await Deno.stat(temporary);
+    await Deno.rename(temporary, path);
+    return info;
+  } catch (error) {
+    try {
+      await Deno.remove(temporary);
+    } catch {
+      // Ignore cleanup when no temporary file remains.
+    }
+    throw error;
   }
 }
 

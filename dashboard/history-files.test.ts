@@ -6,6 +6,7 @@ import {
   CacheFile,
   dashboardCacheDirectory,
   dashboardCacheFile,
+  replaceFile,
 } from "./history-files.ts";
 
 function environment(
@@ -86,28 +87,28 @@ Deno.test("dashboard cache files recognize Windows temp variables", () => {
 });
 
 describe("history-files", () => {
+  let directory: string;
+  let path: string;
+
+  beforeEach(async () => {
+    directory = await Deno.makeTempDir({ prefix: "history-files-" });
+    path = join(directory, "cache.json");
+  });
+
+  afterEach(async () => {
+    await Deno.remove(directory, { recursive: true });
+  });
+
+  /** The names in the directory, sorted. */
+  async function names(): Promise<string[]> {
+    const found: string[] = [];
+    for await (const entry of Deno.readDir(directory)) found.push(entry.name);
+    return found.sort();
+  }
+
+  const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
   describe("CacheFile", () => {
-    let directory: string;
-    let path: string;
-
-    beforeEach(async () => {
-      directory = await Deno.makeTempDir({ prefix: "history-files-" });
-      path = join(directory, "cache.json");
-    });
-
-    afterEach(async () => {
-      await Deno.remove(directory, { recursive: true });
-    });
-
-    /** The names in the directory, sorted. */
-    async function names(): Promise<string[]> {
-      const found: string[] = [];
-      for await (const entry of Deno.readDir(directory)) found.push(entry.name);
-      return found.sort();
-    }
-
-    const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
-
     describe("instance members", () => {
       describe("locked()", () => {
         it("returns what its body returns, once leftover temporary files are removed", async () => {
@@ -292,6 +293,20 @@ describe("history-files", () => {
           expect(await names()).toEqual(["cache.json"]);
         });
       });
+    });
+  });
+
+  describe("replaceFile()", () => {
+    it("replaces the file with exactly the bytes given, leaving no temporary file", async () => {
+      await Deno.writeTextFile(path, "old");
+      const bytes = new Uint8Array([0, 0xff, 0xfe, 0x0a, 0x80]);
+
+      const info = await replaceFile(path, bytes);
+
+      expect(await Deno.readFile(path)).toEqual(bytes);
+      expect(info.size).toBe(bytes.length);
+      expect(info.ino).toBe((await Deno.stat(path)).ino);
+      expect(await names()).toEqual(["cache.json"]);
     });
   });
 });
