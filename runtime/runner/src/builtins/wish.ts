@@ -14,6 +14,7 @@ import { favoriteListSchema } from "@commonfabric/home-schemas";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { extractHashtags } from "../hashtags.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import {
   isObjectNotArray,
@@ -1852,9 +1853,7 @@ function createSharedHashtagResolver(
       });
     } catch (error) {
       if (error instanceof DocumentPending) return;
-      const errorMessage = error instanceof Error
-        ? error.message
-        : String(error);
+      const errorMessage = describeFailure(error);
       stateCell.set({
         result: undefined,
         candidates: [],
@@ -2104,10 +2103,6 @@ export const wishSidecarDiagnostics = {
 
 function errorUI(message: string): VNode {
   return h("span", { style: "color: red" }, `⚠️ ${message}`);
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function cellLinkUI(cell: Cell<unknown>): VNode {
@@ -2979,7 +2974,7 @@ export function wish(
           return;
         }
         if (disposition === "retry") continue;
-        await commitPatternErrorUI(resultCell, errorMessage(error));
+        await commitPatternErrorUI(resultCell, describeFailure(error));
         return;
       }
     }
@@ -3275,7 +3270,7 @@ export function wish(
         if (!cancelled && slot.resultCell) {
           commitPatternErrorUI(
             slot.resultCell,
-            errorMessage(error),
+            describeFailure(error),
           );
         }
       });

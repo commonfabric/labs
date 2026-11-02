@@ -64,6 +64,7 @@ import type {
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
@@ -170,20 +171,8 @@ export class ReplicaLoadFailureError extends Error {
     readonly failure: ReplicaLoadFailure,
     cause: unknown,
   ) {
-    super(loadFailureMessage(cause), { cause });
+    super(describeFailure(cause), { cause });
   }
-}
-
-/**
- * Returns the message a load failure's cause carries. A pull reports its
- * failure as a plain result object rather than an `Error`, so the message is
- * read off any object that has one; a cause without one is stringified.
- */
-function loadFailureMessage(cause: unknown): string {
-  return typeof cause === "object" && cause !== null && "message" in cause &&
-      typeof cause.message === "string"
-    ? cause.message
-    : String(cause);
 }
 
 export const toReplicaLoadFailureError = (

@@ -12,11 +12,6 @@
 import { readOnlyArguments } from "./only-arguments.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
 
-/** What an error says, for a reader who has no stack to read. */
-export function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** What a caller who gave a command line this cannot read is told. */
 export const USAGE = "usage: deno task cfcheck [--only <pattern>]...";
 

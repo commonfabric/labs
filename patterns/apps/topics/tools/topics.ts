@@ -16,6 +16,7 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -473,7 +474,7 @@ async function invoke<T>(
   // names the phase it reached; only one that never dispatched cannot have
   // committed, so any other failure, named or not, names this id to settle it.
   const unsettled = (error: unknown): Error => {
-    const message = messageOf(error);
+    const message = describeFailure(error);
     const phases = [...message.matchAll(/^invocation: \S+ phase: (\S+)$/gm)];
     return phases.at(-1)?.[1] === "initial_sync"
       ? new Error(message, { cause: error })
@@ -523,11 +524,6 @@ async function invoke<T>(
   });
 }
 
-/** What `error` says. */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Runs the Topic at `cell` to completion once, after the write `written` to
  * it. The board lists each Topic with a comment count and a last activity
@@ -544,7 +540,7 @@ async function step(
     await cf(deps, board, ["piece", "step", "--cell", cell]);
   } catch (error) {
     throw new Error(
-      `${messageOf(error)}\nThe write was made, but the board will not ` +
+      `${describeFailure(error)}\nThe write was made, but the board will not ` +
         `show it until ${cell} runs: run the same command with ` +
         `\`--invocation ${written.invocation}\` to run it without writing ` +
         "again.",
@@ -1234,7 +1230,7 @@ export async function main(
 
 /** Reports `error` as what the command failed with, giving the exit status. */
 function failure(error: unknown): number {
-  console.error(messageOf(error));
+  console.error(describeFailure(error));
   return 1;
 }
 
