@@ -14,7 +14,10 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { dirname, fromFileUrl, join, resolve } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+import { resolve } from "@std/path/resolve";
 import { debugStr } from "@commonfabric/data-model";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";

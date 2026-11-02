@@ -9,11 +9,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { join } from "@std/path";
+import { writeSourcePackage } from "../lib/piece.ts";
 import {
   undeclaredDataFiles,
   undeclaredDataFileWarning,
-  writeSourcePackage,
-} from "../lib/piece.ts";
+} from "../lib/undeclared-data-files.ts";
 
 const READS_CITIES = 'import { dataFile } from "commonfabric";\n' +
   'export default () => dataFile("/data/cities.json");\n';

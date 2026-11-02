@@ -20,7 +20,7 @@ import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
-import { readWatermarkSeq } from "../../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
 import { ArrivalLog, highestAuthoredSeq } from "./serving-waits.ts";
 

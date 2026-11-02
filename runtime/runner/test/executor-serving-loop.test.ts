@@ -42,11 +42,8 @@ import {
   settleServing,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import {
-  readWatermarkSeq,
-  watermarkCell,
-  watermarkDocLink,
-} from "../src/executor/watermark.ts";
+import { watermarkCell, watermarkDocLink } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

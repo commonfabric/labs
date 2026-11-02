@@ -19,7 +19,7 @@ import { defer } from "@commonfabric/async/defer";
 import { type Cell, sendEvent } from "../src/cell.ts";
 import { ServingWorker } from "../src/executor/serving-worker-host.ts";
 import type { ServingLoopStats } from "../src/executor/stats.ts";
-import { readWatermarkSeq } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";

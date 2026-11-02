@@ -1,11 +1,9 @@
-import {
-  dirname,
-  isAbsolute,
-  join,
-  normalize,
-  relative,
-  SEPARATOR,
-} from "@std/path";
+import { SEPARATOR } from "@std/path/constants";
+import { dirname } from "@std/path/dirname";
+import { isAbsolute } from "@std/path/is-absolute";
+import { join } from "@std/path/join";
+import { normalize } from "@std/path/normalize";
+import { relative } from "@std/path/relative";
 
 import { decodeDataFile } from "@commonfabric/text/utf8";
 import { isDeno } from "@commonfabric/platform/env";

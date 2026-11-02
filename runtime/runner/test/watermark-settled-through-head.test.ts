@@ -14,12 +14,8 @@ import {
   type ServingMemoryServer,
   startServingMemoryServer,
 } from "../src/executor/serving-memory-server.deno.ts";
-import {
-  readWatermarkSeq,
-  SERVER_EXECUTION_WATERMARK_DOC_ID,
-  waitForSettled,
-  waitForSettledThroughHead,
-} from "../src/executor/watermark.ts";
+import { SERVER_EXECUTION_WATERMARK_DOC_ID, waitForSettled, waitForSettledThroughHead } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 

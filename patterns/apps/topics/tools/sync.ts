@@ -10,7 +10,8 @@
  * nothing to the space.
  */
 
-import { dirname, join } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { join } from "@std/path/join";
 import {
   createSession,
   Identity,
@@ -27,12 +28,12 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { SpaceSession } from "@commonfabric/memory/v2/client";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
-import { settingsForDeployedClient } from "@commonfabric/runner";
+import { settingsForDeployedClient } from "@commonfabric/runner/deployment-meta";
 import {
   RemoteSessionFactory,
   type SessionFactory,
   storageAddressForHost,
-} from "@commonfabric/runner/storage/v2";
+} from "@commonfabric/runner/storage/v2-remote-session";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 

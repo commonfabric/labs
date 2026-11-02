@@ -179,7 +179,8 @@ import {
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
-import { readWatermarkSeq, watermarkDocLink } from "./watermark.ts";
+import { watermarkDocLink } from "./watermark.ts";
+import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
   bumpDerivedCommits,
   type ServingLoopStats,

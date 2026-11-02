@@ -35,7 +35,8 @@ import {
   STORE_REFRESH_ATTEMPTS,
 } from "../src/executor/space-server.ts";
 import type { WaveCommitSink } from "../src/executor/wave.ts";
-import { readWatermarkSeq, waitForSettled } from "../src/executor/watermark.ts";
+import { waitForSettled } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
