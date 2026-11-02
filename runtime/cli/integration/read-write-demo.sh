@@ -226,10 +226,11 @@ say "Those are two cells, not two views of one. A read goes to the result"
 say "cell; --input sends it to the arguments cell instead, which holds only"
 say "what the pattern declared as input — here, links to target and zones."
 run cf cell get -s "$SPACE" --piece thermostat --input
-say "So a derived field has no position in the arguments cell at all, and"
-say "asking for one there names the keys that are:"
+say "So a derived field has no position in the arguments cell at all. The"
+say "input schema decides which positions it has, so asking there for one"
+say "the schema does not declare is refused by name:"
 refused "a derived field lives on the result cell, not on the arguments cell" \
-  "Available keys: target, zones" \
+  "current pattern's input schema" \
   cf cell get -s "$SPACE" --piece thermostat targetFahrenheit --input
 
 act "3 · A read is a query: name the shape you want"

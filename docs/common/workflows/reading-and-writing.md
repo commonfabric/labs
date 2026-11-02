@@ -155,9 +155,11 @@ it whole is a short answer — `target` and `zones`, each a link.
 cf cell get -s demo --piece thermostat --input
 ```
 
-And a derived field has no position there at all. The refusal names the keys
-that do exist, which is the fastest way to find out which cell you are
-addressing.
+And a derived field has no position there at all. The pattern's input schema
+decides which positions the arguments cell has, so the refusal says the path is
+not in that schema: the read went to the arguments cell. Its advice to declare
+the field with `cf piece setsrc` is for a field that belongs among the inputs;
+a derived field is read from the result cell, without `--input`.
 
 ```bash
 cf cell get -s demo --piece thermostat targetFahrenheit --input
