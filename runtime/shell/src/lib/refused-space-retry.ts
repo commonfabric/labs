@@ -1,17 +1,26 @@
 import type { DID } from "@commonfabric/identity";
 
+/** A runtime's notice of a refused space, as `RuntimeClient` emits it. */
+interface SpaceAccessLostNotice {
+  /** The refused space. */
+  space: DID;
+
+  /** Present when the space is deleted, which no retry can undo. */
+  deleted?: true;
+}
+
 /** What a `RefusedSpaceRetry` uses of a `RuntimeClient`. */
 interface RefusingRuntime {
   /** Adds a listener for the runtime's notices of a refused space. */
   on(
     event: "spaceaccesslost",
-    listener: (notice: { space: DID }) => void,
+    listener: (notice: SpaceAccessLostNotice) => void,
   ): unknown;
 
   /** Removes a listener `on()` added. */
   off(
     event: "spaceaccesslost",
-    listener: (notice: { space: DID }) => void,
+    listener: (notice: SpaceAccessLostNotice) => void,
   ): unknown;
 
   /** Asks the memory server once more for `space`. */
@@ -29,16 +38,27 @@ interface RefusingRuntime {
  * a space stays among them once readmitted, since nothing reports a
  * readmission to the host. Retrying one that is no longer refused is a no-op
  * the runtime decides without the server, and a retry asked for while one of
- * the same space is in flight shares it.
+ * the same space is in flight shares it. A space a notice marked deleted is
+ * never asked for again, since no retry can admit anyone to it.
  */
 export class RefusedSpaceRetry {
   readonly #runtime: RefusingRuntime;
 
-  /** Every space the runtime has reported refused. */
+  /** Every space the runtime has reported refused, and not deleted. */
   readonly #refused = new Set<DID>();
 
-  readonly #onSpaceAccessLost = ({ space }: { space: DID }): void => {
-    this.#refused.add(space);
+  /** Every space the runtime has reported deleted. */
+  readonly #deleted = new Set<DID>();
+
+  readonly #onSpaceAccessLost = (
+    { space, deleted }: SpaceAccessLostNotice,
+  ): void => {
+    if (deleted === true) {
+      this.#refused.delete(space);
+      this.#deleted.add(space);
+    } else if (!this.#deleted.has(space)) {
+      this.#refused.add(space);
+    }
   };
 
   /**
@@ -55,15 +75,17 @@ export class RefusedSpaceRetry {
     this.#runtime.off("spaceaccesslost", this.#onSpaceAccessLost);
   }
 
-  /** Retries `space`, if the runtime has reported it refused. */
+  /**
+   * Retries `space`, if the runtime has reported it refused and not deleted.
+   */
   retry(space: DID | undefined): void {
     if (space !== undefined && this.#refused.has(space)) this.#retry(space);
   }
 
   /**
-   * Retries every space the runtime has reported refused. A view can show a
-   * space other than its own through a link, and which ones it shows is known
-   * only to the renderer, so this asks for each of them.
+   * Retries every space the runtime has reported refused and not deleted. A
+   * view can show a space other than its own through a link, and which ones it
+   * shows is known only to the renderer, so this asks for each of them.
    */
   retryAll(): void {
     for (const space of this.#refused) this.#retry(space);
