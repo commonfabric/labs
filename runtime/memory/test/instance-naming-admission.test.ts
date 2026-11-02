@@ -13,9 +13,15 @@ import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 
+import {
+  connect as connectClient,
+  loopback,
+  type Transport,
+} from "../v2/client.ts";
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
 import {
+  decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   type HelloOkMessage,
@@ -225,6 +231,33 @@ describe("instance-naming-admission", () => {
           flags: { instanceNameMark: true },
         });
       } finally {
+        await server.close();
+      }
+    });
+
+    it("is left out of the client's own `hello`, and read from `hello.ok`", async () => {
+      // An older routed host refuses a `hello` carrying a flag it does not
+      // know, so a server's capability travels only in `hello.ok`.
+
+      const server = createServer("client-hello", "enforce");
+      const inner = loopback(server);
+      const sent: unknown[] = [];
+      const transport: Transport = Object.assign(Object.create(inner), {
+        send: (payload: string) => {
+          sent.push(decodeMemoryBoundary(payload));
+          return inner.send(payload);
+        },
+      });
+      const client = await connectClient({ transport });
+      try {
+        const hello = sent.find((frame) =>
+          (frame as { type?: unknown }).type === "hello"
+        ) as { flags: Record<string, unknown> } | undefined;
+        expect(hello?.flags).toBeDefined();
+        expect(hello!.flags).not.toHaveProperty("instanceNameMark");
+        expect(client.serverFlags?.instanceNameMark).toBe(true);
+      } finally {
+        await client.close();
         await server.close();
       }
     });

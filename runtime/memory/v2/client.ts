@@ -2199,8 +2199,8 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle`, `servedRequests` and `spaceInvites` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
+    // `patternLifecycle`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client reads them from `hello.ok` and
     // never offers them. Other flags an endpoint does not know are ignored
     // there, since the routed flag allowlists were removed (infra DEVIATIONS
     // row 41).
@@ -2211,6 +2211,7 @@ export class Client {
       patternLifecycle: _lifecycleServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      instanceNameMark: _instanceNameMarkServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(

@@ -413,13 +413,14 @@ defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
 
-`instanceNameMark` advertises that the server
-records the instance-naming mark of a space and enforces INV-16: a marked
-space admits only sessions, and commits, that declare `instanceNames: true`;
-the first commit from such a session marks the space; and the server admits a
-declaring session to an unmarked space only while its own posture names
-instances. It is build-inherent, defaults to `false` when absent, and only the
-server advertises it. A client whose runtime names instances REQUIRES it: an
+`instanceNameMark` advertises that the server records the instance-naming mark
+of a space and enforces INV-16: a marked space admits only sessions, and
+commits, that declare `instanceNames: true`; the first commit from such a
+session marks the space; and the server admits a declaring session to an
+unmarked space only while its own posture names instances. It is
+build-inherent, defaults to `false` when absent, and only the server advertises
+it: a client's `hello` leaves it out, as it leaves out `sessionReportV1`. A
+client whose runtime names instances REQUIRES it: an
 older server would admit its commits and mark nothing, leaving positional
 runtimes free to bind the parents it wrote to other documents. Such a client
 fails the connection permanently against a server that does not advertise it,
