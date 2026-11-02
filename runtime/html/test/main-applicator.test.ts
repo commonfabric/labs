@@ -13,6 +13,7 @@ import { assertExists } from "@std/assert";
 import { expect } from "@std/expect";
 
 import { $conn, type CellRef } from "@commonfabric/runtime-client";
+import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { DomApplicator } from "../src/main/applicator.ts";
@@ -933,6 +934,46 @@ describe("DomApplicator", () => {
           const parent = applicator.getNode(1) as any;
           expect(parent.childNodes.length).toBe(0);
           expect(applicator.getNode(2)).toBe(undefined);
+        });
+
+        it("records every node's removal under one timing key", () => {
+          const logger = getLogger("vdom-applicator");
+          const before = logger.getTimeStats("remove-node")?.count ?? 0;
+          const applicator = new DomApplicator({
+            document: createMockDocument(),
+            runtimeClient: createMockRuntimeClient(),
+            onEvent: () => {},
+          });
+          const children = [2, 3, 4];
+          applicator.applyBatch({
+            batchId: 1,
+            ops: [
+              { op: "create-element", nodeId: 1, tagName: "div" },
+              ...children.flatMap((nodeId) => [
+                { op: "create-element", nodeId, tagName: "span" } as const,
+                {
+                  op: "insert-child",
+                  parentId: 1,
+                  childId: nodeId,
+                  beforeId: null,
+                } as const,
+              ]),
+            ],
+          });
+
+          applicator.applyBatch({
+            batchId: 2,
+            ops: children.map((nodeId) => ({ op: "remove-node", nodeId })),
+          });
+
+          expect(logger.getTimeStats("remove-node")?.count).toBe(
+            before + children.length,
+          );
+          expect(
+            Object.keys(logger.timeStats).filter((key) =>
+              key.startsWith("remove-node/")
+            ),
+          ).toEqual([]);
         });
 
         it("removes listeners from removed descendants", () => {
