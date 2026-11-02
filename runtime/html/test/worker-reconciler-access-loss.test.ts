@@ -508,6 +508,152 @@ describe("worker reconciler access loss", () => {
     }
   });
 
+  describe("a deleted space", () => {
+    /**
+     * Mounts a root, or a root showing a panel of a space of its own, where
+     * the access provider reports the space of `where` refused, and deleted
+     * while `deleted()` says so. Returns the ops rendered, what the retry
+     * control asked for, and a function telling the reconciler the space's
+     * access changed.
+     */
+    const mountRefused = async (
+      where: "root" | "panel",
+      deleted: () => boolean,
+    ) => {
+      const owner = await Identity.fromPassphrase(`render deleted ${where}`);
+      const foreign = await Identity.fromPassphrase(
+        `render deleted ${where} foreign`,
+      );
+      const refused = where === "root" ? owner.did() : foreign.did();
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: StorageManager.emulate({ as: owner }),
+      });
+      const retried: string[] = [];
+      const ops: VDomOp[] = [];
+      const listeners = new Set<() => void>();
+      const reconciler = new WorkerReconciler({
+        onOps: (batch) => {
+          for (const op of batch) ops.push(op);
+        },
+        spaceAccess: {
+          error: (space) =>
+            space === refused ? new Error("Access revoked") : undefined,
+          deleted: (space) => space === refused && deleted(),
+          subscribe: (_space, onChange) => {
+            listeners.add(onChange);
+            return () => listeners.delete(onChange);
+          },
+          retries: {
+            retry: (space) => retried.push(space),
+            state: () => ({ retrying: false, settled: 0 }),
+          },
+        },
+      });
+      const panel = runtime.getCell(foreign.did(), "deleted panel", undefined);
+      const root = runtime.getCell(owner.did(), "deleted root", undefined);
+      await runtime.editWithRetry((tx) =>
+        panel.withTx(tx).set({
+          $UI: { type: "vnode", name: "article", props: {}, children: ["p"] },
+        })
+      );
+      await runtime.editWithRetry((tx) =>
+        root.withTx(tx).set({
+          $UI: {
+            type: "vnode",
+            name: "main",
+            props: {},
+            children: where === "root" ? ["x"] : [panel],
+          },
+        })
+      );
+      reconciler.mount(root.asSchema(rendererVDOMSchema));
+      await runtime.idle();
+      await runtime.storageManager.synced();
+      await runtime.idle();
+      reconciler.flush();
+      return {
+        ops,
+        retried,
+        changed: () => {
+          for (const listener of [...listeners]) listener();
+          reconciler.flush();
+        },
+        async dispose() {
+          reconciler.unmount();
+          await runtime.dispose();
+        },
+      };
+    };
+
+    /**
+     * Whether `ops`, applied in order, leave a placeholder reading "Deleted",
+     * marked `data-space-deleted`, standing, and whether they leave a retry
+     * control standing.
+     */
+    const deletedShown = (ops: readonly VDomOp[]) => {
+      const removed = new Set(
+        ops.flatMap((op) => op.op === "remove-node" ? [op.nodeId] : []),
+      );
+      const live = (nodeId: number) => !removed.has(nodeId);
+      return {
+        deleted:
+          ops.some((op) =>
+            op.op === "set-prop" && op.key === "data-space-deleted" &&
+            live(op.nodeId)
+          ) &&
+          ops.some((op) =>
+            op.op === "create-text" && op.text === "Deleted" &&
+            live(op.nodeId)
+          ),
+        retryControl: ops.some((op) =>
+          op.op === "set-prop" && op.key === "data-space-access-retry" &&
+          live(op.nodeId)
+        ),
+      };
+    };
+
+    it('shows a refused root of a deleted space as "Deleted", with no retry control', async () => {
+      const mounted = await mountRefused("root", () => true);
+      try {
+        expect(deletedShown(mounted.ops)).toEqual({
+          deleted: true,
+          retryControl: false,
+        });
+        expect(
+          mounted.ops.some((op) =>
+            op.op === "create-text" && op.text === "Access unavailable"
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.dispose();
+      }
+    });
+
+    for (const where of ["root", "panel"] as const) {
+      it(`replaces a refused ${where}'s retry control with "Deleted" once the space turns out to be deleted`, async () => {
+        let deleted = false;
+        const mounted = await mountRefused(where, () => deleted);
+        try {
+          expect(deletedShown(mounted.ops)).toEqual({
+            deleted: false,
+            retryControl: true,
+          });
+
+          deleted = true;
+          mounted.changed();
+          expect(deletedShown(mounted.ops)).toEqual({
+            deleted: true,
+            retryControl: false,
+          });
+          expect(mounted.retried).toEqual([]);
+        } finally {
+          await mounted.dispose();
+        }
+      });
+    }
+  });
+
   it("offers no retry control when the access provider cannot retry", async () => {
     const owner = await Identity.fromPassphrase("render retry unsupported");
     const runtime = new Runtime({
