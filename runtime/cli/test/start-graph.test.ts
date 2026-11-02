@@ -17,17 +17,27 @@ import { buildCfLauncherCommand } from "../launcher.ts";
 
 const REPO_ROOT = fromFileUrl(new URL("../../../", import.meta.url));
 
+/** A module as `deno info --json` reports it. */
 interface InfoModule {
+  /** What the module is, as the graph names it. */
   specifier: string;
+
+  /** What the module imports. A type-only import has no `code` entry. */
   dependencies?: {
     isDynamic?: boolean;
     code?: { specifier?: string };
   }[];
 }
 
+/** What `deno info --json` reports of a graph. */
 interface Info {
+  /** The entry the graph was built from. */
   roots: string[];
+
+  /** Every module on the graph, deferred imports included. */
   modules: InfoModule[];
+
+  /** Specifiers that stand for another, such as a version range. */
   redirects: Record<string, string>;
 }
 

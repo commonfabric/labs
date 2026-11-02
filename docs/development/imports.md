@@ -99,8 +99,12 @@ them shows up in a type check or a test:
 - It reads a whole package through a barrel. `@std/path` reads the module of
   every function it has, and `@std/path/join` reads that one's.
 
-`cf` and the Topics client run with that option, and `runtime/cli/test/start-graph.test.ts`
-holds what their commands read to a limit.
+`cf` and the Topics client run with that option. The
+`cf-import-list/types-are-import-type` lint rule reports the inline spelling of
+the first case. It reads syntax alone, so it does not see the other spelling,
+a value import used only as a type; `runtime/cli/test/start-graph.test.ts` holds
+what those commands read to a limit, which is what notices either one widening
+them.
 
 ## `cf-imports/no-inline-module-import`
 

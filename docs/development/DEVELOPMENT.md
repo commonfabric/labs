@@ -89,7 +89,7 @@ about one aspect of the runtime, are indexed in
   A file uses whichever reads better; neither is preferred. A statement whose
   every name is a type is written `import type`, which the
   `cf-import-list/types-are-import-type` lint rule holds everywhere but
-  `patterns/`: Deno reads what a value statement names before it starts a
+  `patterns/` and `fixtures/` directories: Deno reads what a value statement names before it starts a
   program, even where TypeScript erases the statement
   ([`imports.md`](imports.md#what-starting-a-program-reads)). What neither shape
   allows is a second statement of the same kind — two value imports from one

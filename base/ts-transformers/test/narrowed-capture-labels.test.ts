@@ -215,7 +215,7 @@ export const writers: CfcExchangeRulesDeclaration = exchangeRules([
   releaseToWriters,
 ]);`,
         "/test.tsx": `${IMPORTS}
-import type { PolicyOf } from "commonfabric/cfc";
+import { type PolicyOf } from "commonfabric/cfc";
 import { readers, rules, writers } from "./rules.ts";
 ${declarations}
 export default pattern<{ ${declaration} }>(

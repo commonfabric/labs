@@ -23,14 +23,21 @@ import { reservesStdoutForCommandOutput } from "../lib/json-output.ts";
  * loads nothing. `main-command.serial.test.ts` holds the two equal.
  */
 interface TopLevelCommand {
+  /** The word that addresses it. */
   readonly name: string;
+
+  /** Its short description, as the root's help prints it. */
   readonly description: string;
+
+  /** Its positionals, as the root's help prints them, for one that takes any. */
   readonly arguments?: string;
 
+  /** Loads the command itself. */
   // deno-lint-ignore no-explicit-any
   readonly load: () => Promise<Command<any>>;
 }
 
+/** Every top-level command, in the order the root's help lists them. */
 export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
   {
     name: "acl",

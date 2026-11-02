@@ -47,16 +47,16 @@ import {
   type SpaceConfig,
 } from "./piece.ts";
 
-/** What {@link readSourcePin} resolves its address and connection through. */
 /**
  * What resolves a program from disk, which reaches the compiler. Only the
- * retarget and repair stages use it, and the other `piece` commands import this
+ * survey and repair stages use it, and every other `piece` command imports this
  * module.
  */
 const bulkLocal = () =>
   // deno-lint-ignore cf-imports/no-inline-module-import
   import("@commonfabric/piece/ops/bulk-local");
 
+/** What {@link readSourcePin} resolves its address and connection through. */
 export type SourcePinDependencies = PieceResolutionDeps;
 
 /**

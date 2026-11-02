@@ -191,6 +191,7 @@ export const rules = exchangeRules([exchangeRule({
 })]);`,
         "/main.tsx":
           `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string }
 interface Dict<U> { [key: string]: U }
@@ -241,7 +242,7 @@ export const rules = exchangeRules([exchangeRule({
 })]);`,
           "/main.tsx":
             `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
-import type { PolicyOf } from "commonfabric/cfc";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string }
 ${main}`,

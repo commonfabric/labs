@@ -1,3 +1,9 @@
+/**
+ * What `cf piece getsrc` has to say about the data files of a source package it
+ * wrote. Finding which ones the source declares parses it, so this sits apart
+ * from `piece.ts`, whose other commands should not load the compiler.
+ */
+
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
 import type { RuntimeProgram } from "@commonfabric/runner";

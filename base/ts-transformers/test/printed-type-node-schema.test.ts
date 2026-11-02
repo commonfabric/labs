@@ -2327,6 +2327,7 @@ export default pattern<{ a: Holder<string> }>(({ a }) => ({ a }));`,
         const files = await transformFiles({
           "/main.tsx": `/// <cts-enable />
 import { Confidential, pattern } from "commonfabric";
+import type { PolicyOf } from "commonfabric/cfc";
 import {
   cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v,
 } from "commonfabric/cfc";
@@ -2410,6 +2411,7 @@ export default pattern<{ a: Outer<readonly ["c", "d"]> }>(({ a }) => ({ a }));`,
           const files = await transformFiles({
             "/main.tsx": `/// <cts-enable />
 import { Confidential, pattern } from "commonfabric";
+import type { AnyOf } from "commonfabric/cfc";
 type Tail<L extends readonly unknown[]> = Confidential<{ x: string }, readonly [...L, "b"]>;
 type Lead<L extends readonly unknown[]> = Confidential<{ x: string }, readonly ["b", ...L]>;
 type Named<L extends readonly unknown[]> =
@@ -2881,6 +2883,7 @@ export const rules = exchangeRules([neverRelease]);`,
         await captured({
           "/main.tsx":
             `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string; b: string; }
 export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> }>(
@@ -2895,6 +2898,7 @@ export default pattern<{ secret: Confidential<Secret, [PolicyOf<typeof rules>]> 
         await captured({
           "/main.tsx":
             `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string; b: string; }
 export default pattern<{ value: Secret }>(({ value }) => {
@@ -2910,6 +2914,7 @@ export default pattern<{ value: Secret }>(({ value }) => {
         await captured({
           "/main.tsx":
             `import { computed, pattern, type Confidential, type PerUser } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string; b: string; }
 export default pattern<{ secret: PerUser<Confidential<Secret, [PolicyOf<typeof rules>]>> }>(
@@ -2924,6 +2929,7 @@ export default pattern<{ secret: PerUser<Confidential<Secret, [PolicyOf<typeof r
         await captured({
           "/main.tsx":
             `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string; b: string; }
 type MaybeSecret = Confidential<Secret, [PolicyOf<typeof rules>]> | undefined;
@@ -2948,6 +2954,7 @@ export default pattern<{ secret: MaybeSecret }>(
         captured({
           "/main.tsx":
             `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 interface Secret { a: string; b: string; }
 interface Other { a: string; c: number; }
@@ -3011,6 +3018,7 @@ export default pattern<{ ${declaration} }>(
         await captured({
           "/release.tsx":
             `import { type Confidential, pattern } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 export interface Released {
   message: Confidential<string, readonly [PolicyOf<typeof rules>]>;
@@ -3037,6 +3045,7 @@ export default pattern(() => {
         await captured({
           "/release.tsx":
             `import { type Confidential, pattern } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { rules } from "./rules.ts";
 export interface Entry { a: string; b: string; }
 export interface Released {
@@ -3099,6 +3108,7 @@ export const writers: CfcExchangeRulesDeclaration = exchangeRules([release("writ
         "/rules.ts": RULES,
         "/main.tsx":
           `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { readers, writers } from "./rules.ts";
 export default pattern<{ ${input} }>(({ a, b }) => (${result}));`,
       }, { types: COMMONFABRIC_TYPES, typeCheck: true });
@@ -3219,6 +3229,7 @@ export default pattern<{ ${input} }>(({ a, b }) => (${result}));`,
         "/rules.ts": RULES,
         "/main.tsx":
           `import { computed, pattern, type Confidential } from "commonfabric";
+import { type PolicyOf } from "commonfabric/cfc";
 import { readers, writers } from "./rules.ts";
 export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]>; b: Confidential<string[], [PolicyOf<typeof writers>]> }>(({ a, b }) => ({ out: computed(() => [a, b]) }));`,
       }, { types: COMMONFABRIC_TYPES, typeCheck: true });
@@ -3236,7 +3247,7 @@ export default pattern<{ a: Confidential<string[], [PolicyOf<typeof readers>]>; 
         "/rules.ts": RULES,
         "/main.tsx":
           `import { computed, pattern, type Confidential } from "commonfabric";
-import type { AnyOf, PolicyOf } from "commonfabric/cfc";
+import { type PolicyOf } from "commonfabric/cfc";
 import { readers, writers } from "./rules.ts";
 ${main}`,
       }, { types: COMMONFABRIC_TYPES, typeCheck: true });
@@ -3322,7 +3333,7 @@ ${main}`,
       const output = await transformFiles({
         "/rules.ts": RULES,
         "/main.tsx": `import { pattern, type Confidential } from "commonfabric";
-import type { PolicyOf } from "commonfabric/cfc";
+import { type PolicyOf } from "commonfabric/cfc";
 import { readers } from "./rules.ts";
 export default pattern<{ a: string }>(({ a }) => {
   const secret: Confidential<string, [PolicyOf<typeof readers>]> = a;
