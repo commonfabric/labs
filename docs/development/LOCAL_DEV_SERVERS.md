@@ -124,7 +124,14 @@ To let teammates interact with a locally-hosted pattern (e.g. "host latest-main
 `--inspect`) + shell on offset ports, deploys the pattern, and `tailscale serve`s
 it (tailnet-only). It launches the shell with `API_URL` set to your MagicDNS name
 — the standard `dev-local` task bakes in `localhost`, which breaks remote
-browsers.
+browsers. Each server runs in a process group of its own, so the servers keep
+running after the script returns, until `--down` stops them. Until the script
+prints the shareable URL, the servers end with it: a failure, Ctrl-C, or a
+hangup or termination signal sent to the script stops every server it started.
+Their logs are in `tmp/share-pattern-via-tailscale/` in the checkout. The script
+refuses to start while a share from the same checkout is running, or while
+anything answers on one of its ports. `--down` turns off the machine's
+`tailscale serve` mapping only in a checkout that has a record of a share.
 
 `start-local-dev.sh` validates required commands before launching anything and
 waits for both servers to bind their ports and return HTTP 200 before reporting
