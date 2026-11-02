@@ -4,14 +4,15 @@ import {
   parseCellReference,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { readSpaceSegment } from "@commonfabric/runner/fabric-url";
+import {
+  EMBED_PATH_PREFIX,
+  readSpaceSegment,
+} from "@commonfabric/runner/fabric-url";
 import { isSlugAddress, isValidSlug } from "@commonfabric/runner/slugs";
 
 export type AppBuiltInView = "home";
 
 export type AppViewMode = "embed";
-
-const EMBED_PATH_PREFIX = ".embed";
 
 export type PieceViewRef = {
   pieceId?: string;

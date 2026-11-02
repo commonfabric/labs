@@ -93,8 +93,19 @@ export function readSpaceSegment(segment: string): string | undefined {
   return decoded?.startsWith("@") ? decoded.slice(1) : decoded;
 }
 
-function splitPath(pathname: string): string[] {
-  return pathname.split("/").filter((segment) => segment.length > 0);
+/**
+ * The first segment of a shell page URL shown in embed mode. It says how the
+ * page is shown rather than what it names, so the space follows it.
+ */
+export const EMBED_PATH_PREFIX = ".embed";
+
+/**
+ * The nonempty segments of a page URL's path, from its space on: the embed
+ * prefix, when the path starts with one, comes off.
+ */
+export function pagePathSegments(pathname: string): string[] {
+  const segments = pathname.split("/").filter((segment) => segment.length > 0);
+  return segments[0] === EMBED_PATH_PREFIX ? segments.slice(1) : segments;
 }
 
 /** Every segment as its key, or undefined when any of them cannot be read. */
@@ -167,7 +178,7 @@ export function parseFabricUrl(
   const hosts = options.hosts ?? [];
   if (!hosts.includes(parsed.host)) return undefined;
 
-  const segments = splitPath(parsed.pathname);
+  const segments = pagePathSegments(parsed.pathname);
   // `/<space>/<piece>` is the page URL shape. A host of ours with anything
   // shorter is one of its own pages rather than a piece.
   if (segments.length < 2) return undefined;

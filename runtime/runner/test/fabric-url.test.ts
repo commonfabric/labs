@@ -188,6 +188,19 @@ describe("fabric-url", () => {
           .toBeUndefined();
       });
 
+      it("returns the space after the embed prefix", () => {
+        // The prefix says how the shell shows the page, not what it names.
+        expect(
+          parseFabricUrl("https://fabric.example/.embed/work/my-note", options),
+        ).toEqual({ space: "work", slug: "my-note", path: [] });
+        expect(parseFabricUrl("https://fabric.example/.embed/work", options))
+          .toBeUndefined();
+        // Behind the mark, the same spelling is a space's name.
+        expect(
+          parseFabricUrl("https://fabric.example/@.embed/my-note", options),
+        ).toEqual({ space: ".embed", slug: "my-note", path: [] });
+      });
+
       it("returns undefined for a slug segment carrying a colon it cannot use", () => {
         expect(
           parseFabricUrl("https://fabric.example/work/not:a:slug", options),

@@ -684,6 +684,15 @@ describe("cli piece parsing", () => {
       .toMatchObject({ space: "@work" });
     expect(() => parseSpaceOptions({ url: `${API_URL}/@`, identity: ID }))
       .toThrow(/does not contain a space/);
+    // The embed prefix says how the shell shows the page, not what it names.
+    expect(
+      parsePieceOptions({
+        url: `${API_URL}/.embed/${SPACE}/tracker`,
+        identity: ID,
+      }),
+    ).toMatchObject({ apiUrl: API_URL, space: SPACE, piece: "tracker" });
+    expect(() => parseSpaceOptions({ url: `${API_URL}/.embed`, identity: ID }))
+      .toThrow(/does not contain a space/);
   });
 
   it("parseSpaceOptions() takes both URL encodings off a path segment", () => {
