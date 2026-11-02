@@ -835,7 +835,10 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
  * own message's place by key.
  */
 export interface MessageFacts {
-  /** Every stored message, in the order recorded. */
+  /**
+   * Every stored message the room can read (see `messageEntries()`), in the
+   * order recorded.
+   */
   entries: MessageEntry[];
 
   /**

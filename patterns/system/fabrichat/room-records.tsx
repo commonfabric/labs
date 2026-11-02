@@ -470,7 +470,10 @@ export interface MessageEntry extends ViewItem {
 
 /** The entries of a room's messages, and every author among them. */
 export interface MessageEntries {
-  /** Every stored message, in the order recorded. */
+  /**
+   * Every stored message the room can read (see `readableMessage()`), in
+   * the order recorded.
+   */
   entries: MessageEntry[];
 
   /**
@@ -479,7 +482,7 @@ export interface MessageEntries {
    */
   authors: ProfileCell[];
 
-  /** Each stored message's record, by its entry's key. */
+  /** Each entry's record, by its key. */
   records: ReadonlyMap<string, MessageRecord>;
 
   /**
