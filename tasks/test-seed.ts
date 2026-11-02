@@ -14,6 +14,7 @@
  * a run reports the order it took whether or not anyone thought to ask.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   nextDaySeed,
   shuffleNotice,
@@ -49,7 +50,7 @@ export function main(
   try {
     seed = requestedSeed(args, now);
   } catch (error) {
-    announce(error instanceof Error ? error.message : String(error));
+    announce(describeFailure(error));
     return 2;
   }
   announce(shuffleNotice(seed));

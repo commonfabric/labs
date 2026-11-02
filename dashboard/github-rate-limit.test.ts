@@ -107,13 +107,16 @@ Deno.test("GitHub performance budget rejects every malformed primary field", asy
 
 Deno.test("GitHub performance budget reports rejected in-memory probes", async () => {
   for (
-    const [index, reason] of [new Error("offline"), "disconnected"].entries()
+    const [index, [reason, described]] of ([
+      [new Error("offline"), "offline"],
+      ["disconnected", "disconnected"],
+    ] as const).entries()
   ) {
     const budget = new GitHubRateLimitBudget();
     await assertRejects(
       () => budget.reserve(`rejected-${index}`, () => Promise.reject(reason)),
       GitHubRateLimitBudgetError,
-      String(reason instanceof Error ? reason.message : reason),
+      described,
     );
   }
 });

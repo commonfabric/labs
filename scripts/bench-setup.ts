@@ -11,6 +11,7 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   callPieceHandler,
   type EntryConfig,
@@ -198,7 +199,7 @@ async function deployNote(
   } catch (err) {
     log(
       `[bench-setup]   Warning: setTitle failed for "${note.title}": ${
-        err instanceof Error ? err.message : String(err)
+        describeFailure(err)
       }`,
     );
   }
@@ -209,7 +210,7 @@ async function deployNote(
   } catch (err) {
     log(
       `[bench-setup]   Warning: editContent failed for "${note.title}": ${
-        err instanceof Error ? err.message : String(err)
+        describeFailure(err)
       }`,
     );
   }
@@ -258,7 +259,7 @@ async function main() {
     } catch (err) {
       console.error(
         `[bench-setup] ERROR deploying note "${note.title}": ${
-          err instanceof Error ? err.message : String(err)
+          describeFailure(err)
         }`,
       );
     }
@@ -277,7 +278,7 @@ async function main() {
       } catch (err) {
         log(
           `[bench-setup]   Warning: addItem failed for "${item}": ${
-            err instanceof Error ? err.message : String(err)
+            describeFailure(err)
           }`,
         );
       }
@@ -287,9 +288,7 @@ async function main() {
     log(`[bench-setup]   Done. id=${id}`);
   } catch (err) {
     console.error(
-      `[bench-setup] ERROR deploying todo-list: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      `[bench-setup] ERROR deploying todo-list: ${describeFailure(err)}`,
     );
   }
 

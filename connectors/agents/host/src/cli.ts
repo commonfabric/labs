@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { loadAgentsHostConfig } from "./config.ts";
 import { AGENTS_HOST_USAGE, parseAgentsHostCliOptions } from "./cli-options.ts";
 import { CollectionRequestQueue } from "./collection-request-queue.ts";
@@ -168,9 +169,7 @@ export async function runAgentsHostCli(
     }
     if (!running && error === startupCancellation) return 0;
     dependencies.error(
-      `Agent host failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `Agent host failed: ${describeFailure(error)}`,
     );
     return 1;
   } finally {

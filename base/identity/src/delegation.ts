@@ -22,6 +22,7 @@ import { CID } from "multiformats/cid";
 import { base58btc } from "multiformats/bases/base58";
 import { sha256 } from "multiformats/hashes/sha2";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   DAG_CBOR_CODE,
   type DagCborValue,
@@ -265,7 +266,7 @@ export async function decodeDelegation(bytes: Uint8Array): Promise<Delegation> {
     envelope = decodeDagCbor(bytes);
   } catch (error) {
     throw new DelegationError(
-      `not DAG-CBOR: ${error instanceof Error ? error.message : error}`,
+      `not DAG-CBOR: ${describeFailure(error)}`,
     );
   }
   if (!Array.isArray(envelope) || envelope.length !== 2) {

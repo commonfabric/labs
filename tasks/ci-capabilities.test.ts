@@ -579,7 +579,7 @@ describe("opening a capability on a machine that answers", () => {
       });
       await opened.close();
     } catch (error) {
-      said.push(`threw ${error instanceof Error ? error.message : error}`);
+      said.push(`threw ${describeFailure(error)}`);
     } finally {
       await Deno.remove(root, { recursive: true });
     }

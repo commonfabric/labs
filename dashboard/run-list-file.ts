@@ -16,6 +16,7 @@
  * back. A file that cannot be read at all is replaced.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
 
@@ -144,7 +145,7 @@ export class RunListFile {
       if (!(error instanceof Deno.errors.NotFound)) {
         console.error(
           `run lists in ${this.#path} could not be read:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
       return heads;

@@ -25,6 +25,7 @@
 // deno-lint-ignore no-external-import
 import { Session } from "node:inspector";
 import { main } from "../../../runtime/cli/mod.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLoggerCountsBreakdown,
   getLoggerFlagsBreakdown,
@@ -112,9 +113,7 @@ async function finalize(code: number): Promise<void> {
     );
   } catch (error) {
     console.error(
-      `[profile-cf] writing the artifacts failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[profile-cf] writing the artifacts failed: ${describeFailure(error)}`,
     );
   } finally {
     // The command's own code, whatever became of the artifacts.
