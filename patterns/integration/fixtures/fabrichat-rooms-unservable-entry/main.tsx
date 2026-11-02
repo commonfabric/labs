@@ -2,11 +2,14 @@
  * Stands in for a person's Home around FabriChat: a shared-space catalog the
  * person registers spaces in, and their FabriChat manager over it, whose
  * profile is their first. A registration carries only the fields its event
- * names, so the catalog carries no label. Fixture for
+ * names, so the catalog carries no label. A room can also be recorded as one
+ * the person belongs to, as joining it through its container records it,
+ * whatever the room is. Fixture for
  * `fabrichat-rooms-unservable-entry-multi-runtime.test.ts`.
  */
 
 import {
+  type Cell,
   Default,
   handler,
   NAME,
@@ -21,10 +24,14 @@ import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
   type ManagerStreamEvent,
+  type RoomMembership,
 } from "../../../system/fabrichat/manager.tsx";
 import {
   type ChatIndexEntry,
   type ChatRequestOutcome,
+  type ChatRoomKind,
+  type ChatRoomLink,
+  epochNsecFromMsec,
   type ManagerProfileCell,
 } from "../../../system/fabrichat/schemas.tsx";
 import ProfileHome, {
@@ -88,6 +95,29 @@ const register = handler<
   });
 });
 
+/** What recording a membership asks: the room, and the kind it is said to be. */
+interface RememberEvent {
+  /** The room. */
+  room: Cell<ChatRoomLink>;
+
+  /** The room's kind, as the membership records it. */
+  kind: ChatRoomKind;
+}
+
+/** Records the event's room as one the person belongs to and keeps. */
+const remember = handler<
+  RememberEvent,
+  { memberships: Writable<RoomMembership[]> }
+>((event, { memberships }) => {
+  memberships.push({
+    room: event.room,
+    kind: event.kind,
+    since: epochNsecFromMsec(0),
+    state: "saved",
+    revision: "remembered",
+  });
+});
+
 /** What the stand-in stores, the FabriChat manager's records among it. */
 export interface MainInput
   extends Omit<FabriChatManagerInput, "sharedSpaceCatalog"> {
@@ -105,6 +135,9 @@ export interface MainOutput {
   /** Registers a space in the person's catalog. */
   register: Stream<RegisterEvent>;
 
+  /** Records a room as one the person belongs to. */
+  remember: Stream<RememberEvent>;
+
   /** Creates a group room from the person's manager. */
   createGroup: Stream<ManagerStreamEvent>;
 
@@ -116,6 +149,9 @@ export interface MainOutput {
 
   /** The rooms the manager lists for the person. */
   rooms: PerUser<ChatIndexEntry[]>;
+
+  /** The people the person's rooms list, by principal. */
+  people: PerUser<Record<string, ManagerProfileCell[]>>;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -140,9 +176,11 @@ export default pattern<MainInput, MainOutput>((
     profiles,
     createProfile: createProfile({ profiles }),
     register: register({ catalog }),
+    remember: remember({ memberships: chats.roomMembership }),
     createGroup: chats.createGroup,
     requests: chats.requests,
     sharedSpaceCatalog: chats.sharedSpaceCatalog,
     rooms: chats.rooms,
+    people: chats.people,
   };
 });
