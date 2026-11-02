@@ -2264,7 +2264,9 @@ export class SpaceServer implements TransactionSealDestination {
    * therefore lead to multiple passes. Input-driven cycles reconcile demand
    * independently of the timer; the grace is a coalescing interval, not a
    * minimum wait for every new demand. */
-  noteDemandChanged(reason: "watch" | "push-growth" | "warm" = "watch"): void {
+  noteDemandChanged(
+    reason: "watch" | "push-growth" | "warm" | "read-view" = "watch",
+  ): void {
     // MINOR-1: a fresh demand note — bump the generation so a pass that
     // already snapshotted its rows re-latches on completion.
     this.#demandNoteGeneration += 1;
@@ -2280,7 +2282,7 @@ export class SpaceServer implements TransactionSealDestination {
       this.#noteGrowthWakeForSettle();
     } else if (reason === "warm") {
       this.#options.stats.demand.warmWakes += 1;
-    } else {
+    } else if (reason === "watch") {
       this.#options.stats.demand.watchWakes += 1;
     }
     if (this.#demandWakeTimer !== undefined) return;
@@ -8172,7 +8174,7 @@ export class SpaceServer implements TransactionSealDestination {
   #readViewSettled(handle: SessionViewHandle): boolean {
     if (!this.#nothingOwed()) return false;
     if (this.#demandedReadViews.has(viewLifetimeKey(handle))) return true;
-    this.noteDemandChanged("watch");
+    this.noteDemandChanged("read-view");
     return false;
   }
 
