@@ -329,9 +329,13 @@ sweeps the catalog for them. Every runtime that holds a person's catalog and
 hears of a refusal marked `deleted` sends it, when the catalog holds the space
 as saved or archived, at the revision its view shows: the shell on a
 `spaceaccesslost` marked `deleted`, and a runtime that holds the catalog
-outside the shell, such as a native client's, on the same refusal. A catalog only the shell kept up would never record a deletion
-for a person who uses another client. A pattern that lists catalog entries
-sends it for an entry whose `spaceDeleted(space)` reads `true`. As with the
+outside the shell, such as a native client's, on the same refusal. A catalog
+only the shell kept up would never record a deletion for a person who uses
+another client. A pattern that lists catalog entries sends it for an entry
+whose `spaceDeleted(space)` reads `true`. Two senders often race to record the
+same deletion, and the one that loses gets `conflict` with the reason
+`revision`, the winner having advanced the entry. That conflict is expected: it
+means the deletion is already recorded, and its sender surfaces nothing. As with the
 other commands, the whole of what the handler does is
 `markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler
 holding the catalog cell can record the deletion in its own transaction.
