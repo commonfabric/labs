@@ -14146,9 +14146,18 @@ export class Runner {
         const postRunResult = result instanceof Promise
           ? result.then(
             postRun,
-            (error) =>
-              this.#bringUpHomeRootAndRetry(error, frame, tx) ??
-                Promise.reject(error),
+            (error) => {
+              // An async body may reject on the `undefined` a `spaceDeleted()`
+              // call returned, as a synchronous one may throw on it below.
+              if (
+                !(error instanceof RetryImmediately) &&
+                (frame.pendingSpaceAnswers?.size ?? 0) > 0
+              ) {
+                return this.#awaitPendingSpaceAnswersAndRetry(frame);
+              }
+              return this.#bringUpHomeRootAndRetry(error, frame, tx) ??
+                Promise.reject(error);
+            },
           )
           : postRun(result);
         if (postRunResult instanceof Promise) {

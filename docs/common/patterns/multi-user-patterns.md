@@ -868,12 +868,13 @@ const SavedRooms = pattern<{ rooms: DID[] }>(({ rooms }) => {
 });
 ```
 
-`true` means the memory server refuses the space because it is deleted, which
-it is for good, and `false` that it admits the runtime there or refuses it for
+`true` means the memory server refuses the space because it is deleted, which it
+is for good, and `false` that it admits the runtime there or refuses it for
 another reason. `undefined` means there is no answer yet: a computation runs
 again once the server answers, and a handler is run again with the answer in
-place, unless its event was sent with `retries: false`. Call it where
-`spaceAccess(target)` can be called.
+place, unless it runs on the client and its event was sent with
+`retries: false`; a handler a serving runtime runs is run again either way. Call
+it where `spaceAccess(target)` can be called.
 [`space-access.md`](../../features/space-access.md#a-deleted-space) has the
 details.
 

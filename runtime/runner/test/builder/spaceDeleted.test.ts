@@ -114,9 +114,11 @@ describe("spaceDeleted()", () => {
   /**
    * Runs, in the home space, a pattern whose `ask` handler writes what
    * `spaceDeleted()` returns for the space an event names, as a string, and
-   * returns what each run of the handler saw and what the runs committed.
+   * returns what each run of the handler saw and what the runs committed. With
+   * `async`, the handler is an async function that rejects instead of writing
+   * when the call returns `undefined`.
    */
-  const handlerAnswers = async () => {
+  const handlerAnswers = async (options: { async?: boolean } = {}) => {
     const { handler, pattern } = createTrustedBuilder(runtime).commonfabric;
     const seen: (boolean | undefined)[] = [];
     const stateSchema = {
@@ -131,11 +133,19 @@ describe("spaceDeleted()", () => {
         required: ["space"],
       },
       stateSchema,
-      ({ space }, { answers }) => {
-        const answer = spaceDeleted(space as MemorySpace);
-        seen.push(answer);
-        answers.push(String(answer));
-      },
+      options.async
+        ? async ({ space }, { answers }) => {
+          const answer = spaceDeleted(space as MemorySpace);
+          seen.push(answer);
+          if (answer === undefined) throw new Error("No answer for the space");
+          answers.push(String(answer));
+          await Promise.resolve();
+        }
+        : ({ space }, { answers }) => {
+          const answer = spaceDeleted(space as MemorySpace);
+          seen.push(answer);
+          answers.push(String(answer));
+        },
     );
     const Root = pattern<{ answers: Cell<string[]> }>(
       ({ answers }) => ({ answers, ask: ask({ answers }) }),
@@ -223,6 +233,16 @@ describe("spaceDeleted()", () => {
 
       expect(root.seen).toEqual([undefined, false]);
       expect(await root.committed()).toEqual(["false"]);
+    });
+
+    it("runs an async handler that rejects on the `undefined` again once the server answers, rather than failing its event", async () => {
+      const gone = await spaceNamed("handler async");
+      refuse(gone, "deleted");
+      const root = await handlerAnswers({ async: true });
+      await root.ask(gone);
+
+      expect(root.seen).toEqual([undefined, true]);
+      expect(await root.committed()).toEqual(["true"]);
     });
 
     it("drops an unserved event sent with `retries: false` once the answer arrives, running it no second time", async () => {
