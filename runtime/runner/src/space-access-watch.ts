@@ -10,10 +10,11 @@ import type { IStorageManager } from "./storage/interface.ts";
  * touches a document an action has read, so an action whose value depends on
  * the verdict, as the value of `spaceAccess(target)` does, or on whether the
  * server has answered at all, as the value of `spaceDeleted(target)` does,
- * registers here to learn of it. A runtime holds one of these for as long as it lives, and disposing
- * it cancels its subscriptions, which matters when the storage manager
- * outlives the runtime. An action the scheduler unsubscribes is let go at
- * once, so a discarded computation is not held until its space next changes.
+ * registers here to learn of it. A runtime holds one of these for as long as
+ * it lives, and disposing it cancels its subscriptions, which matters when the
+ * storage manager outlives the runtime. An action the scheduler unsubscribes is
+ * let go at once, so a discarded computation is not held until its space next
+ * changes.
  */
 export class SpaceAccessWatch {
   #storage: Pick<

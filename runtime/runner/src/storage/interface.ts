@@ -634,7 +634,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * Whether the memory server has answered for `space`: `true` once it has
    * admitted this manager's session there or refused it, `false` while it has
    * not, and `undefined` when no memory server answers for the space, as for
-   * one whose reads a store supplies. Opens nothing.
+   * one whose reads a store supplies. A reopen that replaces the session, such
+   * as a remount after a revocation, puts it back to `false` until the server
+   * answers the reopen, unless a refusal stays recorded for the space in the
+   * meantime. Opens nothing.
    */
   spaceAnswered?(space: MemorySpace): boolean | undefined;
 
