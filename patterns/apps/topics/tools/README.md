@@ -104,13 +104,15 @@ next command starts from it.
 ## Writes go through `cf`
 
 A write runs the Topics verb through the checkout's own `cf piece call`, with
-the payload on its standard input, then runs `cf piece step` on the Topic it
-wrote to, then refreshes the copy and fails unless the write reads back; a
-comment or a link reads back only when there is one more of it than before. The
-step is there because a Topic stores the comment count and last activity the
-board lists only when a run of it completes, and `cf piece call` returns before
-that. Each `cf` is a process of its own, which starts a runtime, so a write
-takes several seconds longer than a read.
+the payload on its standard input, then refreshes the copy and fails unless the
+write reads back; a comment or a link reads back only when there is one more of
+it than before. On a deployment with server execution off it also runs
+`cf piece
+step` on the Topic it wrote to, before the refresh, because a Topic
+stores the comment count and last activity the board lists only when a run of it
+completes, and `cf piece call` returns before that. A deployment that publishes
+server execution on `/api/meta` runs the Topic itself. Each `cf` is a process of
+its own, which starts a runtime, so a write takes longer than a read.
 
 Each run is a new invocation under an invocation session minted once per board,
 into a file under `$XDG_STATE_HOME` (or `~/.local/state`) that only its owner

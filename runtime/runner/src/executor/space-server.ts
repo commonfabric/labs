@@ -8323,9 +8323,22 @@ export class SpaceServer implements TransactionSealDestination {
       runtime,
       this.#options.server,
       this.#options.space,
-      { quiescent },
+      { quiescent, settled: quiescent && this.#nothingOwed() },
     );
     timing.time(publishStart, "executor", "wave", "publish");
+  }
+
+  /**
+   * Whether the settlement that just ended leaves this loop owing nothing it
+   * knows of: its demand pass saw every demand note, including the one a view
+   * registering sends, and no commit, load or input is outstanding. Whichever
+   * of those is owed runs a later cycle, which asks again.
+   */
+  #nothingOwed(): boolean {
+    return this.#demandNoteGeneration === this.#passDemandNoteGen &&
+      !this.#pendingDemandWake && !this.#pendingStructureRetryWake &&
+      this.#structureLoadPass === undefined &&
+      this.#commitInFlight === undefined && !this.#hasWorkBesidesOwnEchoes();
   }
 
   /** Dispose the serving runtime under a DEADLINE (park liveness — the

@@ -46,6 +46,16 @@ type Selection = Omit<ViewPlan, "id" | "revision" | "generation"> & {
   delivery: ViewQuery[];
 };
 
+/** A `read` view's one selection: nothing beyond its roots, and its answer. */
+const SETTLED_READ: Selection = {
+  settled: true,
+  delivery: [],
+  eligibleActions: [],
+  pieces: [],
+  inputs: [],
+  producers: [],
+};
+
 /** Independent invalidation of rendered reads and execution-dependent output. */
 type CachedView = {
   render: ViewReadCache<ViewRenderReads>;
@@ -127,13 +137,18 @@ export class ViewPlanPublisher {
    * quiescence: after one the flush deadline cut, a view that already holds
    * a published selection keeps it, and only a view with none is planned, so
    * that a burst of cut waves plans each view once, at the settlement that
-   * ends it, over the snapshot that settlement left.
+   * ends it, over the snapshot that settlement left. `settled` says that the
+   * loop knows of nothing still owed, which is what a `read` view waits to
+   * hear.
    */
   async publish(
     runtime: Runtime,
     server: HostMemoryServer,
     space: MemorySpace,
-    { quiescent = true }: { quiescent?: boolean } = {},
+    { quiescent = true, settled = false }: {
+      quiescent?: boolean;
+      settled?: boolean;
+    } = {},
   ): Promise<void> {
     if (this.#runtime !== runtime) {
       this.dispose();
@@ -142,9 +157,13 @@ export class ViewPlanPublisher {
     }
     const live = new Set<string>();
     const interests = await server.viewInterestsForSpace(space);
+    // A read view holds demand and runs nothing, so it consumes no handler
+    // observations.
     runtime.scheduler.setViewConsumers(
       space,
-      interests.map((interest) => ({
+      interests.filter((interest) => interest.view.mode !== "read").map((
+        interest,
+      ) => ({
         principal: interest.principal,
         sessionId: interest.handle.sessionId as ScopeKeyIdentity["sessionId"],
       })),
@@ -179,6 +198,18 @@ export class ViewPlanPublisher {
       live.add(key);
       if (!interest.attached) {
         logger.debug("detached-view", "Deferring planning for a detached view");
+        continue;
+      }
+      if (view.mode === "read") {
+        if (
+          settled && !this.#published.has(key) &&
+          await server.setViewSelection(space, handle, {
+            ...SETTLED_READ,
+            generation: (interest.selectionGeneration ?? 0) + 1,
+          })
+        ) {
+          this.#published.set(key, SETTLED_READ);
+        }
         continue;
       }
       if (

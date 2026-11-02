@@ -178,7 +178,11 @@ import {
   ignoreReadForScheduling,
   txToReactivityLog,
 } from "./scheduler.ts";
-import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import {
+  mintEventId,
+  scopeCallerEventId,
+  servedReceiptCause,
+} from "./scheduler/event-identity.ts";
 import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
@@ -684,6 +688,15 @@ export type StreamSendOptions = {
     delivery: EventAppendDeliveryOutcome,
     tx: IExtendedStorageTransaction,
   ) => void;
+
+  /**
+   * `false` sends the event without running its handler in this runtime, for a
+   * client under server execution that has no use for a speculative echo: the
+   * event append is the whole of the send, the piece is not started for it, and
+   * the commit callback receives a transaction that wrote nothing and names the
+   * handling's receipt. A runtime that runs its own events ignores it.
+   */
+  echo?: false;
 };
 
 // The mint registry backing `runtimeInjectedEventKeys` (see
@@ -2979,29 +2992,40 @@ export class CellImpl<T extends FabricValue>
           onCommit?.(tx);
         }
         : onCommit;
-      this.#runtime.scheduler.queueEvent(
-        resolvedToValueLink,
-        event,
-        undefined,
-        settleCallback,
-        false,
-        {
-          // Under events-down the COMMITTED append's id is the one the
-          // echo must carry (overlay origin `intent(eventId)`,
-          // speculation.md §1) — the same session-scoped id, one mint.
-          eventId: firedEventId ?? deliveryEventId,
-          ...(clientCascadeParent !== undefined
-            ? { parentEventId: clientCascadeParent }
-            : {}),
-          originTx: this.#tx ?? undefined,
-          // Forward injection provenance only when it carries the mint (see
-          // markRuntimeInjectedEventKeys): a plain array here — the shape any
-          // in-process or sandboxed caller could pass — is dropped, and the
-          // closed-world gate then judges the key like any other undeclared
-          // field.
-          runtimeInjectedEventKeys: mintedKeys,
-        },
-      );
+      if (firedEventId !== undefined && sendOptions?.echo === false) {
+        if (settleCallback !== undefined) {
+          const unechoed = this.#runtime.edit();
+          unechoed.handlingReceiptLink = this.#runtime.getCell(
+            resolvedToValueLink.space,
+            servedReceiptCause(firedEventId),
+          ).getAsNormalizedFullLink();
+          void unechoed.commit().settled.then(() => settleCallback(unechoed));
+        }
+      } else {
+        this.#runtime.scheduler.queueEvent(
+          resolvedToValueLink,
+          event,
+          undefined,
+          settleCallback,
+          false,
+          {
+            // Under events-down the COMMITTED append's id is the one the
+            // echo must carry (overlay origin `intent(eventId)`,
+            // speculation.md §1) — the same session-scoped id, one mint.
+            eventId: firedEventId ?? deliveryEventId,
+            ...(clientCascadeParent !== undefined
+              ? { parentEventId: clientCascadeParent }
+              : {}),
+            originTx: this.#tx ?? undefined,
+            // Forward injection provenance only when it carries the mint (see
+            // markRuntimeInjectedEventKeys): a plain array here — the shape any
+            // in-process or sandboxed caller could pass — is dropped, and the
+            // closed-world gate then judges the key like any other undeclared
+            // field.
+            runtimeInjectedEventKeys: mintedKeys,
+          },
+        );
+      }
 
       this.#cleanup?.();
       const [cancel, addCancel] = useCancelGroup();

@@ -1870,6 +1870,14 @@ export type ViewPlan = {
   id: string;
   revision: number;
   generation: number;
+
+  /**
+   * On a `read` view's plan: the serving loop settled with this view's demand
+   * included, so the documents delivered ahead of this plan hold what it
+   * derived for them.
+   */
+  settled?: true;
+
   eligibleActions: string[];
   pieces: { id: string; scope: CellScope; patternIdentity?: string }[];
   /** Settled execution failures upstream of this rendered view. */
@@ -2145,8 +2153,14 @@ export type ViewInterest = {
   revision: number;
   /** Visible roots, which also hold execution demand. */
   query: ViewQuery;
-  /** Whether the server should select data for local interaction previews. */
-  mode: "render" | "speculate";
+  /**
+   * What the view is for. `render` and `speculate` keep a renderer's roots
+   * delivered, and `speculate` also selects data for local interaction
+   * previews. `read` holds demand for a one-shot read: the server selects
+   * nothing for it and sends one plan, marked `settled`, once its roots are
+   * current.
+   */
+  mode: "render" | "speculate" | "read";
   /** Shared component read contract version supplied by this client build. */
   componentContractVersion: string;
 };

@@ -305,6 +305,67 @@ describe("view plan publisher", () => {
     expect(fixture.publications.calls).toHaveLength(2);
   });
 
+  describe("a `read` view", () => {
+    const asReadView = () => {
+      fixture.interest.view = { ...fixture.interest.view, mode: "read" };
+    };
+
+    it("publishes nothing until the settlement reports nothing owed", async () => {
+      asReadView();
+
+      await publish();
+
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
+    it("publishes a selection marked `settled` that delivers nothing, without walking the view", async () => {
+      asReadView();
+      const reads = fixture.reads.calls.length;
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: true,
+      });
+
+      expect(fixture.reads.calls.length - reads).toBe(0);
+      expect(fixture.publications.calls).toHaveLength(1);
+      expect(fixture.publications.calls[0].args[2]).toEqual({
+        generation: 1,
+        settled: true,
+        delivery: [],
+        eligibleActions: [],
+        pieces: [],
+        inputs: [],
+        producers: [],
+      });
+    });
+
+    it("publishes once for a view however many settlements follow", async () => {
+      asReadView();
+
+      for (let settlement = 0; settlement < 3; settlement++) {
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: true },
+        );
+      }
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("publishes for a view whose component contract differs from the server's", async () => {
+      asReadView();
+      fixture.interest.view.componentContractVersion = "another-build";
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: true,
+      });
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+  });
+
   it("plans a view with no selection yet after a cut wave", async () => {
     await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
       quiescent: false,

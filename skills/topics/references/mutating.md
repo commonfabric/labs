@@ -98,9 +98,11 @@ for a topic that has never run, but a topic that has run keeps sorting by the
 activity time it last stored, so a stale one sinks below topics with less recent
 activity.
 
-So after every authored write to a topic, `addTopic` and each Topic verb below
-alike, step that topic, which is the headless equivalent of opening it. Several
-writes to one topic in a row need one step after the last:
+So on a deployment with server execution off, after every authored write to a
+topic, `addTopic` and each Topic verb below alike, step that topic, which is the
+headless equivalent of opening it. Under server execution the server runs the
+topic and a read pulls what it derives, so no step is needed. Several writes to
+one topic in a row need one step after the last:
 
 ```bash
 deno task cf piece step --cell "$TOPIC"

@@ -508,11 +508,19 @@ available for JSON tool results. Errors always go to stderr.
 
 ## Gotcha: Always `step` After `set` or `call`
 
-Neither `cf cell set` nor `cf piece call` triggers recomputation automatically.
-You **must** run `piece step` after either one to get fresh computed values.
-When the value is session-scoped, use `cf cell get --step` so recomputation and
-the read happen in the same CLI session; a separate `piece step` process cannot
-carry session-local materialization into the following `cf cell get` process.
+Under server execution (`/api/meta` reports `experimental.serverExecution`, as
+Rapids does), this does not apply. `cf` runs no piece, every read pulls from the
+server and returns the current value, and `piece step` is only such a pull. Use
+`cf cell get --no-run` for what the store holds now, with no recomputation.
+`runtime/cli/README.md`, "What a read and a call do under server execution", has
+the detail.
+
+With server execution off, neither `cf cell set` nor `cf piece call` triggers
+recomputation automatically. You **must** run `piece step` after either one to
+get fresh computed values. When the value is session-scoped, use
+`cf cell get --step` so recomputation and the read happen in the same CLI
+session; a separate `piece step` process cannot carry session-local
+materialization into the following `cf cell get` process.
 
 ```bash
 # After setting data:

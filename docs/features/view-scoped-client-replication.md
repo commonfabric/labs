@@ -52,6 +52,22 @@ Delivery selects complete documents. Selecting a field limits traversal into
 other documents; it does not hide unrelated fields within a delivered document.
 Path projection and navigation prefetch are separate work.
 
+## One-shot reads
+
+A client that reads a value once and exits needs no replication plan, but it
+needs what a renderer gets from one: the server has to be asked for the value,
+because a derivation nothing demands stays stale in the store, and it has to say
+when it has answered. `pullFromServer()` in `runtime/runner/src/served-read.ts`
+does that with a view of mode `read`. Its roots hold execution demand as any
+view's do. The planner walks nothing for it and selects nothing, and sends one
+plan marked `settled` once the serving loop owes nothing it knows of
+([protocol.md §3](../specs/server-side-execution/protocol.md#3-subscription-and-push)).
+A `read` view needs no matching component contract, so a client and a server of
+different builds can use one, and it holds no handler observations.
+
+Any runtime can make such a read. It does not depend on the web client class or
+on view-scoped replication being requested for the runtime.
+
 ## Observed reads and component contracts
 
 After a successful serving settlement, including a quiet settlement or a partial

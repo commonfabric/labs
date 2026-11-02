@@ -83,13 +83,13 @@ it as an agent.
   comments. Fabric retains the human principal behind the key; Topics stores the
   agent name as content attribution. `mention` and `unmention`, which record and
   remove a reference, take none.
-- A write runs the Topic it wrote to once it settles, so that the comment count
-  and last activity the board lists are stored, and is then checked by reading
-  it back. Each run is a new write, and prints its invocation id before it
-  dispatches. When a write fails saying it may have committed, or its answer is
-  lost, run the same command with `--invocation <id>`, which settles on the
-  first outcome rather than writing twice. Running it again without the id is
-  how one update becomes two.
+- On a deployment without server execution, a write runs the Topic it wrote to
+  once it settles, so that the comment count and last activity the board lists
+  are stored. Every write is then checked by reading it back. Each run is a new
+  write, and prints its invocation id before it dispatches. When a write fails
+  saying it may have committed, or its answer is lost, run the same command with
+  `--invocation <id>`, which settles on the first outcome rather than writing
+  twice. Running it again without the id is how one update becomes two.
 - Recommended, not required: the body states the core issue for a first-time
   reader and is replaced whole, with any critical update also noted at its top;
   the thread holds point-in-time updates; links hold the resources the body or

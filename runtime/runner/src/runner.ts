@@ -202,7 +202,10 @@ import {
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
-import { deriveEventKey } from "./scheduler/event-identity.ts";
+import {
+  deriveEventKey,
+  servedReceiptCause,
+} from "./scheduler/event-identity.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
 import {
@@ -13267,10 +13270,22 @@ export class Runner {
   ): Cell<unknown> {
     return this.#runtime.getCell(
       patternResultCell.space,
-      { resultFor: cause },
+      this.#handlingReceiptCause(cause),
       undefined,
       tx,
     );
+  }
+
+  /**
+   * Helper for the handler paths, which returns the cause a handling's result
+   * cell derives from, given the cause of the handling itself. Under server
+   * execution that is the event alone, so that the sender of an event can name
+   * the receipt without running the handler (`servedReceiptCause()`).
+   */
+  #handlingReceiptCause(cause: Record<string, any>): Record<string, any> {
+    return this.#runtime.experimental.serverExecution === true
+      ? servedReceiptCause(cause.$event)
+      : { resultFor: cause };
   }
 
   async #handleJavaScriptHandlerResult(
@@ -13709,7 +13724,7 @@ export class Runner {
   ): DeferredStartResult<any> {
     const resultCell = this.#runtime.getCell(
       resultSpace,
-      { resultFor: cause },
+      this.#handlingReceiptCause(cause),
       undefined,
       tx,
     );

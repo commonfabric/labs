@@ -56,6 +56,7 @@ export type SessionState = {
     {
       revision: number;
       generation: number;
+      settled?: true;
       delivery: readonly ViewQuery[];
       eligibleActions?: readonly string[];
       pieces?: ViewPlan["pieces"];

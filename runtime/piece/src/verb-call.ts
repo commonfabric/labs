@@ -76,6 +76,12 @@ export interface SendVerbEventOptions {
   /** Wraps each span, for a caller that times them. */
   time?: <T>(span: VerbDispatchSpan, run: () => Promise<T>) => Promise<T>;
 
+  /**
+   * `false` sends the event without running its handler in this runtime, for
+   * a caller under server execution that has not started the piece.
+   */
+  echo?: false;
+
   /** @internal Seam for tests, which dispatch to a stand-in handler. */
   sendEvent?: typeof sendEvent;
 }
@@ -182,6 +188,7 @@ export async function sendVerbEvent(
                 eventId: invocation.id,
                 session: invocation.session,
               }),
+              ...(options.echo === false ? { echo: false } : {}),
               onAppended,
             },
           );

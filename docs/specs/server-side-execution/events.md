@@ -342,13 +342,14 @@ ambient-state one.
   witness stands — in the handler run's own transaction, so the write
   seals into the run's wave with the entry's `consequenced` mark (§4's
   mark/effects atomicity) and rides the same carriage as every other
-  served event-handler write. The cell identity stays the cause-derived
-  address the client-era write used (same event ⇒ same minted cell id),
-  so an unchanged consumer reads served results exactly as it read
-  client-written ones; a flag-ON client's diverted echo publishes that
-  same address on its transaction, and the durable-ack coupling settles
-  the sender's callback only after the handling consequenced — the
-  receipt is durable before the address is ever dereferenced. The
+  served event-handler write. The cell identity derives from the durable
+  event id alone (`servedReceiptCause`: same event ⇒ same minted cell id),
+  so a sender names the receipt without running the handler. A flag-ON
+  client's diverted echo publishes that address on its transaction, and
+  so does a send with `echo: false`, which queues no echo and starts no
+  piece, and the durable-ack coupling settles the sender's callback only
+  after the handling consequenced — the receipt is durable before the
+  address is ever dereferenced. The
   callback reads that outcome rather than the echo's: where the echo's
   own transaction failed — an echo that withdrew (speculation.md §2), or
   one whose commit was refused — the transaction it is handed reports

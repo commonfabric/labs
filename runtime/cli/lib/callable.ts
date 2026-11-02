@@ -1008,6 +1008,11 @@ export async function executeResolvedCallable(
     const sent = await sendVerbEvent(resolved.callableCell, dispatchInput, {
       ...(invocation !== undefined ? { invocation } : {}),
       ...(deps.onPhase !== undefined ? { onPhase: deps.onPhase } : {}),
+      // Under server execution the serving runtime runs the handler, and the
+      // piece was not started here.
+      ...(resolved.pieces.runtime?.experimental?.serverExecution === true
+        ? { echo: false }
+        : {}),
       // The dispatch span is the dispatch-to-commit time the `--verbose`
       // phases report.
       time: (span, run) => timeCliPhase(`executeCallable.${span}`, run),

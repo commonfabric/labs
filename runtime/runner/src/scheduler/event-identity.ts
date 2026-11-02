@@ -20,6 +20,19 @@ function originStateFor(tx: object): { key: string; counter: number } {
 }
 
 /**
+ * The cause of the receipt a served handling of the event `eventId` writes: the
+ * cell that holds its outcome (events.md §4, "Result carriage"). It derives from
+ * the durable event id alone, so a client that sends the event and runs nothing
+ * of the piece can name the receipt as well as a client whose echo of the
+ * handler mints it.
+ */
+export function servedReceiptCause(eventId: string): {
+  resultFor: { $event: string };
+} {
+  return { resultFor: { $event: eventId } };
+}
+
+/**
  * Mints the durable id for an event at send time (spec §7.5). Ingress
  * callers that already own a durable delivery id pass it through
  * {@link scopeCallerEventId} instead.

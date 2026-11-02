@@ -1694,7 +1694,15 @@ before qualifiers or path, to select the arguments cell the way --input does.`,
     )
     .option(
       "--step",
-      "Start and recompute the piece in this session before reading",
+      "Start and recompute the piece in this session before reading. Under " +
+        "server execution every read already recomputes, on the server",
+    )
+    .option(
+      "--no-run",
+      "Read what the store holds now, without asking the server to recompute " +
+        "a derived value or waiting for it. A value nothing has derived yet " +
+        "reads as null",
+      { conflicts: ["step"] },
     )
     .option(
       "--json",
@@ -3246,6 +3254,7 @@ export interface PieceLabelCommandDependencies {
 
 export interface PieceGetCLIOptions extends PieceLabelCLIOptions {
   step?: boolean;
+  run?: boolean;
   filter?: string;
   select?: string;
   schema?: string;
@@ -3324,6 +3333,7 @@ export async function getCellValueFromCommand(
       {
         input,
         step: options.step,
+        ...(options.run === false ? { run: false } : {}),
         ...(selection === undefined ? {} : { selection }),
       },
     );
@@ -3402,6 +3412,8 @@ export async function setCellValueFromCommand(
   const wroteTo = written.path.length === pathSegments.length
     ? pieceConfig.piece
     : written.piece;
+  // Under server execution a later read pulls the recomputed value.
+  if (written.served === true) return;
   (deps.hint ?? hint)(
     cliText(
       `TIP: Computed values may be stale. Run 'cf piece step --cell ${wroteTo} ...' to trigger recomputation.`,
