@@ -30,9 +30,10 @@ rewrite. In particular:
 - deleting a space (section 4.5.1, INV-15) is specified and not yet
   implemented: the server refuses the tombstone it writes under INV-12's
   validity clause, as it refuses any ACL document that is not an access list
-- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is specified
-  and not yet implemented: no server advertises `instanceNameMark`, no client
-  declares `instanceNames`, and no space is marked
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
+  by the server, which advertises `instanceNameMark`, records the mark and
+  admits opens and commits by it; no client declares `instanceNames` yet, so
+  no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -412,7 +413,7 @@ defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
 
-`instanceNameMark` (specified, not yet built) advertises that the server
+`instanceNameMark` advertises that the server
 records the instance-naming mark of a space and enforces INV-16: a marked
 space admits only sessions, and commits, that declare `instanceNames: true`;
 the first commit from such a session marks the space; and the server admits a
@@ -476,9 +477,8 @@ interface SessionOpenRequest {
     // signed into a signed open, covered by the connection's authentication
     // of an open that names its principal.
     invite?: { inviteId: string; code: string };
-    // Present when the session's runtime names instances (specified, not yet
-    // built; see the rules and INV-16). Absent means positional. Inside the
-    // signed descriptor.
+    // Present when the session's runtime names instances (see the rules and
+    // INV-16). Absent means positional. Inside the signed descriptor.
     instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
@@ -640,7 +640,8 @@ Rules:
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything
 - a session whose runtime names instances declares `instanceNames: true`, and
-  one that declares nothing is positional (specified, not yet built). A server
+  one that declares nothing is positional; a value other than `true` refuses
+  the message. No client declares it yet. A server
   that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
   carrying `clientUpdateRequired: true`, an open or resume of a marked space by
   a positional session, and an open of an unmarked space by a naming session
@@ -767,7 +768,7 @@ interface HelloMessage {
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
-    // Specified, not yet built (INV-16).
+    // INV-16.
     instanceNameMark?: boolean;
   };
 }
@@ -943,9 +944,9 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  // `instance-names` (specified, not yet built): a naming commit marked the
-  // space and the session declares no naming (INV-16); a client of a build
-  // that knows `instanceNameMark` treats it as `clientUpdateRequired`.
+  // `instance-names`: a naming commit marked the space and the session
+  // declares no naming (INV-16); a client of a build that knows
+  // `instanceNameMark` treats it as `clientUpdateRequired`.
   reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 

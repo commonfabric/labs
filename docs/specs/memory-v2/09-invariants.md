@@ -899,8 +899,14 @@ a naming session admitted to an unmarked space of a server whose posture names
 none lets one client close the space to every positional runtime the
 deployment serves.
 
-Checked by: nothing yet. The server does not record or enforce the mark, the
-client declares no mode, and the `instanceNames` flag stays off until both do
+Checked by: `runtime/memory/test/instance-naming-admission.test.ts`, one case
+per clause: the mark a naming commit records in its own transaction, genesis
+included; the positional commit and the positional open and resume a marked
+space refuses; the revocation of its positional sessions; the posture an
+unmarked space's naming open is admitted under; and the `off` ACL mode.
+`runtime/memory/test/session-open-auth.test.ts` checks that the declaration is
+bound to the signed descriptor. No client declares a mode yet, and the
+`instanceNames` flag stays off until one does
 ([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
 
 ## Change discipline

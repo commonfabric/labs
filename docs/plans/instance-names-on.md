@@ -1,6 +1,7 @@
 # Turning instance names on
 
-Stages 3 and 4 of this plan are done; nothing else is.
+Stages 3 and 4 of this plan are done, and so is the server half of stage 1;
+nothing else is.
 The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
@@ -219,9 +220,13 @@ deployment.
 ### 1. The boundary, with the posture off
 
 The memory server records the mark, enforces INV-16, and advertises
-`instanceNameMark`. In routed mode, the router's public offer is the
-intersection of its endpoints' flags, including flags the router does not
-know, so the router needs no change
+`instanceNameMark`, which is built: the mark is the one row of the
+`instance_name_mark` table in the space's database, written in the commit's
+own transaction and naming that commit, and the toolshed gives the server its
+posture from `experimentalPosture()`, which names no instances. What remains
+of this stage is the client's half below. In routed mode, the router's public
+offer is the intersection of its endpoints' flags, including flags the router
+does not know, so the router needs no change
 ([`routed-mode-a.md`](../specs/memory-v2/routed-mode-a.md)). The memory
 client declares the runtime's mode, fails the connection permanently when it
 names instances and the server does not advertise the capability, and marks the
