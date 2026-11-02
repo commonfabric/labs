@@ -442,7 +442,7 @@ Deno.test("session: backslash cycles wrapping and keeps its content anchor", () 
   assertEquals(s.view().message, "Line wrapping: off");
 });
 
-Deno.test("session: word wrapping repeats punctuation and whitespace prefixes", () => {
+Deno.test("session: word wrapping indents continuations by the line prefix", () => {
   const s = new Session(
     parseDocument("  #  foo bar"),
     { color: false, showLineNumbers: false },
@@ -454,7 +454,7 @@ Deno.test("session: word wrapping repeats punctuation and whitespace prefixes", 
   assertEquals(s.view().wrapMode, "word");
   const rows = renderFrame(s.displayDoc(), s.view());
   assertEquals(rows[0], "  #  foo  \\");
-  assertEquals(rows[1], "  #  bar   ");
+  assertEquals(rows[1], "     bar   ");
 });
 
 Deno.test("session: word wrapping restores the visible source at a word", () => {
