@@ -414,7 +414,10 @@ Deno.test("CI job history page shows the slowest shard, every shard, and unshard
     html,
     'href="/bench?view=ci&amp;repo=labs&amp;days=45&amp;sort=job&amp;stat=p99" aria-current="page"',
   );
-  assertStringIncludes(html, '<select id="repo" name="repo">');
+  assertStringIncludes(
+    html,
+    '<select id="repo" name="repo" autocomplete="off">',
+  );
   assertStringIncludes(
     html,
     'type="range" id="days" name="days" min="1" max="45"',
@@ -639,7 +642,6 @@ Deno.test("CI job history page exposes live collection progress without disablin
   );
   assertStringIncludes(html, "rangeRequest.abort()");
   assertStringIncludes(html, "refreshRangeWhenIdle()");
-  assert(!html.includes("location.reload()"));
   assert(!html.includes("ciJobsRestoreDaysFocus"));
   assertStringIncludes(html, "setInterval(checkForUpdates, 60000)");
   assertStringIncludes(

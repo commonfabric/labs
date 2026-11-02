@@ -47,6 +47,7 @@ import {
   PERFORMANCE_VIEW_STYLES,
   performanceViewNav,
 } from "./performance-views.ts";
+import { VERSION_CLIENT } from "./version.ts";
 import {
   CHART_LINE,
   DASHBOARD_THEME_CLIENT,
@@ -3226,13 +3227,13 @@ ${DASHBOARD_THEME_HEAD}
     runtimeStat
       ? `<input type="hidden" name="stat" value="${escapeHtml(runtimeStat)}">`
       : ""
-  }<label class="field">repository <select id="repo" name="repo"><option value="labs"${
+  }<label class="field">repository <select id="repo" name="repo" autocomplete="off"><option value="labs"${
     source.key === "labs" ? " selected" : ""
   }>labs</option><option value="loom"${
     source.key === "loom" ? " selected" : ""
   }>loom</option></select></label><label class="field" for="days">window <output id="daysv" for="days">${days} day${
     days === 1 ? "" : "s"
-  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}"></label><nav class="choice-group" aria-label="Sort CI history"><span class="lbl">sort</span><a class="${
+  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}" autocomplete="off"></label><nav class="choice-group" aria-label="Sort CI history"><span class="lbl">sort</span><a class="${
     sort === "job" ? "on" : ""
   }" href="${ciPageHref(source, days, "job", runtimeStat)}"${
     sort === "job" ? ' aria-current="true"' : ""
@@ -3249,9 +3250,10 @@ ${DASHBOARD_THEME_HEAD}
 ${dashboardThemeToggle()}
 ${DASHBOARD_THEME_CLIENT}
 <script>
+  ${VERSION_CLIENT}
   const hg = document.getElementById("hg"), days = document.getElementById("days"), daysv = document.getElementById("daysv"), repo = document.getElementById("repo"), controls = days.form, KEY = "ciJobsHideGreen", DEFAULT_DAYS = days.value;
   let rangeContent = document.getElementById("range-content"), fetchProgress = document.getElementById("fetch-progress"), title = document.getElementById("fetch-title"), total = document.getElementById("fetch-total"), detail = document.getElementById("fetch-detail"), bar = document.getElementById("fetch-bar"), pageVersion = fetchProgress.dataset.snapshotVersion, appliedDays = days.value;
-  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", serverVersionChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
+  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", snapshotChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
   const apply = () => document.body.classList.toggle("hide-green", hg.checked);
   hg.checked = sessionStorage.getItem(KEY) === "1";
   apply();
@@ -3383,7 +3385,7 @@ ${DASHBOARD_THEME_CLIENT}
       eventStream?.close();
       eventStream = null;
       connectedProgressUrl = "";
-      if (state.needsReload || serverVersionChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
+      if (state.needsReload || snapshotChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
       else renderIdle();
     }
   };
@@ -3422,14 +3424,18 @@ ${DASHBOARD_THEME_CLIENT}
     const revision = viewRevision;
     try {
       const response = await fetch(fetchProgress.dataset.checkUrl, { headers: { accept: "application/json" } });
+      if (servedByAnotherVersion(response)) {
+        refreshRangeWhenIdle();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const state = await response.json();
       if (revision !== viewRevision) return;
-      serverVersionChanged ||= state.version !== pageVersion;
+      snapshotChanged ||= state.version !== pageVersion;
       if (state.progress) {
         connectProgress("/bench/ci-progress?id=" + encodeURIComponent(state.progress.id));
         renderProgress(state.progress);
-      } else if (serverVersionChanged) refreshRangeWhenIdle();
+      } else if (snapshotChanged) refreshRangeWhenIdle();
       else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");
       else if (!collectionFailed) renderIdle();
     } catch {
@@ -3440,13 +3446,14 @@ ${DASHBOARD_THEME_CLIENT}
   };
   const bindRangeContent = () => {
     viewRevision++;
+    rangeContent.removeAttribute("aria-busy");
     fetchProgress = rangeContent.querySelector("#fetch-progress");
     title = rangeContent.querySelector("#fetch-title");
     total = rangeContent.querySelector("#fetch-total");
     detail = rangeContent.querySelector("#fetch-detail");
     bar = rangeContent.querySelector("#fetch-bar");
     pageVersion = fetchProgress.dataset.snapshotVersion;
-    serverVersionChanged = false;
+    snapshotChanged = false;
     collectionFailed = false;
     transportFailed = false;
     connectedProgressUrl = "";
@@ -3487,6 +3494,13 @@ ${DASHBOARD_THEME_CLIENT}
         headers: { accept: "text/html" },
         signal: controller.signal,
       });
+      if (servedByAnotherVersion(response)) {
+        if (navigating) return;
+        navigating = true;
+        if (mode === "push") location.assign(url.pathname + url.search);
+        else location.reload();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const page = new DOMParser().parseFromString(await response.text(), "text/html");
       const replacement = page.getElementById("range-content");
@@ -3533,11 +3547,26 @@ ${DASHBOARD_THEME_CLIENT}
     if (!Number.isFinite(value)) return DEFAULT_DAYS;
     return String(Math.max(Number(days.min), Math.min(Number(days.max), Math.floor(value))));
   };
-  window.addEventListener("popstate", () => {
+  const restoreDays = () => {
     days.value = daysFromLocation();
     daysv.value = days.value + (days.value === "1" ? " day" : " days");
     syncDayLinks();
+  };
+  window.addEventListener("popstate", () => {
+    restoreDays();
     void loadRange("pop");
+  });
+  const restoreRepo = () => {
+    for (const option of repo.options) option.selected = option.defaultSelected;
+  };
+  window.addEventListener("pageshow", (event) => {
+    navigating = false;
+    restoreRepo();
+    if (event.persisted) {
+      restoreDays();
+      bindRangeContent();
+      void checkForUpdates();
+    }
   });
   bindRangeContent();
   setInterval(checkForUpdates, ${PERFORMANCE_CHECK_MS});
