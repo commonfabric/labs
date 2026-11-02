@@ -339,6 +339,8 @@ keep `fabric-wall-run-lists-ci-history.json` and
 `fabric-wall-run-lists-commit-ci-gantt.json`. A file holds, for each workflow,
 the runs of its head, whether they reach the end of the list, the oldest run
 each reader last read and when, and when the top of the list was last read. A
+run keeps only the first line of its head commit's message, which is the only
+part any view shows, and a run taken from a file that holds more is cut to it. A
 `RunLists` takes a workflow's head from its file whenever it starts holding one,
 and reads the list as it reads one it holds: from the top until it reaches a run
 in the file, so a run deleted from the top of the list meanwhile is dropped.
@@ -353,16 +355,17 @@ head nobody has read for a day is dropped, so a dashboard that has been down for
 longer reads from scratch.
 
 Processes that share a file lock it while each puts its heads in place of the
-ones the file holds and replaces the file whole. Of two heads of one workflow,
-the one whose top was read last is kept. A head was whole when it was saved, and
-a head taken from the file reads its list from the top until it reaches a run it
-holds, so either one can be restored. Every version of the dashboard reads the
-file the same way, without a version number. A head is cut back above the first
-run that lacks a field the dashboard reads or holds one it cannot use, so the
-runs from there down are read from GitHub again; a head whose own fields cannot
-be used, or that records a time later than the present, is dropped; fields the
-dashboard does not know are ignored and not written back; and a file that cannot
-be read at all is replaced.
+ones the file holds and replaces the file whole. Each process keeps the heads it
+last read or wrote, and parses the file again only once another process has
+replaced it. Of two heads of one workflow, the one whose top was read last is
+kept. A head was whole when it was saved, and a head taken from the file reads
+its list from the top until it reaches a run it holds, so either one can be
+restored. Every version of the dashboard reads the file the same way, without a
+version number. A head is cut back above the first run that lacks a field the
+dashboard reads or holds one it cannot use, so the runs from there down are read
+from GitHub again; a head whose own fields cannot be used, or that records a
+time later than the present, is dropped; fields the dashboard does not know are
+ignored and not written back; and a file that cannot be read at all is replaced.
 
 GitHub lists runs newest first, and a newer run has the larger id. Runs land at
 the top of the list and can be deleted from anywhere in it between two
@@ -1444,7 +1447,7 @@ it.
 | `COMMON_FABRIC_URL` | production | override the public-site URL (e.g. the `www` host if the apex redirects). |
 | `DASHBOARD_REPO` | CI tiles, github users | which repo the CI tiles read. Its owner is the organization the **github users** tile reads (default `commonfabric/labs`). |
 | `GITHUB_WEBHOOK_RELAY` | GitHub tiles | the `host:port` of the GitHub webhook relay's subscriber listener (default `github-webhooks.stage.commonfabric.dev:8081`). An empty value turns the relay off, and the dashboard then reads GitHub on its intervals alone. See [Following the GitHub webhook relay](#following-the-github-webhook-relay). |
-| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. |
+| `DASHBOARD_CACHE_DIR` | server caches | directory for all persistent dashboard cache files (default: the platform temp directory), including the `fabric-wall-run-lists-*.json` files that keep the run-list reader's runs across restarts. The first time a process takes the lock on the CI run index, a run-list file, the GitHub rate-limit ledger, the test-records history, or the runtime benchmark history, it removes the temporary files beside that file that interrupted writes left behind. |
 | `SIGNOZ_UI_URL` | prod errors, dau | browser-facing SigNoz URL for the explorer pop-outs: **prod errors** links to `/logs/logs-explorer` and **dau** to `/traces-explorer` under it. Defaults to `SIGNOZ_URL` when that is a public `https://` URL. An in-cluster `http://` URL, which a browser cannot reach, leaves both tiles with no pop-out at all, so set this whenever the server reaches SigNoz over one. |
 | `PROD_SERVICE` | prod errors, dau | the `service.name` production reports under in SigNoz, which both trace-reading tiles scope to. Defaults to `toolshed-production`. A name outside `[A-Za-z0-9._-]` is ignored, since it lands inside a query expression. |
 | `DAU_EXCLUDE_DIDS` | dau | comma-separated identity DIDs to leave out of the count — the server's own identity, `MEMORY_SERVICE_DIDS`, background services. Until it is set the count is an upper bound. See [dau](#dau) below. |
@@ -1787,19 +1790,33 @@ Notes:
     renders the same chart, warning, and coverage while honoring the remaining
     part of the 30-minute freshness window without querying GitHub. Dashboard
     processes that share the file lock it while merging and atomically replacing
-    entries. Attempts referenced by the last completed chart remain in the
-    cache while a rerun is being collected. An interrupted or rate-limited
-    collection records that its earlier manifest is no longer fresh, so a
-    restart keeps the completed chart visible but resumes collection.
-  - Runtime benchmark artifact results are written atomically to
-    the fixed `fabric-wall-benchmark-history.json` file in the dashboard cache
-    directory.
+    entries. A process merges the file into its own entries only when another
+    process has replaced the file since this process last wrote it. Attempts
+    referenced by the last completed chart remain in the cache while a rerun is
+    being collected. An interrupted or rate-limited collection records that its
+    earlier manifest is no longer fresh, so a restart keeps the completed chart
+    visible but resumes collection.
+  - Runtime benchmark artifact results are kept in the
+    `fabric-wall-benchmark-history` directory in the dashboard cache directory,
+    one binary file per run attempt, each written atomically.
+    `benchmark-history-cache.ts` describes the file layout. A save writes the
+    small `state.json` and only those run attempts that are missing from the
+    directory or that this process changed since it last read the directory.
+    Anything in the store that does not decode is read as absent, and the next
+    save replaces or removes it; the collection fetches a missing run again.
+    When the cache directory also holds a `fabric-wall-benchmark-history.json`
+    file, the dashboard reads it one run at a time, and the next save moves its
+    runs into the directory and deletes it. Loads and saves delete temporary
+    files that an interrupted write left in the directory. The first time a
+    process takes the store's lock, it also deletes those left beside the JSON
+    file.
     Successful reads and definitive empty results are retained for 60 days. A
     failed read remains uncached so a later scheduled collection can establish
-    whether the artifact exists. Dashboard processes that share the file lock it
-    while merging and replacing the stored run attempts. The exact run attempts
-    behind the last completed refresh, including the reason for a definitive
-    empty result, are stored in the same file. Attempts used by that completed
+    whether the artifact exists. Dashboard processes that share the cache
+    directory hold `fabric-wall-benchmark-history.json.lock` while they read,
+    merge, and write the stored run attempts. The exact run attempts behind the
+    last completed refresh, including the reason for a definitive empty result,
+    are stored beside them in `state.json`. Attempts used by that completed
     refresh remain available while a rerun is incomplete. Restarting the
     dashboard therefore reconstructs the same chart without immediately
     rediscovering benchmark runs that are still within the 30-minute freshness

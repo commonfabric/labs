@@ -5,6 +5,7 @@ import type {
   TerminalCodec,
 } from "@/codec-interface/interface.ts";
 import { debugStr, toCompactDebugString } from "@/value-debug";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { UnknownValue } from "./UnknownValue.ts";
 import type { FabricValue } from "@/interface.ts";
@@ -313,7 +314,7 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       return this.reportMalformed(
         tag,
         state,
-        e instanceof Error ? e.message : String(e),
+        describeFailure(e),
       );
     }
 

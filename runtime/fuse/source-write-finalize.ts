@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { PatternUpdateReceipt } from "@commonfabric/piece/ops";
 
 /**
@@ -47,7 +48,7 @@ export async function finalizeCommittedSourceWrite(
     await finalize();
     return { status: "completed" as const };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     const warning = committedSourceWarning(
       receipt,
       `refreshing the FUSE projection failed: ${message}`,

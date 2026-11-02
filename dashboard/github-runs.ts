@@ -60,6 +60,7 @@
  * the top was read.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type GitHubWebhooks,
   githubWebhooks,
@@ -72,9 +73,12 @@ import {
   GitHubStatusError,
   RUN_LIST_ACCESS,
 } from "./lib.ts";
-import { RunListFile, type SavedHead } from "./run-list-file.ts";
+import { firstLine, RunListFile, type SavedHead } from "./run-list-file.ts";
 
-/** A workflow run, as far as any part of the dashboard reads one. */
+/**
+ * A workflow run, as far as any part of the dashboard reads one. A run the
+ * dashboard holds keeps only the first line of its head commit's message.
+ */
 export interface GitHubRun {
   id: number;
   name?: string;
@@ -458,7 +462,7 @@ export class RunLists {
       } catch (error) {
         console.error(
           `run lists could not be saved to ${file.path}:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     });
@@ -678,7 +682,7 @@ async function recheck(
         // on without it, and the next reading reads it again.
         console.error(
           `run list ${list.repo} ${list.workflow} ${key} failed:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
         return;
       }
@@ -887,10 +891,10 @@ function pageHolding(
 }
 
 /**
- * Helper for `RunList`, which returns the fields of `run` the dashboard reads.
- * GitHub sends around 18 KB for each run, carrying its repository, head
- * repository, whole head commit, and both actors, and a head can hold
- * thousands of runs for a day.
+ * Helper for `RunList`, which returns the fields of `run` the dashboard reads,
+ * with only the first line of its head commit's message. GitHub sends around
+ * 18 KB for each run, carrying its repository, head repository, whole head
+ * commit, and both actors, and a head can hold thousands of runs for a day.
  */
 function narrow(run: GitHubRun): GitHubRun {
   return {
@@ -908,6 +912,8 @@ function narrow(run: GitHubRun): GitHubRun {
     run_started_at: run.run_started_at,
     updated_at: run.updated_at,
     html_url: run.html_url,
-    head_commit: run.head_commit && { message: run.head_commit.message },
+    head_commit: run.head_commit && {
+      message: firstLine(run.head_commit.message),
+    },
   } satisfies Record<keyof GitHubRun, unknown>;
 }

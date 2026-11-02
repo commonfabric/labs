@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
@@ -154,9 +155,7 @@ export class CFPlaidLink extends BaseElement {
       this.initializePlaidLink(data.linkToken, authCellId);
     } catch (error) {
       console.error("Error creating link session:", error);
-      this.authStatus = `Error: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.authStatus = `Error: ${describeFailure(error)}`;
       this.isLoading = false;
     }
   }
@@ -229,9 +228,7 @@ export class CFPlaidLink extends BaseElement {
       this.requestUpdate();
     } catch (error) {
       console.error("Error exchanging token:", error);
-      this.authStatus = `Error: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.authStatus = `Error: ${describeFailure(error)}`;
       this.isLoading = false;
     }
   }
@@ -267,9 +264,7 @@ export class CFPlaidLink extends BaseElement {
       this.requestUpdate();
     } catch (error) {
       console.error("Error removing account:", error);
-      this.authStatus = `Error: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.authStatus = `Error: ${describeFailure(error)}`;
       this.isLoading = false;
     }
   }

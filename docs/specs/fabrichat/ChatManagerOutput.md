@@ -13,6 +13,9 @@ interface ChatManagerOutput {
   /** Every room this user belongs to and hasn't forgotten, newest first. */
   rooms: PerUser<ChatIndexEntry[]>;
 
+  /** The rooms `rooms` would list but for their space's deletion. */
+  deletedRooms: PerUser<ChatIndexEntry[]>;
+
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
 
@@ -178,7 +181,27 @@ session that has none is refused.
   catalog, Home's: standalone `fabrichat-room` roots and explicit `chatRoom`
   declarations on other saved spaces' roots, combined with the manager's
   individual `roomMembership` choices. Resolved room identity deduplicates
-  discovery paths; an archived individual entry suppresses every path.
+  discovery paths; an archived individual entry suppresses every path. A room
+  whose space is
+  [deleted](../random-space-identities.md#deleting-a-space) is left out: its
+  catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
+  `true`.
+- **`deletedRooms`** lists, newest first, every room this user's manager knows
+  of whose space is deleted, apart from the rooms this user can still use, as
+  the catalog lists a deleted entry apart from saved and archived ones: a room
+  whose catalog entry is in the `deleted` state, and a room of `rooms` or
+  `roomMembership`, saved or archived, for which `spaceDeleted(room)` returns
+  `true`. A room archived before its space was deleted is listed too, as the
+  catalog lists its entry, so a person sees the same deletions in Home and in
+  FabriChat. A deleted
+  room can't be read, written or forgotten, so a client shows each one as
+  deleted and offers no control for it. Nothing through the entry's link can
+  be read, so what is left to show is what the manager holds itself: the
+  catalog's `title` hint for a standalone room, and for any room the entry's
+  own `kind`, `counterpart` and `since`. Recording the deletion is the
+  catalog's `markDeleted`, sent by the runtime that holds the catalog
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
+  the manager writes nothing when a room is deleted.
 - **`roomMembership`** keeps explicit choices about individual conversations:
   resolved room links, `saved` or `archived` state, `since`, and opaque
   `revision`. An optional `catalogRevision` records that standalone catalog
@@ -196,7 +219,9 @@ session that has none is refused.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the
-  conversation with that person is always the same room.
+  conversation with that person is always the same room, until the room's space
+  is deleted: then the next `openDirect` with that person replaces the entry
+  with a new room.
 - **`requests`** records each request's outcome under the `requestId` its caller
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
   for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason,
@@ -290,12 +315,21 @@ outward act when it creates a room, or offers one it finds.
   say. A room `counterpart` created and offered this user is in `direct` once
   this user's host has accepted it for them (see [offers](#offers)). A found
   room that was offered `counterpart` nothing, since a notice for them of it is
-  still in `outgoingNotices`, is offered them through `profile`'s inbox when
-  there is one, and `profile` is added to the room's participants, as for a new
-  room, and the notice is removed. A room whose roster already lists a profile
-  attesting `counterpart` is one they have joined, and is offered nothing; so is
-  one whose notice has been delivered. Nor is a room offered, and its notice
-  stays, when `requestId` is longer than an offer's `id` may be.
+  still in `outgoingNotices`, is offered them through `profile`'s inbox, and
+  `profile` is added to the room's participants, as for a new room. The notice
+  stays, so that it still tells them of the room should the offer not be sent,
+  as when `profile` points at no inbox; once the offer puts them on the room's
+  roster, `outgoingNotices` leaves it out. A room whose roster already lists a
+  profile attesting `counterpart` is one they have joined, and is offered
+  nothing; so is one whose notice has been delivered. Nor is a room offered,
+  and its notice stays, when `requestId` is longer than an offer's `id` may be.
+  A `direct` entry whose room's space is deleted, `spaceDeleted(room)`
+  returning `true`, is no such entry: the request goes on as if `direct` had
+  none for `counterpart`, and the room it creates replaces the entry. Where the
+  memory server has not yet answered for the room's space, the request runs
+  again once it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`.
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct
@@ -308,7 +342,14 @@ outward act when it creates a room, or offers one it finds.
   user, or `profile`'s label doesn't name `counterpart`.
 
 It is the only way a direct room is created, which is what keeps one person's
-conversation from splitting.
+conversation from splitting. A deleted direct room is the one exception: its
+conversation is gone for both people, and the next `openDirect` on either side
+creates its replacement. The two sides converge on one replacement as two new
+counterparts do: the room offered first is accepted as the one `direct` holds
+on the other side, since a held room whose space is deleted does not keep it
+out ([offers](#offers)), and when both create one before either offer arrives,
+the result is the [crossing creations](#crossing-creations) case, as for any
+first pair of rooms.
 
 ### `createGroup(requestId: string, members: string[], profiles?: Cell<ChatProfile>[], title: string, joinableByLink?: boolean)`
 
@@ -326,8 +367,9 @@ conversation from splitting.
   inbox the profile points at (see [offers](#offers)). A
   person named by more than one profile is offered the room through each
   distinct inbox those profiles point at, once per inbox, and added to the
-  room's participants once. Profiles of two different people must not point at
-  the same inbox. This user's own profiles are ignored.
+  room's participants once. An inbox that profiles of more than one person
+  point at is sent the offer once, and each of them is offered the room
+  through it. This user's own profiles are ignored.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its
@@ -346,12 +388,14 @@ Creates a group room. This is an outward act: it grants other people access.
   room's participants, produces a notice for each other member, and records the
   entry in `rooms`; adding this user to the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
-  `members` is absent, a member is not a principal's DID, a profile in
-  `profiles` attests no principal, or profiles of two different people point
-  at the same inbox, with the `code` `shared-inbox`. No setup points one
-  person's profile at another's inbox, so the request is refused whole, before
-  anything is created, granted, or offered, rather than handing each person an
-  offer meant for the other.
+  `members` is absent, a member is not a principal's DID, or a profile in
+  `profiles` attests no principal. The creating transaction reads no inbox
+  pointer, since a pointer can carry a label, such as its owner's
+  `PersonalSpace`, that neither the room's space nor this user's records
+  admit, so where the profiles point decides nothing about the outcome. Every
+  member is sent the same offer, so an inbox that profiles of two people point
+  at holds nothing meant for one of them alone. A stored outcome may still
+  carry the `code` `shared-inbox`, which no act records.
 
 ### `offerRoom(requestId: string, room: Cell<ChatRoomOutput>, member?: string, profile?: Cell<ChatProfile>)`
 
@@ -380,15 +424,22 @@ outcome back as the add's `delivery`.
   inbox, as this user reads `people`. The first profile the room is offered
   through is added to the room's participants. A person offered nothing, since
   no profile known for them points at an inbox, gets a notice instead. It
-  grants nobody anything.
-- **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry;
+  grants nobody anything. The offer is sent by an event of its own that
+  follows, which reads where the profiles point apart from the request's
+  outcome: a profile's inbox pointer can carry a label, such as its owner's
+  `PersonalSpace`, that this user's records don't admit.
+- **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry:
+  `noticed` at once for a person with no profile known for them, and otherwise
+  `offered`, which the event sending the offer turns to `noticed` when none of
+  the profiles points at an inbox;
   or `refused` if this user's catalog doesn't list the room, the room space's
   access list grants this user a level other than OWNER, the link isn't to a
   group room, as its creator's record would say, `requestId` is longer than an
   offer's `id` may be, `profile` attests no principal or names someone other
   than `member`, `member` is not a principal's DID, or it is this user. An
   access list the run doesn't hold yet, as a served run may not for a room
-  created moments before, refuses nothing. `offered` means sent, not received.
+  created moments before, refuses nothing. `offered` means sent, or about to
+  be, not received.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
@@ -590,14 +641,17 @@ and registers the room's space in their Home's shared-space catalog
 that registers a new entry, the host then sends the room to the recipient's own
 manager's `accept`, with `keepArchived`, so the recipient's manager records the
 room as theirs. A direct room goes in their `direct` under its creator, unless
-`direct` already holds a room with the sender, which stays, as under [crossing
-creations](#crossing-creations); either way their later `openDirect` with the
-sender returns the room `direct` holds rather than creating another. An entry
-already in the catalog, archived or not, gets no acceptance. A notice is
-produced for each other member offered nothing: one known only by their DID,
-who has no profile to reach an inbox through, or one whose profile points at no
-inbox. A member sent an offer gets no notice, and nothing tells the
-sender whether the offer arrived: `offerRoom`'s `offered` means sent.
+`direct` already holds a room with the sender, which stays, as under
+[crossing creations](#crossing-creations). A held room whose space is deleted,
+`spaceDeleted(room)` returning `true`, is no such room, as it is no such entry
+for `openDirect`, so the received room replaces it; either way their later
+`openDirect` with the sender returns the room `direct` holds rather than
+creating another. An entry already in the catalog, archived or not, gets no
+acceptance. A notice is produced for each other member offered nothing: one
+known only by their DID, who has no profile to reach an inbox through, or one
+whose profile points at no inbox. A member sent an offer gets no notice, and
+nothing tells the sender whether the offer arrived: `offerRoom`'s `offered`
+means sent, or about to be.
 
 ## Crossing creations
 

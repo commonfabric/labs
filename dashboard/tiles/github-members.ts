@@ -4,6 +4,7 @@
  * rolling history of each roster's size and chart them as two lines.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { REPO } from "../config.ts";
 import type { Tile, TileView } from "../types.ts";
 import { dashboardCacheFile } from "../history-files.ts";
@@ -144,7 +145,7 @@ export function createGithubMembers(): Tile {
           organizationUserIds(org, "outside_collaborators", credential),
         ]);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         console.error(
           "github users: could not read organization users:",
           message,

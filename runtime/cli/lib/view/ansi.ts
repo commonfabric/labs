@@ -74,17 +74,23 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * Number of Unicode code points in `s` — a non-BMP character (surrogate pair)
- * counts as one display column rather than two UTF-16 units. Column maths uses
- * this so glyphs like `𝑻` line up correctly.
+ * Number of code points in `s`, counted as `for...of` iterates them: a
+ * surrogate pair counts once, and a lone surrogate counts once too. Column maths
+ * uses this so glyphs like `𝑻` line up correctly.
  */
 export function cpLen(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 0xdc00 || c > 0xdfff) n++; // count everything but low surrogates
-  }
+  let n = s.length;
+  for (let i = 1; i < s.length; i++) if (isSurrogatePairEnd(s, i)) n--;
   return n;
+}
+
+/** Whether the UTF-16 unit at `i` is a low surrogate that completes a pair
+ * with the high surrogate before it. */
+export function isSurrogatePairEnd(s: string, i: number): boolean {
+  const unit = s.charCodeAt(i);
+  const previous = s.charCodeAt(i - 1);
+  return unit >= 0xdc00 && unit <= 0xdfff &&
+    previous >= 0xd800 && previous <= 0xdbff;
 }
 
 /** Visible width of `text` (code points) once ANSI escapes are removed. */

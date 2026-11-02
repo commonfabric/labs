@@ -148,7 +148,9 @@ export type HomeSharedSpaceProfileView = Schema<
 /**
  * Reads only command bindings at `Home.sharedSpaces.commands`. Event schemas
  * retain every field so Home's authored validator sees malformed optional data.
- * Host callers observe completion through ordinary handling receipts.
+ * Host callers observe completion through ordinary handling receipts. A Home
+ * without `retitle` still answers for the commands it has, so a caller that
+ * needs it can tell that Home needs an update.
  */
 export const sharedSpaceCommandsSchema = {
   type: "object",
@@ -159,6 +161,11 @@ export const sharedSpaceCommandsSchema = {
       asCell: ["stream"],
     },
     changeMembership: {
+      type: "object",
+      additionalProperties: true,
+      asCell: ["stream"],
+    },
+    retitle: {
       type: "object",
       additionalProperties: true,
       asCell: ["stream"],

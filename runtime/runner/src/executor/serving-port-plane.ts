@@ -18,6 +18,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import type { ExecutionLeaseAccess } from "@commonfabric/memory/v2/execution-lease";
 import {
   resolveSpaceOwnerOf,
   type ServedAclChange,
@@ -25,6 +26,7 @@ import {
   type SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {
@@ -79,6 +81,7 @@ export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
   eventStats: () => ServingLoopStats["events"];
   diagnostics: () => ServingLoopDiagnostics;
+  collectedMemory: () => CollectedMemory;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
@@ -297,18 +300,12 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     // about as much to post as the commit itself.
     this.#reportEventStats();
     try {
-      const { result, homeRefused } = await this.#endpoint.request(
-        "sink.commitWave",
-        {
-          sessionId: this.#deps.sessionId,
-          localSeq,
-          batch: encodeMemoryBoundary(batch as unknown as FabricValue),
-        },
-      );
-      if (homeRefused) this.#deps.onHomeRefused();
-      return result;
+      return await this.#endpoint.request("sink.commitWave", {
+        sessionId: this.#deps.sessionId,
+        localSeq,
+        batch: encodeMemoryBoundary(batch as unknown as FabricValue),
+      });
     } catch (error) {
-      if (batch.home) this.#deps.onHomeRefused();
       return waveCommitFailureResult(error);
     }
   }
@@ -448,6 +445,31 @@ class PlaneMemoryServer implements HostMemoryServer {
   /** @inheritDoc */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#plane.engineForSpace(space);
+  }
+
+  /** @inheritDoc */
+  get executionLeases(): ExecutionLeaseAccess {
+    return {
+      acquire: (space, holder) =>
+        this.#endpoint.request("server.acquireExecutionLease", {
+          space,
+          holder,
+        }),
+      release: (space, holder) =>
+        this.#endpoint.request("server.releaseExecutionLease", {
+          space,
+          holder,
+        }),
+    };
+  }
+
+  /** @inheritDoc */
+  commitDeliveryFailureNotice(
+    notice: Parameters<HostMemoryServer["commitDeliveryFailureNotice"]>[0],
+  ): Promise<void> {
+    return this.#endpoint.request("server.commitDeliveryFailureNotice", {
+      notice,
+    });
   }
 
   /** @inheritDoc */
@@ -657,6 +679,10 @@ export class ServingPlane {
     this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
+    this.#endpoint.onRequest(
+      "host.collectedMemory",
+      () => host.collectedMemory(),
+    );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",
       ({ space, verb }) => host.runLifecycleVerb(space, verb),

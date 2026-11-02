@@ -16,6 +16,7 @@
  * command that does.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { BenchmarkStats } from "./benchmark-history-cache.ts";
 
 /** One benchmark in a `deno bench --json` report. */
@@ -189,7 +190,7 @@ export function benchmarkReportProblem(json: string): string | undefined {
   try {
     report = parseBenchmarkReport(json);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = describeFailure(error);
     return `the report does not parse: ${reason}`;
   }
   if (report.cpu === undefined) {

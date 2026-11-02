@@ -34,10 +34,7 @@ import {
   WavePreconditionError,
   WaveStaleReadError,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   replaceSchedulerBasisRows,
   selectSchedulerBasisRows,
@@ -110,7 +107,7 @@ const revisionScopeKeys = (
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);
-  assert(acquireExecutionLease(engine, { space: SPACE, holder }));
+  assert(engine.executionLeases.acquire(SPACE, holder));
   return holder;
 };
 

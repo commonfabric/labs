@@ -1,4 +1,5 @@
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type ConfidenceAssessment,
   DEFAULT_INPUT,
@@ -264,7 +265,7 @@ textTrack.mode = "hidden";
 
 function showError(cause: unknown): void {
   durationErrorMessage = undefined;
-  error.textContent = cause instanceof Error ? cause.message : String(cause);
+  error.textContent = describeFailure(cause);
 }
 
 function clearError(): void {
@@ -273,7 +274,7 @@ function clearError(): void {
 }
 
 function showDurationError(cause: unknown): void {
-  const detail = cause instanceof Error ? cause.message : String(cause);
+  const detail = describeFailure(cause);
   durationErrorMessage = `Could not update the recording duration. ${detail}`;
   error.textContent = durationErrorMessage;
 }

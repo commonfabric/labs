@@ -225,6 +225,16 @@ export interface Suite {
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
 
   /**
+   * The repository files a unit runs, for a unit that is not itself one
+   * file: the test files of a unit that holds a directory's tests, the files
+   * a shell suite's step can source, call or deploy, or the source a named
+   * unit judges. A change reaches the unit through what
+   * reaches them. Absent, or empty for a unit, a unit is the file it is
+   * named for where it is named for one, and stands for no file otherwise.
+   */
+  sourcesOf?(unit: Unit): readonly string[];
+
+  /**
    * What this suite's coverage is gated on: one entry per workspace
    * member whose lines a subset of these units is scored over. Absent
    * where nothing here is measured, which is every suite whose runner

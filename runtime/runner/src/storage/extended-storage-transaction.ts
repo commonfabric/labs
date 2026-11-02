@@ -26,6 +26,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
@@ -3647,7 +3648,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // pre-storage-rejection path and every observer (commit callbacks, the
       // scheduler's failed-commit machinery, error surfacing) sees the real
       // cause.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeFailure(error);
       this.#commitPreparationCrash = message;
       // Reported UNCONDITIONALLY, not through this module's opt-in logger
       // (disabled by default — `@commonfabric/logger` early-returns): a crash

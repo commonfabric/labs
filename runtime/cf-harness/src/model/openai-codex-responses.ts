@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -681,7 +682,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         responseCompleteDurationMs: durationMs,
         outcome: "transport_error",
         errorDetail: redact(
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       }, providerUnavailable("OpenAI Codex transport request failed"));
     }
@@ -842,7 +843,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     } catch (error) {
       throw providerUnavailable(
         "OpenAI Codex returned an invalid terminal response: " +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
       );
     }
     const emptyReply = emptyReplyDiagnostic(assistant, "responses", rawPayload);

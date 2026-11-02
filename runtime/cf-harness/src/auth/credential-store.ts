@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type {
   HarnessCredential,
@@ -475,9 +476,7 @@ export class FileHarnessCredentialStore implements HarnessCredentialStore {
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return emptyDocument();
       throw new Error(
-        `failed to read credential store: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `failed to read credential store: ${describeFailure(error)}`,
       );
     }
   }

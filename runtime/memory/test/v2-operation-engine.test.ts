@@ -23,10 +23,7 @@ import {
   UnsupportedOpCodecError,
   WaveCommitConflictError,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
@@ -2242,7 +2239,7 @@ describe("v2-operation-engine", () => {
           const seededSeq = seed(engine);
           const space = "did:key:z6Mk-operation-wave-space";
           const holder = executionLeaseHolder(`service:${space}`);
-          expect(acquireExecutionLease(engine, { space, holder })).toBe(true);
+          expect(engine.executionLeases.acquire(space, holder)).toBe(true);
 
           let thrown: unknown;
           try {

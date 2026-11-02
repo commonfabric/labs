@@ -74,6 +74,7 @@
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { parseCellReference } from "@commonfabric/runner/shared";
 
 import { repositoryFiles } from "./repository-files.ts";
@@ -368,18 +369,6 @@ function lineAt(text: string, index: number): number {
 }
 
 /**
- * What a reader is told about a value a parse threw.
- *
- * `parseCellReference` throws an `Error`, whose message is the sentence the
- * grammar wrote for the string it refused. A value of any other kind is
- * rendered whole rather than reached into, so one this module did not expect
- * still reaches the report as itself rather than as `undefined`.
- */
-export function refusalMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
  * Keys an exemption by the file it is about and the string it names.
  *
  * The pair is encoded rather than joined. A join needs a separator neither
@@ -430,7 +419,7 @@ export function collectFindings(
           file: path,
           line: lineAt(prose, span.at),
           example,
-          message: refusalMessage(error),
+          message: describeFailure(error),
         });
       }
     }

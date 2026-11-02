@@ -5,6 +5,8 @@
  * and every language module can depend on them without depending on each other.
  */
 
+import { isSurrogatePairEnd } from "./ansi.ts";
+
 /** Char offset where each line begins. */
 export function computeLineStarts(text: string): number[] {
   const starts = [0];
@@ -40,19 +42,18 @@ export function codePointColumns(
   text: string,
   lineStarts: number[],
 ): ColumnOf {
-  // `cpLen()` counts every UTF-16 unit except a low surrogate, so a column is
-  // the distance in units less the low surrogates in between.
-  const lowSurrogates: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c >= 0xdc00 && c <= 0xdfff) lowSurrogates.push(i);
+  // `cpLen()` counts every UTF-16 unit except a low surrogate that completes a
+  // pair, so a column is the distance in units less those in between.
+  const pairEnds: number[] = [];
+  for (let i = 1; i < text.length; i++) {
+    if (isSurrogatePairEnd(text, i)) pairEnds.push(i);
   }
   const before = (offset: number): number => {
     let lo = 0;
-    let hi = lowSurrogates.length;
+    let hi = pairEnds.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (lowSurrogates[mid] < offset) lo = mid + 1;
+      if (pairEnds[mid] < offset) lo = mid + 1;
       else hi = mid;
     }
     return lo;

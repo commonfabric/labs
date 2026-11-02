@@ -29,7 +29,8 @@ import {
   parseAttrcacheTimeoutSeconds,
   resolveMountCacheOptions,
 } from "./mount-options.ts";
-import darwinPlatform, { libfusePaths } from "./platform-darwin.ts";
+import darwinPlatform from "./platform-darwin.ts";
+import { darwinLibfusePaths } from "./library-paths.ts";
 import linuxPlatform from "./platform-linux.ts";
 import { EACCES, EINVAL, EROFS, FILE_MODE_RW } from "./platform.ts";
 import { FsTree } from "./tree.ts";
@@ -693,7 +694,7 @@ Deno.test("attrcache-timeout parses whole seconds within bounds", () => {
 
 Deno.test("libfuse search includes the FUSE-T per-user install location", () => {
   assertEquals(
-    libfusePaths(env({ HOME: "/Users/alice" })),
+    darwinLibfusePaths(env({ HOME: "/Users/alice" })),
     [
       "/usr/local/lib/libfuse-t.dylib",
       "/Users/alice/.fuse-t/usr/local/lib/libfuse-t.dylib",
@@ -701,7 +702,7 @@ Deno.test("libfuse search includes the FUSE-T per-user install location", () => 
     ],
   );
   assertEquals(
-    libfusePaths(env({})),
+    darwinLibfusePaths(env({})),
     [
       "/usr/local/lib/libfuse-t.dylib",
       "/usr/local/lib/libfuse.2.dylib",

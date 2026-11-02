@@ -27,20 +27,22 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- deleting a space (section 4.5.1, INV-15) is specified and not yet
-  implemented: the server refuses the tombstone it writes under INV-12's
-  validity clause, as it refuses any ACL document that is not an access list.
-  The client's support for the `deleted` marker and `session/revoked` reason
-  lands before the server sends either
+- deleting a space (section 4.5.1, INV-15) is specified and not yet implemented:
+  the server refuses the deletion tombstone it writes under INV-12's validity
+  clause, as it refuses any ACL document that is not an access list
+- the client in this repository handles the `deleted` marker and
+  `session/revoked` reason, which the server sends neither of yet. Every
+  client in use handles both before the server sends either, those built
+  outside this repository included
+  ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
 - an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
   4.5.1) is specified and not yet implemented: the server sends its current
   sequence
-- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is specified
-  and not yet implemented: no server advertises `instanceNameMark`, no client
-  declares `instanceNames`, and no space is marked. Only the client's handling
-  of the `session/revoked` reason `instance-names` is built: a client ends the
-  session with the refusal `clientUpdateRequired` marks, and keeps it the same
-  way, though no server sends that reason
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
+  by the server, which advertises `instanceNameMark`, records the mark and
+  admits opens and commits by it, and a client keeps the `session/revoked`
+  reason `instance-names` as the refusal `clientUpdateRequired` marks; no
+  client declares `instanceNames` yet, so no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -420,13 +422,14 @@ defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
 
-`instanceNameMark` (specified, not yet built) advertises that the server
-records the instance-naming mark of a space and enforces INV-16: a marked
-space admits only sessions, and commits, that declare `instanceNames: true`;
-the first commit from such a session marks the space; and the server admits a
-declaring session to an unmarked space only while its own posture names
-instances. It is build-inherent, defaults to `false` when absent, and only the
-server advertises it. A client whose runtime names instances REQUIRES it: an
+`instanceNameMark` advertises that the server records the instance-naming mark
+of a space and enforces INV-16: a marked space admits only sessions, and
+commits, that declare `instanceNames: true`; the first commit from such a
+session marks the space; and the server admits a declaring session to an
+unmarked space only while its own posture names instances. It is
+build-inherent, defaults to `false` when absent, and only the server advertises
+it: a client's `hello` leaves it out, as it leaves out `sessionReportV1`. A
+client whose runtime names instances REQUIRES it: an
 older server would admit its commits and mark nothing, leaving positional
 runtimes free to bind the parents it wrote to other documents. Such a client
 fails the connection permanently against a server that does not advertise it,
@@ -435,8 +438,7 @@ advertise `stableExpressionResultIds`, with guidance to update the server. A
 client whose runtime names none declares nothing and is unaffected on any
 server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
-`clientUpdateRequired` marks, and keeps it the same way; a client already does
-so, before the capability is built.
+`clientUpdateRequired` marks, and keeps it the same way.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -485,9 +487,8 @@ interface SessionOpenRequest {
     // signed into a signed open, covered by the connection's authentication
     // of an open that names its principal.
     invite?: { inviteId: string; code: string };
-    // Present when the session's runtime names instances (specified, not yet
-    // built; see the rules and INV-16). Absent means positional. Inside the
-    // signed descriptor.
+    // Present when the session's runtime names instances (see the rules and
+    // INV-16). Absent means positional. Inside the signed descriptor.
     instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
@@ -649,7 +650,8 @@ Rules:
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything
 - a session whose runtime names instances declares `instanceNames: true`, and
-  one that declares nothing is positional (specified, not yet built). A server
+  one that declares nothing is positional; a value other than `true` refuses
+  the message. No client declares it yet. A server
   that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
   carrying `clientUpdateRequired: true`, an open or resume of a marked space by
   a positional session, and an open of an unmarked space by a naming session
@@ -776,7 +778,7 @@ interface HelloMessage {
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
-    // Specified, not yet built (INV-16).
+    // INV-16.
     instanceNameMark?: boolean;
   };
 }
@@ -954,8 +956,8 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  // `instance-names` (no server sends it yet): a naming commit marked the
-  // space and the session declares no naming (INV-16); a client treats it as
+  // `instance-names`: a naming commit marked the space and the session
+  // declares no naming (INV-16); a client treats it as
   // `clientUpdateRequired`.
   reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
@@ -1877,7 +1879,7 @@ Semantics:
 `served` carries one crossing from the serving host of one space into the
 session's space, for the process that owns that space to admit: the host's
 side of
-[owner routing](../../plans/serving-loop-owner-routing.md), where a crossing
+[owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
 session to the owner, open as the deployment's service identity.
@@ -2145,7 +2147,7 @@ row for a deleted space applies whether or not the policy is active:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
-| a deleted space's tombstone | No access for any principal, service DIDs included, for good |
+| a deleted space's deletion tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
 initialize or repair ACL state, except a deleted space's. The exact space DID
@@ -2175,59 +2177,60 @@ revision of the document exists.
 A space's sole member deletes it, which ends it for everyone and for good.
 Deleting a space writes its ACL document and never removes it: the deletion
 commit is an ACL-only commit, shaped as any other, whose document is a
-tombstone rather than an access list:
+deletion tombstone rather than an access list:
 
 ```json
 { "deleted": { "by": "did:key:z6Mk..." } }
 ```
 
-`by` names the committing principal, and the tombstone holds nothing else. The
-server admits it only when the stored ACL is valid and its one entry is at
-OWNER, naming either the committing principal or the principal the session's
-capability resolves to through a verified proof chain, the chain's root issuer
-("Proof chains" below). For an ordinary space that entry is the deleting
-principal's own, so another member has to be removed, visibly and through the
-ordinary check, before the space can be deleted. That asks no authority an OWNER
-does not already hold. A self-owned space, whose list names the space's own DID
-and whose owner acts through a delegation from it, is deleted through the chain,
-as every other OWNER act on it is. A server whose access-list policy admits no
-delegations, and so advertises no `sessionOpenProofs`, refuses every chain, and
-there only an entry naming the committing principal admits a deletion. A
-delegation is not an entry in the list, so another holder of one loses access
-with no commit of its own first, as it does when an owner replaces the list; and
-since `by` still names the committing principal, the tombstone is the one place
-such a space records the identity that acted for it. A self-owned profile's
-space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
-list replacement through the chain before it is deleted. No one deletes a Home
-space, through a chain or without one: a space whose list grants its own DID
-OWNER and that declares no kind, which is how the server already tells a home
-when it resolves the `actingAs` binding. "Nothing else" binds the document's
-`value`, the tombstone itself; the fields beside it are held to what any ACL
-write holds them to.
+`by` names the committing principal, and the deletion tombstone holds nothing
+else. The server admits it only when the stored ACL is valid and its one entry
+is at OWNER, naming either the committing principal or the principal the
+session's capability resolves to through a verified proof chain, the chain's
+root issuer ("Proof chains" below). For an ordinary space that entry is the
+deleting principal's own, so another member has to be removed, visibly and
+through the ordinary check, before the space can be deleted. That asks no
+authority an OWNER does not already hold. A self-owned space, whose list names
+the space's own DID and whose owner acts through a delegation from it, is
+deleted through the chain, as every other OWNER act on it is. A server whose
+access-list policy admits no delegations, and so advertises no
+`sessionOpenProofs`, refuses every chain, and there only an entry naming the
+committing principal admits a deletion. A delegation is not an entry in the
+list, so another holder of one loses access with no commit of its own first, as
+it does when an owner replaces the list; and since `by` still names the
+committing principal, the deletion tombstone is the one place such a space
+records the identity that acted for it. A self-owned profile's space, whose list
+also grants `"*"` WRITE, has that entry removed by an ordinary list replacement
+through the chain before it is deleted. A Home space is not deleted while its
+list has a Home's shape, through a chain or without one: a space whose list
+grants its own DID OWNER and that declares no kind, which is how the server
+already tells a home when it resolves the `actingAs` binding. INV-15 says what
+that test guarantees and what it leaves to a service identity's trust.
+"Nothing else" binds the document's `value`, the deletion tombstone itself; the
+fields beside it are held to what any ACL write holds them to.
 
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
-carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`.
-The server checks for deletion once it has routed the command and, for a
-command that names a session, found that session open, and before every other
-check, so a command to a deleted space reports the deletion and never a shape,
-capability or genesis failure. The server revokes the sessions open on the
-space with the `session/revoked` reason `deleted`. The session that committed
-the deletion receives its transact response first and its revocation after, as
-a member's session does when it removes its own entry. The server admits
-no further commit to the space on any write path, engine-direct writes from the
-serving plane included, so no principal can undo the deletion. These checks
-run before a commit's write transaction starts, so the engine repeats the
-tombstone check inside that transaction for every fresh commit, and checks a
+carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`. The
+server checks for deletion once it has routed the command and, for a command
+that names a session, found that session open, and before every other check, so
+a command to a deleted space reports the deletion and never a shape, capability
+or genesis failure. The server revokes the sessions open on the space with the
+`session/revoked` reason `deleted`. The session that committed the deletion
+receives its transact response first and its revocation after, as a member's
+session does when it removes its own entry. The server admits no further commit
+to the space on any write path, engine-direct writes from the serving plane
+included, so no principal can undo the deletion. These checks run before a
+commit's write transaction starts, so the engine repeats the deletion tombstone
+check inside that transaction for every fresh commit, and checks a deletion
 tombstone commit's own clauses there too, against the ACL as stored: a deletion
 committed through another connection in between still refuses the commit, with
-the same refusal (INV-15). All of this
-holds in every ACL mode, `off` included, as do the admission rules above for a
-commit that writes a tombstone: a deleted space is refused whatever the policy,
-since a mode that admitted commits to one could undo it. A tombstone is not an
-access list, so a server rolled back to a release that does not know tombstones
-finds the ACL malformed, and refuses the space to every principal but a service
-DID.
+the same refusal (INV-15). All of this holds in every ACL mode, `off` included,
+as do the admission rules above for a commit that writes a deletion tombstone: a
+deleted space is refused whatever the policy, since a mode that admitted commits
+to one could undo it. A deletion tombstone is not an access list, so a server
+rolled back to a release that does not know deletion tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
 
 The server sends the `deleted` marker and the `deleted` reason to every client,
 whatever the client advertises. A client that predates the marker reads the
@@ -2596,8 +2599,7 @@ and the markers, never on `message`. A `session/revoked` terminates the session
 with an `Error` named `SessionRevokedError` for `taken-over`, and
 `AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
 also sets `deleted: true` on it, so a session open when its space is deleted
-reports the deletion as a refused reopen would. Copying `deleted` is not
-implemented yet.
+reports the deletion as a refused reopen would.
 
 ### 4.8.5 Session Lifecycle
 

@@ -285,7 +285,10 @@ space.
   attestation. The streams check the authenticated event actor instead, so
   selecting another person's profile can offer a control the handler refuses.
   Every entry is all `false` while `canSend` doesn't hold or the selected
-  profile has no verified owner.
+  profile has no verified owner. It is absent until the session has derived
+  it, so an empty list says the room has no messages. A client reads an absent
+  `messageRights` as no rights to any message, and offers none of the controls
+  that act on one.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's
@@ -676,8 +679,10 @@ with them.
   carry none. An add the stream doesn't admit, as one without the gesture,
   records nothing.
 - **Delivery:** a `done` add carries `delivery`, how the person was told of
-  the room: `offered`, sent to at least one share inbox, which says nothing of
-  whether it arrived; `noticed`, a notice in the manager's `outgoingNotices`
+  the room: `offered`, sent, or about to be, to at least one share inbox,
+  which says nothing of whether it arrived, and which the manager turns to
+  `noticed` should no profile it offers through point at an inbox; `noticed`,
+  a notice in the manager's `outgoingNotices`
   for a client to deliver; or `access-only`, told nothing, so that the adder
   has to send them the room's link. An add with no manager to send to records
   `access-only` in that event: the reader has no manager, or theirs hasn't

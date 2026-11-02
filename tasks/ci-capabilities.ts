@@ -17,6 +17,12 @@
  */
 
 import * as path from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
+import {
+  darwinLibfusePaths,
+  LINUX_LIBFUSE_PATHS,
+} from "@commonfabric/fuse/library-paths";
 
 import {
   awaitReadyMarker,
@@ -111,6 +117,15 @@ export interface CapabilityContext {
   workDir: string;
 
   /**
+   * The tree a binary the lane keeps is built in and kept under, absolute,
+   * in place of the root. A binary found under `BINARY_CACHE_DIR` there is
+   * used as it is, and a build rewrites files of the tree it runs in while
+   * it runs, so a run that cannot vouch for what the root's cache holds, or
+   * whose root somebody is working in, names a copy of the tree here.
+   */
+  buildFrom?: string;
+
+  /**
    * How a capability runs a command. A caller that supplies one is
    * saying what the machine would have answered, which is the only way
    * setup that installs packages and starts servers can be exercised
@@ -183,6 +198,37 @@ export interface Capability {
    * environment is visible to this one.
    */
   needs?: readonly CapabilityId[];
+
+  /**
+   * Whether opening it prepares a continuous-integration runner, installing
+   * packages, relaxing a kernel setting, or deepening a shallow checkout,
+   * rather than starting or naming something the suites reach. A run on a
+   * workstation opens none of these, and its tests find the machine and the
+   * checkout as their owner set them up.
+   */
+  preparesRunner?: true;
+
+  /**
+   * For one that prepares a runner, what a machine running `os` lacks that
+   * opening it would have provided, or nothing where the machine has it. It
+   * asks and changes nothing, so a run on a workstation can leave out the
+   * suites needing what is not there rather than fail them.
+   */
+  missing?(
+    context: Pick<CapabilityContext, "root" | "exec" | "report">,
+    os?: typeof Deno.build.os,
+  ): Promise<string | undefined>;
+
+  /** The binary it builds where `BINARY_CACHE_DIR` holds none. */
+  builds?: CachedBinaryName;
+
+  /**
+   * Whether what it opens shares the checkout with its owner's own work, as
+   * the local development stack does: its servers keep their logs and their
+   * store in the checkout, where the owner's own servers keep theirs. A run
+   * on a workstation runs no suite needing one.
+   */
+  sharesCheckout?: true;
 
   open(context: CapabilityContext): Promise<OpenCapability>;
 }
@@ -323,7 +369,7 @@ function commandOptions(
 }
 
 /** How this context runs commands. */
-function execOf(context: CapabilityContext): Exec {
+function execOf(context: Pick<CapabilityContext, "exec" | "report">): Exec {
   const exec = context.exec ?? run;
   return (command, args, options) => {
     context.report?.(`ci-lane: running ${[command, ...args].join(" ")}`);
@@ -338,11 +384,6 @@ function spawnOf(context: CapabilityContext): Spawn {
     context.report?.(`ci-lane: starting ${[command, ...args].join(" ")}`);
     return start(command, args, options);
   };
-}
-
-/** What a thrown value says, whether or not it is an `Error`. */
-export function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -409,6 +450,37 @@ const deno: Capability = {
 const fuse: Capability = {
   id: "fuse",
   description: "the FUSE headers and tools the CLI's mount suite needs",
+  preparesRunner: true,
+  async missing(context, os = Deno.build.os) {
+    const exec = execOf(context);
+    // The paths are the shell's arguments, so none is read as shell syntax.
+    const anyOf = (paths: readonly string[]) =>
+      succeeds(exec, [
+        "sh",
+        "-c",
+        'for at; do test -e "$at" && exit 0; done; exit 1',
+        "sh",
+        ...paths,
+      ]);
+    if (os === "darwin") {
+      return await anyOf(darwinLibfusePaths())
+        ? undefined
+        : "neither FUSE-T nor macFUSE is installed";
+    }
+    if (!await anyOf(LINUX_LIBFUSE_PATHS)) {
+      return "libfuse3 is not where the FUSE bindings look for it";
+    }
+    if (!await succeeds(exec, onPath("fusermount3"))) {
+      return "fusermount3 is not on the path";
+    }
+    return await succeeds(exec, [
+        "sh",
+        "-c",
+        "test -r /dev/fuse -a -w /dev/fuse",
+      ])
+      ? undefined
+      : "/dev/fuse is not open to this user";
+  },
   async open(context) {
     if (!context.dryRun) {
       const exec = execOf(context);
@@ -439,6 +511,12 @@ const fuse: Capability = {
 const jq: Capability = {
   id: "jq",
   description: "jq, which the shell integration suites filter JSON with",
+  preparesRunner: true,
+  async missing(context) {
+    return await succeeds(execOf(context), onPath("jq"))
+      ? undefined
+      : "jq is not on the path";
+  },
   async open(context) {
     if (!context.dryRun) {
       await apt(execOf(context), ["jq"], [onPath("jq")]);
@@ -446,6 +524,9 @@ const jq: Capability = {
     return exported({});
   },
 };
+
+/** The kernel setting with which AppArmor restricts user namespaces. */
+const USERNS_SYSCTL = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
 
 /**
  * Astral drives Chrome through a user namespace, which Ubuntu's AppArmor
@@ -455,8 +536,18 @@ const jq: Capability = {
 const browser: Capability = {
   id: "browser",
   description: "the AppArmor relaxation a sandboxed browser needs",
+  preparesRunner: true,
+  async missing(context) {
+    return await succeeds(execOf(context), [
+        "sh",
+        "-c",
+        `test ! -e ${USERNS_SYSCTL} || test "$(cat ${USERNS_SYSCTL})" = 0`,
+      ])
+      ? undefined
+      : "AppArmor restricts the user namespace a sandboxed browser needs";
+  },
   async open(context) {
-    const sysctl = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns";
+    const sysctl = USERNS_SYSCTL;
     if (!context.dryRun) {
       const exec = execOf(context);
       // Asked of the machine rather than of the filesystem directly, so
@@ -487,6 +578,14 @@ const browser: Capability = {
 const gitHistory: Capability = {
   id: "git-history",
   description: "an unshallowed checkout",
+  preparesRunner: true,
+  async missing(context) {
+    const shallow = (await execOf(context)("git", [
+      "rev-parse",
+      "--is-shallow-repository",
+    ], { cwd: context.root })).trim();
+    return shallow === "true" ? "the checkout is shallow" : undefined;
+  },
   async open(context) {
     if (!context.dryRun) {
       const exec = execOf(context);
@@ -597,6 +696,14 @@ interface ToolshedOptions {
    * it named works.
    */
   role: ServerExecutionCiRole;
+
+  /**
+   * Whether the suites are told the server's own store, rather than one of
+   * their own beside it. A suite that reads a server's store through the
+   * command line needs the server's. One that starts servers of its own in
+   * its test processes needs its own, or two servers would open one store.
+   */
+  sharesStore: boolean;
 }
 
 /**
@@ -673,7 +780,21 @@ async function startToolshed(
     TOOLSHED_URL: url,
     TOOLSHED_PORT: `${port}`,
   };
-  if (context.dryRun) return exported(env);
+  // The server keeps its spaces in a store of its own in the lane's work
+  // directory, and so do the suites, so none of them opens another's, a
+  // developer's own included. A server, and a command that reads a store
+  // directly, finds it by these names before any default.
+  const store = path.join(context.workDir, `toolshed-${port}`);
+  const storeAt = (directory: string) => ({
+    MEMORY_DIR: path.toFileUrl(path.join(store, directory) + "/").href,
+    DB_PATH: "",
+  });
+  const storeEnv = storeAt("memory");
+  const told = {
+    ...env,
+    ...(options.sharesStore ? storeEnv : storeAt("suites-memory")),
+  };
+  if (context.dryRun) return exported(told);
   const [command, ...args] = options.command;
   const logFile = path.join(context.workDir, `toolshed-${port}.log`);
   const server = spawnOf(context)(command!, [...args, `--port=${port}`], {
@@ -683,10 +804,14 @@ async function startToolshed(
     clearEnv: true,
     env: {
       ...serverExecutionEnv(options.role),
+      CACHE_DIR: path.join(store, "cache"),
       // The server reaches for a gateway and a model key at startup. A
       // test server has neither.
       CFTS_AI_GATEWAY_URL: "",
       CFTS_AI_LLM_ANTHROPIC_API_KEY: "fake",
+      // Leak tests read the server's memory after a full collection.
+      EXPOSE_GC: "true",
+      ...storeEnv,
       ...env,
       [BACKGROUND_LOG_ENV]: logFile,
     },
@@ -719,12 +844,12 @@ async function startToolshed(
     // the log is carried in the throw or it goes with the work directory
     // unread.
     throw new Error(
-      `${messageOf(error)}\ntoolshed log:\n${await logTail(logFile)}`,
+      `${describeFailure(error)}\ntoolshed log:\n${await logTail(logFile)}`,
       { cause: error },
     );
   }
   return {
-    env,
+    env: told,
     logs: [logFile],
     close: async () => {
       const status = await stop();
@@ -764,6 +889,8 @@ const toolshed: Capability = {
       command: [Deno.execPath(), "run", "--unstable-otel", "-A", "index.ts"],
       cwd: path.join(context.root, "runtime", "toolshed"),
       role: "default",
+      // The shell suites read the server's spaces through `cf inspect`.
+      sharesStore: true,
     }),
 };
 
@@ -790,7 +917,8 @@ async function cachedBinary(
   context: CapabilityContext,
   name: CachedBinaryName,
 ): Promise<string> {
-  const binary = path.join(context.root, BINARY_CACHE_DIR, name);
+  const tree = context.buildFrom ?? context.root;
+  const binary = path.join(tree, BINARY_CACHE_DIR, name);
   if (context.dryRun) return binary;
   let present = true;
   try {
@@ -802,12 +930,12 @@ async function cachedBinary(
   if (!present) {
     const { build, bakes } = cachedBinaries()[name];
     await execOf(context)(Deno.execPath(), ["task", "build-binaries", build], {
-      cwd: context.root,
+      cwd: tree,
       clearEnv: true,
       env: { ...hostEnv(), ...bakes },
     });
     await Deno.mkdir(path.dirname(binary), { recursive: true });
-    await Deno.copyFile(path.join(context.root, "dist", build), binary);
+    await Deno.copyFile(path.join(tree, "dist", build), binary);
   }
   await Deno.chmod(binary, 0o755);
   return binary;
@@ -835,11 +963,15 @@ function bakedToolshed(role: ServerExecutionCiRole): Capability {
     description:
       `a Toolshed server with the ${role} posture in its baked shell`,
     needs: ["deno"],
+    builds: `toolshed-baked-${role}`,
     async open(context) {
       return await startToolshed(context, {
         command: [await cachedBinary(context, `toolshed-baked-${role}`)],
         cwd: context.root,
         role,
+        // Its integration tests start servers of their own in their test
+        // processes, which read where to keep their spaces from these names.
+        sharesStore: false,
       });
     },
   };
@@ -876,6 +1008,7 @@ const localDevServers: Capability = {
   id: "local-dev-servers",
   description: "the local development stack on an allocated port offset",
   needs: ["deno"],
+  sharesCheckout: true,
   // `deno task integration patterns-reload` brings the stack up and takes
   // it down around its own run. Declaring the capability is what keeps
   // that suite from being packed beside one that opened a Toolshed
@@ -1001,7 +1134,7 @@ export async function openCapabilities(
       try {
         await open.close();
       } catch (error) {
-        failures.push(`${id} failed to close: ${messageOf(error)}`);
+        failures.push(`${id} failed to close: ${describeFailure(error)}`);
       }
     }
     opened.length = 0;
@@ -1028,9 +1161,10 @@ export async function openCapabilities(
     try {
       await close();
     } catch (closing) {
-      throw new Error(`${messageOf(error)}\n${messageOf(closing)}`, {
-        cause: error,
-      });
+      throw new Error(
+        `${describeFailure(error)}\n${describeFailure(closing)}`,
+        { cause: error },
+      );
     }
     throw error;
   }

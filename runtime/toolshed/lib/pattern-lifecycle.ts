@@ -11,6 +11,7 @@
 import type { AttributeValue } from "@opentelemetry/api";
 import { z } from "zod";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   streamEntriesDocId,
@@ -121,7 +122,7 @@ export interface LifecycleDeps {
 
   /**
    * The routed plane to other spaces' owners while the process routes its
-   * crossings (docs/plans/serving-loop-owner-routing.md), as the scope
+   * crossings (serving-loop.md §2), as the scope
    * members a delivery uses; `undefined` while it does not, and then every
    * delivery goes to this process's own server.
    */
@@ -270,7 +271,7 @@ async function runServedVerb<Verb extends ServedLifecycleVerbDescriptor>(
     }
     const refusal = servedRefusalOf(error);
     if (refusal !== undefined) return refuse(refusal.code, refusal.message);
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     // The loop's own `SpaceNotServedError`, by the name a worker's port keeps.
     if (error instanceof Error && error.name === "SpaceNotServedError") {
       return refuse("space-not-served", message);
@@ -586,7 +587,7 @@ async function observeRegistrationDelivery(
     } catch {
       /* Retain the original delivery identity when readback also fails. */
     }
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: describeFailure(error) };
   } finally {
     finished = true;
     cancel?.();

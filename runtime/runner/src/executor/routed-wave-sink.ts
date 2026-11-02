@@ -1,6 +1,6 @@
 /**
  * The wave commit sink of a tenure with a route
- * (docs/plans/serving-loop-owner-routing.md): a home batch, and a change to
+ * (serving-loop.md §2): a home batch, and a change to
  * the home's access list, go to the sink it wraps, which commits them against
  * this process's store; every other batch and change is a crossing into a
  * space another process may own, and goes to that space's owner through the

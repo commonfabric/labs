@@ -17,6 +17,7 @@
 
 import { assert } from "@std/assert";
 import { join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const CLI_MOD = join(import.meta.dirname!, "..", "mod.ts");
 const ENC = new TextEncoder();
@@ -185,7 +186,7 @@ class PtyPager {
     } catch (error) {
       throw new Error(this.#report(
         `writing ${JSON.stringify(text)} to the child failed (${
-          error instanceof Error ? error.message : error
+          describeFailure(error)
         })`,
       ));
     }

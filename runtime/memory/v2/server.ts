@@ -12,6 +12,7 @@ import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
 import { StagedMap } from "@commonfabric/collections/staged-map";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
@@ -158,10 +159,7 @@ import {
   readGenesisRoot,
   readSpaceKind,
 } from "./genesis-root.ts";
-import {
-  executionLeaseHolder,
-  liveExecutionLeaseHolder,
-} from "./execution-lease.ts";
+import { executionLeaseHolder, ExecutionLeases } from "./execution-lease.ts";
 import { parseClientInfo } from "./client-info.ts";
 import { respondToHello } from "./handshake.ts";
 import {
@@ -842,7 +840,7 @@ function hashToken(s: string): string {
  *  schema prefix is stripped — a bare table literally named `a.b` is preserved,
  *  so the result matches a declared-table key exactly. */
 function missingTableName(error: unknown): string | undefined {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const match = /no such table:\s*(.+)$/i.exec(message);
   if (match === null) return undefined;
   const ref = match[1].trim();
@@ -918,6 +916,29 @@ const spaceInviteRefusal = (
     code,
   },
 });
+
+/**
+ * The response refusing a `session.open` or a commit whose naming mode INV-16
+ * does not admit to its space: a `SessionRevokedError` carrying
+ * `clientUpdateRequired`, which a client keeps across mounts and never
+ * retries, since only a runtime of the other mode is admitted.
+ */
+const instanceNamingRefusal = <Result>(
+  requestId: string,
+  message: string,
+): ResponseMessage<Result> =>
+  respondTypedError<Result>(requestId, {
+    ...toError("SessionRevokedError", message),
+    clientUpdateRequired: true,
+  });
+
+/**
+ * The message of the refusal INV-16 gives a positional session's open of, or
+ * commit to, `space` once the space is marked.
+ */
+const markedSpaceRefusalMessage = (space: string): string =>
+  `Space ${space} holds data written with instance names, which this ` +
+  "runtime does not use";
 
 /** The response refusing a `pattern.lifecycle` request for `code`. */
 const patternLifecycleRefusal = (
@@ -2041,7 +2062,7 @@ class Connection {
           : parsed.type === "transact"
           ? "TransactionError"
           : "QueryError",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       ),
     });
     return true;
@@ -3183,9 +3204,11 @@ export class Server {
 
   #engines = new Map<string, Promise<Engine.Engine>>();
 
+  /** What `executionLeases` returns, shared with every engine this opens. */
+  readonly #executionLeases = new ExecutionLeases();
+
   /**
-   * The resolved-engine index for the synchronous read-path checks, the
-   * unnamed scoped read's (`#denyForeignServingScopedRead()`) among them;
+   * The resolved-engine index for the synchronous read-path checks;
    * `#openEngineInner()` populates it.
    */
   #resolvedEngines = new Map<string, Engine.Engine>();
@@ -3318,6 +3341,14 @@ export class Server {
    */
   #spaceKinds = new WeakMap<Engine.Engine, string | undefined>();
 
+  /**
+   * The engines whose store holds the instance-naming mark, as
+   * {@link #hasInstanceNameMark} found it or this server recorded it. Nothing
+   * removes a mark, so an entry never goes stale; an engine not listed is
+   * read afresh, since another writer to its store may have marked it.
+   */
+  #instanceNameMarked = new WeakSet<Engine.Engine>();
+
   #store?: URL;
   #operationCodecs: OperationCodecRegistry;
 
@@ -3441,6 +3472,15 @@ export class Server {
        * refuses every `space.invite`.
        */
       inviteHost?: string;
+
+      /**
+       * Whether this server's posture names instances (INV-16): the
+       * deployment's value of the `instanceNames` experimental flag. Asked at
+       * every `session.open` that declares `instanceNames: true` of a space
+       * not yet marked, which is admitted only while it returns `true`. A
+       * server given none names no instances, and refuses every such open.
+       */
+      namesInstances?: () => boolean;
 
       /**
        * Authentication data advertised in `hello.ok` and enforced for
@@ -4059,6 +4099,40 @@ export class Server {
       this.#spaceKinds.set(engine, readSpaceKind(engine));
     }
     return this.#spaceKinds.get(engine);
+  }
+
+  /**
+   * Whether the store of the space `engine` holds the instance-naming mark
+   * (INV-16).
+   */
+  #hasInstanceNameMark(engine: Engine.Engine): boolean {
+    if (this.#instanceNameMarked.has(engine)) return true;
+    if (!Engine.hasInstanceNameMark(engine)) return false;
+    this.#instanceNameMarked.add(engine);
+    return true;
+  }
+
+  /**
+   * After a commit marked `space` (INV-16), drop its live sessions that do
+   * not declare `instanceNames: true`, as {@link #revokeDeauthorizedSessions}
+   * drops the sessions an access-list change leaves without READ, and tell
+   * each one's connection with the `session/revoked` reason
+   * `instance-names`. The commit refusal is what keeps their commits out;
+   * this tells their clients. The marking commit's own session declares
+   * naming, so it is never among them.
+   */
+  #revokePositionalSessions(space: string): void {
+    for (const session of this.#sessions.sessionsForSpace(space)) {
+      if (session.instanceNames === true) continue;
+      this.#sessions.remove(space, session.id);
+      if (session.ownerConnectionId !== null) {
+        this.#connections.get(session.ownerConnectionId)?.revokeSession(
+          space,
+          session.id,
+          "instance-names",
+        );
+      }
+    }
   }
 
   /** Enforce ACL document shape and fresh-space genesis in the `observe` and
@@ -5608,7 +5682,7 @@ export class Server {
       next = request.change(stored?.value);
     } catch (error) {
       return {
-        refused: error instanceof Error ? error.message : String(error),
+        refused: describeFailure(error),
       };
     }
     if (stored !== null && valueEqual(stored.value as FabricValue, next)) {
@@ -5788,7 +5862,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Error ? error.name : "SqliteError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -5876,7 +5950,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Error ? error.name : "SqliteError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -5929,7 +6003,7 @@ export class Server {
     } catch (error) {
       const wireError = toError(
         "AuthorizationError",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       if ((error as { retriable?: unknown }).retriable === true) {
         wireError.retriable = true;
@@ -6155,6 +6229,26 @@ export class Server {
           ),
         );
       }
+      // INV-16's open clauses. After authorization, so a principal the space
+      // refuses learns nothing of its mark, and in every ACL mode, since the
+      // mark is not access control.
+      if (this.#hasInstanceNameMark(engine)) {
+        if (message.session.instanceNames !== true) {
+          return instanceNamingRefusal<SessionOpenResult>(
+            message.requestId,
+            markedSpaceRefusalMessage(message.space),
+          );
+        }
+      } else if (
+        message.session.instanceNames === true &&
+        this.options.namesInstances?.() !== true
+      ) {
+        return instanceNamingRefusal<SessionOpenResult>(
+          message.requestId,
+          `The server of space ${message.space} does not name instances, ` +
+            "and this runtime does",
+        );
+      }
       // Admission awaited, and the connection may have closed meanwhile: its
       // sessions were detached at the close, so one opened now would be held
       // by a connection that is gone, and never expire.
@@ -6342,7 +6436,7 @@ export class Server {
         : "ProtocolError";
       const wireError = toError(
         name,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       // Carry the retriable marker (an anti-replay race a fresh handshake heals)
       // so the client distinguishes it from a permanent denial without parsing
@@ -6416,7 +6510,7 @@ export class Server {
         message.requestId,
         toError(
           "SessionError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -6569,9 +6663,7 @@ export class Server {
       return patternLifecycleRefusal(
         requestId,
         "internal",
-        `${message.verb} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `${message.verb} failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -6647,9 +6739,7 @@ export class Server {
       return servedRequestRefusal(
         requestId,
         "internal",
-        `${message.kind} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `${message.kind} failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -7061,9 +7151,7 @@ export class Server {
           ok: { serverSeq: commit.seq, resolution },
         };
       } catch (error) {
-        const messageText = error instanceof Error
-          ? error.message
-          : String(error);
+        const messageText = describeFailure(error);
         return respondTypedError<EventAttentionResolveResult>(
           message.requestId,
           toError(
@@ -7200,6 +7288,18 @@ export class Server {
               deny,
             );
           }
+          // INV-16's commit clause, after authorization like the open
+          // clauses. A commit from a session that names instances marks a
+          // space not yet marked, in the commit's own transaction.
+          const marked = this.#hasInstanceNameMark(engine);
+          if (marked && session.instanceNames !== true) {
+            return instanceNamingRefusal<Engine.AppliedCommit>(
+              message.requestId,
+              markedSpaceRefusalMessage(message.space),
+            );
+          }
+          const marks = !marked && session.instanceNames === true;
+          let markedNow = false;
           // Fold-in SQLite writes: ATTACH their cell-db(s) BEFORE applyCommit (ATTACH
           // cannot run inside a transaction); the engine executes them inside the
           // commit txn (atomic with cell ops). Detach in finally.
@@ -7219,19 +7319,29 @@ export class Server {
               (persistSpan) => {
                 try {
                   engineDecided = true;
-                  return Engine.applyCommit(engine, {
-                    sessionId: message.sessionId,
-                    space: message.space,
-                    principal: session.principal,
-                    commit: message.commit,
-                    sqliteAttachments,
-                    ...(session.elidedVerdicts === true
-                      ? { elidedVerdicts: true }
-                      : {}),
-                    // Session-facing transact admission: `authored`, always.
-                    // The class is determined HERE, by the admission path —
-                    // never read from the client payload (protocol.md §1).
-                    commitClass: "authored",
+                  return Engine.runAtomicCommit(engine, (apply) => {
+                    const applied = apply({
+                      sessionId: message.sessionId,
+                      space: message.space,
+                      principal: session.principal,
+                      commit: message.commit,
+                      sqliteAttachments,
+                      ...(session.elidedVerdicts === true
+                        ? { elidedVerdicts: true }
+                        : {}),
+                      // Session-facing transact admission: `authored`,
+                      // always. The class is determined HERE, by the
+                      // admission path — never read from the client payload
+                      // (protocol.md §1).
+                      commitClass: "authored",
+                    });
+                    if (marks) {
+                      markedNow = Engine.recordInstanceNameMark(
+                        engine,
+                        applied.seq,
+                      );
+                    }
+                    return applied;
                   });
                 } finally {
                   persistSpan.end();
@@ -7358,6 +7468,10 @@ export class Server {
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
           );
+          if (markedNow) {
+            this.#instanceNameMarked.add(engine);
+            this.#revokePositionalSessions(message.space);
+          }
           if (aclTouched) {
             this.#invalidateAclCapabilities(message.space);
             // Pass the writing session so it isn't sent the terminal revocation
@@ -7403,9 +7517,7 @@ export class Server {
             const engine = await this.#openEngine(message.space);
             retryAfterSeq = Engine.serverSeq(engine);
           }
-          const messageText = error instanceof Error
-            ? error.message
-            : String(error);
+          const messageText = describeFailure(error);
           const preconditionError = toPreconditionFailedError(
             error,
             messageText,
@@ -7565,7 +7677,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7628,7 +7740,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Engine.ProtocolError ? error.name : "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7723,7 +7835,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7766,7 +7878,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -8390,7 +8502,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -8728,7 +8840,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -9147,7 +9259,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -11091,23 +11203,17 @@ export class Server {
   /**
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
-   * process and whose principal holds the space's live lease (protocol.md
-   * §2's read row). A session from another process carries the same
-   * principal, so the connection decides. Only a resolved engine holds a
-   * lease row, so a caller on the synchronous read path passes the one
-   * from `#resolvedEngines`.
+   * process and whose principal holds the space's lease (protocol.md §2's
+   * read row). A session from another process carries the same principal, so
+   * the connection decides.
    */
-  #isServingSession(
-    space: string,
-    engine: Engine.Engine,
-    session: SessionState,
-  ): boolean {
+  #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
     const connection = session.ownerConnectionId === null
       ? undefined
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
-      liveExecutionLeaseHolder(engine, space) ===
+      this.#executionLeases.holderOf(space) ===
         executionLeaseHolder(session.principal);
   }
 
@@ -11211,7 +11317,7 @@ export class Server {
       );
     }
     const engine = await this.#openEngine(space);
-    if (!this.#isServingSession(space, engine, session)) {
+    if (!this.#isServingSession(space, session)) {
       if (
         session.principal === undefined ||
         !this.#isDelegatingPrincipal(session.principal)
@@ -11284,9 +11390,8 @@ export class Server {
    *
    * FULLY SYNCHRONOUS (called without await at the three read sites):
    * ordinary client reads keep sharing one engine turn with their
-   * authorization (the ACL revocation-race invariant). Only a RESOLVED
-   * engine can hold a lease row (a never-opened engine has none), so the
-   * sync map is authoritative for the serving check.
+   * authorization (the ACL revocation-race invariant). The lease map is
+   * synchronous, so the serving check adds no boundary.
    */
   #denyForeignServingScopedRead(
     space: string,
@@ -11305,13 +11410,7 @@ export class Server {
       }
     }
     if (unnamedScopedRoot === undefined) return undefined;
-    const readEngine = this.#resolvedEngines.get(space);
-    if (
-      readEngine !== undefined &&
-      this.#isServingSession(space, readEngine, session)
-    ) {
-      return undefined;
-    }
+    if (this.#isServingSession(space, session)) return undefined;
     return toError(
       "ProtocolError",
       `scoped read of ${unnamedScopedRoot} refused: the requesting ` +
@@ -11772,14 +11871,87 @@ export class Server {
 
   /**
    * The co-hosted direct-engine access of server-execution v2
-   * (serving-loop.md §1): the ExecutorHost's lease writes ride plane (c)
-   * as direct table updates, and the wave commit step's sink runs its
-   * store transaction (per-doc re-verification + derived-class apply +
-   * basis rows) against this same engine. Server-internal machinery and
-   * tests only — nothing session-facing reaches an engine directly.
+   * (serving-loop.md §1): the wave commit step's sink runs its store
+   * transaction (per-doc re-verification + derived-class apply + basis rows)
+   * against this engine. Server-internal machinery and tests only — nothing
+   * session-facing reaches an engine directly.
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * The map from space to execution lease holder (serving-loop.md §2), which
+   * this server's serving loop acquires and releases through. Server-internal
+   * machinery and tests only, like `engineForSpace()`.
+   */
+  get executionLeases(): ExecutionLeases {
+    return this.#executionLeases;
+  }
+
+  /**
+   * Writes the failure notice of a refused delegated append onto its source
+   * event's stream entry (serving-loop.md §5), as a derived-class commit of the
+   * serving loop's own: admitted against `executionLeases` under `holder`, as the
+   * session it commits in, and not fanned out to sessions. The lookup and the
+   * patch run with nothing between them, so the array index the patch names is
+   * the entry's. Writes nothing for an entry compacted away, since the notice
+   * never outlives the entry it annotates (events.md §4), or for one that already
+   * carries this notice.
+   *
+   * @throws {ProtocolError} when a notice is due and `holder` does not hold the
+   * space's lease.
+   */
+  async commitDeliveryFailureNotice(
+    { space, holder, localSeq, sourceEvent, failure }: {
+      space: string;
+      holder: string;
+
+      /** The serving loop's own number for the commit. */
+      localSeq: number;
+
+      /** The source event, and the stream document that holds its entry. */
+      sourceEvent: { sidecarId: string; eventId: string };
+
+      /** What the notice says: the refused append, its target, and why. */
+      failure: { eventId: string; targetSpace: string; reason: string };
+    },
+  ): Promise<void> {
+    const engine = await this.#openEngine(space);
+    const doc = Engine.read(engine, { id: sourceEvent.sidecarId });
+    const entries = ((doc?.value ?? {}) as {
+      entries?: Array<
+        {
+          eventId?: string;
+          deliveryFailures?: Array<{ eventId: string }>;
+        } | null
+      >;
+    }).entries ?? [];
+    const index = entries.findIndex((entry) =>
+      entry?.eventId === sourceEvent.eventId
+    );
+    if (index < 0) return;
+    const existing = entries[index]?.deliveryFailures ?? [];
+    if (existing.some(({ eventId }) => eventId === failure.eventId)) return;
+    Engine.applyCommit(engine, {
+      sessionId: holder,
+      space,
+      commitClass: "derived",
+      holder,
+      commit: {
+        localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: sourceEvent.sidecarId,
+          patches: [{
+            op: "replace",
+            path: `/value/entries/${index}/deliveryFailures`,
+            value: [...existing, failure],
+          }],
+        }],
+      },
+    });
   }
 
   /**
@@ -11979,6 +12151,7 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        executionLeases: this.#executionLeases,
         // Every commit this engine decides, on whichever path, counts
         // toward the space's commit rate; the engine is this space's, so
         // the space is known here whatever the committing caller named.
@@ -11986,13 +12159,8 @@ export class Server {
           this.#observeCommit({ ...decision, space }),
       });
     })();
-    // The SYNC engine view (server-execution v2 Phase 5): the read-row
-    // check on the unnamed read path (`#denyForeignServingScopedRead`,
-    // protocol.md §2) must stay synchronous (the ACL revocation-race
-    // invariant — no added microtask boundary), so resolved engines are
-    // indexed here for it. A lease can only exist on an OPEN engine
-    // (co-hosted activation opens it before acquiring), so the resolved
-    // map sees every live lease.
+    // The SYNC engine view, which the read paths that must not add a
+    // microtask boundary consult.
     opened.then((engine) => {
       if (this.#engines.get(space) === opened) {
         this.#resolvedEngines.set(space, engine);
@@ -12192,6 +12360,13 @@ const parseDecodedClientMessage = (
       parsed.session.spaceKind !== undefined &&
       !isSpaceKind(parsed.session.spaceKind)
     ) return null;
+    // Only the literal `true` declares naming: any other value refuses the
+    // message rather than open the session in a mode its client did not ask
+    // for.
+    if (
+      parsed.session.instanceNames !== undefined &&
+      parsed.session.instanceNames !== true
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -12242,6 +12417,9 @@ const parseDecodedClientMessage = (
           : {}),
         ...(isSpaceKind(parsed.session.spaceKind)
           ? { spaceKind: parsed.session.spaceKind }
+          : {}),
+        ...(parsed.session.instanceNames === true
+          ? { instanceNames: true as const }
           : {}),
         ...(invite === undefined ? {} : { invite }),
       },

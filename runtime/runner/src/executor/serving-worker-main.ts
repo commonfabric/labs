@@ -18,6 +18,7 @@ import {
 } from "@commonfabric/logger";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
+import { collectedMemory } from "../collected-memory.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
@@ -65,6 +66,12 @@ export function serveFromPort(
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
+    // A timer on this thread, so that the watchdog on the server's thread hears
+    // nothing once this thread stops (serving-loop.md §2).
+    const heartbeat = setInterval(
+      () => endpoint.notify("worker.heartbeat", null),
+      init.heartbeatIntervalMs,
+    );
     // The environment a served handler's `fetch` resolves against is this
     // realm's, so it is set here to what the process that started the worker
     // serves patterns from, as that process sets its own.
@@ -123,6 +130,7 @@ export function serveFromPort(
         loggerCounts: getLoggerCountsBreakdown(),
         timingStats: getTimingStatsBreakdown(),
       }),
+      collectedMemory,
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(
@@ -138,6 +146,7 @@ export function serveFromPort(
         try {
           await host.close();
         } finally {
+          clearInterval(heartbeat);
           await plane.close();
         }
       },

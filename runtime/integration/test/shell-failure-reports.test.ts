@@ -3,6 +3,7 @@ import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { RequestType } from "@commonfabric/runtime-client";
 
 import { Browser } from "../browser.ts";
@@ -289,7 +290,7 @@ async function rejectionMessage(work: Promise<unknown>): Promise<string> {
   try {
     await work;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return describeFailure(error);
   }
   throw new Error("Expected the call to throw, and it returned instead.");
 }

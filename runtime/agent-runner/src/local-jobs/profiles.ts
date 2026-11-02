@@ -44,6 +44,7 @@ import {
 } from "@commonfabric/cf-harness/input-cells";
 import { isDID } from "@commonfabric/identity/did";
 import type { MemorySpace } from "@commonfabric/runner";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** One profile, as the host file states it. */
@@ -369,9 +370,7 @@ const profileOf = async (
       for (const mount of mounts) formatHostMountSpec(mount);
     } catch (error) {
       fail(
-        `\`hostMounts\`: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `\`hostMounts\`: ${describeFailure(error)}`,
       );
     }
   }
@@ -603,7 +602,7 @@ const refuseInputs = (
   try {
     routes = validateHarnessForeignSpaces(foreignSpaces ?? {});
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return describeFailure(error);
   }
   const named = inputSpaces(inputs, fabric.space);
   const unused = listed.filter((space) => !named.has(space));
@@ -642,7 +641,7 @@ const refuseInputs = (
         routes,
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeFailure(error);
       return message.includes(`\`${name}\``)
         ? message
         : `Input \`${name}\`: ${message}`;

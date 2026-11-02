@@ -1264,6 +1264,9 @@ export class Client {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
       }
+      if (result.error.deleted === true) {
+        (error as Error & { deleted?: true }).deleted = true;
+      }
       serverVerdicts.add(error);
       throw error;
     }
@@ -2211,8 +2214,8 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle`, `servedRequests` and `spaceInvites` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
+    // `patternLifecycle`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client reads them from `hello.ok` and
     // never offers them. Other flags an endpoint does not know are ignored
     // there, since the routed flag allowlists were removed (infra DEVIATIONS
     // row 41).
@@ -2223,6 +2226,7 @@ export class Client {
       patternLifecycle: _lifecycleServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      instanceNameMark: _instanceNameMarkServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -4241,9 +4245,14 @@ export class SpaceSession {
       return;
     }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = reason === "unauthorized"
-      ? "AuthorizationError"
-      : "SessionRevokedError";
+    error.name = reason === "taken-over"
+      ? "SessionRevokedError"
+      : "AuthorizationError";
+    // A session open when its space is deleted reports the deletion as a
+    // refused reopen would.
+    if (reason === "deleted") {
+      (error as Error & { deleted?: true }).deleted = true;
+    }
     this.#terminateSession(error);
   }
 
@@ -5656,6 +5665,19 @@ export function isPermanentAuthorizationError(error: unknown): boolean {
     (error as { retriable?: unknown }).retriable !== true;
 }
 
+/**
+ * Recognizes the memory server's refusal of a deleted space: an
+ * `AuthorizationError` marked `deleted`, which no principal's retry can undo
+ * (INV-15 in `docs/specs/memory-v2/09-invariants.md`).
+ */
+export function isDeletedSpaceError(error: unknown): error is Error & {
+  /** The space is deleted, and refused to every principal for good. */
+  deleted: true;
+} {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { deleted?: unknown }).deleted === true;
+}
+
 /** Recognizes a server refusal whose recovery requires replacing the runtime. */
 export function isClientUpdateRequiredError(error: unknown): error is Error & {
   /** Explicit recovery instruction, independent of the refusal's error name. */
@@ -5807,7 +5829,7 @@ const isSessionRevoked = (
     typeof space === "string" &&
     typeof sessionId === "string" &&
     (reason === "taken-over" || reason === "unauthorized" ||
-      reason === "instance-names");
+      reason === "deleted" || reason === "instance-names");
 };
 
 const isSessionAdmissible = (

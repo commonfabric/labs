@@ -611,7 +611,7 @@ Printable keys enter text while a filter is active.
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, and `M` file-visibility keys remain
+and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
 active. On a commit row, `f` hides all of that commit's files. Pressing it again
 shows them. Each commit row reports its total added and removed lines under the
 selected count policy. The list's summary reports added and removed lines for
@@ -628,6 +628,24 @@ whose text differs only in whitespace. The third also removes lines containing
 only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
+
+Press `C` in a diff or in its list to hide the files whose changes touch only
+comments, and press it again to show them. `C` compares the complete file before
+and after the change, using the comments that syntax highlighting finds. It
+therefore selects only files in a language whose highlighting marks comments, in
+a diff whose `index` line names both versions of the file (as `git diff` does),
+and only when the versions the viewer rebuilds from the repository or the
+working tree are the ones named. Editing a comment's text, or adding or removing
+a line that holds only comments and whitespace, leaves the code as it was. Where
+such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
+adding or removing it changes the file too. A line that follows code ending with
+a backslash continues that code, and a first line that starts with `#!` names
+the program that runs the file, so both are read exactly as written. Adding or
+removing a comment on a line that holds anything else changes the code, and so
+does a change to blank lines or other whitespace. Each side is read on its own,
+so a comment marker that turns unchanged lines into a comment changes the code.
+`C` never selects a renamed or new file, a file whose mode changes, or a file
+whose byte order mark is added or removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
@@ -677,6 +695,16 @@ continues. Word wrapping breaks at whitespace and indents each continuation row
 by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
 or when it is too narrow for the indentation and any text.
+
+Press `c` to cycle how non-printable characters are shown. The first mode draws
+each control character as its control-picture glyph, such as `␉` for a tab, one
+column per character. The ANSI color mode applies color escape sequences to the
+text that follows them instead of showing them. It also advances each tab to the
+next column that is a multiple of 4, counting the columns drawn from the start
+of the line. Other control characters still appear as control pictures. The
+hidden mode drops every complete escape sequence that starts with `ESC [`, and
+shows each run of other control characters, including the escape characters of
+other sequences, as one `…`. Editing always uses the first mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its

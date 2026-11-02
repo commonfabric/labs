@@ -4,8 +4,9 @@ The Home pattern owns the shared-space catalog: which social spaces a person
 keeps in their collection. Its `sharedSpaces` surface separates private
 observations from command bindings. Authored patterns and host applications use
 the same operations. The flat `sharedSpaceCatalog`, `registerSharedSpace`,
-`changeSharedSpaceMembership`, and `removeSharedSpace` fields are aliases over
-the same storage and streams, as is `markSharedSpaceDeleted`.
+`changeSharedSpaceMembership`, `retitleSharedSpace`, and `removeSharedSpace`
+fields are aliases over the same storage and streams, as is
+`markSharedSpaceDeleted`.
 Catalog types, validation, and transitions live in
 `patterns/system/shared-space/shared-space-catalog.ts`.
 
@@ -28,6 +29,7 @@ its stable cause. Importing Home's full output type or binding the whole
 | --- | --- |
 | `sharedSpaces.commands.register` | Admit a target the caller has vetted |
 | `sharedSpaces.commands.changeMembership` | Archive or restore at the observed revision |
+| `sharedSpaces.commands.retitle` | Set a listed space's display title |
 | `sharedSpaces.commands.markDeleted` | Record that a listed space is deleted, at the observed revision |
 | `sharedSpaces.view` | Validated collection observation and membership lists |
 | `sharedSpaces.receipts` | Validated offer-admission evidence |
@@ -184,9 +186,14 @@ handler's transaction, to the title the space's root now gives. It writes only
 when the title differs, and returns `retitled`, `unchanged`, or `conflict` for a
 space with no entry. It moves no revision, state, or last action: a title is a
 display hint, not a membership choice, so a choice made from a list shown
-before the retitle still names the current revision. Home exposes no command
-for it; the application that knows the root's current title calls it from its
-own handler.
+before the retitle still names the current revision. An application with a
+handler in Home calls it from there. One with none, such as a Loom daemon that
+reaches Home only through its streams, sends `retitleSharedSpace`, which does
+the same and returns the same. The stream takes the caller's word for the
+title, as registration does, and reads nothing from the space's root, so whoever
+holds the current title is the one to send it, to their own Home. The stream is
+optional in `sharedSpaceCommandsSchema`: a caller that needs it reports
+`home-update-required` for a Home without it.
 
 FabriChat's manager in Home calls all three from its own handlers. For standalone
 `fabrichat-room` spaces, the catalog's current state and revision govern the
@@ -282,11 +289,11 @@ means the action was applied, not that it remains the latest choice.
 Deleting a space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
 ends it for everyone, and writes nothing in anyone's catalog: each entry naming
-the space keeps its state and revision until a consumer comes upon the
-deletion. The consumer then records it with `markDeleted`, which takes the
-space DID and the revision its caller observed, and moves the entry to the
-`deleted` state. That carries the space's tombstone into the person's own
-collection, so a list stops offering a space nobody can open.
+the space keeps its state and revision until a consumer comes upon the deletion.
+The consumer then records it with `markDeleted`, which takes the space DID and
+the revision its caller observed, and moves the entry to the `deleted` state.
+That carries the space's deletion tombstone into the person's own collection, so
+a list stops offering a space nobody can open.
 
 `markDeleted` changes the entry only when all of these hold, checked in this
 order, and otherwise returns `conflict` with the reason given:
@@ -301,12 +308,17 @@ order, and otherwise returns `conflict` with the reason given:
 The last check is the handler's own: it asks the runtime it runs on, as
 [`space-access.md`](space-access.md#a-deleted-space) describes, so an event
 naming a space that is not deleted, forged or mistaken, changes nothing. The
-handler passes the entry's space DID, and on a runtime that has not opened the
+handler passes the entry's space DID. On a runtime that has not opened the
 space, the call has the handler run again once the memory server has answered
-for it. A runtime with no memory server it can ask about the space reads
-`undefined`, and the handler returns `not-deleted`. Success returns `deleted`,
-advances the entry's revision as a membership change does, and keeps `since`,
-`from`, the title, and every offer receipt naming the space.
+for it, for a served run and for an event its sender allows retries, as an
+ordinary send does. An unserved event sent with `retries: false` is dropped
+instead ([`space-access.md`](space-access.md#a-deleted-space)), so a sender that
+may not have opened the space sends with retries. Where server execution is off,
+Home's handlers run on the client and are unserved, so there it is the sender's
+`retries` that decides. A runtime with no memory server it can ask about the
+space reads `undefined`, and the handler returns `not-deleted`. Success returns
+`deleted`, advances the entry's revision as a membership change does, and keeps
+`since`, `from`, the title, and every offer receipt naming the space.
 
 `deleted` is terminal. No command restores or saves a deleted entry:
 `changeMembership` returns `conflict: unsupported-state` for it, and a later
@@ -318,13 +330,29 @@ lists a deleted entry under `deleted`, apart from saved and archived ones, with
 no membership control.
 
 Consumers call `markDeleted` when they come upon a deleted space, and nothing
-sweeps the catalog for them. The shell sends it when a `spaceaccesslost` it
-receives is marked `deleted` and the catalog holds the space as saved or
-archived, at the revision its view shows. A pattern that lists catalog entries
-sends it for an entry whose `spaceDeleted(space)` reads `true`. As with the
-other commands, the whole of what the handler does is
+sweeps the catalog for them. Every runtime that holds a person's catalog and
+hears of a refusal marked `deleted` sends it, when the catalog holds the space
+as saved or archived, at the revision its view shows: the shell on a
+`spaceaccesslost` marked `deleted`, and a runtime that holds the catalog
+outside the shell, such as a native client's, on the same refusal. A catalog
+only the shell kept up would never record a deletion for a person who uses
+another client. A pattern that lists catalog entries sends it for an entry
+whose `spaceDeleted(space)` reads `true`. Two senders often race to record the
+same deletion, and the one that loses gets `conflict` with the reason
+`revision`, the winner having advanced the entry. That conflict is expected: it
+means the deletion is already recorded, and its sender surfaces nothing. As with
+the other commands, the whole of what the handler does is
 `markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler
 holding the catalog cell can record the deletion in its own transaction.
+
+A runtime hears of a deletion only from the memory server's answer for the
+space. One refused the space before it was deleted learns of the deletion only
+when it asks again, with `retrySpaceAccess(space)`, since the server sends no
+`session/admissible` for a deleted space
+([`space-access.md`](space-access.md#a-deleted-space)). The shell asks on
+navigation and on regaining focus. A runtime outside the shell asks on
+occasions of its own, and until it does, its person's catalog keeps such an
+entry as it was.
 
 Deleting a space is not implemented yet, and neither are `markDeleted`, its
 flat alias `markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()`, and the

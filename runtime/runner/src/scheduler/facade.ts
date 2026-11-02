@@ -2,6 +2,7 @@ import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
@@ -608,9 +609,7 @@ export class Scheduler {
   /**
    * The serving posture's cooperative macrotask yield (`cooperative-yield.ts`):
    * constructed _only_ for a serving runtime, so the OFF arm and flag-ON
-   * clients keep their settle loops' exact microtask shape. Its observer is the
-   * runtime's `servingYieldObserver` seam — the `SpaceServer`'s mid-wave lease
-   * renew.
+   * clients keep their settle loops' exact microtask shape.
    */
   readonly #cooperativeYield: CooperativeYield | undefined;
 
@@ -623,11 +622,7 @@ export class Scheduler {
     consoleHandler?: ConsoleHandler,
     errorHandlers?: ErrorHandler[],
   ) {
-    if (runtime.servingPosture) {
-      const yielder = new CooperativeYield();
-      yielder.onYield = () => runtime.servingYieldObserver?.();
-      this.#cooperativeYield = yielder;
-    }
+    if (runtime.servingPosture) this.#cooperativeYield = new CooperativeYield();
     this.#initializeSchedulerState();
 
     this.#consoleHandler = consoleHandler ||
@@ -4085,7 +4080,7 @@ export class Scheduler {
     const keys = this.#headEventLoadPark.keys.join(", ");
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeFailure(error);
     if (event.served === undefined) {
       this.#dropEvent(
         event,
