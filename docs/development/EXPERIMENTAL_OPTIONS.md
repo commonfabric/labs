@@ -2260,6 +2260,9 @@ the per-epic implementation notes).
   deployment reads there whether routing carries its crossings.
 - **Path to removal.** Delete the knob and the in-process crossings, once a
   deployment's every process runs a release that keeps the lease in memory.
+  The unused `execution_lease` table goes at the same point, since no process
+  writes its rows by then (the `TODO` beside its definition in
+  `runtime/memory/v2/engine.ts`).
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 

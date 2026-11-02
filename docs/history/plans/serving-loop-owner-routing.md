@@ -2,7 +2,7 @@
 status: historical
 created: 2026-11-01
 archived: 2026-11-02
-reason: "Executed plan; a serving loop reaches every other space through its owner, and the lease lives in the memory server's memory. Two removals remain, tracked outside this plan: the flag in EXPERIMENTAL_OPTIONS.md and the execution_lease table in runtime/memory/v2/engine.ts."
+reason: "Executed plan; a serving loop reaches every other space through its owner, and the lease lives in the memory server's memory. Two removals remain, the flag and the execution_lease table, both under the flag's path to removal in docs/development/EXPERIMENTAL_OPTIONS.md."
 superseded-by: docs/specs/server-side-execution/serving-loop.md
 ---
 
