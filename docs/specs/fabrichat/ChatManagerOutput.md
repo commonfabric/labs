@@ -186,9 +186,14 @@ session that has none is refused.
   [deleted](../random-space-identities.md#deleting-a-space) is left out: its
   catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
   `true`.
-- **`deletedRooms`** lists, newest first, the rooms `rooms` leaves out because
-  their space is deleted, apart from the rooms this user can still use, as the
-  catalog lists a deleted entry apart from saved and archived ones. A deleted
+- **`deletedRooms`** lists, newest first, every room this user's manager knows
+  of whose space is deleted, apart from the rooms this user can still use, as
+  the catalog lists a deleted entry apart from saved and archived ones: a room
+  whose catalog entry is in the `deleted` state, and a room of `rooms` or
+  `roomMembership`, saved or archived, for which `spaceDeleted(room)` returns
+  `true`. A room archived before its space was deleted is listed too, as the
+  catalog lists its entry, so a person sees the same deletions in Home and in
+  FabriChat. A deleted
   room can't be read, written or forgotten, so a client shows each one as
   deleted and offers no control for it. Nothing through the entry's link can
   be read, so what is left to show is what the manager holds itself: the
@@ -337,9 +342,14 @@ outward act when it creates a room, or offers one it finds.
   user, or `profile`'s label doesn't name `counterpart`.
 
 It is the only way a direct room is created, which is what keeps one person's
-conversation from splitting. A deleted direct room is the one exception, and
-not a split: its conversation is gone for both people, and the new room is the
-only one either can use.
+conversation from splitting. A deleted direct room is the one exception: its
+conversation is gone for both people, and the next `openDirect` on either side
+creates its replacement. The two sides converge on one replacement as two new
+counterparts do: the room offered first is accepted as the one `direct` holds
+on the other side, since a held room whose space is deleted does not keep it
+out ([offers](#offers)), and when both create one before either offer arrives,
+the result is the [crossing creations](#crossing-creations) case, as for any
+first pair of rooms.
 
 ### `createGroup(requestId: string, members: string[], profiles?: Cell<ChatProfile>[], title: string, joinableByLink?: boolean)`
 
@@ -631,15 +641,17 @@ and registers the room's space in their Home's shared-space catalog
 that registers a new entry, the host then sends the room to the recipient's own
 manager's `accept`, with `keepArchived`, so the recipient's manager records the
 room as theirs. A direct room goes in their `direct` under its creator, unless
-`direct` already holds a room with the sender, which stays, as under [crossing
-creations](#crossing-creations); either way their later `openDirect` with the
-sender returns the room `direct` holds rather than creating another. An entry
-already in the catalog, archived or not, gets no acceptance. A notice is
-produced for each other member offered nothing: one known only by their DID,
-who has no profile to reach an inbox through, or one whose profile points at no
-inbox. A member sent an offer gets no notice, and nothing tells the
-sender whether the offer arrived: `offerRoom`'s `offered` means sent, or about
-to be.
+`direct` already holds a room with the sender, which stays, as under
+[crossing creations](#crossing-creations). A held room whose space is deleted,
+`spaceDeleted(room)` returning `true`, is no such room, as it is no such entry
+for `openDirect`, so the received room replaces it; either way their later
+`openDirect` with the sender returns the room `direct` holds rather than
+creating another. An entry already in the catalog, archived or not, gets no
+acceptance. A notice is produced for each other member offered nothing: one
+known only by their DID, who has no profile to reach an inbox through, or one
+whose profile points at no inbox. A member sent an offer gets no notice, and
+nothing tells the sender whether the offer arrived: `offerRoom`'s `offered`
+means sent, or about to be.
 
 ## Crossing creations
 

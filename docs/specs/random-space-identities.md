@@ -230,8 +230,12 @@ says which spaces this covers):
 - **No access-control document.** A populated space that predates genesis has
   no list, and a deployment's service identity holds OWNER there implicitly,
   which the sole-member clause does not count. A service identity first writes
-  a list naming the deleting principal, `cf acl set <DID> OWNER`, which INV-13
-  admits from a service identity while the space has none. Such a space is
+  a list naming the deleting principal, `cf acl set <DID> OWNER`, which that
+  implicit OWNER admits: service identities hold it on every space so that
+  they can initialize or repair access-control state
+  ([the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass)).
+  INV-13's genesis rules bind only a space with no history, which a populated
+  space is not. Such a space is
   open to every authenticated principal, so that one commit is where all of
   their access ends, with no entry naming any of them, and nothing records who
   they were. A Home with no list is never one of these: it gets its own list,
