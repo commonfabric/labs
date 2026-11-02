@@ -2,10 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "@commonfabric/memory/v2/execution-lease";
+import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
@@ -23,12 +20,12 @@ async function fixture(sealing = false) {
   const storage = EmulatedStorageManager.connectTo(server, { as: signer });
   if (sealing) {
     const engine = await server.engineForSpace(signer.did());
-    expect(acquireExecutionLease(engine, {
-      space: signer.did(),
-      holder: executionLeaseHolder(signer.did()),
-      now: Date.now(),
-      ttlMs: 600_000,
-    })).toBe(true);
+    expect(
+      engine.executionLeases.acquire(
+        signer.did(),
+        executionLeaseHolder(signer.did()),
+      ),
+    ).toBe(true);
   }
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),

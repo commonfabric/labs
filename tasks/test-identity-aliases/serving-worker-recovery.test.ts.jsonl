@@ -1,0 +1,2 @@
+{"date":"2026-11-01","from":{"k":"unit","s":"runner","n":"serving-worker-recovery > waits for lease release before replacement when init fails"},"to":{"k":"unit","s":"runner","n":"serving-worker-recovery > releases the worker's leases before replacement when init fails"}}
+{"date":"2026-11-01","from":{"k":"unit","s":"runner","n":"serving-worker-recovery > waits for lease release before replacement when error fails"},"to":{"k":"unit","s":"runner","n":"serving-worker-recovery > releases the worker's leases before replacement when error fails"}}

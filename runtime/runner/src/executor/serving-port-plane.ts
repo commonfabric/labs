@@ -18,6 +18,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import type { ExecutionLeaseAccess } from "@commonfabric/memory/v2/execution-lease";
 import {
   resolveSpaceOwnerOf,
   type ServedAclChange,
@@ -297,18 +298,12 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     // about as much to post as the commit itself.
     this.#reportEventStats();
     try {
-      const { result, homeRefused } = await this.#endpoint.request(
-        "sink.commitWave",
-        {
-          sessionId: this.#deps.sessionId,
-          localSeq,
-          batch: encodeMemoryBoundary(batch as unknown as FabricValue),
-        },
-      );
-      if (homeRefused) this.#deps.onHomeRefused();
-      return result;
+      return await this.#endpoint.request("sink.commitWave", {
+        sessionId: this.#deps.sessionId,
+        localSeq,
+        batch: encodeMemoryBoundary(batch as unknown as FabricValue),
+      });
     } catch (error) {
-      if (batch.home) this.#deps.onHomeRefused();
       return waveCommitFailureResult(error);
     }
   }
@@ -448,6 +443,31 @@ class PlaneMemoryServer implements HostMemoryServer {
   /** @inheritDoc */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#plane.engineForSpace(space);
+  }
+
+  /** @inheritDoc */
+  get executionLeases(): ExecutionLeaseAccess {
+    return {
+      acquire: (space, holder) =>
+        this.#endpoint.request("server.acquireExecutionLease", {
+          space,
+          holder,
+        }),
+      release: (space, holder) =>
+        this.#endpoint.request("server.releaseExecutionLease", {
+          space,
+          holder,
+        }),
+    };
+  }
+
+  /** @inheritDoc */
+  commitDeliveryFailureNotice(
+    notice: Parameters<HostMemoryServer["commitDeliveryFailureNotice"]>[0],
+  ): Promise<void> {
+    return this.#endpoint.request("server.commitDeliveryFailureNotice", {
+      notice,
+    });
   }
 
   /** @inheritDoc */

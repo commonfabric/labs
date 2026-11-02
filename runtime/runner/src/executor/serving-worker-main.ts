@@ -65,6 +65,12 @@ export function serveFromPort(
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
+    // A timer on this thread, so that the watchdog on the server's thread hears
+    // nothing once this thread stops (serving-loop.md §2).
+    const heartbeat = setInterval(
+      () => endpoint.notify("worker.heartbeat", null),
+      init.heartbeatIntervalMs,
+    );
     // The environment a served handler's `fetch` resolves against is this
     // realm's, so it is set here to what the process that started the worker
     // serves patterns from, as that process sets its own.
@@ -138,6 +144,7 @@ export function serveFromPort(
         try {
           await host.close();
         } finally {
+          clearInterval(heartbeat);
           await plane.close();
         }
       },

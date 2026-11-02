@@ -683,12 +683,12 @@ export type ServingLoopStats = {
     superseded: number;
   };
   /**
-   * `lost` counts renewals that found the row naming another holder or
-   * gone; `lapsesRecovered` counts renewals that found the holder's own row
-   * expired with no successor, as a renewal driver that synchronous work
-   * held past the TTL does, and extended it (serving-loop.md §2).
+   * `held` counts the tenures that acquired a lease. `lost` counts the leases
+   * the watchdog released when it killed a stalled serving worker
+   * (serving-loop.md §2). The thread that holds the memory server adds it to the
+   * counters each worker posts, so it carries across a worker's successors.
    */
-  lease: { held: number; lost: number; lapsesRecovered: number };
+  lease: { held: number; lost: number };
 
   /** OW45 arm-B server-ensure stage 1 (design PR #6209 §10): the
    * SpaceServer's space-root ensure — one lease-guarded owed step per
@@ -856,7 +856,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     budgetDeferrals: 0,
     superseded: 0,
   },
-  lease: { held: 0, lost: 0, lapsesRecovered: 0 },
+  lease: { held: 0, lost: 0 },
   rootEnsure: {
     runs: 0,
     created: 0,

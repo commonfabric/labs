@@ -42,6 +42,7 @@ import {
 } from "./path.ts";
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
+import { ExecutionLeases } from "./execution-lease.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -234,7 +235,7 @@ CREATE TABLE IF NOT EXISTS "commit" (
   class              TEXT    NOT NULL DEFAULT 'authored',
   -- The producing lease holder, derived-class commits only (protocol.md §7's
   -- closed metadata list: 'holder' — derived only). NULL on every other
-  -- class. Admission verified it against the live execution_lease row before
+  -- class. Admission verified it against the memory server's lease map before
   -- the insert (serving-loop.md §2), so a stored value names the holder that
   -- actually held the lease at admission time.
   holder             TEXT,
@@ -388,17 +389,10 @@ CREATE TABLE IF NOT EXISTS branch (
 INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
 VALUES ('', 0, 0, 'active');
 
--- Server-execution v2: the single-deriver lease
--- (docs/specs/server-side-execution/serving-loop.md §2). One row per space,
--- EXACTLY three fields — the v1 branch's richer shape (branch PK,
--- generation/host/on-behalf-of columns, a state enum) is prior art this
--- REDUCES from, not substrate. 'holder' is a per-process identity (service
--- identity + process-instance component, minted at process start — DR1), so
--- the admission equality check itself fences cross-process succession.
--- Acquire/renew are DIRECT table writes on the direct-engine plane
--- (serving-loop.md §1 plane (c)) — a lease renewal is never a commit.
--- Liveness is judged by the memory server's own clock against expires_at;
--- an expired row matches nobody. References nothing; nothing references it.
+-- Unused: the single-deriver lease lives in the memory server's memory
+-- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
+-- writes this table. TODO(seefeld): Drop it once no deployed process writes
+-- its rows.
 CREATE TABLE IF NOT EXISTS execution_lease (
   space       TEXT    NOT NULL PRIMARY KEY,
   holder      TEXT    NOT NULL,
@@ -819,17 +813,6 @@ ORDER BY r.seq ASC, r.op_index ASC
 LIMIT 1
 `;
 
-// The derived-class admission read (serving-loop.md §2): the space's LIVE
-// lease row, liveness judged by the memory server's own clock (the :now the
-// admission path passes is always this process's Date.now()). An expired row
-// is not returned, so it matches nobody.
-const SELECT_LIVE_EXECUTION_LEASE = `
-SELECT holder
-FROM execution_lease
-WHERE space = :space
-  AND expires_at > :now
-`;
-
 const SELECT_SET_DELETE_CONFLICT = `
 SELECT seq
 FROM revision
@@ -994,7 +977,6 @@ interface PreparedStatements {
   selectLatestSnapshot: PreparedStatement;
   selectLatestSnapshotBelow: PreparedStatement;
   selectRevisionRow: PreparedStatement;
-  selectLiveExecutionLease: PreparedStatement;
   selectNextSeq: PreparedStatement;
   selectPatchConflicts: PreparedStatement;
   selectPatchConflictsExcludingSession: PreparedStatement;
@@ -1121,6 +1103,9 @@ export type Engine = {
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
   statements: PreparedStatements;
+
+  /** The lease map derived-class admission checks (serving-loop.md §2). */
+  executionLeases: ExecutionLeases;
 
   /**
    * Documents already decoded, by the revision each one is.
@@ -1353,6 +1338,12 @@ export type OpenOptions = {
   /** The observer every commit decision is reported to; see
    * {@link CommitObserver}. */
   commitObserver?: CommitObserver;
+
+  /**
+   * The lease map derived-class admission checks: the opening `Server`'s, which
+   * all its spaces share. An engine opened without one starts a map of its own.
+   */
+  executionLeases?: ExecutionLeases;
 };
 
 export type InvocationRecord = {
@@ -1404,9 +1395,9 @@ export type ApplyCommitOptions = {
 
   /** The producing lease holder of a `derived`-class commit — the DR1
    *  per-process identity the SpaceServer minted at process start
-   *  (serving-loop.md §2). Admission compares it against the space's live
-   *  `execution_lease` row: one equality check, judged by this process's own
-   *  clock. Server-internal like `commitClass`: `ClientCommit` cannot express
+   *  (serving-loop.md §2). Admission compares it against the holder the
+   *  memory server's lease map names for the space: one equality check.
+   *  Server-internal like `commitClass`: `ClientCommit` cannot express
    *  a holder, and no session-facing path supplies one. Meaningless (and
    *  ignored) on other classes. */
   holder?: string;
@@ -1800,7 +1791,6 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
   selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
   selectRevisionRow: database.prepare(SELECT_REVISION_ROW),
-  selectLiveExecutionLease: database.prepare(SELECT_LIVE_EXECUTION_LEASE),
   selectNextSeq: database.prepare(SELECT_NEXT_SEQ),
   selectPatchConflicts: database.prepare(SELECT_PATCH_CONFLICTS),
   selectPatchConflictsExcludingSession: database.prepare(
@@ -2249,6 +2239,7 @@ export const open = async (
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
     commitObserver,
+    executionLeases = new ExecutionLeases(),
   }: OpenOptions,
 ): Promise<Engine> => {
   if (
@@ -2287,6 +2278,7 @@ export const open = async (
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
     statements: prepareStatements(database),
+    executionLeases,
     documentCache: new Map(),
     documentCacheBytes: 0,
     documentCacheBudgetBytes,
@@ -5690,7 +5682,7 @@ const applyCommitTransaction = (
   // The derived-class posture gate (protocol.md §1): off the flag NOTHING
   // may claim the class — retries included — because `derived` names the
   // single-deriver posture and nothing outside EXPERIMENTAL_SERVER_EXECUTION
-  // may claim it. Only this gate precedes replay detection; the LIVE-lease
+  // may claim it. Only this gate precedes replay detection; the lease
   // equality check sits after it below, on the fresh-commit path.
   if (commitClass === "derived" && !getServerExecutionConfig()) {
     throw new ProtocolError(
@@ -5700,14 +5692,14 @@ const applyCommitTransaction = (
   }
   const sessionKey = resolveCommitSessionKey(sessionId, principal);
   // Replay detection FIRST — ahead of every current-authority admission
-  // check, the live-lease equality check included (owner review on #5349,
+  // check, the lease equality check included (owner review on #5349,
   // 2026-08-12): a commit this session already applied returns its stored
   // result without re-validating preconditions — re-checking entity-absent
   // against the state the original application created would wrongly reject
-  // the replay — and without consulting the live `execution_lease`: the
-  // lease authorizes NEW derived commits, and a network retry of an
-  // already-ACCEPTED one must keep its stored answer after the producing
-  // lease was released, expired, or succeeded by a new holder. The stored
+  // the replay — and without consulting the lease map: the lease authorizes
+  // NEW derived commits, and a network retry of an already-ACCEPTED one must
+  // keep its stored answer after the producing lease was released or
+  // succeeded by a new holder. The stored
   // identity spans the payload bytes (sameStoredOriginal) AND the admission
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
@@ -5760,26 +5752,18 @@ const applyCommitTransaction = (
   }
 
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
-  // `derived` row): the producer holds the space's live `execution_lease` —
-  // ONE equality check against the row's holder, not admission machinery.
-  // Fresh commits only: an exact replay already answered from the store
-  // above. Liveness is judged by THIS process's clock — the memory
-  // server's own, never the holder's: the select excludes expired rows, so
-  // an expired lease matches nobody and a fresh derived commit under one
-  // is rejected even before any successor acquires.
+  // `derived` row): the producer holds the space's lease — ONE equality check
+  // against the holder the memory server's map names, not admission
+  // machinery. Fresh commits only: an exact replay already answered from the
+  // store above.
   if (commitClass === "derived") {
-    const lease = space === undefined
+    const leaseHolder = space === undefined
       ? undefined
-      : engine.statements.selectLiveExecutionLease.get({
-        space,
-        now: Date.now(),
-      }) as { holder: string } | undefined;
-    if (
-      holder === undefined || lease === undefined || lease.holder !== holder
-    ) {
+      : engine.executionLeases.holderOf(space);
+    if (holder === undefined || leaseHolder !== holder) {
       throw new ProtocolError(
-        "derived-class commit rejected: producer does not hold the live " +
-          "execution_lease for the space (serving-loop.md §2)",
+        "derived-class commit rejected: producer does not hold the " +
+          "execution lease for the space (serving-loop.md §2)",
       );
     }
     // Derived-envelope defense-in-depth (protocol.md §2, RULED 2026-08-05):

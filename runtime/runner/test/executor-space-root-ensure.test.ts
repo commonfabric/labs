@@ -851,7 +851,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const resumedWave = Promise.withResolvers<void>();
     let demandReads = 0;
     const facade = new Proxy(server, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === "demandForSpace") {
           return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
@@ -864,7 +864,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
             resumedWave.resolve();
           };
         }
-        const value = Reflect.get(target, property, receiver);
+        const value = Reflect.get(target, property);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

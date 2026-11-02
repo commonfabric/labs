@@ -158,10 +158,7 @@ import {
   readGenesisRoot,
   readSpaceKind,
 } from "./genesis-root.ts";
-import {
-  executionLeaseHolder,
-  liveExecutionLeaseHolder,
-} from "./execution-lease.ts";
+import { executionLeaseHolder, ExecutionLeases } from "./execution-lease.ts";
 import { parseClientInfo } from "./client-info.ts";
 import { respondToHello } from "./handshake.ts";
 import {
@@ -3183,9 +3180,11 @@ export class Server {
 
   #engines = new Map<string, Promise<Engine.Engine>>();
 
+  /** What `executionLeases` returns, shared with every engine this opens. */
+  readonly #executionLeases = new ExecutionLeases();
+
   /**
-   * The resolved-engine index for the synchronous read-path checks, the
-   * unnamed scoped read's (`#denyForeignServingScopedRead()`) among them;
+   * The resolved-engine index for the synchronous read-path checks;
    * `#openEngineInner()` populates it.
    */
   #resolvedEngines = new Map<string, Engine.Engine>();
@@ -11091,23 +11090,17 @@ export class Server {
   /**
    * Whether `session` is `space`'s serving session on this server: the
    * SpaceServer's own loopback session, which reached the server from this
-   * process and whose principal holds the space's live lease (protocol.md
-   * §2's read row). A session from another process carries the same
-   * principal, so the connection decides. Only a resolved engine holds a
-   * lease row, so a caller on the synchronous read path passes the one
-   * from `#resolvedEngines`.
+   * process and whose principal holds the space's lease (protocol.md §2's
+   * read row). A session from another process carries the same principal, so
+   * the connection decides.
    */
-  #isServingSession(
-    space: string,
-    engine: Engine.Engine,
-    session: SessionState,
-  ): boolean {
+  #isServingSession(space: string, session: SessionState): boolean {
     if (session.principal === undefined) return false;
     const connection = session.ownerConnectionId === null
       ? undefined
       : this.#connections.get(session.ownerConnectionId);
     return connection?.inProcess === true &&
-      liveExecutionLeaseHolder(engine, space) ===
+      this.#executionLeases.holderOf(space) ===
         executionLeaseHolder(session.principal);
   }
 
@@ -11211,7 +11204,7 @@ export class Server {
       );
     }
     const engine = await this.#openEngine(space);
-    if (!this.#isServingSession(space, engine, session)) {
+    if (!this.#isServingSession(space, session)) {
       if (
         session.principal === undefined ||
         !this.#isDelegatingPrincipal(session.principal)
@@ -11284,9 +11277,8 @@ export class Server {
    *
    * FULLY SYNCHRONOUS (called without await at the three read sites):
    * ordinary client reads keep sharing one engine turn with their
-   * authorization (the ACL revocation-race invariant). Only a RESOLVED
-   * engine can hold a lease row (a never-opened engine has none), so the
-   * sync map is authoritative for the serving check.
+   * authorization (the ACL revocation-race invariant). The lease map is
+   * synchronous, so the serving check adds no boundary.
    */
   #denyForeignServingScopedRead(
     space: string,
@@ -11305,13 +11297,7 @@ export class Server {
       }
     }
     if (unnamedScopedRoot === undefined) return undefined;
-    const readEngine = this.#resolvedEngines.get(space);
-    if (
-      readEngine !== undefined &&
-      this.#isServingSession(space, readEngine, session)
-    ) {
-      return undefined;
-    }
+    if (this.#isServingSession(space, session)) return undefined;
     return toError(
       "ProtocolError",
       `scoped read of ${unnamedScopedRoot} refused: the requesting ` +
@@ -11772,14 +11758,87 @@ export class Server {
 
   /**
    * The co-hosted direct-engine access of server-execution v2
-   * (serving-loop.md §1): the ExecutorHost's lease writes ride plane (c)
-   * as direct table updates, and the wave commit step's sink runs its
-   * store transaction (per-doc re-verification + derived-class apply +
-   * basis rows) against this same engine. Server-internal machinery and
-   * tests only — nothing session-facing reaches an engine directly.
+   * (serving-loop.md §1): the wave commit step's sink runs its store
+   * transaction (per-doc re-verification + derived-class apply + basis rows)
+   * against this engine. Server-internal machinery and tests only — nothing
+   * session-facing reaches an engine directly.
    */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#openEngine(space);
+  }
+
+  /**
+   * The map from space to execution lease holder (serving-loop.md §2), which
+   * this server's serving loop acquires and releases through. Server-internal
+   * machinery and tests only, like `engineForSpace()`.
+   */
+  get executionLeases(): ExecutionLeases {
+    return this.#executionLeases;
+  }
+
+  /**
+   * Writes the failure notice of a refused delegated append onto its source
+   * event's stream entry (serving-loop.md §5), as a derived-class commit of the
+   * serving loop's own: admitted against `executionLeases` under `holder`, as the
+   * session it commits in, and not fanned out to sessions. The lookup and the
+   * patch run with nothing between them, so the array index the patch names is
+   * the entry's. Writes nothing for an entry compacted away, since the notice
+   * never outlives the entry it annotates (events.md §4), or for one that already
+   * carries this notice.
+   *
+   * @throws {ProtocolError} when a notice is due and `holder` does not hold the
+   * space's lease.
+   */
+  async commitDeliveryFailureNotice(
+    { space, holder, localSeq, sourceEvent, failure }: {
+      space: string;
+      holder: string;
+
+      /** The serving loop's own number for the commit. */
+      localSeq: number;
+
+      /** The source event, and the stream document that holds its entry. */
+      sourceEvent: { sidecarId: string; eventId: string };
+
+      /** What the notice says: the refused append, its target, and why. */
+      failure: { eventId: string; targetSpace: string; reason: string };
+    },
+  ): Promise<void> {
+    const engine = await this.#openEngine(space);
+    const doc = Engine.read(engine, { id: sourceEvent.sidecarId });
+    const entries = ((doc?.value ?? {}) as {
+      entries?: Array<
+        {
+          eventId?: string;
+          deliveryFailures?: Array<{ eventId: string }>;
+        } | null
+      >;
+    }).entries ?? [];
+    const index = entries.findIndex((entry) =>
+      entry?.eventId === sourceEvent.eventId
+    );
+    if (index < 0) return;
+    const existing = entries[index]?.deliveryFailures ?? [];
+    if (existing.some(({ eventId }) => eventId === failure.eventId)) return;
+    Engine.applyCommit(engine, {
+      sessionId: holder,
+      space,
+      commitClass: "derived",
+      holder,
+      commit: {
+        localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: sourceEvent.sidecarId,
+          patches: [{
+            op: "replace",
+            path: `/value/entries/${index}/deliveryFailures`,
+            value: [...existing, failure],
+          }],
+        }],
+      },
+    });
   }
 
   /**
@@ -11979,6 +12038,7 @@ export class Server {
         documentCacheBudgetBytes: this.options.documentCacheBudgetBytes,
         documentCacheMaxEntries: this.options.documentCacheMaxEntries,
         documentCacheCoordinator: this.#documentCacheCoordinator,
+        executionLeases: this.#executionLeases,
         // Every commit this engine decides, on whichever path, counts
         // toward the space's commit rate; the engine is this space's, so
         // the space is known here whatever the committing caller named.
@@ -11986,13 +12046,8 @@ export class Server {
           this.#observeCommit({ ...decision, space }),
       });
     })();
-    // The SYNC engine view (server-execution v2 Phase 5): the read-row
-    // check on the unnamed read path (`#denyForeignServingScopedRead`,
-    // protocol.md §2) must stay synchronous (the ACL revocation-race
-    // invariant — no added microtask boundary), so resolved engines are
-    // indexed here for it. A lease can only exist on an OPEN engine
-    // (co-hosted activation opens it before acquiring), so the resolved
-    // map sees every live lease.
+    // The SYNC engine view, which the read paths that must not add a
+    // microtask boundary consult.
     opened.then((engine) => {
       if (this.#engines.get(space) === opened) {
         this.#resolvedEngines.set(space, engine);

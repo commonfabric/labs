@@ -1426,7 +1426,9 @@ Stages, one PR each except C, which is a three-PR train (below):
       enforces the one equality check under the flag, judged by the
       memory server's clock (an expired row matches nobody). Landed
       dark: nothing drives the renew cadence until stage F's
-      SpaceServer.
+      SpaceServer. *(The lease has since moved into the memory server's
+      memory, with no renewal or expiry:
+      [`serving-loop-owner-routing.md`](serving-loop-owner-routing.md).)*
 - [x] **C — main reduction** (a THREE-PR TRAIN, not one PR — the
       surface is ~25 source files across five packages plus ~110
       goldens, and the seams below are where it cuts cleanly):
