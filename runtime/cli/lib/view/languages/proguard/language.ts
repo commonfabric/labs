@@ -18,6 +18,8 @@ const PROGUARD_OPTION_LINE =
 export const proguardLanguage: Language = {
   id: "proguard",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

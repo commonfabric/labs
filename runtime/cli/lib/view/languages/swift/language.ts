@@ -17,6 +17,8 @@ import { swiftGrammar } from "./swift.ts";
 export const swiftLanguage: Language = {
   id: "swift",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {
