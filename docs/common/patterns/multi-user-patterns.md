@@ -873,7 +873,10 @@ is for good, and `false` that it admits the runtime there or refuses it for
 another reason. `undefined` means there is no answer yet: a computation runs
 again once the server answers, and a handler is run again with the answer in
 place, unless it runs on the client and its event was sent with
-`retries: false`; a handler a serving runtime runs is run again either way. Call
+`retries: false`; a handler a serving runtime runs is run again either way. It
+is also `undefined`, with no answer from the server coming to run anything
+again, when `target` is `undefined`, and on a runtime with no memory server to
+ask about the space, such as one that reads the space from a local store. Call
 it where `spaceAccess(target)` can be called.
 [`space-access.md`](../../features/space-access.md#a-deleted-space) has the
 details.
