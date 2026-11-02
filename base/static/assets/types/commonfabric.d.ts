@@ -5173,6 +5173,33 @@ export type SpaceOfFunction = <T>(
 
 export declare const spaceOf: SpaceOfFunction;
 
+/**
+ * Returns whether the space `target` names is deleted, so a pattern that keeps
+ * a list of spaces can put away an entry whose space is gone. `target` is a
+ * cell, naming the space its value lives in as `spaceAccess()` does, or the
+ * space's own DID.
+ *
+ * `true` means the memory server has refused this runtime the space because
+ * it is deleted, which it is for good. `false` means the server has admitted
+ * the runtime to the space, or has refused it for another reason. `undefined`
+ * means there is no answer yet: in a reactive computation the server has not
+ * answered for the space yet, and the computation runs again once it has.
+ * Anywhere, it also means no memory server can answer for the space, or
+ * `target` is `undefined`. A handler does not see `undefined` for a space the
+ * server has yet to answer for: the runtime waits for the answer once the run
+ * ends, discarding what the run wrote, and runs the handler again.
+ *
+ * Call it in a handler or a reactive computation (`computed()`, `lift()`).
+ * Calling it in a pattern body throws, as does a string `target` that is not a
+ * well-formed DID. Deletion is the same for every principal, so the answer
+ * does not depend on who asks, and carries no label of its own.
+ */
+export type SpaceDeletedFunction = (
+  target: AnyCell<unknown> | DID | undefined,
+) => boolean | undefined;
+
+export declare const spaceDeleted: SpaceDeletedFunction;
+
 /** The level `grantSpaceAccess()` sets an access-list entry to. */
 export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";
 

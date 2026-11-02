@@ -6,6 +6,7 @@ import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import {
   connect,
   isClientUpdateRequiredError,
+  isDeletedSpaceError,
   loopback,
   type Transport,
 } from "../v2/client.ts";
@@ -381,6 +382,71 @@ describe("memory session termination", () => {
       }
     });
 
+    it("ends the session with an `AuthorizationError` marked `deleted` for a `deleted` revocation", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://deleted-revocation"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      const space = "did:key:z6Mk-deleted-revocation";
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const observed: Error[] = [];
+        session.subscribeTermination((error) => observed.push(error));
+        injecting.inject({
+          type: "session/revoked",
+          space,
+          sessionId: session.sessionId,
+          reason: "deleted",
+        });
+        expect(observed).toEqual([session.closeError]);
+        const error = observed[0];
+        expect(error.name).toBe("AuthorizationError");
+        expect(isDeletedSpaceError(error)).toBe(true);
+        expect(isClientUpdateRequiredError(error)).toBe(false);
+        await expect(session.queryGraph({ roots: [] })).rejects.toBe(error);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("marks no other revocation `deleted`", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://revocation-not-deleted"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      try {
+        for (const reason of ["taken-over", "unauthorized"]) {
+          const space = `did:key:z6Mk-revocation-not-deleted-${reason}`;
+          const session = await client.mount(
+            space,
+            {},
+            testSessionOpenAuthFactory,
+          );
+          injecting.inject({
+            type: "session/revoked",
+            space,
+            sessionId: session.sessionId,
+            reason,
+          });
+          expect(session.closeError).toBeDefined();
+          expect(Object.hasOwn(session.closeError!, "deleted")).toBe(false);
+          expect(isDeletedSpaceError(session.closeError)).toBe(false);
+        }
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
     it("leaves the session open for a revocation reason the client does not know", async () => {
       const server = new Server({
         ...testSessionOpenServerOptions,
@@ -403,6 +469,66 @@ describe("memory session termination", () => {
         });
         expect(session.closeError).toBeUndefined();
         await session.queryGraph({ roots: [] });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+  });
+  describe("a refused request", () => {
+    it("carries the server's `deleted` marker onto the error it rejects with, beside the other markers", async () => {
+      // The server's refusal of a deleted space is stood in for by rewriting
+      // the response to the query, so the client's own copying is what is
+      // under test.
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://request-refused-deleted"),
+      });
+      const space = "did:key:z6Mk-request-refused-deleted";
+      let refuseNext = false;
+      const client = await connect({
+        transport: loopback({
+          connect: (send, syncParts) =>
+            server.connect((message, payload) => {
+              if (refuseNext && message.type === "response") {
+                refuseNext = false;
+                send({
+                  type: "response",
+                  requestId: message.requestId,
+                  error: {
+                    name: "AuthorizationError",
+                    message: `Space ${space} is deleted`,
+                    permanentEvidence: true,
+                    aclRevision: 3,
+                    deleted: true,
+                  },
+                });
+              } else {
+                send(message, payload);
+              }
+            }, syncParts),
+        }),
+      });
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        refuseNext = true;
+        const refusal = await session.queryGraph({ roots: [] }).then(
+          () => undefined,
+          (error: Error) => error,
+        );
+        expect(refusal).toBeInstanceOf(Error);
+        expect(refusal!.name).toBe("AuthorizationError");
+        expect(refusal!.message).toBe(`Space ${space} is deleted`);
+        expect(refusal).toMatchObject({
+          permanentEvidence: true,
+          aclRevision: 3,
+          deleted: true,
+        });
+        expect(isDeletedSpaceError(refusal)).toBe(true);
       } finally {
         await client.close();
         await server.close();

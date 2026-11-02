@@ -30,8 +30,8 @@ rewrite. In particular:
 - deleting a space (section 4.5.1, INV-15) is specified and not yet
   implemented: the server refuses the tombstone it writes under INV-12's
   validity clause, as it refuses any ACL document that is not an access list.
-  The client's support for the `deleted` marker and `session/revoked` reason
-  lands before the server sends either
+  The client handles the `deleted` marker and `session/revoked` reason, which
+  the server sends neither of yet
 - an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
   4.5.1) is specified and not yet implemented: the server sends its current
   sequence
@@ -2596,8 +2596,7 @@ and the markers, never on `message`. A `session/revoked` terminates the session
 with an `Error` named `SessionRevokedError` for `taken-over`, and
 `AuthorizationError` for `unauthorized` and `deleted`; the `deleted` reason
 also sets `deleted: true` on it, so a session open when its space is deleted
-reports the deletion as a refused reopen would. Copying `deleted` is not
-implemented yet.
+reports the deletion as a refused reopen would.
 
 ### 4.8.5 Session Lifecycle
 

@@ -8,9 +8,8 @@ a room it lists is one they belong to. The implementation is
 `runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did). `spaceDeleted(target)`,
-whether that space is deleted, is planned beside them and not implemented yet;
-[below](#a-deleted-space) says what it will return.
+same space, described [below](#the-spaces-own-did), and `spaceDeleted(target)`, whether
+that space is deleted, described [below](#a-deleted-space).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -249,10 +248,13 @@ does, so the memory server answers for it. The run waits for that answer
 through machinery the runtime already has, not a retry or a poll of its own:
 
 - A reactive computation gets `undefined` at once, and is run again when the
-  answer arrives: an admission delivers the access list it read, and a refusal
-  reaches it through the storage manager's access-change observer
-  (`subscribeSpaceAccessChange()`), which runs it again through
-  `Scheduler.invalidateAction()`, as it does for `spaceAccess(target)`.
+  answer arrives. The runtime's `SpaceAccessWatch` waits for the server's
+  answer for the space (`awaitSpaceAnswer()` on the storage manager) and runs
+  it again through `Scheduler.invalidateAction()`, since an admission to a
+  space with no access list delivers no document it read. A refusal that comes
+  later, as when the space is deleted while the session is open, reaches it
+  through the storage manager's access-change observer
+  (`subscribeSpaceAccessChange()`), as it does for `spaceAccess(target)`.
 - A handler does not see `undefined` for a space it is waiting on. The call
   records the space as pending, as a run records an `inSpace()` name it cannot
   resolve yet, and the run's transaction is dropped. Once the run has ended,
@@ -266,7 +268,7 @@ through machinery the runtime already has, not a retry or a poll of its own:
   again.
 
 A runtime with no memory server it can ask about the space, such as one whose
-routing gives the space's host no route, returns `undefined` from both, and a
+reads of the space a local store supplies, returns `undefined` from both, and a
 handler is not run again: there is no answer to wait for.
 
 It can be called where `spaceAccess(target)` can: in a handler or a reactive
@@ -280,7 +282,10 @@ It tells a principal who names a space nothing the server's refusal of that
 space does not already tell them.
 
 `spaceaccesslost`, the runtime's notice of a refused space across the worker
-boundary, carries `deleted: true` for a deleted space. The renderer's
+boundary, carries `deleted: true` for a deleted space. A space the runtime
+reported refused before a retry found it deleted is reported again, with the
+marker, and so is the change to the computations that asked about it. The
+renderer's
 placeholder for content of a deleted space reads "Deleted" and has no Retry
 button, since no retry can admit anyone, and the shell asks again neither when
 the person navigates into a deleted space nor when the page regains focus.
@@ -290,8 +295,9 @@ them, uses `spaceDeleted(target)` to put away an entry whose space is gone
 ([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
 
 Deleting a space is not implemented yet; until it is, the memory server
-refuses the commit that would delete one, and `spaceDeleted(target)` and the
-`deleted` marker on `spaceaccesslost` do not exist.
+refuses the commit that would delete one and sends no refusal marked `deleted`,
+so `spaceDeleted(target)` never returns `true` and `spaceaccesslost` never
+carries the marker, though the runtime, the renderer and the shell handle both.
 
 ## Changing the level
 

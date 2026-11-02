@@ -2663,12 +2663,17 @@ export class StorageManager implements IStorageManager {
           }
         },
         onAccessChange: (error) => {
-          const alreadyDenied = this.#spaceAccessErrors.has(space);
+          const previous = this.#spaceAccessErrors.get(space);
+          const alreadyDenied = previous !== undefined;
+          // A refusal that turns out to be the space's deletion is news even
+          // to an observer that heard of the refusal before it.
+          const nowDeleted = MemoryV2Client.isDeletedSpaceError(error) &&
+            !MemoryV2Client.isDeletedSpaceError(previous);
           if (error === undefined) {
             this.#spaceAccessErrors.delete(space);
           } else {
             this.#spaceAccessErrors.set(space, error);
-            if (!alreadyDenied) {
+            if (!alreadyDenied || nowDeleted) {
               for (const observer of [...this.#spaceAccessObservers]) {
                 try {
                   observer(space, error);
@@ -2678,7 +2683,7 @@ export class StorageManager implements IStorageManager {
               }
             }
           }
-          if (alreadyDenied !== (error !== undefined)) {
+          if (alreadyDenied !== (error !== undefined) || nowDeleted) {
             for (const observer of [...this.#spaceAccessChangeObservers]) {
               try {
                 observer(space);
@@ -3069,6 +3074,24 @@ export class StorageManager implements IStorageManager {
   /** @inheritDoc */
   spaceAccessError(space: MemorySpace): Error | undefined {
     return this.#spaceAccessErrors.get(space);
+  }
+
+  /** @inheritDoc */
+  spaceAnswered(space: MemorySpace): boolean | undefined {
+    if (this.#storeReadThroughs.has(space)) return undefined;
+    if (this.#spaceAccessErrors.has(space)) return true;
+    return this.#providers.get(space)?.sessionAnswered() ?? false;
+  }
+
+  /** @inheritDoc */
+  async awaitSpaceAnswer(space: MemorySpace): Promise<void> {
+    if (this.spaceAnswered(space) !== false) return;
+    try {
+      await this.#openProvider(space).ensureSession();
+    } catch (error) {
+      // A refusal is an answer, and is recorded before the open rejects.
+      if (this.spaceAnswered(space) !== true) throw error;
+    }
   }
 
   /** @inheritDoc */
@@ -4989,6 +5012,11 @@ class Provider
     return this.replica.authorizationError();
   }
 
+  /** See SpaceReplica.sessionAnswered. */
+  sessionAnswered(): boolean {
+    return this.replica.sessionAnswered();
+  }
+
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
   }
@@ -6209,6 +6237,16 @@ export class SpaceReplica
       return closeError;
     }
     return undefined;
+  }
+
+  /**
+   * Whether the memory server has answered for this replica's space: it has
+   * admitted a session this replica opened, or refused one, as
+   * `authorizationError()` reports.
+   */
+  sessionAnswered(): boolean {
+    return this.#sessionSession !== undefined ||
+      this.authorizationError() !== undefined;
   }
 
   /** The terminal error of the remote subscription supplying this replica. */
@@ -12594,10 +12632,34 @@ const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
   error.name === "AuthorizationError" &&
   (error as { retriable?: unknown }).retriable !== true;
 
-// Preserve a real AuthorizationError (name, message, and the server's retriable
-// marker) instead of flattening it to a generic ConnectionError, so a caller can
-// tell an authorization denial apart from a transport failure. Everything else
-// remains a ConnectionError.
+/**
+ * Returns the markers of the memory server's refusal that `error` carries,
+ * which every copy of an `AuthorizationError` keeps: `permanentEvidence`,
+ * `aclRevision`, and `deleted`, the marker of a deleted space.
+ */
+const authorizationMarkersOf = (error: object): {
+  permanentEvidence?: true;
+  aclRevision?: number;
+  deleted?: true;
+} => {
+  const details = error as {
+    permanentEvidence?: unknown;
+    aclRevision?: unknown;
+    deleted?: unknown;
+  };
+  return {
+    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
+    ...(typeof details.aclRevision === "number"
+      ? { aclRevision: details.aclRevision }
+      : {}),
+    ...(details.deleted === true ? { deleted: true } : {}),
+  };
+};
+
+// Preserve a real AuthorizationError (name, message, and the server's markers)
+// instead of flattening it to a generic ConnectionError, so a caller can tell an
+// authorization denial apart from a transport failure. Everything else remains
+// a ConnectionError.
 const toPullError = (error: unknown): PullError => {
   if (
     !(error instanceof Error) || error.name !== "AuthorizationError" ||
@@ -12605,37 +12667,23 @@ const toPullError = (error: unknown): PullError => {
   ) {
     return toConnectionError(error);
   }
-  const details = error as unknown as {
-    retriable?: unknown;
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
   return ({
     name: "AuthorizationError",
     message: error.message,
-    ...(details.retriable === true ? { retriable: true } : {}),
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
+    ...((error as { retriable?: unknown }).retriable === true
+      ? { retriable: true }
       : {}),
+    ...authorizationMarkersOf(error),
   }) as unknown as IAuthorizationError;
 };
 
 // Rebuild a throwable Error from a stored AuthorizationError result so `synced()`
 // rejects with a proper Error instance a caller can match on by name.
-const authorizationErrorToThrow = (error: IAuthorizationError): Error => {
-  const details = error as unknown as {
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
-  return Object.assign(new Error(error.message), {
+const authorizationErrorToThrow = (error: IAuthorizationError): Error =>
+  Object.assign(new Error(error.message), {
     name: "AuthorizationError",
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
-      : {}),
+    ...authorizationMarkersOf(error),
   });
-};
 
 const toRejectedError = (
   error: unknown,

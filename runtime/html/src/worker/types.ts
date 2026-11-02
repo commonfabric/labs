@@ -401,6 +401,12 @@ export interface SpaceAccessProvider {
   error(space: string): Error | undefined;
 
   /**
+   * Whether the access loss `error()` reports for the named space is its
+   * deletion, which no retry can undo. Optional: without it, no loss is.
+   */
+  deleted?(space: string): boolean;
+
+  /**
    * Observes loss and recovery, and, while the space is refused, the start
    * and settling of each of its retries. The current snapshot is read through
    * `error()` and `retries.state()`.

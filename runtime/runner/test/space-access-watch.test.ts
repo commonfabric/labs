@@ -20,6 +20,17 @@ const spaceB = "did:key:z6Mk-space-access-watch-b" as MemorySpace;
 class FakeStorage {
   observers = new Set<(space: MemorySpace) => void>();
 
+  /** The answers waited for, by space, which a test settles. */
+  answers = new Map<MemorySpace, PromiseWithResolvers<void>>();
+
+  awaitSpaceAnswer(space: MemorySpace): Promise<void> {
+    let answer = this.answers.get(space);
+    if (answer === undefined) {
+      this.answers.set(space, answer = Promise.withResolvers<void>());
+    }
+    return answer.promise;
+  }
+
   subscribeSpaceAccessChange(
     observer: (space: MemorySpace) => void,
   ): () => void {
@@ -85,6 +96,52 @@ describe("SpaceAccessWatch", () => {
         watch.rerunOnChange(spaceA, fakeAction());
         watch.rerunOnChange(spaceB, fakeAction());
         expect(storage.observers.size).toBe(1);
+      });
+    });
+
+    describe("rerunOnAnswer()", () => {
+      it("runs each action waiting on a space once the server answers for it, and only once", async () => {
+        const { storage, invalidated, watch } = watchOverFake();
+        const first = fakeAction();
+        const second = fakeAction();
+        watch.rerunOnAnswer(spaceA, first);
+        watch.rerunOnAnswer(spaceA, second);
+        watch.rerunOnAnswer(spaceB, fakeAction());
+        expect([...storage.answers.keys()]).toEqual([spaceA, spaceB]);
+        expect(invalidated).toEqual([]);
+
+        storage.answers.get(spaceA)!.resolve();
+        await storage.answers.get(spaceA)!.promise;
+        expect(invalidated).toEqual([first, second]);
+        expect([...watch.accessForTestingOnly.answering.keys()]).toEqual([
+          spaceB,
+        ]);
+      });
+
+      it("runs nothing when the space's open ends with no answer", async () => {
+        const { storage, invalidated, watch } = watchOverFake();
+        watch.rerunOnAnswer(spaceA, fakeAction());
+
+        const answer = storage.answers.get(spaceA)!;
+        answer.reject(new Error("no connection"));
+        await answer.promise.catch(() => {});
+        expect(invalidated).toEqual([]);
+        expect(watch.accessForTestingOnly.answering.size).toBe(0);
+      });
+
+      it("runs nothing for an action the scheduler let go, or once disposed", async () => {
+        const { storage, invalidated, unsubscribe, watch } = watchOverFake();
+        const gone = fakeAction();
+        watch.rerunOnAnswer(spaceA, gone);
+        unsubscribe(gone);
+        watch.rerunOnAnswer(spaceB, fakeAction());
+        watch.dispose();
+
+        for (const answer of storage.answers.values()) {
+          answer.resolve();
+          await answer.promise;
+        }
+        expect(invalidated).toEqual([]);
       });
     });
 

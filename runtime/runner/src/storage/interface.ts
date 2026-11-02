@@ -642,7 +642,27 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**
-   * Observes authoritative access loss synchronously. Transient connection
+   * Whether the memory server has answered for `space`: `true` once it has
+   * admitted this manager's session there or refused it, `false` while it has
+   * not, and `undefined` when no memory server answers for the space, as for
+   * one whose reads a store supplies. Opens nothing.
+   */
+  spaceAnswered?(space: MemorySpace): boolean | undefined;
+
+  /**
+   * Opens `space`'s session if none is open, and resolves once the memory
+   * server has answered for it, admitting it or refusing it, as
+   * `spaceAnswered()` reports. Resolves at once where that is already `true`
+   * or is `undefined`.
+   *
+   * @throws When the session's open ends with no answer, as when its
+   *   connection never completes a handshake.
+   */
+  awaitSpaceAnswer?(space: MemorySpace): Promise<void>;
+
+  /**
+   * Observes authoritative access loss synchronously, and a refusal of a space
+   * already refused that turns out to be its deletion. Transient connection
    * failures and normal closure do not emit; `spaceAccessError()` supplies
    * the current snapshot for subscriptions installed after a loss.
    */
@@ -651,9 +671,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Cancel;
 
   /**
-   * Observes authoritative denial and recovery after an authorized reopen.
-   * Read `spaceAccessError()` for the current verdict. Initial successful
-   * opens and transient connection failures do not emit.
+   * Observes authoritative denial and recovery after an authorized reopen,
+   * and a refusal of a space already refused that turns out to be its
+   * deletion. Read `spaceAccessError()` for the current verdict. Initial
+   * successful opens and transient connection failures do not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
