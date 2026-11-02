@@ -713,6 +713,21 @@ export function retitleSharedSpaceIn(
 }
 
 /**
+ * Applies {@link retitleSharedSpaceIn} for a caller with no handler of its own
+ * in Home. The caller's word is the title, as it is for a registration's: Home
+ * does not read the space's root.
+ */
+export const retitleSharedSpace = handler<
+  SharedSpaceRetitle,
+  SharedSpaceCatalogState,
+  SharedSpaceRetitleResult
+>(
+  eventSchema,
+  toSchema<SharedSpaceCatalogState>(),
+  (retitle, { catalog }) => retitleSharedSpaceIn(catalog, retitle),
+);
+
+/**
  * Removes one entry from the catalog, for one purpose only: an application
  * that registered spaces on the person's behalf undoing that import. It is not
  * how a person puts a shared space away (archive is, and nothing a person

@@ -155,6 +155,35 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries[SPACE]?.host === "https://room.example" &&
     home.sharedSpaceCatalog.entries[SPACE]?.state === "saved"
   );
+  const action_retitle = action(() => {
+    home.sharedSpaces.commands.retitle!.send({
+      space: SPACE,
+      title: "Renamed loom",
+    });
+  });
+  // A retitle moves the title alone, so a choice made from a list shown before
+  // it still names the current revision.
+  const assert_retitled = assert(() =>
+    home.sharedSpaceCatalog.entries[SPACE]?.title === "Renamed loom" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("3:") &&
+    home.sharedSpaces.view.status === "ready" &&
+    home.sharedSpaces.view.saved[0]?.title === "Renamed loom"
+  );
+  const action_retitle_flat = action(() => {
+    home.retitleSharedSpace.send({ space: SPACE, title: "Renamed again" });
+  });
+  const assert_retitled_flat = assert(() =>
+    home.sharedSpaceCatalog.entries[SPACE]?.title === "Renamed again" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.revision.startsWith("3:")
+  );
+  const action_retitle_missing = action(() => {
+    home.retitleSharedSpace.send({ space: IMPORTED, title: "Nowhere" });
+  });
+  const assert_retitle_admits_nothing = assert(() =>
+    !Object.hasOwn(home.sharedSpaceCatalog.entries, IMPORTED) &&
+    Object.keys(home.sharedSpaceCatalog.entries).length === 1
+  );
   const action_register_import = action(() => {
     home.registerSharedSpace.send({
       space: IMPORTED,
@@ -228,6 +257,12 @@ export default pattern(() => {
       { assertion: assert_restored },
       { action: action_conflicting_route },
       { assertion: assert_route_retained },
+      { action: action_retitle },
+      { assertion: assert_retitled },
+      { action: action_retitle_flat },
+      { assertion: assert_retitled_flat },
+      { action: action_retitle_missing },
+      { assertion: assert_retitle_admits_nothing },
       { action: action_register_import },
       { assertion: assert_imported },
       { action: action_remove_stale },

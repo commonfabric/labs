@@ -38,6 +38,7 @@ import {
   readSharedSpaceCatalog,
   registerSharedSpace,
   removeSharedSpace,
+  retitleSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
   type SharedSpaceMembershipChange,
@@ -46,6 +47,8 @@ import {
   type SharedSpaceRegistrationResult,
   type SharedSpaceRemoval,
   type SharedSpaceRemovalResult,
+  type SharedSpaceRetitle,
+  type SharedSpaceRetitleResult,
   type TrustedSharedSpaceProfiles,
 } from "../shared-space/shared-space-catalog.ts";
 import {
@@ -221,6 +224,9 @@ export type HomeOutput = {
   // for it, and nothing a person invokes calls it: archive is how a person puts
   // a shared space away.
   removeSharedSpace: Stream<SharedSpaceRemoval, SharedSpaceRemovalResult>;
+  // Sets an entry's display title and nothing else, for an application with no
+  // handler in Home that knows the space's current title.
+  retitleSharedSpace: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
   createProfile: Stream<CreateProfileEvent>;
   // Retires the profile the event links, as the picker's Remove does, unless
   // it is the one `#profile` returns (see `setProfileRetired`).
@@ -565,6 +571,7 @@ const Home = pattern(
       commands: {
         register: home.registerSharedSpace,
         changeMembership: home.changeSharedSpaceMembership,
+        retitle: home.retitleSharedSpace,
       },
       imports: { remove: home.removeSharedSpace },
     };
@@ -780,6 +787,7 @@ const Home = pattern(
       }),
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
       removeSharedSpace: removeSharedSpace({ catalog }),
+      retitleSharedSpace: retitleSharedSpace({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

@@ -4,8 +4,9 @@ The Home pattern owns the shared-space catalog: which social spaces a person
 keeps in their collection. Its `sharedSpaces` surface separates private
 observations from command bindings. Authored patterns and host applications use
 the same operations. The flat `sharedSpaceCatalog`, `registerSharedSpace`,
-`changeSharedSpaceMembership`, and `removeSharedSpace` fields are aliases over
-the same storage and streams, as is `markSharedSpaceDeleted`.
+`changeSharedSpaceMembership`, `retitleSharedSpace`, and `removeSharedSpace`
+fields are aliases over the same storage and streams, as is
+`markSharedSpaceDeleted`.
 Catalog types, validation, and transitions live in
 `patterns/system/shared-space/shared-space-catalog.ts`.
 
@@ -28,6 +29,7 @@ its stable cause. Importing Home's full output type or binding the whole
 | --- | --- |
 | `sharedSpaces.commands.register` | Admit a target the caller has vetted |
 | `sharedSpaces.commands.changeMembership` | Archive or restore at the observed revision |
+| `sharedSpaces.commands.retitle` | Set a listed space's display title |
 | `sharedSpaces.commands.markDeleted` | Record that a listed space is deleted, at the observed revision |
 | `sharedSpaces.view` | Validated collection observation and membership lists |
 | `sharedSpaces.receipts` | Validated offer-admission evidence |
@@ -184,9 +186,14 @@ handler's transaction, to the title the space's root now gives. It writes only
 when the title differs, and returns `retitled`, `unchanged`, or `conflict` for a
 space with no entry. It moves no revision, state, or last action: a title is a
 display hint, not a membership choice, so a choice made from a list shown
-before the retitle still names the current revision. Home exposes no command
-for it; the application that knows the root's current title calls it from its
-own handler.
+before the retitle still names the current revision. An application with a
+handler in Home calls it from there. One with none, such as a Loom daemon that
+reaches Home only through its streams, sends `retitleSharedSpace`, which does
+the same and returns the same. The stream takes the caller's word for the
+title, as registration does, and reads nothing from the space's root, so whoever
+holds the current title is the one to send it, to their own Home. The stream is
+optional in `sharedSpaceCommandsSchema`: a caller that needs it reports
+`home-update-required` for a Home without it.
 
 FabriChat's manager in Home calls all three from its own handlers. For standalone
 `fabrichat-room` spaces, the catalog's current state and revision govern the
