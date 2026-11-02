@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   findCommitMessages,
   messageAt,
@@ -194,7 +195,7 @@ Deno.test({
       try {
         runner.amendCommit("amended", new Map([[path, "pager\n"]]), head);
       } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
+        error = describeFailure(caught);
       }
       assert(error.includes("hook changed"), error || "the amend did not fail");
       assertEquals(runner.headSha(), head);
@@ -231,7 +232,7 @@ Deno.test({
       try {
         runner.amendCommit("amended", new Map(), head);
       } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
+        error = describeFailure(caught);
       }
       assert(error.includes("hook changed"), error || "the amend did not fail");
       assertEquals(runner.headSha(), head);

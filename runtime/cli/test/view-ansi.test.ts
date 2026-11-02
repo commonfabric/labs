@@ -42,3 +42,19 @@ Deno.test("cpLen counts a non-BMP glyph as one display column", () => {
   // visibleWidth (cpLen after stripping escapes) agrees
   assertEquals(visibleWidth(paint("𝑻 lift", { bold: true })), 6);
 });
+
+Deno.test("cpLen counts a lone surrogate as one column, as for...of does", () => {
+  for (
+    const text of [
+      "\udc7b",
+      "\udc7baB",
+      "a\ud835",
+      "\ud835\ud835\udc7b",
+      "\udc7b\ud835",
+    ]
+  ) {
+    assertEquals(cpLen(text), [...text].length, JSON.stringify(text));
+  }
+  assertEquals(cpLen("\udc7baB"), 3);
+  assertEquals(cpLen("\ud835\udc7b"), 1, "a pair is still one column");
+});

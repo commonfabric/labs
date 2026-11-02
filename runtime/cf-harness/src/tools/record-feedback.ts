@@ -5,6 +5,7 @@ import {
   recordPatternFeedback,
 } from "@commonfabric/pattern-index/feedback";
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -86,9 +87,6 @@ export const recordFeedbackToolDescriptor: HarnessToolDescriptor = {
   tags: ["fabric", "pattern", "feedback"],
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 export const recordFeedbackTool: HarnessToolDefinition<
   RecordFeedbackToolInput,
   RecordFeedbackToolOutput
@@ -117,7 +115,9 @@ export const recordFeedbackTool: HarnessToolDefinition<
     try {
       client = await context.getPatternIndexClient();
     } catch (error) {
-      return errorOutput(`pattern index unavailable: ${errorMessage(error)}`);
+      return errorOutput(
+        `pattern index unavailable: ${describeFailure(error)}`,
+      );
     }
     try {
       const recorded = await recordPatternFeedback(client, {
@@ -129,7 +129,7 @@ export const recordFeedbackTool: HarnessToolDefinition<
         return errorOutput(recorded.message);
       }
     } catch (error) {
-      return errorOutput(errorMessage(error));
+      return errorOutput(describeFailure(error));
     }
     return {
       outputId,

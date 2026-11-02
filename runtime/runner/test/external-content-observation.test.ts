@@ -102,20 +102,35 @@ const interceptObservationProbeState = (
     state: Readonly<CfcTxState>,
   ) => Readonly<CfcTxState>,
 ): void => {
+  // The probe opens two transactions: the staged write, prepared once for
+  // initial admission, and then the final check after traversal. Every
+  // transaction opened during the next probe call is intercepted, and
+  // `edit` is restored when that call ends, however it ends.
   const edit = runtime.edit.bind(runtime);
-  runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
-    runtime.edit = edit as Runtime["edit"];
-    let phase: ObservationProbePhase | undefined;
-    return interceptTransaction(edit(...args), (method, _args, proceed) => {
-      const result = proceed();
-      if (method === "prepareForCommit") phase = "initial";
-      if (method === "prepareCfc") phase = "traversal";
-      if (method === "getCfcState" && phase !== undefined) {
-        return transform(phase, result as Readonly<CfcTxState>);
-      }
-      return result;
-    });
-  }) as Runtime["edit"];
+  const probe = runtime.prepareExternalContentObservation.bind(runtime);
+  runtime.prepareExternalContentObservation = async (options) => {
+    runtime.prepareExternalContentObservation = probe;
+    let opened = 0;
+    runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
+      const phase: ObservationProbePhase = opened++ === 0
+        ? "initial"
+        : "traversal";
+      let prepared = false;
+      return interceptTransaction(edit(...args), (method, _args, proceed) => {
+        const result = proceed();
+        if (method === "prepareForCommit") prepared = true;
+        if (method === "getCfcState" && prepared) {
+          return transform(phase, result as Readonly<CfcTxState>);
+        }
+        return result;
+      });
+    }) as Runtime["edit"];
+    try {
+      return await probe(options);
+    } finally {
+      runtime.edit = edit as Runtime["edit"];
+    }
+  };
 };
 
 describe("external content observation", () => {
@@ -671,6 +686,45 @@ describe("external content observation", () => {
             ifc: { maxConfidentiality: [] },
           },
           value: { detail: linked },
+          producer: PRODUCER,
+        })).rejects.toThrow(/traversed external content observation/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses a link the schema does not describe when its content fails the write gate", async () => {
+    await withRuntime(async (runtime) => {
+      const seedTx = runtime.edit();
+      const linked = runtime.getCell(
+        space,
+        "external-content-undescribed-source",
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          ifc: { confidentiality: [SECRET] },
+        },
+        seedTx,
+      );
+      linked.set({ title: "undescribed linked row" });
+      expect((await seedTx.commit().settled).ok).toBeDefined();
+
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-undescribed-link",
+          schema: {
+            type: "object",
+            properties: { title: { type: "string" } },
+            additionalProperties: false,
+            ifc: { maxConfidentiality: [] },
+          },
+          value: { title: "public", extra: linked },
           producer: PRODUCER,
         })).rejects.toThrow(/traversed external content observation/);
       } finally {

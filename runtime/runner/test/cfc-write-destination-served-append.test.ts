@@ -129,11 +129,11 @@ describe("CFC write-destination reads: the served event append", () => {
 
     // The earlier run reads the labeled source and sends what it read.
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    expect(lease.acquire()).toBe(true);
+    expect(await lease.acquire()).toBe(true);
     try {
       const wave = new WaveAccumulator({
         space,
@@ -160,7 +160,7 @@ describe("CFC write-destination reads: the served event append", () => {
       await wave.settled();
       expect(outcome.aborted).toBeUndefined();
     } finally {
-      lease.release();
+      await lease.release();
     }
     await server.flushSessions([space]);
     await storageManager.open(space).pullToServerHead?.();

@@ -1,4 +1,5 @@
 import type { Tokens } from "@cmd-johnson/oauth2-client";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { OAuth2TokenSchema } from "@commonfabric/runner";
 import type { JSONSchema } from "@commonfabric/runner";
 import { getLogger } from "@commonfabric/logger";
@@ -402,9 +403,7 @@ export function createOAuth2Handlers(
         await clearAuthData(payload.authCellId, authSchema, emptyAuthData);
         return createLogoutSuccessResponse(c, "Successfully logged out");
       } catch (error: unknown) {
-        const errorMessage = error instanceof Error
-          ? error.message
-          : String(error);
+        const errorMessage = describeFailure(error);
         return createLogoutErrorResponse(
           c,
           `Failed to clear authentication data: ${errorMessage}`,

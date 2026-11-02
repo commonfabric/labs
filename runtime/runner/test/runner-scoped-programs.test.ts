@@ -43,8 +43,12 @@ describe("runner-scoped-programs", () => {
       experimental: { serverExecution: true },
     });
     const engine = await server.engineForSpace(space);
-    lease = new ExecutionLeaseCycle({ engine, space, holder });
-    expect(lease.acquire()).toBe(true);
+    lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
     demands = [];
   });
 
@@ -52,7 +56,7 @@ describe("runner-scoped-programs", () => {
     runtime.clearSealDestination();
     for (const cancel of demands) cancel();
     await runtime.dispose();
-    lease.release();
+    await lease.release();
     await storage.close();
     await server.close();
   });

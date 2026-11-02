@@ -80,6 +80,7 @@ import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
+  COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
@@ -442,7 +443,7 @@ export interface EstablishHarnessSessionContextOptions {
 
   config: Pick<
     HarnessSessionConfig,
-    "skillsRoot" | "skillsRootSandboxPath" | "skillNames"
+    "skillsRoot" | "skillsRootSandboxPath" | "skillNames" | "allowedToolIds"
   >;
 
   /**
@@ -456,8 +457,9 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, host-supplied input
- * cells, the guidance for selecting a piece target, for a run whose host
+ * skills, the well-known grants of the session's space when a tool can use
+ * them (`describe_handle`, `run_pattern`, `read_value` or `call_verb`),
+ * host-supplied input cells, the guidance for selecting a piece target, for a run whose host
  * opted in to `weaver_action` the guidance for using the Weaver's commands,
  * and the guidance for using the tools the session's backings carry.
  *
@@ -518,10 +520,21 @@ const establishContextMessages = async (
       messages.push(context.contextText);
     }
   }
-  if (engine.fabricSessionAvailable) {
+  if (
+    engine.fabricSessionAvailable &&
+    (config.allowedToolIds === undefined ||
+      config.allowedToolIds.some((tool) =>
+        tool === "describe_handle" || tool === "run_pattern" ||
+        tool === "read_value" || tool === "call_verb"
+      ))
+  ) {
     try {
       const grantMessage = wellKnownGrantsContextMessage(
         await engine.establishWellKnownGrants(),
+        {
+          describeHandleAvailable: config.allowedToolIds === undefined ||
+            config.allowedToolIds.includes("describe_handle"),
+        },
       );
       if (grantMessage !== undefined) {
         messages.push(grantMessage);
@@ -548,6 +561,8 @@ const establishContextMessages = async (
     fabricSessionAvailable: engine.fabricSessionAvailable,
     loomCommandsAvailable: engine.config.loomCommands !== undefined,
     loomRetrievalAvailable: engine.config.loomRetrieval !== undefined,
+    allowedToolIds: config.allowedToolIds,
+    cfcEnforcementMode: engine.config.cfcEnforcementMode,
   });
   for (const message of toolGuidance) {
     messages.push(message);
@@ -564,6 +579,7 @@ const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
   [PIECES_TOOL_GUIDANCE, "pieces-tools"],
   [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
   [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
+  [COMMAND_ENFORCEMENT_GUIDANCE, "loom-commands-tools"],
   [LOOM_RETRIEVAL_TOOL_GUIDANCE, "loom-retrieval-tools"],
 ]);
 

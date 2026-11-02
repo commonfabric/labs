@@ -40,6 +40,7 @@ import {
   type HarnessModelTurnResult,
   observedModelId,
 } from "./client.ts";
+import { emptyReplyDiagnostic } from "./empty-reply.ts";
 import {
   assertOpenAIReasoningEffortSupported,
   supportedOpenAIReasoningEfforts,
@@ -469,8 +470,15 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.model,
       normalizeOpenAIUsage(response.usage),
     );
+    const assistant = createAssistantMessage(response);
+    const emptyReply = emptyReplyDiagnostic(
+      assistant,
+      "chat-completions",
+      response,
+    );
     return {
-      assistant: createAssistantMessage(response),
+      assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       observedModel: observedModelId(response.model),
       ...(usage !== undefined ? { usage } : {}),
     };
@@ -560,14 +568,17 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.model,
       normalizeOpenAIUsage(response.usage),
     );
+    const assistant = normalizeTerminalResponse(
+      response as unknown as Record<string, unknown>,
+      request.model,
+      this.providerId,
+      GATEWAY_RESPONSES_LABEL,
+    );
+    const emptyReply = emptyReplyDiagnostic(assistant, "responses", response);
     return {
       observedModel: observedModelId(response.model),
-      assistant: normalizeTerminalResponse(
-        response as unknown as Record<string, unknown>,
-        request.model,
-        this.providerId,
-        GATEWAY_RESPONSES_LABEL,
-      ),
+      assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       ...(usage !== undefined ? { usage } : {}),
     };
   }

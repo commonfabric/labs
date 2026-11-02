@@ -20,6 +20,7 @@ import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
+import { webSocketRoute } from "./routed-plane.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
   LifecycleVerbDescriptor,
@@ -64,6 +65,12 @@ export function serveFromPort(
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
+    // A timer on this thread, so that the watchdog on the server's thread hears
+    // nothing once this thread stops (serving-loop.md §2).
+    const heartbeat = setInterval(
+      () => endpoint.notify("worker.heartbeat", null),
+      init.heartbeatIntervalMs,
+    );
     // The environment a served handler's `fetch` resolves against is this
     // realm's, so it is set here to what the process that started the worker
     // serves patterns from, as that process sets its own.
@@ -92,9 +99,18 @@ export function serveFromPort(
       ...(init.ensureSpaceRoots === undefined
         ? {}
         : { ensureSpaceRoots: init.ensureSpaceRoots }),
+      ...(init.route === undefined ? {} : {
+        route: webSocketRoute(
+          new URL(init.route),
+          identity,
+          options.clientBuild,
+        ),
+      }),
       createWaveCommitSink: (deps) => plane.createWaveCommitSink(deps),
       // The counters cross on the loop's own edges: every wave cycle, and
-      // each tenure's start and end.
+      // each tenure's start and end. The sink also posts the `events` block
+      // ahead of each wave commit, so the server's thread holds what a
+      // wave's drain counted before it applies that wave's commit.
       onWaveCycle: () => plane.reportStats(host.stats()),
       onActivationSettled: (space, outcome) => {
         plane.reportActivationSettled(space, outcome);
@@ -107,6 +123,7 @@ export function serveFromPort(
     });
     plane.serve({
       stats: () => host.stats(),
+      eventStats: () => host.eventStats(),
       // This realm's loggers: the serving loop's own counts and timings.
       diagnostics: () => ({
         loggerCounts: getLoggerCountsBreakdown(),
@@ -127,6 +144,7 @@ export function serveFromPort(
         try {
           await host.close();
         } finally {
+          clearInterval(heartbeat);
           await plane.close();
         }
       },

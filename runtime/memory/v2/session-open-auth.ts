@@ -36,6 +36,7 @@ import {
   delegationCovers,
   verifyDelegation,
 } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 import { type ClientInfo, parseClientInfo } from "./client-info.ts";
@@ -71,6 +72,8 @@ const sameSessionDescriptor = (
     actingAs?: string;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    instanceNames?: true;
+    invite?: { inviteId: string; code: string };
   },
 ): boolean =>
   valueEqual(
@@ -97,7 +100,14 @@ const sameSessionDescriptor = (
   valueEqual(left.genesisRoot, right.genesisRoot) &&
   // Compared as signed, so a signed kind the message does not carry, of any
   // form, is a mismatch rather than read as no kind.
-  left.spaceKind === right.spaceKind;
+  left.spaceKind === right.spaceKind &&
+  // The session's naming mode decides which spaces admit it (INV-16), so a
+  // declaration cannot be attached or stripped in transit either. Compared
+  // as signed, like the kind.
+  left.instanceNames === right.instanceNames &&
+  // An invitation redeems as the signer, so one cannot be attached to or
+  // taken off a signed open in transit.
+  valueEqual(left.invite, right.invite);
 
 export type SessionOpenMessage = {
   space: string;
@@ -110,6 +120,8 @@ export type SessionOpenMessage = {
     resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    instanceNames?: true;
+    invite?: { inviteId: string; code: string };
   };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
@@ -392,7 +404,7 @@ export const verifySessionOpenProofs = async (
       delegation = await decodeDelegation(proof.slice());
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
     if (cids !== undefined && cids[i] !== delegation.cid) {
@@ -435,7 +447,7 @@ export const verifySessionOpenProofs = async (
       await verifyDelegation(delegation);
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
   }

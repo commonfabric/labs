@@ -23,6 +23,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -693,7 +694,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -782,7 +783,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -2018,7 +2019,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
@@ -2050,7 +2051,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
@@ -2487,7 +2488,7 @@ describe("opening a space root", () => {
     await controller.stopPiece(root);
 
     stub.setSource(SOURCE_INCOMPATIBLE);
-    expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+    expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     await runtime.idle();
     const after = (await controller.getDefaultPattern(true))!;
     await runtime.idle();
@@ -3175,7 +3176,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain(oldRef.identity);
     expect(message).toContain("also failed CFC migration");
@@ -3234,7 +3235,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("is already the pinned entry");
     expect(message).toContain("#default");
@@ -3337,7 +3338,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("could not be compiled");
   });
@@ -3366,7 +3367,7 @@ describe("opening a space root", () => {
       restore();
       pm.getArtifactEntryRef = realGetRef;
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("did not yield an entry identity");
   });
@@ -3402,7 +3403,7 @@ describe("opening a space root", () => {
       (runtime as unknown as { editWithRetry: unknown }).editWithRetry =
         realEdit;
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("identity swap could not commit");
     expect(message).toContain("swap backend down");

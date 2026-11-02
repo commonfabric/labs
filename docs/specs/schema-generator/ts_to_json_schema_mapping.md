@@ -196,7 +196,8 @@ transformer prints a wrapper it builds as `__cfHelpers.PerUser<…>`, a name no
 scope declares), and follows CFC alias chains under their bindings (§11). A
 scope wrapper without a payload argument remains unread, including through an
 alias. `Date` also has a by-name special case. Keyword types and a final
-resolve-else-`true` fallback complete the node path.
+resolve-else-`true` fallback complete the node path; the `symbol` keyword is
+refused as the type is (§4.0.1), not left to that fallback.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
 as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
@@ -221,7 +222,8 @@ keeps it on this path alone, as the checker hands the type path `any`
 itself, which holds nothing of the constituents beside it; a constituent
 whose value, with its labels and whole-value keywords set aside, is `{}` or
 `{ not: true }` is read as `any` or `never`; otherwise a union constituent
-distributes and every combination of arms is settled on its own; `unknown`
+distributes and every combination of arms is settled on its own, a cell
+holding a union being no union, as `Cell<A | B>` is one cell; `unknown`
 is the identity; an empty object part drops out and takes `null` and
 `undefined` with it, as `T & {}` does; primitives are narrowed or found
 disjoint wherever they sit, `"a" & string` being `"a"` and `string & number`
@@ -253,7 +255,15 @@ holds is set aside while the values are settled and stated of what they
 settle to, as the type path reads it from the checker's type: its scope and
 its default belong to the whole value, so two scopes refuse the
 intersection, as a scope wrapper nested in another with no cell between
-them, and defaults that differ leave none; its labels are placed as the type
+them, and defaults that differ leave none. Neither of a cell's scopes is
+set aside: its own is the cap on its handle, and the one written beside its
+handles is that of what it holds, so `Cell<PerUser<string>> & string[]` is
+`Cell<PerUser<string>>`
+(`{ type: "string", scope: "user", asCell: ["cell"] }`), while a scope
+another constituent states of the whole value caps the handle of the cell
+the intersection is, `PerUser<{ x: string }> & Cell<PerSession<{ x: string }>>`
+giving `{ …, scope: "session", asCell: [{ kind: "cell", scope: "user" }] }`;
+its labels are placed as the type
 path places a CFC carrier's (§11): a restriction goes on the members of the
 result it declares, or on the whole result where it declares all of them or
 none, and evidence (`integrity`, `addIntegrity`) goes on the whole result
@@ -278,13 +288,22 @@ beside another primitive (`undefined & void` is `undefined`, `string & void`
 nothing), while the wrapper is a cell, the value beside any other part; an
 unsupported-pattern fallback keeps the constituents behind it, so a nested
 or named intersection is reopened when an enclosing one reduces it
-(`(string & Brand) & number` is nothing); and a union whose arms fold to one
-schema — `void | OpaqueCell<any>`, two branded primitives with the same
+(`(string & Brand) & number` is nothing), with the scope, default and
+restrictions a reference to it states beside it stated of each of them, since
+a value of `PerUser<A & B>` is a value of `PerUser<A>` and of `PerUser<B>`, so
+`PerUser<F> & { y: number }` keeps its scope and
+`Confidential<F, L> & { y: number }` its label, while evidence beside the
+reference is stated of none of them, as no one of them is the labeled payload;
+and a union whose arms fold to one schema — `void | OpaqueCell<any>`, two branded primitives with
+the same
 fallback, or `Record<string, T> | Record<number, T>` — keeps every arm, a
 labeled or scoped copy of it included and wherever it sits among the arms of
 another union, so an intersection reading the survivor still distributes over
 them, and the labels the survivor states are that union's (an arm accepting
-nothing is no arm, and is neither counted nor kept).
+nothing is no arm, and is neither counted nor kept). A cell written around
+such a schema, in place or beside a reference to it, holds it and keeps none
+of this: `Cell<PerUser<F>>` with `F` a union that folded or an intersection
+that fell back is one cell, whose scope stays beside its handle.
 Schemas with recorded union or intersection constituents are deduplicated by
 identity: equal fallback schemas can hide disjoint source types, so separate
 folded unions remain separate constraints in an enclosing intersection.
@@ -394,6 +413,8 @@ by any repo test.
 | `bigint` | `{ type: "integer" }`; the runtime reads and validates a stored bigint under `integer` and `number` | `primitive-formatter.ts` | probe only |
 | bigint literal (`42n`) | `{ type: "integer", enum: [Number(v)] }` — converted through `Number`, so precision above 2^53 would be lost; the runtime matches a stored bigint to a whole-number member of its value | `primitive-formatter.ts` | probe only |
 | Template literal type | `{ type: "string" }` | `primitive-formatter.ts` | probe only |
+| `symbol`, a `unique symbol` (`typeof s`), and a union holding one (`string \| symbol`, `PropertyKey`, `keyof any`) | the `schema-type:symbol` **error**; the symbol reads as `false`, so a union drops it (§4.0.1) | `#formatType()` in `schema-generator.ts`, before any formatter, and the node path's `symbol` keyword; `reportSymbolType()` in `unread-type-diagnostics.ts` | `test/unread-type-diagnostics.test.ts`; end-to-end: ts-transformers `test/symbol-type-diagnostic.test.ts` |
+| A well-known symbol (`typeof Symbol.iterator`, as in `keyof string`) | `false`, with no diagnostic, so `keyof string` reads as its string and number keys (§4.0.1) | `isWellKnownSymbol()` in `typescript/default-library.ts` | `test/unread-type-diagnostics.test.ts` |
 | `null` | `{ type: "null" }` | `primitive-formatter.ts` | fixtures |
 | `undefined` | `{ type: "undefined" }` — non-standard, deliberate (`api/index.ts`) | `primitive-formatter.ts`; node `schema-generator.ts` | fixtures |
 | `void` | `{ asCell: ["opaque"] }` ("matches anything, but we will not access the cell") | `primitive-formatter.ts`; node `schema-generator.ts` | void-type.test.ts ×3 |
@@ -424,6 +445,41 @@ by any repo test.
 Fallback sentinel: a primitive-flagged type matching none of the branches emits
 `{ type: "string", enum: ["unknown"] }` (`primitive-formatter.ts`) — a
 silent, mis-typed sentinel; untested and believed unreachable in practice.
+
+### 4.0.1 Symbols
+
+The schema dialect has no symbol type, so no schema describes a symbol value.
+What the generator does with a symbol depends on whether the runtime could store
+it.
+
+A well-known symbol, such as `Symbol.iterator`, is never stored. The language
+keeps well-known symbols out of the symbol registry, and the data model stores
+only a registered symbol, by its key. A well-known symbol therefore reads as
+`false`, as `never` does, with no diagnostic. `isWellKnownSymbol()` recognizes
+one as a `unique symbol` declared on `SymbolConstructor` in the default library.
+So `keyof string`, which holds `typeof Symbol.iterator`, reads as its string and
+number keys.
+
+Any other symbol could be a registered one: TypeScript gives the type `unique
+symbol` to `const r = Symbol.for("r")` as to `const s = Symbol()`. Leaving such
+a symbol out would refuse stored values the type admits, so the generator
+reports the `schema-type:symbol` error, which refuses the schema. The schema
+reads the symbol as `false`, so a union drops it. The message names the type
+written nearest the symbol. That is the symbol's own node where it has one. A
+symbol with no node of its own, such as a member of `keyof T`, is named by the
+node written around it (`GenerationContext.writtenAround`). Where that node is a
+union holding the symbol, the message suggests `Exclude<…, symbol>`.
+
+A symbol key is a different case. A plain object's data is its string keys, so a
+symbol-keyed member is skipped without a diagnostic (the `FabricInstancePlus`
+row above), and `Record<symbol, V>` reads as an object with no entries.
+
+A symbol branded by intersection with a symbol-keyed member, such as `symbol & {
+readonly [brand]: true }`, reads as the symbol, because the intersection reading
+leaves out a constituent that holds only a brand. It is then refused like any
+other symbol. A symbol branded with a string-keyed member, such as `symbol & {
+__brand: "x" }`, reads through the unsupported-intersection fallback (§9)
+instead, as a string or number branded that way does.
 
 ### 4.1 Generic declarations and their bindings
 
@@ -2288,7 +2344,7 @@ Everything that throws, with source (test-pinned unless noted):
 
 | Condition | Message (prefix) | Source |
 | --- | --- | --- |
-| No formatter matches a type | `No formatter found for type: …` | `schema-generator.ts` (untested) |
+| No formatter matches a type (symbol types are read before the formatters, §4.0.1) | `No formatter found for type: …` | `schema-generator.ts` (untested) |
 | `Map`/`WeakMap` | `… not JSON-serializable … Use Record<string, V> …` | `type-utils.ts` |
 | `Set`/`WeakSet` | `… Use Array<T> instead.` | `type-utils.ts` |
 | `Cell<Stream<T>>` | `Cell<Stream<T>> is unsupported. Wrap the stream: …` | `common-fabric-formatter.ts` |

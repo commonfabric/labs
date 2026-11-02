@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolContext } from "./types.ts";
 
@@ -162,11 +163,8 @@ export const classifyFileToolShellFailure = (
 export const classifyPathResolutionError = (
   error: unknown,
 ): StructuredFileToolErrorCode => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   return message.toLowerCase().includes("path escapes workspace root")
     ? "path_outside_workspace"
     : "unknown";
 };
-
-export const detailFromUnknownError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);

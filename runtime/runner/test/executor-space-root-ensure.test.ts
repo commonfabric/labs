@@ -742,9 +742,11 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(await created.activate()).toBe(true);
     await resolveRootAfterEnsure(clientRuntime(readerSigner));
 
+    // The ensure brings the root into being outside any action, so its start
+    // attributes the root's own initializations: the mark names the root.
     const starts = mintedTxs.filter((tx) =>
       waveRunContextOf(tx)?.actionId?.startsWith("piece-start/") === true &&
-      tx.getCfcState().attributedInitialization
+      tx.getCfcState().attributedPieces.length > 0
     );
     expect(starts.length).toBeGreaterThan(0);
     for (const tx of starts) {
@@ -849,7 +851,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     const resumedWave = Promise.withResolvers<void>();
     let demandReads = 0;
     const facade = new Proxy(server, {
-      get(target, property, receiver) {
+      get(target, property) {
         if (property === "demandForSpace") {
           return (...args: Parameters<typeof server.demandForSpace>) => {
             demandReads++;
@@ -862,7 +864,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
             resumedWave.resolve();
           };
         }
-        const value = Reflect.get(target, property, receiver);
+        const value = Reflect.get(target, property);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

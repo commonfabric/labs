@@ -2916,7 +2916,7 @@ export class WaveAccumulator
       const { key, batch } of this.#buildForeignBatches(requeued, droppedWhole)
     ) {
       // Tenure re-check per sink call (defense-in-depth over the entry
-      // check): the entry check plus the engine's live-lease row cover
+      // check): the entry check plus the memory server's lease map cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
       if (this.#tenureEnded) {
@@ -3021,9 +3021,8 @@ export class WaveAccumulator
         return outcome;
       }
       // The memory server refuses a derived commit whose holder no longer
-      // holds the live lease, and the sink's owner ends the tenure when it
-      // sees such a refusal (serving-loop.md §2). A refusal under an ended
-      // tenure is a lease loss, with no conflict to resolve.
+      // holds the lease (serving-loop.md §2), so a refusal under a tenure a
+      // park ended meanwhile is a lease loss, with no conflict to resolve.
       if (this.#tenureEnded) return this.#abortForLostLease(outcome);
 
       // The sink re-verified inside its transaction and something moved

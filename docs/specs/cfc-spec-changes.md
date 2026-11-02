@@ -121,7 +121,12 @@ there observed without dereferencing, was an SC-4/SC-8 residual until
 template-population Stage A: a standalone slot observation now consumes the
 assignment `J` through the `*`-path `followRef` template — on declared
 list-coordinator containers since Stage A, and on ALL pure-link containers
-since the machinery-read marker landed (#4674; see the SC-8 note below).)
+since the machinery-read marker landed (#4674; see the SC-8 note below).
+Implementation note 2026-10-30: a map's read of its list's
+membership is declared onward (`declaredOnwardRead`) and what it consumes
+at the list itself lands in the container's membership stamp, so a child the
+same transaction sets up carries its own slot's label;
+`cfc-observation-classes.md` §6 has the arrangement.)
 
 **SC-8 [normative] Read-API → observation-class mapping — §4.6.3.** The
 primitive read profile defines `shape`/`value`/`enumerate`/`count`/ `followRef`,
@@ -1217,7 +1222,8 @@ unobservability invariant, the runtime-private condition on a guard's control
 state, and the comment it requires at every marking site. §18.6.2 derives two things from the
 attempt's journal minus runtime-internal reads: the consumed set, and the
 conservative flow-path confidentiality. This entry proposes a fifth kind of
-runtime-internal read, and the runner subtracts it from the second alone —
+runtime-internal read, and the runner subtracts it from the second and from
+the per-write input gate, not from the egress and sink consumed set —
 the boundary at the end of this entry says so, and a runtime that adopts the
 amended list owes either the wider application or that boundary stated.
 §18.6.2 enumerates four kinds today: verifier-internal reads,
@@ -1271,10 +1277,10 @@ was labeled at the wrong paths. Recording a channel a profile does not close
 is the discipline §18.6.4's conformance checklist asks for, and §4.6.3's
 existence channel (SC-4) is the neighbouring disclosure.
 
-The runner applies the exclusion to the flow join alone. The consumed set the
-egress and sink ceilings read, and the per-write read-prefix gate of SC-23,
-both still count these reads, which over-gates and never under-gates; §18.6.2
-governs both sets, so a runtime that claims the amended list owes either the
+The runner applies the exclusion to the flow join and to the per-write
+read-prefix gate of SC-23. The consumed set the egress and sink ceilings read
+still counts these reads, which over-gates and never under-gates; §18.6.2
+governs that set too, so a runtime that claims the amended list owes either the
 wider application or this boundary stated, as SC-23 stated its own. The design and the runner's
 implementation are in
 [`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md); the

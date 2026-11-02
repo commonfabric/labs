@@ -1,5 +1,6 @@
 import { Command, ValidationError } from "@cliffy/command";
 import { HelpCommand } from "@cliffy/command/help";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import ports from "@commonfabric/ports" with { type: "json" };
 
 import { cliName, cliText } from "../lib/cli-name.ts";
@@ -190,7 +191,7 @@ export const main = new Command()
           parsed = parseSupervisorArgs(supervisorArgs);
         } catch (error) {
           throw new ValidationError(
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           );
         }
         if (parsed.help) {

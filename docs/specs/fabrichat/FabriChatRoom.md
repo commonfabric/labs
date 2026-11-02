@@ -45,20 +45,30 @@ the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
 `#default` is itself. `roster` is computed from those who joined alone.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
-computed from the messages, and `canSend` from the reader's access and profile,
-when they're read. Neither is stored. `viewer` and `messageRights` are computed
-for each reader too, `viewer` from their profile and access, and
-`messageRights` from those and the messages, for every message at once.
+computed from the messages when it's read, and isn't stored. The reader's
+profile is what the room's `#profile` wish finds, in a `PerSession` instance,
+so each session holds its own. `canSend`, `canAdd`, `viewer`, and
+`messageRights` are computed for each session, in a `PerSession` instance of
+each: `canSend` from the reader's access and profile, `canAdd` from their
+access, `viewer` from their profile and access, and `messageRights` from those
+and the messages, for every message at once. So are the values the room's
+rendering derives from them: whether its composers are disabled, and, in one
+record for all the message rows, keyed by message, which of each row's edit,
+delete, and obliterate controls show and whether its editor does. A row reads
+its own entry.
 
-`participantEntries` is computed from `participants`, reading whose own profile
-each is with `profileOwnerOf()`, and
-`participantPrincipals` is computed from those entries. A profile lives in its
-owner's own space, so a reader that space refuses reads no principal from it.
-Both are derived per user, so each user reads instances of their own, derived
-under their own access, which every session of theirs shares.
+`members` is computed by `memberSet()`, in the shared social-space code
+(`patterns/system/social-space/member-set.ts`), from the space's access list,
+which `spaceMembers()` reads, and from the profiles `participants` lists ahead
+of the authors. Only a member can read the list, and a profile lives in its
+owner's own space, so a reader that space refuses reads no owner from it. So
+`members` is derived per user: each user reads an instance of their own,
+derived under their own access, which every session of theirs shares. The
+deprecated `participantEntries` and `participantPrincipals` are computed from
+`members`, per user as well.
 
-The contract's derived `PerUser` values are `participantEntries` and
-`participantPrincipals`.
+The contract's derived `PerUser` values are `members`, `participantEntries`
+and `participantPrincipals`.
 
 The room's `[UI]` keeps its composer's state, the drafts, the reply and the
 attachments being composed, in `PerSession` values of its own, so two
@@ -248,8 +258,8 @@ which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
 policy names those three, and a later schema can neither add a writer to a
 stored policy nor drop one.
-`canSend` is computed for each viewer from their access and whether their
-profile resolves.
+`canSend` is computed for each session from the reader's access and whether
+their profile resolves.
 
 ## Configuration
 

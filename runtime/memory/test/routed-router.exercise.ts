@@ -1775,6 +1775,9 @@ finally:
       `${router.did()} local-mode-a`,
     ]);
     expect(sdk.serverFlags?.sessionReportV1).toBe(true);
+    // A capability the endpoints advertise and the router does not name
+    // reaches the client through the router's intersection.
+    expect(sdk.serverFlags?.instanceNameMark).toBe(true);
     for (
       const [i, session, signer] of [[0, sa, alice], [1, sb, bob]] as const
     ) {

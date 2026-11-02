@@ -27,9 +27,16 @@ describe("view-scoped replication flags", () => {
     )).toMatchObject({ ...declared });
   });
 
+  // The flags select view-scoped replication only for a web client under
+  // server execution: off it, with either flag at any value, the client
+  // requests none.
   for (
     const arm of [
-      { global: undefined, web: undefined, server: true, enabled: false },
+      { global: undefined, web: undefined, server: true, enabled: true },
+      { global: false, web: undefined, server: true, enabled: false },
+      { global: undefined, web: false, server: true, enabled: false },
+      { global: undefined, web: undefined, server: false, enabled: false },
+      { global: undefined, web: true, server: undefined, enabled: false },
       { global: false, web: true, server: true, enabled: true },
       { global: true, web: false, server: true, enabled: false },
       { global: true, web: undefined, server: true, enabled: true },

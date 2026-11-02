@@ -27,9 +27,21 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- deleting a space (section 4.5.1, INV-15) is specified and not yet
-  implemented: the server refuses the tombstone it writes under INV-12's
-  validity clause, as it refuses any ACL document that is not an access list
+- deleting a space (section 4.5.1, INV-15) is specified and not yet implemented:
+  the server refuses the deletion tombstone it writes under INV-12's validity
+  clause, as it refuses any ACL document that is not an access list
+- the client's support for the `deleted` marker and `session/revoked` reason
+  lands before the server sends either. That holds for every client in use,
+  those built outside this repository included
+  ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
+- an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
+  4.5.1) is specified and not yet implemented: the server sends its current
+  sequence
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
+  by the server, which advertises `instanceNameMark`, records the mark and
+  admits opens and commits by it, and a client keeps the `session/revoked`
+  reason `instance-names` as the refusal `clientUpdateRequired` marks; no
+  client declares `instanceNames` yet, so no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -100,6 +112,9 @@ If the server accepts the protocol, it returns:
     "sessionClose": true,
     "admissionNotice": true,
     "sessionReportV1": true,
+    "patternLifecycle": true,
+    "servedRequests": true,
+    "spaceInvites": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
     "syncPartsV1": true,
@@ -375,12 +390,54 @@ server would refuse. Only the server advertises it. A client's `hello` leaves
 it out, since an older routed host refuses a `hello` carrying a flag it does
 not know.
 
+`patternLifecycle` advertises that the server runs `pattern.lifecycle`
+requests (section 4.3.10). It is not build-inherent: a server advertises it
+exactly while its host has installed a lifecycle handler, which toolshed does
+while it runs the serving loop. It defaults to `false` when absent: a client
+then sends no `pattern.lifecycle` request, and sends the verb some other way
+or not at all. Only the server advertises it, and a client's `hello` leaves it
+out.
+
+`servedRequests` advertises that the server takes `served` requests (section
+4.3.12), the crossings another process of its deployment sends it as the owner
+of their target space. It is not build-inherent: a server advertises it
+exactly while its host has installed a served-request handler, which toolshed
+does while it runs the serving loop. It defaults to `false` when absent: a
+client then sends no `served` request and keeps the crossing for a later
+attempt. Only the server advertises it, and a client's `hello` leaves it out.
+
+`spaceInvites` advertises that the server administers a space's invitations
+through `space.invite` requests (section 4.3.11). It is not build-inherent: a
+server advertises it exactly when its host gave it the public origin its
+invitation links name, since an invitation's code verifier is bound to that
+origin. It defaults to `false` when absent: a client then sends no
+`space.invite` request, and administers invitations some other way or not at
+all. Only the server advertises it, and a client's `hello` leaves it out.
+
 `spaceKind` advertises that the server seals the kind a space's genesis commit
 declares, and reports it in the result of every `session.open` it admits
 (sections 4.1.2 and 4.5.1). It is build-inherent and
 defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
+
+`instanceNameMark` advertises that the server records the instance-naming mark
+of a space and enforces INV-16: a marked space admits only sessions, and
+commits, that declare `instanceNames: true`; the first commit from such a
+session marks the space; and the server admits a declaring session to an
+unmarked space only while its own posture names instances. It is
+build-inherent, defaults to `false` when absent, and only the server advertises
+it: a client's `hello` leaves it out, as it leaves out `sessionReportV1`. A
+client whose runtime names instances REQUIRES it: an
+older server would admit its commits and mark nothing, leaving positional
+runtimes free to bind the parents it wrote to other documents. Such a client
+fails the connection permanently against a server that does not advertise it,
+before signing any `session.open`, as it does against a server that does not
+advertise `stableExpressionResultIds`, with guidance to update the server. A
+client whose runtime names none declares nothing and is unaffected on any
+server. A client of a build that knows the capability treats the
+`session/revoked` reason `instance-names` as the refusal
+`clientUpdateRequired` marks, and keeps it the same way.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -424,6 +481,14 @@ interface SessionOpenRequest {
     // The kind the space declares in its genesis commit (see the rules).
     // Inside the signed descriptor, like everything the session declares.
     spaceKind?: string;
+    // An invitation the open redeems before its grant is checked (see the
+    // rules). Bound to the open's principal with the rest of the descriptor:
+    // signed into a signed open, covered by the connection's authentication
+    // of an open that names its principal.
+    invite?: { inviteId: string; code: string };
+    // Present when the session's runtime names instances (see the rules and
+    // INV-16). Absent means positional. Inside the signed descriptor.
+    instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -507,6 +572,12 @@ interface SessionOpenResult {
   // The kind the space's genesis commit declares; absent when it declares
   // none, or the space has no history yet.
   spaceKind?: string;
+  // The redemption of the invitation the open carried.
+  invite?: {
+    outcome: "redeemed" | "already-redeemed";
+    redemption: { inviteId: string; did: string };
+    currentAccess: "READ" | "WRITE" | "OWNER" | null;
+  };
   sessionOpen: {
     challenge: {
       value: string;
@@ -564,6 +635,32 @@ Rules:
   with no history admits the declaration, and its genesis commit must then
   carry the same kind. Every open of a space with history is told the kind its
   genesis declares, in `spaceKind`, whether the session declared one or not
+- an open carrying an `invite` first redeems it as the open's authenticated
+  principal, through the same invitation service as `space.invite` (section
+  4.3.11) and checked against the server's invitation host, and then checks
+  the open's grant, so a principal the access list did not name is admitted by
+  the grant the invitation conferred. A refusal of the redemption refuses the
+  open with an error named `SpaceInviteRefusal` carrying the service's code, a
+  server knowing no invitation host refuses it with
+  `invite-service-unsupported`, and an anonymous open, or one that also
+  presents a proof chain or an `actingAs` binding, is refused with
+  `invalid-request`. A client sends
+  `invite` only to a server advertising `spaceInvites`, on the open that
+  redeems and on none of the session's resumes: a server that does not know
+  the field would open, or refuse, the session without redeeming anything
+- a session whose runtime names instances declares `instanceNames: true`, and
+  one that declares nothing is positional; a value other than `true` refuses
+  the message. No client declares it yet. A server
+  that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
+  carrying `clientUpdateRequired: true`, an open or resume of a marked space by
+  a positional session, and an open of an unmarked space by a naming session
+  while its own posture names no instances. It checks both after
+  authorization and before session restoration, so a principal the space
+  would refuse learns nothing of its mark. It marks the space in the same
+  store transaction as the first commit it admits from a naming session,
+  refuses every later commit to the space from a positional session, and
+  revokes the space's positional sessions with the reason `instance-names`.
+  INV-16 states the rule
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -676,7 +773,12 @@ interface HelloMessage {
     admissionNotice?: boolean;
     elidedVerdicts?: boolean;
     sessionReportV1?: boolean;
+    patternLifecycle?: boolean;
+    servedRequests?: boolean;
+    spaceInvites?: boolean;
     spaceKind?: boolean;
+    // INV-16.
+    instanceNameMark?: boolean;
   };
 }
 
@@ -693,6 +795,9 @@ interface RequestMessage {
     | "session.ack"
     | "session.close"
     | "event.attention.resolve"
+    | "pattern.lifecycle"
+    | "served"
+    | "space.invite"
     | "presence.join"
     | "presence.publish"
     | "presence.leave";
@@ -734,9 +839,11 @@ Per-commit invocation / authorization persistence is deferred in this pass.
 Every position where a message names fields holds a plain object. Those
 positions are the message itself, and within it `session`, `invocation`,
 `commit`, `query`, `db`, `db.tables`, each entry of `holdings`, a
-`hello` message's `flags`, and a `presence.publish` message's `facets`
-together with each value in it. Both sides refuse anything else there, and
-the refusal is the one a string or a number in that position gets.
+`hello` message's `flags`, a `presence.publish` message's `facets`
+together with each value in it, a `pattern.lifecycle` message's `body`,
+a `space.invite` message's `invite` and `invite.body`, and a `session.open`
+descriptor's `invite`. Both sides refuse anything else there, and the refusal
+is the one a string or a number in that position gets.
 
 The value codec that decodes a frame builds class instances as well as
 records: a `FabricBytes`, a `FabricLink`, a `FabricRegExp`, a
@@ -785,7 +892,9 @@ The server sends:
 - `response` for command results
 - `session/effect` for catch-up sync on an open logical session
 - `session/revoked` when a session loses ownership to a newer connection, when
-  an access-list change deauthorizes it, or when its space is deleted
+  an access-list change deauthorizes it, when its space is deleted, or, once
+  specified behavior is built, when a naming commit marks its space and it
+  declares no naming (INV-16)
 - `session/admissible` when an access-list change admits a principal this
   connection was refused a space for
 - `presence/upsert` and `presence/remove` for the presence rooms the
@@ -800,6 +909,11 @@ interface ResponseMessage<Result> {
   error?: {
     name: string;
     message: string;
+    // Stable name of the refusal's reason, on an error whose kind classifies
+    // its refusals: a `PatternLifecycleRefusal` (section 4.3.10) or a
+    // `SpaceInviteRefusal` (section 4.3.11). A client branches on it, never on
+    // `message`.
+    code?: string;
     // On an AuthorizationError, present and `true` when the denial is an
     // anti-replay handshake race a fresh reconnect heals (an expired, used, or
     // mismatched connection challenge; a stale signed `exp`). Absent marks a
@@ -816,7 +930,9 @@ interface ResponseMessage<Result> {
     // verdict. Delivery recovery may use this to distinguish a permanent
     // protocol failure from an ambiguous transport or storage outcome.
     permanentEvidence?: true;
-    // Engine revision whose ACL state produced an authorization denial.
+    // The `seq` at which the space's ACL document is stored, on a refusal its
+    // state decided (section 4.5.1): the document's revision, not the server's
+    // current sequence.
     aclRevision?: number;
     // On an AuthorizationError, present and `true` when the space is deleted
     // (section 4.5.1): every principal is refused it for good. An older client
@@ -839,7 +955,10 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  reason: "taken-over" | "unauthorized" | "deleted";
+  // `instance-names`: a naming commit marked the space and the session
+  // declares no naming (INV-16); a client treats it as
+  // `clientUpdateRequired`.
+  reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 
 interface SessionAdmissible {
@@ -1647,6 +1766,238 @@ Semantics:
   in `removes`, and an entity it still covers is not resent unless it changed
 - the cursors of operation watches that remain are kept
 
+### 4.3.10 `pattern.lifecycle` — Run a Pattern-Lifecycle Verb
+
+`pattern.lifecycle` runs one of the pattern-lifecycle verbs — `upload`,
+`instantiate`, `setsrc` — in the session's space, as the session's principal.
+A server advertises it with the `patternLifecycle` capability flag. The verbs,
+their arguments, and their receipts are defined in
+[`server-pattern-lifecycle.md`](../../features/server-pattern-lifecycle.md).
+A request on the session reaches the process that serves the space, since the
+space's memory connection is routed to that process.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface PatternLifecycleRequest {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  verb: "upload" | "instantiate" | "setsrc";
+  /** The verb's arguments; the session supplies the space. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of the response: the verb's receipt. */
+type PatternLifecycleResult = Record<string, unknown>;
+```
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`PATTERN_LIFECYCLE_MAX_BYTES`) with `payload-too-large`. A client refuses
+  before sending a request whose encoding takes more than that, or more than
+  its connection takes in one request: 4 MiB on a routed connection
+  (`ROUTED_QUEUE_LIMIT`), which the router would otherwise refuse by closing
+  the connection
+- the DID the session was opened as must itself hold WRITE on the space; a
+  grant reached only through a proof chain's root issuer (section 4.5.1) does
+  not count, since the verb commits with the requester's own trust. An
+  anonymous session, or a principal without WRITE, is refused with `forbidden`
+- the server hands the verb, its `body` unread, and the principal to the
+  handler its host installed; a server with no handler refuses with
+  `server-execution-off`, and a handler that throws is refused with `internal`.
+  The handler validates `body` and refuses one that does not match the verb's
+  schema with `invalid-request`
+- the server finishes handling the frame once the verb has started, and sends
+  the response when the verb settles. Frames after it for the same space are
+  not held behind the verb (section 4.11.2), and on a routed connection the
+  request's credit returns to the router when the frame's handling ends
+- a refusal is an error named `PatternLifecycleRefusal` whose `code` names the
+  reason (section 4.7); `server-pattern-lifecycle.md` lists the handler's
+  codes
+- a client raises `lifecycle-unsupported` without sending when the server does
+  not advertise `patternLifecycle`. A connection lost before the response
+  leaves the verb's outcome unknown
+
+### 4.3.11 `space.invite` — Administer a Space's Invitations
+
+`space.invite` runs one operation of the space's invitation service as the
+session's principal. A server advertises it with the `spaceInvites` capability
+flag. The service, its operations, their bodies and results, and its refusal
+codes are defined in the
+[invitation service contract](../../../runtime/toolshed/README.md#space-invitations),
+which also exposes them as HTTP routes.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface SpaceInviteRequest {
+  type: "space.invite";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  invite: {
+    operation: "create" | "list" | "revoke" | "receipts";
+    /** The operation's body, as the HTTP route takes it. */
+    body: Record<string, unknown>;
+  };
+}
+```
+
+Semantics:
+
+- `redeem` is not among the operations: the identity redeeming holds no grant
+  on the space yet, and opening a session needs READ, so redemption travels
+  as the `invite` of a `session.open` (section 4.1.2). A `space.invite` naming
+  `redeem`, an unknown operation, or a body that is not exactly the
+  operation's fields gets the refusal any unreadable message gets (section
+  4.2.1)
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the service runs the operation as the DID the session was opened as, with
+  the public origin the server's host configured as the invitation host; it
+  decides what that DID may do, and every operation here takes an explicit
+  OWNER grant. An anonymous session is refused with `not-owner`
+- the response's `ok` is the service's result for the operation, the body the
+  HTTP route returns
+- a refusal is an error named `SpaceInviteRefusal` whose `code` is the
+  service's code (section 4.7). A server given no invitation host refuses
+  every request with `invite-service-unsupported`, and a client raises the same
+  code without sending when the server does not advertise `spaceInvites`
+
+### 4.3.12 `served` — Deliver a Crossing to a Space's Owner
+
+`served` carries one crossing from the serving host of one space into the
+session's space, for the process that owns that space to admit: the host's
+side of
+[owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
+was a call on the host's own co-hosted memory server. A server advertises it
+with the `servedRequests` capability flag. The session is the host's routed
+session to the owner, open as the deployment's service identity.
+
+```typescript
+// Shown at module scope.
+type SpaceId = string;
+type SessionId = string;
+
+interface ServedRequest {
+  type: "served";
+  requestId: string;
+  space: SpaceId;
+  sessionId: SessionId;
+  kind: "append" | "commit" | "acl";
+  /** The crossing, in the kind's shape, which the server hands on unread. */
+  body: Record<string, unknown>;
+}
+
+/** `ok` of an `append`: the admitted entry's position, or that the target's
+ * `eventId` horizon already held it. */
+interface ServedAppendResult {
+  seq?: number;
+  deduped: boolean;
+}
+
+/** The body of a `commit`: a foreign wave batch in the memory boundary's
+ * encoding, and the sender's number for the commit it makes. */
+interface ServedCommitBody {
+  batch: string;
+  localSeq: number;
+}
+
+/** `ok` of a `commit`: the position the batch committed at. */
+interface ServedCommitResult {
+  seq: number;
+}
+
+/** The body of an `acl`: a served access-list change as the list of changes
+ * it applies, and the sender's number for the commit it makes. */
+interface ServedAclBody {
+  change: {
+    space: SpaceId;
+    actingPrincipal: string;
+    actingSession?: string;
+    capabilityRef: string;
+    sourceEvent: { space: SpaceId; sidecarId: string; eventId: string };
+    changes: Array<{ principal: string; level?: string; actor: string }>;
+  };
+  localSeq: number;
+}
+
+/** `ok` of an `acl`: the position the list's commit landed at, or nothing
+ * where the change left the list as it was. */
+interface ServedAclResult {
+  seq?: number;
+}
+```
+
+The kinds are the serving loop's three crossings, and each body carries the
+sender's `localSeq`, the number the crossing's commit is keyed by on the
+session together with the session's id. An `append` is one delegated event
+append (`serving-loop.md` §5): its body is the entry the owner's
+`commitDelegatedAppend` takes, without the target space, which the session
+names, and without the session, which is the one the request came on. A
+`commit` is a foreign wave batch (`protocol.md` §2b), which the owner commits
+as the sender's own sink would have, under the same delegated admission and
+the same refusals, and reports to its own server as the warm authored commit
+that activates the space there. An `acl` is a served run's change to the
+session's space's access list, as the list of changes rather than the
+function that applies them; the owner rebuilds the function and commits the
+change as its own loop's would be (`Server.commitServedAclChange()`), under
+the carried actor. A batch or change for a space other than the session's is
+refused.
+
+Semantics:
+
+- a request naming a session the connection does not hold gets a
+  `SessionError`
+- the server refuses a message of more than 8 MiB in UTF-8
+  (`SERVED_REQUEST_MAX_BYTES`, the `pattern.lifecycle` bound) with
+  `payload-too-large`. A client refuses before sending a request whose
+  encoding takes more than that, or more than its connection takes in one
+  request
+- the session's principal must be of the access list's delegating class
+  (`acl.delegatingDids`, the deployment's service identity); any other
+  session is refused with `forbidden`. The crossing then runs under the actor
+  its body carries, as the delegated carriage does on the host's own server
+  (`protocol.md` §2): the deployment's processes trust each other's carried
+  actor claims, and admissibility comes from the validated grant
+- the server hands the kind, the `body` unread, the space, the principal and
+  the session id to the handler its host installed; a server with no handler
+  refuses with `unavailable`, and a handler that throws is refused with
+  `internal`. The handler answers with the kind's result, or refuses with
+  `refused` for a crossing the owner's admission rejects deterministically.
+  What a refusal means to the sender is the crossing's own rule: the outbox
+  retires an `append` refused as `refused` and keeps one refused as
+  `unavailable` or `internal`, and a wave fails foreign on every refusal of a
+  `commit` or an `acl` alike, withholds its home commit, and replays the
+  event (`protocol.md` §2b)
+- for an `acl`, the owner resolves the carried grant against the entry the
+  run delivers, which lives in the stream of the source event's space, a
+  space the owner need not own: it reads that space's store, which the
+  deployment's one shared store gives every process. A deployment whose
+  owners hold stores of their own carries the entry in the request or has the
+  source's owner verify it; neither is specified here
+- the server finishes handling the frame once the crossing has started, and
+  sends the response when it settles. Frames after it for the same space are
+  not held behind it (section 4.11.2)
+- a refusal is an error named `ServedRequestRefusal` whose `code` names the
+  reason (section 4.7)
+- a client raises `served-unsupported` without sending when the server does
+  not advertise `servedRequests`. A connection lost before the response
+  leaves the crossing's outcome unknown, and the sender's own rule says what
+  it does then: the outbox keeps its row and sends it again, and the owner's
+  `eventId` horizon dedupes the repeat; a wave fails foreign, withholds its
+  home commit, and replays the event, whose next run reads what the lost
+  reply applied (`protocol.md` §2b)
+
 ## 4.4 Selectors
 
 Selectors still describe sets of entities or schema-guided traversals. The
@@ -1786,7 +2137,8 @@ Opening a previously unused space may initialize empty backing storage, but
 `session.open` is not itself a logical write or claim.
 
 When ACL policy is active, the authenticated principal is evaluated against
-the space ACL document (wire entity id `of:<space DID>`) for every command:
+the space ACL document (wire entity id `of:<space DID>`) for every command. The
+row for a deleted space applies whether or not the policy is active:
 
 | Stored ACL state | Effective access |
 | --- | --- |
@@ -1794,7 +2146,7 @@ the space ACL document (wire entity id `of:<space DID>`) for every command:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
-| a deleted space's tombstone | No access for any principal, service DIDs included, for good |
+| a deleted space's deletion tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
 initialize or repair ACL state, except a deleted space's. The exact space DID
@@ -1813,43 +2165,77 @@ control. The one ACL mutation a principal without OWNER may make, in both modes,
 is removing its own entry: a replacement whose document is the stored one less
 that principal's entry, and nothing else, from a list with no `"*"` entry.
 
+A refusal that a space's ACL state decided, and that carries
+`permanentEvidence`, carries `aclRevision` too: the `seq` at which the space's
+ACL document is stored, the revision of the document whose state decided the
+refusal, not the server's current sequence. It names the same revision for as
+long as the document stands, and a new one once the document changes. A refusal
+for a space whose store holds no ACL document carries `aclRevision` 0, since no
+revision of the document exists.
+
 A space's sole member deletes it, which ends it for everyone and for good.
 Deleting a space writes its ACL document and never removes it: the deletion
 commit is an ACL-only commit, shaped as any other, whose document is a
-tombstone rather than an access list:
+deletion tombstone rather than an access list:
 
 ```json
 { "deleted": { "by": "did:key:z6Mk..." } }
 ```
 
-`by` names the committing principal, and the tombstone holds nothing else. The
-server admits it only when the stored ACL is valid and its one entry is at
-OWNER, naming either the committing principal or the principal the session's
-capability resolves to through a verified proof chain, the chain's root issuer
-("Proof chains" below). For an ordinary space that entry is the deleting
-principal's own, so another member has to be removed, visibly and through the
-ordinary check, before the space can be deleted. That asks no authority an OWNER
-does not already hold. A self-owned space, whose list names the space's own DID
-and whose owner acts through a delegation from it, is deleted through the chain,
-as every other OWNER act on it is. A server whose access-list policy admits no
-delegations, and so advertises no `sessionOpenProofs`, refuses every chain, and
-there only an entry naming the committing principal admits a deletion. A
-delegation is not an entry in the list, so another holder of one loses access
-with no commit of its own first, as it does when an owner replaces the list; and
-since `by` still names the committing principal, the tombstone is the one place
-such a space records the identity that acted for it. A self-owned profile's
-space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
-list replacement through the chain before it is deleted. No one deletes a Home
-space, through a chain or without one: a space whose list grants its own DID
-OWNER and that declares no kind, which is how the server already tells a home
-when it resolves the `actingAs` binding. From the deletion commit on, the server
-refuses every command any principal sends the space, a service DID's included,
-with a permanent `AuthorizationError` carrying `deleted: true`, revokes the
-sessions open on it, as it revokes those any ACL commit deauthorizes but with
-the `session/revoked` reason `deleted`, and admits no further commit to it, so
-no principal can undo the deletion. A tombstone is not an access list, so a
-server rolled back to a release that does not know tombstones finds the ACL
+`by` names the committing principal, and the deletion tombstone holds nothing
+else. The server admits it only when the stored ACL is valid and its one entry
+is at OWNER, naming either the committing principal or the principal the
+session's capability resolves to through a verified proof chain, the chain's
+root issuer ("Proof chains" below). For an ordinary space that entry is the
+deleting principal's own, so another member has to be removed, visibly and
+through the ordinary check, before the space can be deleted. That asks no
+authority an OWNER does not already hold. A self-owned space, whose list names
+the space's own DID and whose owner acts through a delegation from it, is
+deleted through the chain, as every other OWNER act on it is. A server whose
+access-list policy admits no delegations, and so advertises no
+`sessionOpenProofs`, refuses every chain, and there only an entry naming the
+committing principal admits a deletion. A delegation is not an entry in the
+list, so another holder of one loses access with no commit of its own first, as
+it does when an owner replaces the list; and since `by` still names the
+committing principal, the deletion tombstone is the one place such a space
+records the identity that acted for it. A self-owned profile's space, whose list
+also grants `"*"` WRITE, has that entry removed by an ordinary list replacement
+through the chain before it is deleted. A Home space is not deleted while its
+list has a Home's shape, through a chain or without one: a space whose list
+grants its own DID OWNER and that declares no kind, which is how the server
+already tells a home when it resolves the `actingAs` binding. INV-15 says what
+that test guarantees and what it leaves to a service identity's trust.
+"Nothing else" binds the document's `value`, the deletion tombstone itself; the
+fields beside it are held to what any ACL write holds them to.
+
+From the deletion commit on, the server refuses every command any principal
+sends the space, a service DID's included, with a permanent `AuthorizationError`
+carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`. The
+server checks for deletion once it has routed the command and, for a command
+that names a session, found that session open, and before every other check, so
+a command to a deleted space reports the deletion and never a shape, capability
+or genesis failure. The server revokes the sessions open on the space with the
+`session/revoked` reason `deleted`. The session that committed the deletion
+receives its transact response first and its revocation after, as a member's
+session does when it removes its own entry. The server admits no further commit
+to the space on any write path, engine-direct writes from the serving plane
+included, so no principal can undo the deletion. These checks run before a
+commit's write transaction starts, so the engine repeats the deletion tombstone
+check inside that transaction for every fresh commit, and checks a deletion
+tombstone commit's own clauses there too, against the ACL as stored: a deletion
+committed through another connection in between still refuses the commit, with
+the same refusal (INV-15). All of this holds in every ACL mode, `off` included,
+as do the admission rules above for a commit that writes a deletion tombstone: a
+deleted space is refused whatever the policy, since a mode that admitted commits
+to one could undo it. A deletion tombstone is not an access list, so a server
+rolled back to a release that does not know deletion tombstones finds the ACL
 malformed, and refuses the space to every principal but a service DID.
+
+The server sends the `deleted` marker and the `deleted` reason to every client,
+whatever the client advertises. A client that predates the marker reads the
+refusal as the permanent `AuthorizationError` it is. One that predates the
+reason discards the `session/revoked` frame, whose reason it does not
+recognize.
 
 The shape and genesis rules are catalogued as **INV-12** (ACL mutation commit
 shape) and **INV-13** (ACL genesis precedence and authority), and deleting a
@@ -2133,7 +2519,29 @@ interface RateLimitError extends Error {
   name: "RateLimitError";
   retryAfter: number;
 }
+
+interface PatternLifecycleRefusal extends Error {
+  name: "PatternLifecycleRefusal";
+  /** Why the verb was refused (section 4.3.10). */
+  code: string;
+}
+
+interface SpaceInviteRefusal extends Error {
+  name: "SpaceInviteRefusal";
+  /** The invitation service's refusal code (section 4.3.11). */
+  code: string;
+}
+
+interface ServedRequestRefusal extends Error {
+  name: "ServedRequestRefusal";
+  /** Why the crossing was refused (section 4.3.12). */
+  code: string;
+}
 ```
+
+A `PatternLifecycleRefusal`, a `SpaceInviteRefusal` and a
+`ServedRequestRefusal` carry `code` in the response's `error`, and a client
+branches on it.
 
 ## 4.8 Client Library API
 
@@ -2183,7 +2591,7 @@ the session cache rather than distinct server-routed effect streams.
 
 The client library rejects a refused request with an `Error` whose `name` is
 the response's `error.name` and whose `message` is its `error.message`, and
-copies onto it each marker the envelope carries: `retriable`,
+copies onto it each marker the envelope carries: `retriable`, `code`,
 `permanentEvidence`, `aclRevision`, `deleted`, `clientUpdateRequired`,
 `precondition`, `retryAfterSeq`, and `conflicts`. A consumer matches on `name`
 and the markers, never on `message`. A `session/revoked` terminates the session
@@ -2247,7 +2655,10 @@ handed over before it, so a `session.open` handed over behind the
 signed opens handed over together are handled one at a time whatever spaces
 they name. Frames for different spaces on
 one connection do not wait for each other, so a `transact` waiting for its
-space's publication lock delays nothing addressed to another space. Presence
+space's publication lock delays nothing addressed to another space. A
+`pattern.lifecycle` frame's handling ends once its verb has started, and its
+response follows when the verb settles (section 4.3.10), so the frames after it
+for its space do not wait for the verb. Presence
 messages stay outside these turns (section 4.13.4).
 
 For live sync, transact verdicts return INLINE before the independently batched

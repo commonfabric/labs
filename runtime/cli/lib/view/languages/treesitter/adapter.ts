@@ -18,8 +18,8 @@
  * edits. A contract test over non-ASCII source pins that convention.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
-  Definition,
   Document,
   Line,
   StructureKind,
@@ -30,7 +30,11 @@ import { flattenStructure } from "../../model.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
 import { isTokenClass } from "../../theme.ts";
 import { linesFromClasses } from "../classes.ts";
-import { structureNode, type StructureSource } from "../structure.ts";
+import {
+  structureNode,
+  type StructureSource,
+  structureSource,
+} from "../structure.ts";
 import {
   createPlainTextHighlighter,
   plainTextDocument,
@@ -140,9 +144,7 @@ async function loadGrammar(grammar: TreeSitterGrammar): Promise<void> {
   );
   const failure = failed === undefined
     ? undefined
-    : failed.error instanceof Error
-    ? failed.error.message
-    : String(failed.error);
+    : describeFailure(failed.error);
   for (const listener of loadListeners) listener(failure);
   if (failed !== undefined) throw failed.error;
 }
@@ -272,20 +274,14 @@ export function parseDocument(
   if (ready === undefined) return plainTextDocument(text);
   const tree = parseWith(ready, parserText(grammar, text));
   try {
-    const lineStarts = computeLineStarts(text);
-    const definitions = new Map<string, Definition[]>();
-    const structure = structureNodes(
-      grammar,
-      tree.rootNode,
-      { text, lineStarts, definitions },
-      0,
-    );
+    const source = structureSource(text);
+    const structure = structureNodes(grammar, tree.rootNode, source, 0);
     return {
       text,
-      lines: colorLines(ready, tree, text, lineStarts),
+      lines: colorLines(ready, tree, text, source.lineStarts),
       structure,
       flatStructure: flattenStructure(structure),
-      definitions,
+      definitions: source.definitions,
     };
   } finally {
     tree.delete();

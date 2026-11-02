@@ -1,4 +1,8 @@
-import type { FabricValue, SchemaPathSelector } from "@commonfabric/api";
+import type {
+  FabricPlainObject,
+  FabricValue,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import {
   cloneIfNecessary,
   debugStr,
@@ -32,6 +36,7 @@ import {
   type TransactionError,
   type URI,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -57,6 +62,7 @@ import {
   type OperationFieldQuery,
   type OperationFieldSnapshot,
   type PatchOp,
+  type PatternLifecycleVerb,
   type PresencePublication,
   type ReleaseOpFieldOperation,
   resolveScopeKey,
@@ -85,6 +91,7 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
 import { getLogger } from "@commonfabric/logger";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -256,12 +263,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-// A cell's CFC write-policy label lives at ["cfc"]. A mergeable write reads it as
-// part of the write; that read is dropped from its conflict set unless the
-// transaction also writes the envelope (`#commitReadActivities`).
-const isCfcLabelPath = (path: readonly string[]): boolean =>
-  path.length === 1 && path[0] === "cfc";
 
 const isStrictPrefixPath = (
   prefix: readonly string[],
@@ -2418,6 +2419,31 @@ export class StorageManager implements IStorageManager {
     return await replica.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const replica = this.open(space).replica;
+    if (replica.runPatternLifecycle === undefined) {
+      throw new Error("storage replica does not run pattern-lifecycle verbs");
+    }
+    return await replica.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    space: MemorySpace,
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const replica = this.open(space).replica;
+    if (replica.administerInvites === undefined) {
+      throw new Error("storage replica does not administer invitations");
+    }
+    return await replica.administerInvites(invite);
+  }
+
   /** IStorageManager (server-execution v2 Phase 4): first-open observer
    * — the flag-ON client effects channel subscribes per space through
    * it. Assigned post-construction by the Runtime; undefined otherwise. */
@@ -2435,10 +2461,14 @@ export class StorageManager implements IStorageManager {
    * `space`'s ACL document, so a session this manager holds on that space
    * — revoked when an EARLIER ACL landed — may now re-open under a
    * different verdict. The executor host calls this for every registered
-   * space server on every ACL-doc-touching admission; `space` is usually
-   * NOT the caller's own, because the session that starves is typically a
-   * CROSS-SPACE replica (a served dispatch's argument link into the
-   * viewer's home space).
+   * space server on every ACL-doc-touching admission on its own memory
+   * server; `space` is usually NOT the caller's own, because the session
+   * that starves is typically a CROSS-SPACE replica (a served dispatch's
+   * argument link into the viewer's home space). A gated replica's grant
+   * verdicts on the space's actors do not wait for this call: the replica
+   * watches the list itself (SpaceReplica.#watchAccessList), so a change
+   * committed on the space's owner in another process reaches it over the
+   * session its reads go through.
    *
    * ALREADY-OPEN providers only. Opening one here would mount a session
    * for a space this manager has never read, turning an unrelated ACL
@@ -2495,6 +2525,20 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
   ): Promise<MemoryProtocolFlags | null | undefined> {
     return await this.#sessionFactory.serverFlags?.(space);
+  }
+
+  /** @inheritDoc */
+  async redeemInvite(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt> {
+    if (this.#sessionFactory.redeemInvite === undefined) {
+      throw MemoryV2Client.spaceInviteRefusalError(
+        "invite-service-unsupported",
+        "This storage manager's sessions cannot carry an invitation",
+      );
+    }
+    return await this.#sessionFactory.redeemInvite(space, invite, this.as);
   }
 
   /** @inheritDoc */
@@ -5523,8 +5567,9 @@ export class SpaceReplica
   /** The grant verdicts this provider has asked for, by actor: a settled
    * one answers `foreignScopedReadStanding` and every later read of that
    * actor's instances until word of an access-list change
-   * (`noteAclChanged`) asks for each again, the last verdict standing
-   * until the new one lands. */
+   * (`noteAclChanged`, which the replica's own watch on the list gives it
+   * whichever process the list changed in) asks for each again, the last
+   * verdict standing until the new one lands. */
   readonly #foreignScopedReadVerdicts = new Map<
     string,
     ForeignScopedReadVerdictEntry
@@ -5537,6 +5582,11 @@ export class SpaceReplica
     string,
     Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
   >();
+
+  /** The watch a gated replica holds on this space's access-list document
+   * from its first grant ask on (`#watchAccessList`), with the list's
+   * confirmed seq as the watch last saw it. */
+  #accessListWatch: { cancel: Cancel; seq: number | undefined } | undefined;
 
   #closed = false;
   readonly #closeSignal = Promise.withResolvers<void>();
@@ -6269,10 +6319,17 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
-    // The list that decided every actor's grant has changed: each actor this
-    // replica has asked about is asked about again now, rather than on its
-    // next load, since an instance already loaded is read from the replica
-    // and loads no more. Its last verdict stands until the new one lands.
+    this.#reaskForeignScopedReadGrants();
+  }
+
+  /**
+   * Asks again for the grant of each actor this replica has asked about,
+   * now rather than on its next load, since an instance already loaded is
+   * read from the replica and loads no more: the list that decided every
+   * verdict has changed, or may have. Each last verdict stands until the
+   * new one lands.
+   */
+  #reaskForeignScopedReadGrants(): void {
     for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
       this.#askForeignScopedReadGrant(actor);
     }
@@ -6322,6 +6379,7 @@ export class SpaceReplica
           "actor's grant with",
       });
     }
+    this.#watchAccessList();
     let entry = this.#foreignScopedReadVerdicts.get(actor);
     if (entry === undefined) {
       entry = { promise: Promise.resolve({ granted: true }) };
@@ -6354,6 +6412,37 @@ export class SpaceReplica
       });
     current.promise = asked;
     return asked;
+  }
+
+  /**
+   * Holds a watch on this space's access-list document through this
+   * replica's own session, so that a change to the list reaches a gated
+   * replica over the session its reads go through: the host's
+   * `noteSpaceAclChanged` fan-out hears the commits its own memory server
+   * admits, and the list of a space another process owns changes there.
+   * Each version of the list that lands after the first the watch saw is
+   * word of a change (`noteAclChanged`). The first landing re-asks every
+   * actor's grant without arming the remount latch: a verdict asked before
+   * the list reached the replica may have been decided on an older one.
+   */
+  #watchAccessList(): void {
+    if (this.#accessListWatch !== undefined || this.#closed) return;
+    const id = aclDocId(this.#space) as URI;
+    const seqOf = (): number | undefined =>
+      this.#visibleVersion(id, "space")?.record.confirmed.seq;
+    const watch = { cancel: () => {}, seq: seqOf() };
+    this.#accessListWatch = watch;
+    watch.cancel = this.sinkDocument(id, () => {
+      const seq = seqOf();
+      if (seq === watch.seq) return;
+      const before = watch.seq;
+      watch.seq = seq;
+      if (before !== undefined) {
+        this.noteAclChanged();
+      } else {
+        this.#reaskForeignScopedReadGrants();
+      }
+    });
   }
 
   /**
@@ -7199,6 +7288,27 @@ export class SpaceReplica
     return await session.resolveEventAttention(eventId, seq, sidecarId, action);
   }
 
+  /** @inheritDoc */
+  async runPatternLifecycle(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    const { session } = await this.#activeSessionHandle();
+    // A verb changes the space, so a late host hint may no longer move it.
+    this.#markRouteWriteIssued();
+    return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async administerInvites(
+    invite: MemoryV2Client.InviteAdministration,
+  ): Promise<FabricValue> {
+    const { session } = await this.#activeSessionHandle();
+    // Administration changes the space, as a verb does.
+    this.#markRouteWriteIssued();
+    return await session.administerInvites(invite);
+  }
+
   /** Pending (undischarged) event intents — the offline queue's live
    * content, bounded by pending-intent count (speculation.md §5). */
   pendingEventAppends(): readonly QueuedEventAppend[] {
@@ -7305,6 +7415,8 @@ export class SpaceReplica
     this.#watchView?.close();
     this.#watchView = null;
     this.#operationSinks.clear();
+    this.#accessListWatch?.cancel();
+    this.#accessListWatch = undefined;
     // Also close the view the update consumer is bound to, in case it diverged
     // from #watchView; otherwise its pending next() never settles and the
     // `Promise.allSettled([...#updatePromises])` below hangs forever.
@@ -8353,9 +8465,7 @@ export class SpaceReplica
           (reason) => ({
             verdict: {
               withdrawn: {
-                message: `wave verdict rejected: ${
-                  reason instanceof Error ? reason.message : String(reason)
-                }`,
+                message: `wave verdict rejected: ${describeFailure(reason)}`,
               },
             } satisfies SealedCommitVerdict,
           }),
@@ -9147,9 +9257,7 @@ export class SpaceReplica
       ]);
     }, (error) => {
       logger.debug("cascade-late-reject", () => [
-        `late server verdict after local rejection: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `late server verdict after local rejection: ${describeFailure(error)}`,
         { localSeq },
       ]);
     }).finally(() => {
@@ -9964,7 +10072,10 @@ export class SpaceReplica
     const envelopeWritersWithMergeableOps = new Set<string>();
     if (mergeableOpPathsByEntity.size > 0) {
       for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (write.space !== this.#space || !isCfcLabelPath(write.path)) {
+        if (
+          write.space !== this.#space ||
+          !Differential.isCfcEnvelopePath(write.path)
+        ) {
           continue;
         }
         const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
@@ -10002,7 +10113,10 @@ export class SpaceReplica
       }
       // Runtime verifier reads of the CFC label are point-in-time policy
       // observations, not consumed values.
-      if (isInternalVerifierRead(read.meta) && isCfcLabelPath(read.path)) {
+      if (
+        isInternalVerifierRead(read.meta) &&
+        Differential.isCfcEnvelopePath(read.path)
+      ) {
         continue;
       }
       const opPaths = mergeableOpPathsByEntity.get(key);
@@ -10015,7 +10129,10 @@ export class SpaceReplica
         !readsMergeableOpArrayLength &&
         (isMergeableOpRead(read.meta) ||
           isReadMarkedAsAttemptedWrite(read.meta) ||
-          isCfcLabelPath(read.path) ||
+          // A mergeable write reads the CFC envelope as part of the write;
+          // the read leaves the conflict set unless the transaction also
+          // writes the envelope (handled above).
+          Differential.isCfcEnvelopePath(read.path) ||
           opPaths.some((opPath) =>
             isStrictPrefixPath(opPath, read.path) ||
             (read.nonRecursive === true && isSamePath(opPath, read.path))
@@ -12402,9 +12519,14 @@ export class SpaceReplica
         },
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
+          // A connection that never completed a handshake, in every attempt
+          // its factory allows, ends the space's session as a denial does:
+          // its readers fail with that error instead of waiting for a session
+          // nothing is still opening.
           const permanent = error instanceof Error && (
             isPermanentAuthorizationFailure(error) ||
-            MemoryV2Client.isClientUpdateRequiredError(error)
+            MemoryV2Client.isClientUpdateRequiredError(error) ||
+            MemoryV2Client.isFirstHandshakeFailure(error)
           );
           if (permanent && !this.#closed) {
             this.#sessionAdmissionError = error;
@@ -12451,11 +12573,11 @@ const snapshotState = (
 const toConnectionError = (error: unknown): IConnectionError =>
   ({
     name: "ConnectionError",
-    message: error instanceof Error ? error.message : String(error),
+    message: describeFailure(error),
     address: "",
     cause: {
       name: "SystemError",
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       code: 500,
     },
   }) as IConnectionError;
@@ -12517,7 +12639,7 @@ const toRejectedError = (
   commit: ClientCommit,
   space: MemorySpace,
 ): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const name = error instanceof Error
     ? error.name
     : (error as { name?: unknown })?.name;

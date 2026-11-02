@@ -1,5 +1,6 @@
 /** Private invitation records share the space engine's ACL transaction. */
 import { isDIDKey } from "@commonfabric/identity/did";
+import { isPlainObject } from "@commonfabric/js-values/types";
 import {
   type ACL,
   aclDocId,
@@ -35,6 +36,69 @@ export type InviteOperation =
   | { operation: "revoke"; body: { inviteId: string } }
   | { operation: "list"; body: Record<string, never> }
   | { operation: "receipts"; body: { inviteId?: string } };
+
+/**
+ * Returns the invitation operation a wire message names, or `null` when
+ * `operation` names none or `body` is not that operation's shape: a record
+ * holding exactly the operation's fields, each of its type. The values
+ * themselves — an identifier's form, a lifetime's range — are
+ * `executeInvite()`'s to judge.
+ */
+export function parseInviteOperation(
+  operation: unknown,
+  body: unknown,
+): InviteOperation | null {
+  if (!isPlainObject(body)) return null;
+  const keys = Object.keys(body);
+  const only = (...allowed: string[]) =>
+    keys.every((key) => allowed.includes(key));
+  switch (operation) {
+    case "create": {
+      const { inviteId, codeVerifier, access, ttlSeconds, maxUses } = body;
+      if (
+        !only("inviteId", "codeVerifier", "access", "ttlSeconds", "maxUses") ||
+        typeof inviteId !== "string" || typeof codeVerifier !== "string" ||
+        !isInviteAccess(access) || typeof ttlSeconds !== "number" ||
+        (maxUses !== undefined && typeof maxUses !== "number")
+      ) return null;
+      return {
+        operation,
+        body: {
+          inviteId,
+          codeVerifier,
+          access,
+          ttlSeconds,
+          ...(maxUses === undefined ? {} : { maxUses }),
+        },
+      };
+    }
+    case "redeem": {
+      const { inviteId, code } = body;
+      if (
+        !only("inviteId", "code") || typeof inviteId !== "string" ||
+        typeof code !== "string"
+      ) return null;
+      return { operation, body: { inviteId, code } };
+    }
+    case "revoke": {
+      const { inviteId } = body;
+      if (!only("inviteId") || typeof inviteId !== "string") return null;
+      return { operation, body: { inviteId } };
+    }
+    case "list":
+      return keys.length === 0 ? { operation, body: {} } : null;
+    case "receipts": {
+      const { inviteId } = body;
+      if (
+        !only("inviteId") ||
+        (inviteId !== undefined && typeof inviteId !== "string")
+      ) return null;
+      return { operation, body: inviteId === undefined ? {} : { inviteId } };
+    }
+    default:
+      return null;
+  }
+}
 
 /** Common envelope, supplied by the server rather than by the request body. */
 export type InviteRequest = InviteOperation & {

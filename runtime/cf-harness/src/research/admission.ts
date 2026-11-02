@@ -4,6 +4,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   RESEARCH_INPUTS_SCHEMA,
   RESEARCH_RULES_SCHEMA,
@@ -24,7 +25,6 @@ import type {
   HarnessResearchStatus,
   HarnessResearchSyntaxCheck,
 } from "../contracts/research.ts";
-import { errorMessage } from "../error-message.ts";
 import { RUN_PATTERN_INPUT_SCHEMA } from "../contracts/run-pattern.ts";
 import { validateStructuredResultValue } from "../structured-result.ts";
 import { objectValue, stringList, stringValue, unique } from "./model-value.ts";
@@ -355,7 +355,7 @@ const checkPatternSourceSyntax = async (
       status: "unavailable",
       scope: "syntax-only",
       diagnostics: [],
-      detail: errorMessage(error),
+      detail: describeFailure(error),
     };
   }
 };
@@ -420,7 +420,7 @@ const parseExample = async (
       }
     } catch (error) {
       missing.push(
-        `run-pattern-input example is invalid: ${errorMessage(error)}`,
+        `run-pattern-input example is invalid: ${describeFailure(error)}`,
       );
     }
     return { kind, content, sourceIds: admitted };

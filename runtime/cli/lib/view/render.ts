@@ -288,7 +288,7 @@ export interface ViewState {
   viewMode?: ViewMode;
 
   /** Whether the content holds non-printable characters, so the navigation help
-   * advertises the display-mode key `C`. */
+   * advertises the display-mode key `c`. */
   hasNonPrintables?: boolean;
 
   /** Lines shown just above the status/prompt bar (e.g. the list of files an
@@ -372,7 +372,7 @@ export function cursorScreenPos(
       );
     const row = wrappedRowForPosition(plan, line, col);
     screenLine = row?.row ?? plan.firstRow[line];
-    contentCol = (row?.prefixWidth ?? 0) + col - (row?.offset ?? 0);
+    contentCol = (row?.indentWidth ?? 0) + col - (row?.offset ?? 0);
   }
   const contentHeight = view.height - 1;
   const r = screenLine - view.top;
@@ -707,7 +707,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
         wrappedRow?.offset ?? view.left,
         sourceWidth,
         wrappedRow?.sourceEnd ?? Number.POSITIVE_INFINITY,
-        wrappedRow?.prefixWidth ?? 0,
+        wrappedRow?.indentWidth ?? 0,
         wrappedRow?.wrapMarker ?? false,
         displayedCells,
         displayedSelection,
@@ -746,7 +746,7 @@ function renderContentRow(
   offset: number,
   sourceWidth: number,
   sourceEnd: number,
-  prefixWidth: number,
+  indentWidth: number,
   wrapMarker: boolean,
   display: readonly DisplayCell[] | undefined,
   selection: SelectionSpan | null,
@@ -801,7 +801,7 @@ function renderContentRow(
     contentWidth,
     sourceWidth,
     sourceEnd,
-    prefixWidth,
+    indentWidth,
     wrapMarker,
     selection,
     display,
@@ -963,7 +963,7 @@ function composeContent(
   width: number,
   sourceWidth: number,
   sourceEnd: number,
-  prefixWidth: number,
+  indentWidth: number,
   showWrapMarker: boolean,
   sel: SelectionSpan | null,
   display: readonly DisplayCell[] | undefined,
@@ -997,24 +997,20 @@ function composeContent(
         dc.col >= sel.lo && dc.col < sel.hi;
       return inSel ? mergeBg(base, sel.bg) : base;
     };
-    for (let d = 0; d < prefixWidth && d < display.length; d++) {
-      const dc = display[d];
-      cells[d] = { ch: dc.ch, style: styleCell(dc) };
-    }
     const end = Math.min(
       display.length,
       sourceEnd,
       offset + sourceWidth,
     );
     for (let d = offset; d < end; d++) {
-      const idx = prefixWidth + d - offset;
+      const idx = indentWidth + d - offset;
       const dc = display[d];
       cells[idx] = { ch: dc.ch, style: styleCell(dc) };
     }
   }
 
   if (showWrapMarker) {
-    cells[prefixWidth + sourceWidth] = {
+    cells[indentWidth + sourceWidth] = {
       ch: "\\",
       style: color ? mergeBg(ui.wrapMarker, rowBg) : EMPTY_STYLE,
     };
@@ -1257,7 +1253,7 @@ function browseHints(view: ViewState): KeyHint[] {
     });
   }
   if (view.canEdit) hints.push({ key: "e", label: "Edit" });
-  if (view.hasNonPrintables) hints.push({ key: "C", label: "Chars" });
+  if (view.hasNonPrintables) hints.push({ key: "c", label: "Chars" });
   const wrapLabel = view.wrapMode === "off"
     ? "Hard wrap"
     : view.wrapMode === "hard"

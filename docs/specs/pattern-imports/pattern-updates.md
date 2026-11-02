@@ -18,12 +18,15 @@ pinned and do not adopt the live update behavior specified for piece origins.
 
 ## Status
 
-Implemented. A piece follows its origin when it is opened — one mechanism for
+Implemented. A piece follows its origin when it is started — one mechanism for
 every piece, with no path of its own for any kind of piece — and a `system:`
 origin resolves to the patterns route of whichever host serves the piece's
-space. A user opening a piece is what opens most of them; the runtime opens the
-surfaces it instantiates for itself, which record the `system:` ref they were
-made from and are followed the same way. Resolving an external `https://`
+space. A user opening a piece on a client that runs it is what starts most of
+them; the runtime opens the surfaces it instantiates for itself, which record
+the `system:` ref they were made from and are followed the same way; and a
+serving runtime follows a piece's origin before its first start of the piece in
+a tenure, so a piece a client under server execution opens or sends to is
+followed where it runs. Resolving an external `https://`
 endpoint at open time is specified by the lifecycle and not built, so a piece
 that records one keeps what it runs. The downloaded source and its import
 closure must compile to the identity that route advertises before the persisted
@@ -33,8 +36,10 @@ release safe to adopt is the release gate below, which is exactly why this
 exemption is confined to origins this deployment serves.
 
 No kind of piece has a path of its own, and nothing follows an origin on behalf
-of a piece nobody opened. Tenure activation ensures the root exists without
-following its source. The serving wish builtin explicitly opens its
+of a piece nobody started. Tenure activation ensures the root exists without
+following its source; the root's first start follows it. A client that
+replicates views under server execution runs no piece and follows no origin,
+the root included. The serving wish builtin explicitly opens its
 runtime-supplied sidecars, so those origins are followed on the serving runtime;
 ON clients reference the served sidecars. The executed root milestone map and
 the corrections found

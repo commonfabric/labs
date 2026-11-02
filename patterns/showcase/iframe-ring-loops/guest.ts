@@ -11,6 +11,7 @@ import {
   connectFabric,
   type PresenceRoomEvent,
 } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   DEFAULT_INPUT,
   DEFAULT_OUTPUT,
@@ -384,7 +385,7 @@ function makeField(
 /** Shows `cause` in the alert beneath the controls. */
 function showError(cause: unknown): void {
   layoutErrorMessage = undefined;
-  error.textContent = cause instanceof Error ? cause.message : String(cause);
+  error.textContent = describeFailure(cause);
 }
 
 /**

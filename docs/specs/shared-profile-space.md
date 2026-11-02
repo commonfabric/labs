@@ -161,7 +161,10 @@ owns itself and declares the `profile` kind: its access list grants its own
 DID OWNER and the wildcard `"*"` WRITE, and the creating user holds a
 delegation from the space's key, recorded in the home space and presented
 when the user's runtime opens the space, in place of a grant
-([profile delegation](profile-delegation.md)). A profile created before
+([profile delegation](profile-delegation.md)). The creating runtime holds that
+delegation from the moment the key signs it, so creation itself, the commit
+placing the profile and the copy of its pattern into the space, is made under
+the space's own grant and not the wildcard. A profile created before
 profiles owned themselves names its creator as owner instead. Other users read a profile's
 name, and a runtime showing a profile writes into the profile's space — its
 per-session state at the least — so a space granting READ alone refuses the

@@ -883,8 +883,12 @@ handler returns a `conflict` for a row it was sent, as for a space the catalog
 already holds under another kind, the intake logs that once too, with the
 reason. A failure to read what vetting needs, other than a refusal of access, is
 logged and leaves the row undecided, and so does a space whose kind the host
-cannot tell, as when it does not report kinds, a send to Home that throws, and a
-failed read of Home or of an inbox before the row is reached. When a lost
+cannot tell, as when it does not report kinds. Such a row waits on its space's
+state as a refused one does: it is vetted again as the intake begins following
+that state, which takes up a failure that has passed, and then each time the
+state changes, with the connection to the host up or not. A send to Home that
+throws, and a failed read of Home or of an inbox before the row is reached,
+leave the row undecided too. When a lost
 connection to the host comes back, the intake reads again which inboxes Home
 holds and retains and considers every row of each, so a row left undecided
 while it was down is taken up then, or when its inbox next changes. A lone offer

@@ -868,10 +868,14 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
 
   // A failing lane keeps its working directory under the job's temporary
   // directory, which is where this reaches for it, and a process in the lane
-  // that crashes natively leaves its core beside it.
+  // that crashes natively leaves its core beside it. Each Toolshed server's
+  // store is left out, and its log, which sits beside the store, is not.
   const failure = namedStep(job, "📋 Upload what a failing lane left behind");
   assertEquals(failure.if, "${{ failure() }}");
-  assertEquals(failure.with?.path, "${{ runner.temp }}/ci-lane-*");
+  assertEquals(
+    failure.with?.path,
+    "${{ runner.temp }}/ci-lane-*\n!${{ runner.temp }}/ci-lane-*/toolshed-*/\n",
+  );
   const lane = namedStep(job, "🧪 Run the lane").run ?? "";
   assertStringIncludes(lane, "ulimit -c unlimited");
   assertStringIncludes(

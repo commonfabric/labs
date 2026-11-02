@@ -382,7 +382,13 @@ What this leaves open:
   updating the parent, it shows the carried child's state under that instance,
   with no refusal in either case (`runtime/runner/test/instance-naming-modes.test.ts`).
   The `instanceNames` flag stays off until such a runtime is kept away from a
-  space whose data a naming runtime wrote.
+  space whose data a naming runtime wrote. The memory server is to do that by
+  marking a space at the first commit from a naming runtime and admitting no
+  runtime with naming off to it afterward (INV-16 in
+  [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission),
+  which the server enforces and no client declares a mode for yet);
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
+  that and the flip.
 
 ### Transaction provenance
 

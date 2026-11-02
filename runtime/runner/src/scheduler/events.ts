@@ -1,6 +1,7 @@
 import { getLogger } from "@commonfabric/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
@@ -918,7 +919,14 @@ function chainOnCommit(
  * enclosing it derives. A client under server execution runs the handler only
  * as its speculative echo, which the served run replaces, so it starts the
  * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server.
+ * read, to the server. A serving runtime also has the piece's origin followed
+ * before its first start of it (`EnsurePieceOptions.originFollowed`, which
+ * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
+ * opens a piece it serves, so the start is where the piece's source is
+ * brought up to date; the pieces its inputs come from are followed the same
+ * way before they start. A start a follow is still owed, the piece's own or
+ * an input source's, is declined, and the served event it was for is
+ * deferred to a later wave as any start that could not happen yet defers it.
  */
 function startEventPiece(
   runtime: Runtime,
@@ -927,6 +935,7 @@ function startEventPiece(
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
+    originFollowed: runtime.pieceOriginFollowed,
   });
 }
 
@@ -1173,7 +1182,12 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           // stays pending and a later wave re-drains it, under the serving
           // loop's bounded deferral budget — a condition that outlasts the
           // budget hardens into §5's drop notice rather than wedging the
-          // stream. A client event waits as described above.
+          // stream. The exception is a pattern the runtime could not load,
+          // which the deferral names: when the space lacks the pattern's
+          // program closure, the loop waits for the closure to arrive, and
+          // past a grace counts the absence against the failed-state budget,
+          // which ends in a needs-attention notice rather than a drop. A
+          // client event waits as described above.
           // A verdict that did not start the piece and names no reason is
           // one whose start threw, which the start walk logs and collapses.
           const pieceStartReason = verdict.started
@@ -1185,7 +1199,31 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           const reason = `Event dropped: no handler registered for ` +
             `${args.eventLink.id} and its piece ${pieceState}`;
           if (queuedEvent.served !== undefined) {
-            dropQueuedEvent(state, queuedEvent, reason, "deferred");
+            dropQueuedEvent(
+              state,
+              queuedEvent,
+              reason,
+              "deferred",
+              pieceStartReason === "origin-pending"
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "origin-pending",
+                    message: reason,
+                  },
+                }
+                : pieceStartReason === "pattern-unloadable" &&
+                    verdict.patternIdentity !== undefined
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "pattern-unloadable",
+                    patternIdentity: verdict.patternIdentity,
+                    message: reason,
+                  },
+                }
+                : {},
+            );
             // A deferral carries the drain's arrival-order barrier
             // (events.md §2; review-6459 F1's sibling arm), exactly as
             // the handler-not-run withdrawal and the facade's load-park
@@ -1249,9 +1287,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // disposition was someone else's (e.g. a lineage drop mid-load).
         const alreadySettled = queuedEvent.finalOutcomeNotified === true;
         const reason = `Event dropped: starting the piece for ` +
-          `${args.eventLink.id} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+          `${args.eventLink.id} failed: ${describeFailure(error)}`;
         if (queuedEvent.served === undefined) {
           dropUndeliverableClientEvent(
             state,
@@ -2442,7 +2478,8 @@ export async function dispatchQueuedEvent(state: {
     // never becomes pending again), so a handler with finitely many distinct
     // inSpace names terminates; an access-list re-run repeats only when another
     // writer changed the same list in between, and a change it makes itself is
-    // a no-op on the re-run. Dispatch released the lineage registration above,
+    // a no-op on the re-run; a Home-root re-run follows the root being linked,
+    // and a linked root stays linked. Dispatch released the lineage registration above,
     // so the fresh QueuedEvent must be re-recorded: otherwise an origin that fails
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
@@ -2666,9 +2703,7 @@ export async function dispatchQueuedEvent(state: {
             // behind it. The drop settles the requeued entry's callback; a
             // failed origin that dropped it meanwhile left nothing to drop.
             delete requeued.retryReadinessPending;
-            const detail = cause instanceof Error
-              ? cause.message
-              : String(cause);
+            const detail = describeFailure(cause);
             const failure = cause instanceof ReplicaLoadFailureError
               ? cause.failure
               : {

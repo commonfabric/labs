@@ -1,5 +1,5 @@
 /**
- * A room names a participant by whose own profile theirs is, by the rule every
+ * A room names its reader by whose own profile theirs is, by the rule every
  * reader of a person's profiles applies (`profileOwnerOf()`), as `#profile`
  * does. A profile of the person's own whose `name` links to the name of another
  * profile of theirs names no one: its label names them, but its name is
@@ -9,7 +9,6 @@
 import {
   action,
   assert,
-  computed,
   currentPrincipal,
   handler,
   pattern,
@@ -28,7 +27,7 @@ import {
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import { testRoomStorage } from "./room-test-fixture.ts";
-import { FabriChatRoomCore, participantEntriesOf } from "./room.tsx";
+import { FabriChatRoomCore } from "./room.tsx";
 
 /** The display of a room's first message-edit control. */
 const editDisplay = (ui: unknown): unknown => {
@@ -113,9 +112,6 @@ export default pattern(() => {
   });
   const me = new Writable("");
   const recordMe = action(() => me.set(currentPrincipal() ?? ""));
-  const principals = computed(() =>
-    participantEntriesOf([named, borrowing]).map((entry) => entry.principal)
-  );
   const records = testRoomStorage({});
   const ownRoom = FabriChatRoomCore({
     myProfile: named,
@@ -137,11 +133,6 @@ export default pattern(() => {
         assertion: assert(() =>
           me.get() !== "" &&
           principalOf(borrowing, "represents-principal") === me.get()
-        ),
-      },
-      {
-        assertion: assert(() =>
-          principals[0] === me.get() && principals[1] === undefined
         ),
       },
       {

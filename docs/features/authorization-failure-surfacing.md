@@ -125,8 +125,10 @@ and `spaceaccessrestored` with the space once a retry admits the principal
 again; it does not send the server's diagnostic error text to the UI. For a
 deleted space
 ([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
-carries `deleted: true`, the one marker of the refusal it forwards; that marker
-is not implemented yet.
+carries `deleted: true`, the one marker of the refusal it forwards. A space
+already refused that turns out to be deleted is reported again, with the
+marker, to the storage provider's loss and access-change observers alike; that
+marker is not implemented yet.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
@@ -150,7 +152,10 @@ again.
 
 An admission refusal marked `clientUpdateRequired: true` says that this runtime
 cannot mount until its code is replaced. It is independent of the error name;
-the expression-result identity check sends it on a `SessionRevokedError`.
+the expression-result identity check sends it on a `SessionRevokedError`. A
+`session/revoked` with the reason `instance-names` (INV-16) carries no message,
+so the memory client ends that session with a `SessionRevokedError` that carries
+the marker and a message made from the space.
 A refused restore keeps the server's actual reason. The memory client remembers
 the update requirement across mounts, and the storage manager retains it across
 spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
@@ -174,7 +179,10 @@ conservative warning, not proof that a write was lost or saved.
 The worker reports this status with `RuntimeErrorCode.ClientUpdateRequired` to
 its connected clients and replays it to clients that attach later. The shell
 shows persistent reload guidance, including a request to copy recent edits
-when writes were unconfirmed. It preserves the browser's leave-page warning
+when writes were unconfirmed. The guidance fits every refusal it shows: a reload
+loads the runtime the deployment serves, retrying access cannot change the
+runtime, and a refusal that comes back after a reload means that the deployment
+cannot open that space. It preserves the browser's leave-page warning
 for those writes and never reloads automatically. Updating the CLI checkout
 and starting a new process is the equivalent recovery for a command-line host.
 This recovery mechanism does not enable client-generation retirement.

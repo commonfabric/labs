@@ -1,4 +1,5 @@
 import { type BuiltInLLMMessage } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type LLMGenerateObjectRequest,
   llmGenerateObjectRequestProblem,
@@ -58,9 +59,7 @@ async function readJsonBody(
   } catch (error) {
     return {
       ok: false,
-      error: `Request body is not JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error: `Request body is not JSON: ${describeFailure(error)}`,
     };
   }
 }

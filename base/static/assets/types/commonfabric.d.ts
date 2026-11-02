@@ -4323,6 +4323,37 @@ export type DID = `did:${string}`;
  */
 export declare function isWellFormedDID(value: unknown): value is DID;
 
+/** A DID split into the parts that follow its `did:` prefix. */
+export interface ParsedDID {
+  /** The whole DID, as it was given. */
+  did: DID;
+
+  /**
+   * The method name: the text between the `did:` prefix and the next colon,
+   * or the whole remainder when no colon follows the prefix.
+   */
+  method: string;
+
+  /**
+   * The method-specific identifier: the text after the method's colon, and the
+   * empty string when no colon follows the method.
+   */
+  id: string;
+}
+
+/**
+ * Splits `value` into its method and its method-specific identifier, or
+ * returns `undefined` when `value` is not a DID. A DID here is any string that
+ * starts with `did:`, compared exactly, so `did:web:example.com:8080` parses
+ * to method `web` and id `example.com:8080`, and `did:key` to method `key` and
+ * the empty id. It checks no syntax beyond the prefix: ask `isWellFormedDID()`
+ * of a DID that is to be shown to a person or read as a principal.
+ *
+ * The runtime takes DIDs apart with this same function. It reads nothing but
+ * its argument, so it can be called anywhere a call to `isWellFormedDID()` can.
+ */
+export declare function parseDID(value: unknown): ParsedDID | undefined;
+
 /**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.

@@ -1,4 +1,5 @@
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { decode } from "@commonfabric/text/utf8";
 import { dirname } from "@std/path";
 import { cliText } from "./cli-name.ts";
@@ -69,7 +70,7 @@ async function identityFromKeyfile(
           } > ${shellQuote(path)}\`.`,
       );
     }
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = describeFailure(error);
     throw new IdentityKeyfileError(
       path,
       `cannot be read (${reason})`,

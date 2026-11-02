@@ -7,6 +7,8 @@ import {
   describeCompileErrors,
   describeFailures,
   dumperConfig,
+  dumperEnvironment,
+  workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
   assignmentDigest,
@@ -471,9 +473,9 @@ describe("check-cause-assignments", () => {
     ): Promise<void> {
       const scratch = await Deno.makeTempDir({ prefix: "dumper-config-" });
       const a = {
-        "base/a/deno.jsonc": JSON.stringify({
+        "base/a/deno.json": JSON.stringify({
           name: "@t/a",
-          exports: { "./m": "./src/m.ts" },
+          exports: "./src/m.ts",
         }),
         "base/a/src/m.ts": "export const m = 1;\n",
       };
@@ -506,6 +508,28 @@ describe("check-cause-assignments", () => {
         await Deno.remove(scratch, { recursive: true });
       }
     }
+
+    it("lists each workspace package with its directory, the file each export names, and its own imports", () =>
+      withCheckouts(async ({ head }) => {
+        const url = (path: string) => toFileUrl(join(head, path)).href;
+        expect(await workspacePackages(head)).toEqual(
+          new Map([
+            ["@t/a", {
+              dir: url("base/a/"),
+              exports: new Map([["@t/a", url("base/a/src/m.ts")]]),
+              imports: {},
+            }],
+            ["@t/b", {
+              dir: url("base/b/"),
+              exports: new Map([
+                ["@t/b", url("base/b/src/index.ts")],
+                ["@t/b/n", url("base/b/src/n.ts")],
+              ]),
+              imports: { "@/": url("base/b/src/") },
+            }],
+          ]),
+        );
+      }));
 
     it("returns the checkout's own configuration where the change adds no package", () =>
       withCheckouts(async ({ head }) => {
@@ -548,5 +572,23 @@ describe("check-cause-assignments", () => {
         const withAdded = await run(await dumperConfig(base, head));
         expect(new TextDecoder().decode(withAdded.stdout)).toBe("3 3\n");
       }));
+  });
+
+  describe("dumperEnvironment()", () => {
+    it("leaves out each variable that sets an experimental flag, and keeps the rest", () => {
+      expect(
+        dumperEnvironment({
+          PATH: "/bin",
+          EXPERIMENTAL_LOCAL_FOLD: "true",
+          EXPERIMENTAL_MODERN_CELL_REP: "false",
+          EXPERIMENTAL_UNMAPPED_NAME: "true",
+          LOG_LEVEL: "debug",
+        }),
+      ).toStrictEqual({
+        PATH: "/bin",
+        EXPERIMENTAL_UNMAPPED_NAME: "true",
+        LOG_LEVEL: "error",
+      });
+    });
   });
 });

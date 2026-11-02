@@ -1791,15 +1791,26 @@ Notes:
     cache while a rerun is being collected. An interrupted or rate-limited
     collection records that its earlier manifest is no longer fresh, so a
     restart keeps the completed chart visible but resumes collection.
-  - Runtime benchmark artifact results are written atomically to
-    the fixed `fabric-wall-benchmark-history.json` file in the dashboard cache
-    directory.
+  - Runtime benchmark artifact results are kept in the
+    `fabric-wall-benchmark-history` directory in the dashboard cache directory,
+    one binary file per run attempt, each written atomically.
+    `benchmark-history-cache.ts` describes the file layout. A save writes the
+    small `state.json` and only those run attempts that are missing from the
+    directory or that this process changed since it last read the directory.
+    Anything in the store that does not decode is read as absent, and the next
+    save replaces or removes it; the collection fetches a missing run again.
+    When the cache directory also holds a `fabric-wall-benchmark-history.json`
+    file, the dashboard reads it one run at a time, and the next save moves its
+    runs into the directory and deletes it. Loads and saves delete temporary
+    files that an interrupted write left in the directory, and loads also
+    delete those left beside the JSON file.
     Successful reads and definitive empty results are retained for 60 days. A
     failed read remains uncached so a later scheduled collection can establish
-    whether the artifact exists. Dashboard processes that share the file lock it
-    while merging and replacing the stored run attempts. The exact run attempts
-    behind the last completed refresh, including the reason for a definitive
-    empty result, are stored in the same file. Attempts used by that completed
+    whether the artifact exists. Dashboard processes that share the cache
+    directory hold `fabric-wall-benchmark-history.json.lock` while they read,
+    merge, and write the stored run attempts. The exact run attempts behind the
+    last completed refresh, including the reason for a definitive empty result,
+    are stored beside them in `state.json`. Attempts used by that completed
     refresh remain available while a rerun is incomplete. Restarting the
     dashboard therefore reconstructs the same chart without immediately
     rediscovering benchmark runs that are still within the 30-minute freshness

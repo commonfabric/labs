@@ -257,20 +257,6 @@ export interface MultiRuntimeHarnessOptions {
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
- * The execution-lease TTL of the serving loop the harness hosts. That loop
- * runs on the test's thread, or on a worker's when the environment selects
- * one, and a pattern compile does not yield either, so on a slow runner one
- * compile can hold the loop's thread past the production TTL. Every
- * space the loop serves then loses its lease at once, any wave in flight
- * aborts, and a space that parks over it compiles again when it reactivates.
- * Two minutes is well clear of the longest stall between renewals seen (22 s
- * on a developer machine, with coverage on), and nothing in the harness
- * contends for a lease, so a longer tenure costs no failover. A stall that
- * outlasts it still loses the lease.
- */
-const SERVED_LEASE_TTL_MS = 120_000;
-
-/**
  * The claims harnesses in this process hold on its pattern environment,
  * oldest first, each with the environment that was in force when it was
  * made. The environment is the newest claim's; releasing a claim hands what it
@@ -969,9 +955,8 @@ export class MultiRuntimeHarness {
         // holds for this realm, shared by every serving runtime: a space that
         // reactivates, or another space serving the same program, skips the
         // transform-and-emit step on this thread. A loop the environment puts
-        // in a worker takes no closure, so its runtimes compile without it.
+        // in a worker takes no closure; the worker builds a cache of its own.
         ...(runsInWorker() ? {} : { moduleByteCache }),
-        policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
       })
       : StandaloneMemoryServer.start({
         serve,

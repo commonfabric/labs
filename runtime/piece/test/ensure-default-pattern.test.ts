@@ -154,6 +154,36 @@ describe("PiecesController.ensureDefaultPattern", () => {
     expect(defaultPattern?.get()?.[NAME]).toBe("MockDefaultPattern");
   });
 
+  it("returns a root whose reads see what is written after an earlier read", async () => {
+    // A caller keeps the root and waits on it, so a read through it, or through
+    // a cell made from it, returns what the replica holds at that read, not
+    // what it held when that document was first read through the root.
+    const schema = {
+      type: "object",
+      properties: { [NAME]: { type: "string" }, note: { type: "string" } },
+    } as const;
+    const stored = runtime.getCell(
+      controller.getSpace(),
+      "written-after-a-read-default-pattern",
+      schema,
+    );
+    await runtime.editWithRetry((tx) => {
+      stored.withTx(tx).setRawUntyped({ [NAME]: "MockDefaultPattern" });
+    });
+    await controller.linkDefaultPattern(stored);
+
+    const root = await controller.getDefaultPattern(false);
+    const note = root!.asSchema(schema).key("note");
+    expect(note.getRaw()).toBeUndefined();
+
+    await runtime.editWithRetry((tx) => {
+      stored.withTx(tx).key("note").set("written later");
+    });
+
+    expect(note.getRaw()).toBe("written later");
+    expect(note.get()).toBe("written later");
+  });
+
   describe("initial state", () => {
     it("should have no defaultPattern in space cell initially", () => {
       // The space cell should initially have no defaultPattern

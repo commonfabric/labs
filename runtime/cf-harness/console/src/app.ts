@@ -10,6 +10,7 @@
  */
 
 import { html, LitElement, nothing, type TemplateResult } from "lit";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   cancelTurn,
   type ConsoleChatEventEnvelope,
@@ -220,7 +221,7 @@ export class ConsoleApp extends LitElement {
       // says so rather than reading as one still arriving.
       if (read === this.#flowReads && this.openRunId === runId) {
         this.flow = undefined;
-        this.flowError = error instanceof Error ? error.message : String(error);
+        this.flowError = describeFailure(error);
       }
     } finally {
       if (read === this.#flowReads) {
@@ -247,7 +248,7 @@ export class ConsoleApp extends LitElement {
       this.runs = await listRuns();
       this.error = undefined;
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = describeFailure(error);
     }
   }
 
@@ -382,7 +383,7 @@ export class ConsoleApp extends LitElement {
     } catch (error) {
       this.running = false;
       this.state = "failed";
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = describeFailure(error);
     }
   }
 
@@ -402,7 +403,7 @@ export class ConsoleApp extends LitElement {
       this.error = undefined;
     } catch (error) {
       this.state = before;
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = describeFailure(error);
     }
   }
 

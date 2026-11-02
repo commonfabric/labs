@@ -34,6 +34,7 @@
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 /** The task a member's tests live in, and the one appended flags reach. */
 export const DENO_TEST_TASK = "deno-test";
@@ -210,7 +211,7 @@ if (import.meta.main) {
     // A misconfigured member is an authoring mistake, and the message
     // says what to write. A stack through this file says nothing a
     // reader of that message needs.
-    console.error(error instanceof Error ? error.message : `${error}`);
+    console.error(describeFailure(error));
     Deno.exit(2);
   }
 }

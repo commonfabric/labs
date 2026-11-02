@@ -60,6 +60,7 @@
  * the top was read.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type GitHubWebhooks,
   githubWebhooks,
@@ -458,7 +459,7 @@ export class RunLists {
       } catch (error) {
         console.error(
           `run lists could not be saved to ${file.path}:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     });
@@ -678,7 +679,7 @@ async function recheck(
         // on without it, and the next reading reads it again.
         console.error(
           `run list ${list.repo} ${list.workflow} ${key} failed:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
         return;
       }

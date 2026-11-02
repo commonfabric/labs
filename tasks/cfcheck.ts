@@ -10,18 +10,19 @@
  * none checks everything.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
-import { formatError, selectionFor, USAGE } from "./cfcheck-lib.ts";
+import { selectionFor, USAGE } from "./cfcheck-lib.ts";
 import { collectAllPatternFiles } from "./pattern-files.ts";
 
 let filesToCheck: string[];
 try {
   filesToCheck = selectionFor(await collectAllPatternFiles(), Deno.args);
 } catch (error) {
-  console.error(formatError(error));
+  console.error(describeFailure(error));
   console.error(USAGE);
   Deno.exit(2);
 }
@@ -45,7 +46,7 @@ for (const file of filesToCheck) {
       ),
     });
   } catch (error) {
-    failures.push({ file, error: formatError(error) });
+    failures.push({ file, error: describeFailure(error) });
   }
 }
 

@@ -29,6 +29,7 @@ import {
 } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { commandEndpointUrlProblem } from "@commonfabric/cf-harness/loom-commands";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type Cell, type Runtime, sendEvent } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -446,9 +447,7 @@ export async function startAgentRunner(
     } catch (cleanupError) {
       report(
         `agent runner: startup cleanup failed: ${
-          cleanupError instanceof Error
-            ? cleanupError.message
-            : String(cleanupError)
+          describeFailure(cleanupError)
         }`,
       );
     } finally {
@@ -585,7 +584,7 @@ export async function agentRunnerAction(
     if (options.localOnly) throw error;
     deps.report(
       `agent runner: the local lane did not start, continuing with the Fabric lane: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
     return await runFabricLane(options, deps);
@@ -616,11 +615,11 @@ export async function agentRunnerAction(
       } catch (error) {
         local.setFabricReadiness({
           state: "refused",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
         deps.report(
           `agent runner: the Fabric lane did not start, so this runner serves local jobs only: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
         );
       }

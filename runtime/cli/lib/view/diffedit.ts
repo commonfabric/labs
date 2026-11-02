@@ -15,6 +15,7 @@ import { basename, dirname } from "@std/path";
 
 import { spliceAll } from "@commonfabric/collections/splice";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
@@ -486,7 +487,7 @@ export function diffSource(
             rollbackErrors.push(String(rollbackError));
           }
         }
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = describeFailure(error);
         const suffix = rollbackErrors.length > 0
           ? `; restoring files failed: ${rollbackErrors.join("; ")}`
           : "";
@@ -1851,7 +1852,7 @@ function diffLogicalEnd(
   row: number,
 ): number {
   const line = lines[row] ?? "";
-  const length = [...line].length;
+  const length = cpLen(line);
   if (!line.endsWith("\r")) return length;
   const hunk = model ? hunkAt(model, row)?.hunk : undefined;
   const noTrailingNewline = lines[row + 1]?.replace(/\r$/, "") ===

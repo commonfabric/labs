@@ -23,11 +23,13 @@ export class SpaceRootMissingError extends Error {
   constructor(space: MemorySpace) {
     super(
       `${space} has no root yet, so a write beneath its \`defaultPattern\` ` +
-        `slot is refused rather than landing in the space cell. On a client ` +
-        `runtime, when a handler's write beneath a user's own Home slot is ` +
-        `refused and the refusal escapes the handler, that Home's root is ` +
-        `brought up and the handler runs again. Any other space ` +
-        `gets its root when an OWNER of it opens it on a client runtime, or, ` +
+        `slot is refused rather than landing in the space cell. When a ` +
+        `handler's write beneath the Home slot of the user it acts for is ` +
+        `refused and the refusal escapes the handler, the handler runs again ` +
+        `once that Home has a root: a client runtime brings the root up, and ` +
+        `a serving runtime waits for the Home's own server to link it. Any ` +
+        `other space gets its root when an OWNER of it opens it on a client ` +
+        `runtime, or, ` +
         `under server execution, from the space's own server once the space ` +
         `is active and its owner resolves; a user with WRITE alone does not ` +
         `bring it up by opening it.`,

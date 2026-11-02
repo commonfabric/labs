@@ -91,12 +91,17 @@ A client that draws natively MUST:
   against the record's `authored-by` attestation.
 - **Show members from the room's space.** A room's `participants` are its
   space's participants, as claims, plus its authors. None of them is proof that
-  someone can read the room. To name each of them, and to tell which one is the
-  reader, as when titling a direct room with the other person's name, a client
-  reads the room's `participantEntries`, which pairs each participant's profile
-  with the principal it attests. It is best effort and derived for each reader:
-  an entry whose profile the reader can't read holds no principal, and it is
-  not an access list.
+  someone can read the room. A room's membership is its space's, so a client
+  asks the space: it shows the member set the space's root offers, which for a
+  room in a space of its own is the room's `members`: each principal the
+  space's access list names, with the participants' profiles that are that
+  principal's own. To name each member, it shows their first profile, and to
+  tell which one is the reader, as when titling a direct room with the other
+  person's name, it compares each member's `principal` with the reader's. It
+  is derived for each reader: a profile the reader can't read counts toward no
+  member. The room's `participantEntries` and `participantPrincipals` hold the
+  same members in older shapes, and are deprecated: a client that reads them
+  moves to `members`, and they will be retired once clients have.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
@@ -137,6 +142,10 @@ A client that draws natively MUST:
   [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+- **Show a deleted room as deleted, with no controls**: an entry of the
+  manager's `deletedRooms`, or a placement whose `state` is `"deleted"` (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#facts)). Deleting a room is
+  deleting its space, which FabriChat itself offers no way to do.
 
 A client MUST NOT copy a room's contents into any other space, including as a
 cache inside a piece. A copy loses the room's label and is readable by everyone
@@ -178,10 +187,8 @@ client asks the adder to send them the room's link. A client offers people to ad
 user's manager's `people`, and names a person picked there by their profile as
 well as their address, so the manager offers the room through that profile.
 To leave the people already in the room out of its add control, it reads the
-room's `participantPrincipals`, the principals the room's `participantEntries`
-hold. It is a best-effort set to leave out, not an access list: someone who
-has been added but has never joined isn't among them, and neither is a
-participant whose profile the reader can't read.
+room's `members`, whose principals are exactly those the space's access list
+names, whether or not they have joined.
 
 A client that draws natively retitles a room the same way: it sends `setTitle`
 through the sanctioned issuing path on `ChatRetitleSurface`, finds it in
