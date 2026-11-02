@@ -36,6 +36,7 @@ import {
   benchmarkFailureLabel,
   benchmarkHistoryProgressResponse,
   benchmarkRerunHandoff,
+  type BenchmarkSnapshot,
   benchmarkTrend,
   benchmarkTrendRuns,
   benchPage,
@@ -48,8 +49,10 @@ import {
   trendPct,
   trendStatus,
 } from "./benchmark.ts";
+import type * as tileModule from "./benchmark.ts";
 import { CALIBRATION_FILE } from "../bench-report.ts";
 import {
+  CI_HISTORY_DAYS,
   CI_HISTORY_MIN_DAYS,
   CI_HISTORY_POINT_TARGET,
   ciHistoryBucketMs,
@@ -4428,6 +4431,44 @@ describe("keyBenchmarks", () => {
   });
 });
 
+// Runs `body` against a newly started copy of the tile whose cache holds
+// `runs`, and whose last refresh read `refreshed` when there is one.
+async function withCache<T>(
+  runs: CachedBenchmarkRun[],
+  refreshed: CachedBenchmarkRun[] | undefined,
+  body: (isolated: typeof tileModule) => Promise<T>,
+): Promise<T> {
+  const directory = await Deno.makeTempDir({ prefix: "benchmark-snapshot-" });
+  const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
+  Deno.env.set("DASHBOARD_CACHE_DIR", directory);
+  try {
+    const store = new BenchmarkHistoryStore();
+    await store.load();
+    for (const run of runs) store.set(run);
+    if (refreshed) {
+      store.markRefreshed(
+        Date.now(),
+        refreshed.map((run) => store.get(run.runId, run.runAttempt)!),
+      );
+    }
+    await store.save();
+    return await body(
+      await import(`./benchmark.ts?snapshot=${crypto.randomUUID()}`),
+    );
+  } finally {
+    if (previousCacheDirectory === undefined) {
+      Deno.env.delete("DASHBOARD_CACHE_DIR");
+    } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
+    await Deno.remove(directory, { recursive: true });
+  }
+}
+
+// The snapshot version an update check of `isolated` reports.
+async function checkedVersion(isolated: typeof tileModule): Promise<string> {
+  return (await (await isolated.benchmarkHistoryCheckResponse(ctx())).json())
+    .version;
+}
+
 describe("benchmarkSnapshotVersion", () => {
   const timing = (value: number) => ({
     min: value,
@@ -4454,33 +4495,16 @@ describe("benchmarkSnapshotVersion", () => {
   const calibrationOnly = run(140_002, 1, [`${CALIBRATION_FILE} > spin`]);
 
   // The version a newly started drill-down reports for a cache whose last
-  // refresh read `runs`. Each update check rebuilds the snapshot from the
-  // cache, so the two checks also show whether rebuilding moves the version.
-  async function versionFor(runs: CachedBenchmarkRun[]): Promise<string> {
-    const directory = await Deno.makeTempDir({ prefix: "benchmark-version-" });
-    const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
-    Deno.env.set("DASHBOARD_CACHE_DIR", directory);
-    try {
-      const store = new BenchmarkHistoryStore();
-      await store.load();
-      store.markRefreshed(Date.now(), runs.map((cached) => store.set(cached)));
-      await store.save();
-      const isolated = await import(
-        `./benchmark.ts?version=${crypto.randomUUID()}`
-      );
-      const check = async () =>
-        (await (await isolated.benchmarkHistoryCheckResponse(ctx())).json())
-          .version;
-      const version = await check();
-      expect(await check()).toBe(version);
+  // refresh read `runs`. Each call starts a new copy of the tile, which builds
+  // the snapshot afresh, so equal results across calls also show that
+  // building it again does not move the version.
+  function versionFor(runs: CachedBenchmarkRun[]): Promise<string> {
+    return withCache(runs, runs, async (isolated) => {
+      const version = await checkedVersion(isolated);
+      expect(await checkedVersion(isolated)).toBe(version);
       expect(isolated.benchmarkSnapshotVersion()).toBe(version);
       return version;
-    } finally {
-      if (previousCacheDirectory === undefined) {
-        Deno.env.delete("DASHBOARD_CACHE_DIR");
-      } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
-      await Deno.remove(directory, { recursive: true });
-    }
+    });
   }
 
   it("stays the same while the measurements shown stay the same", async () => {
@@ -4500,5 +4524,159 @@ describe("benchmarkSnapshotVersion", () => {
       await versionFor([run(140_000, 2)]),
     ];
     expect(new Set(versions).size).toBe(versions.length);
+  });
+});
+
+describe("the /bench snapshot", () => {
+  const origin = "runtime/a/snapshot.bench.ts";
+  const key = `${origin} > snapshot`;
+  const cached = (runId: number, at: number): CachedBenchmarkRun => ({
+    runId,
+    runAttempt: 1,
+    at,
+    cpu: TEST_CPU,
+    metrics: new Map([[key, {
+      min: runId,
+      avg: runId,
+      max: runId,
+      p75: runId,
+      p99: runId,
+      p995: runId,
+      p999: runId,
+    }]]),
+  });
+  const chartedAttempts = (snapshot: BenchmarkSnapshot): string[] =>
+    snapshot.series.flatMap((series) =>
+      series.cpus.flatMap((cpu) =>
+        cpu.points.map((point) => `${point.runId}.${point.runAttempt}`)
+      )
+    );
+
+  it("is kept while the runs it charts stay the same", async () => {
+    const first = cached(141_000, SAMPLED_BASE - 2 * DAY);
+    const second = cached(141_001, SAMPLED_BASE - DAY);
+    // Once with a refresh manifest naming both runs, which the tile charts as
+    // it stands, and once with none, when the tile samples the cache by time.
+    for (const refreshed of [[first, second], undefined]) {
+      await withCache([first, second], refreshed, async (isolated) => {
+        await isolated.benchmarkHistoryCheckResponse(ctx());
+        const snapshot = isolated.benchmarkSnapshotForTest();
+        expect(chartedAttempts(snapshot)).toEqual([
+          `${first.runId}.1`,
+          `${second.runId}.1`,
+        ]);
+        await isolated.benchmarkHistoryResponse(
+          new URL("http://x/bench?view=runtime"),
+          ctx(),
+        );
+        await isolated.benchmarkHistoryCheckResponse(ctx());
+        expect(isolated.benchmarkSnapshotForTest()).toBe(snapshot);
+      });
+    }
+  });
+
+  it("is rebuilt when a run leaves the window it charts", async () => {
+    using time = new FakeTime();
+    const leaving = cached(
+      141_010,
+      Date.now() - CI_HISTORY_DAYS * DAY + HOUR,
+    );
+    const staying = cached(141_011, Date.now() - DAY);
+    await withCache([leaving, staying], undefined, async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([
+        `${leaving.runId}.1`,
+        `${staying.runId}.1`,
+      ]);
+
+      time.tick(2 * HOUR);
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${staying.runId}.1`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+
+  it("is rebuilt when a collection reads a run's next attempt", async () => {
+    const charted = cached(141_020, SAMPLED_BASE - DAY);
+    const rerun = ghRun(charted.runId, charted.at, "success", 2);
+    await withCache([charted], [charted], async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([`${charted.runId}.1`]);
+
+      await withApi({
+        pages: { 1: [rerun] },
+        artifacts: {
+          [rerun.id]: [{
+            id: rerun.id * 10,
+            name: "bench-results",
+            expired: false,
+          }],
+        },
+        zips: {
+          [rerun.id * 10]: await benchZip(
+            report([bench(origin, null, "snapshot", timings(5))]),
+          ),
+        },
+      }, async () => {
+        await isolated.benchmark.collect(
+          ctx({ GH_TOKEN: `snapshot-${crypto.randomUUID()}` }),
+        );
+      });
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${charted.runId}.2`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
+  });
+
+  it("is rebuilt when a collection reads a run's processor again", async () => {
+    // A run cached before the store recorded processors charts nothing. The
+    // next collection fetches the same attempt again, now naming a processor.
+    const unplaced = {
+      ...cached(141_030, SAMPLED_BASE - DAY),
+      cpu: undefined,
+    };
+    const listed = ghRun(unplaced.runId, unplaced.at);
+    await withCache([unplaced], [unplaced], async (isolated) => {
+      const check = () => checkedVersion(isolated);
+      const version = await check();
+      const before = isolated.benchmarkSnapshotForTest();
+      expect(chartedAttempts(before)).toEqual([]);
+
+      await withApi({
+        pages: { 1: [listed] },
+        artifacts: {
+          [listed.id]: [{
+            id: listed.id * 10,
+            name: "bench-results",
+            expired: false,
+          }],
+        },
+        zips: {
+          [listed.id * 10]: await benchZip(
+            report([bench(origin, null, "snapshot", timings(5))]),
+          ),
+        },
+      }, async () => {
+        await isolated.benchmark.collect(
+          ctx({ GH_TOKEN: `snapshot-${crypto.randomUUID()}` }),
+        );
+      });
+      expect(await check()).not.toBe(version);
+      const after = isolated.benchmarkSnapshotForTest();
+      expect(after).not.toBe(before);
+      expect(chartedAttempts(after)).toEqual([`${unplaced.runId}.1`]);
+      await check();
+      expect(isolated.benchmarkSnapshotForTest()).toBe(after);
+    });
   });
 });

@@ -217,7 +217,9 @@ interface BenchmarkSeries {
 }
 
 /** What the /bench drill-down charts, and its version. */
-interface BenchmarkSnapshot {
+export interface BenchmarkSnapshot {
+  /** The runs the snapshot was assembled from, oldest first. */
+  runs: readonly CachedBenchmarkRun[];
   /** Every charted benchmark, in key order. */
   series: BenchmarkSeries[];
   /**
@@ -233,7 +235,11 @@ interface BenchmarkSnapshot {
   version: string;
 }
 
-let snapshot = assembleCachedBenchmarkSnapshot([]);
+let snapshot: BenchmarkSnapshot = {
+  runs: [],
+  series: [],
+  version: benchmarkVersion(""),
+};
 // The benchmarks.yml runs, as far down as the window reaches, for each GitHub
 // client that reads them: the tile's, and the drill-down's, which reads on the
 // performance views' rate budget. Each keeps its own, so that neither waits
@@ -312,6 +318,11 @@ function benchmarkVersion(text: string): string {
 
 export function benchmarkSnapshotVersion(): string {
   return snapshot.version;
+}
+
+/** The snapshot the /bench drill-down currently charts. */
+export function benchmarkSnapshotForTest(): BenchmarkSnapshot {
+  return snapshot;
 }
 
 function newBenchmarkProgress(baseline?: string): BenchmarkProgressRecord {
@@ -543,11 +554,19 @@ function currentRunMetrics(run: Run): ReadonlyMap<string, Stats> | undefined {
 /**
  * Groups the measurements in `runs` into series by benchmark and processor,
  * leaving out calibration benchmarks and runs that name no processor, and
- * versions the result by the run attempts it holds.
+ * versions the result by the run attempts it holds. When the current snapshot
+ * was assembled from the same run objects, returns it instead.
+ * `BenchmarkHistoryStore` replaces a run rather than changing it, so the same
+ * objects hold the same measurements.
  */
 function assembleCachedBenchmarkSnapshot(
   runs: CachedBenchmarkRun[],
 ): BenchmarkSnapshot {
+  const sorted = runs.toSorted((a, b) => a.at - b.at);
+  if (
+    sorted.length === snapshot.runs.length &&
+    sorted.every((run, index) => run === snapshot.runs[index])
+  ) return snapshot;
   const byKey = new Map<
     string,
     Map<
@@ -561,7 +580,7 @@ function assembleCachedBenchmarkSnapshot(
     >
   >();
   const attempts: string[] = [];
-  for (const run of [...runs].sort((a, b) => a.at - b.at)) {
+  for (const run of sorted) {
     if (run.cpu === undefined) continue;
     let held = false;
     for (const [key, stats] of run.metrics) {
@@ -596,7 +615,11 @@ function assembleCachedBenchmarkSnapshot(
     }))
     .filter((series) => series.cpus.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key));
-  return { series, version: benchmarkVersion(attempts.join(" ")) };
+  return {
+    runs: sorted,
+    series,
+    version: benchmarkVersion(attempts.join(" ")),
+  };
 }
 
 function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSnapshot {
