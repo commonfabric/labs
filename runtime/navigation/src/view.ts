@@ -4,7 +4,7 @@ import {
   parseCellReference,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { asSpaceSegment } from "@commonfabric/runner/fabric-url";
+import { readSpaceSegment } from "@commonfabric/runner/fabric-url";
 import { isSlugAddress, isValidSlug } from "@commonfabric/runner/slugs";
 
 export type AppBuiltInView = "home";
@@ -275,15 +275,38 @@ export function appViewToUrlPath(view: AppView): `/${string}` {
         return `/`;
     }
   } else if ("spaceName" in view) {
-    // `urlToAppView` reads a DID-shaped first segment back as a space DID, so
-    // a name that is a DID would round-trip into a different space. Refuse it
-    // here, where the name is still attached to the view that carried it.
-    assertNotDID(view.spaceName, "A space name");
-    return `${prefix}/${view.spaceName}${pieceUrlSegments(view)}`;
+    return `${prefix}/${spaceNameSegment(view.spaceName)}${
+      pieceUrlSegments(view)
+    }`;
   } else if ("spaceDid" in view) {
     return `${prefix}/${view.spaceDid}${pieceUrlSegments(view)}`;
   }
   return `/`;
+}
+
+/**
+ * The path segment that `urlToAppView` reads back as the space named `name`.
+ *
+ * A space name answers to no grammar, so it is percent-encoded: a `/`, `?`,
+ * `#`, or `%` in it would otherwise end the segment or the path, or read back
+ * as an escape. A name the reader would take for something other than a name
+ * is written behind the space's mark, which the reader removes: one that
+ * begins with the mark, one that is a dot segment and would resolve away, and
+ * one that is the embed prefix.
+ *
+ * Two names have no segment at all. The empty name reads back as the home
+ * view, and a name that is a DID reads back as a space DID, which addresses a
+ * different space than deriving the name does. Both throw here, where the name
+ * is still attached to the view that carried it.
+ */
+function spaceNameSegment(name: string): string {
+  assertNotDID(name, "A space name");
+  if (!name) throw new Error("A space name must not be empty");
+  const segment = encodeURIComponent(name);
+  return name.startsWith("@") || name === EMBED_PATH_PREFIX ||
+      !isKeptAsWrittenInPath(segment)
+    ? `@${segment}`
+    : segment;
 }
 
 /**
@@ -332,14 +355,12 @@ export function urlToAppView(url: URL): AppView {
   // the whole difference, so the empty segment it leaves ahead of the space
   // comes off.
   if (segments[0] === "") segments.shift();
-  // A leading `@` on the space marks it as well. Addresses in circulation
-  // carry that spelling, though the grammar reads it only ahead of a DID. The
-  // mark is no part of the space, so it comes off and the segment reads as
-  // any other space does — which leaves a segment that is nothing but the
-  // mark naming no space, the address a bare origin already carries.
+  // A segment that is nothing but the space's mark names no space, the address
+  // a bare origin already carries. A segment holding a malformed escape was
+  // written without escaping, so it names the space it spells.
   const first = segments[0] === undefined
     ? undefined
-    : asSpaceSegment(segments[0]) ?? segments[0];
+    : readSpaceSegment(segments[0]) ?? segments[0];
   let pieceId = segments[1];
   let scopeRef: Pick<PieceViewRef, "pieceScope" | "piecePath"> = {};
   if (pieceId?.includes(":")) {

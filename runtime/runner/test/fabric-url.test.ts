@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { asSpaceSegment, parseFabricUrl } from "../src/fabric-url.ts";
+import { parseFabricUrl, readSpaceSegment } from "../src/fabric-url.ts";
 
 const HASH = "V2tROHl4KsExx5M0fYnkQaOryFwjVUkqXIlcdMWz7SQ";
 const SPACE = "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh";
@@ -168,6 +168,26 @@ describe("fabric-url", () => {
           .toBeUndefined();
       });
 
+      it("returns the space as the shell reads it", () => {
+        // The shell percent-encodes a space name and writes the space's mark
+        // ahead of a name it would otherwise read as something else.
+        expect(
+          parseFabricUrl("https://fabric.example/a%20b/my-note", options)
+            ?.space,
+        ).toBe("a b");
+        expect(
+          parseFabricUrl("https://fabric.example/@work/my-note", options)
+            ?.space,
+        ).toBe("work");
+        expect(
+          parseFabricUrl("https://fabric.example/@%40work/my-note", options)
+            ?.space,
+        ).toBe("@work");
+        // A segment that is nothing but the mark names no space.
+        expect(parseFabricUrl("https://fabric.example/@/my-note", options))
+          .toBeUndefined();
+      });
+
       it("returns undefined for a slug segment carrying a colon it cannot use", () => {
         expect(
           parseFabricUrl("https://fabric.example/work/not:a:slug", options),
@@ -221,43 +241,35 @@ describe("fabric-url", () => {
       });
     });
   });
-
-  describe("asSpaceSegment()", () => {
-    // Exported for `urlToAppView` (`runtime/navigation/src/view.ts`), which
-    // reads the same mark out of a page URL. Both of the answers below that a
-    // caller could mistake for each other — the empty string and `undefined`
-    // — are load-bearing there, so both are pinned here rather than left to
-    // whichever caller happens to depend on them.
-
-    it("returns the space behind the mark", () => {
-      expect(asSpaceSegment("@space")).toBe("space");
-      expect(asSpaceSegment(`@${SPACE}`)).toBe(SPACE);
+  describe("readSpaceSegment()", () => {
+    it("returns the segment percent-decoded", () => {
+      expect(readSpaceSegment("space")).toBe("space");
+      expect(readSpaceSegment("a%20b")).toBe("a b");
+      expect(readSpaceSegment("a%2Fb%3Fc%23d%25e")).toBe("a/b?c#d%e");
+      expect(readSpaceSegment(SPACE)).toBe(SPACE);
     });
 
-    it("returns undefined for a segment carrying no mark", () => {
-      expect(asSpaceSegment("space")).toBeUndefined();
-      expect(asSpaceSegment("")).toBeUndefined();
+    it("returns the space behind the mark, escaped or not", () => {
+      expect(readSpaceSegment("@space")).toBe("space");
+      expect(readSpaceSegment("%40space")).toBe("space");
+      expect(readSpaceSegment(`@${SPACE}`)).toBe(SPACE);
+      // Only one mark comes off, which is how a name beginning with one is
+      // written.
+      expect(readSpaceSegment("@%40space")).toBe("@space");
+      expect(readSpaceSegment("@..")).toBe("..");
     });
 
-    it("returns the space for a mark that arrived percent-encoded", () => {
-      // `%40` is an equivalent encoding of a path `@`, so it marks the space
-      // the same way, and what it marks is decoded along with it.
-      expect(asSpaceSegment("%40space")).toBe("space");
-      expect(asSpaceSegment("@a%20b")).toBe("a b");
+    it("returns the empty string for a segment that is nothing but the mark", () => {
+      expect(readSpaceSegment("@")).toBe("");
+      expect(readSpaceSegment("%40")).toBe("");
+      expect(readSpaceSegment("")).toBe("");
     });
 
     it("returns undefined for a malformed percent escape", () => {
       // The contract the rest of this module holds: a segment this cannot
       // read carries no space, rather than asking about it throwing.
-      expect(asSpaceSegment("%ZZ")).toBeUndefined();
-      expect(asSpaceSegment("@%ZZ")).toBeUndefined();
-    });
-
-    it("returns the empty string for a segment that is nothing but the mark", () => {
-      // Not `undefined`: the segment says it is the space and names none,
-      // which is what lets a caller tell it from one that never said it was.
-      expect(asSpaceSegment("@")).toBe("");
-      expect(asSpaceSegment("%40")).toBe("");
+      expect(readSpaceSegment("%ZZ")).toBeUndefined();
+      expect(readSpaceSegment("@%ZZ")).toBeUndefined();
     });
   });
 });
