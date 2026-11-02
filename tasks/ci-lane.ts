@@ -62,12 +62,12 @@ import {
   pinShuffleSeed,
 } from "@commonfabric/test-support/shuffle";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type Capability,
   type CapabilityId,
   COMPILE_CACHE_FILE,
   logTail,
-  messageOf,
   openCapabilities,
   takeGithubToken,
 } from "./ci-capabilities.ts";
@@ -2800,7 +2800,9 @@ export async function runLane(
   const leaveWorkDir = async (passed: boolean) => {
     if (passed || temp === undefined) {
       await Deno.remove(workDir, { recursive: true }).catch((error) =>
-        console.log(`ci-lane: could not remove ${workDir}: ${messageOf(error)}`)
+        console.log(
+          `ci-lane: could not remove ${workDir}: ${describeFailure(error)}`,
+        )
       );
     }
   };
@@ -2975,8 +2977,8 @@ export async function runLane(
       await opened.close();
     } catch (error) {
       ok = false;
-      notes.push(messageOf(error));
-      console.log(`ci-lane: ${messageOf(error)}`);
+      notes.push(describeFailure(error));
+      console.log(`ci-lane: ${describeFailure(error)}`);
     }
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
