@@ -4011,6 +4011,7 @@ export class Runtime {
       options.schema,
       tx,
     );
+    let finalTx: IExtendedStorageTransaction | undefined;
     try {
       await cell.sync();
       cell.set(options.value);
@@ -4100,8 +4101,34 @@ export class Runtime {
           tx.getCfcState(),
         );
       }
-      tx.prepareCfc();
-      const finalPreparedState = tx.getCfcState();
+      // The traversal above loaded what the value reaches, but its reads
+      // come after the staged write, and a write's input check counts only
+      // the reads before that write (§8.10.3). The final check therefore runs
+      // in a fresh transaction that reads through the value first and writes
+      // it after, so what the traversal reaches is an input to the write.
+      // Everything it reads is loaded by now, and nothing awaits between the
+      // loop's last pass and this one.
+      tx.abort("external content observation staged");
+      finalTx = this.edit();
+      this.getImmutableCell(
+        options.space,
+        options.value,
+        options.schema,
+        finalTx,
+      ).get({ traverseCells: true });
+      const finalCell = this.getCell<unknown>(
+        options.space,
+        options.cause,
+        options.schema,
+        finalTx,
+      );
+      finalCell.set(options.value);
+      // Read the written value back as well, so the receipt's flow and
+      // consumed labels carry the labels its schema gives it, as the staged
+      // transaction's traversal did.
+      finalCell.get({ traverseCells: true });
+      this.prepareTxForCommit(finalTx);
+      const finalPreparedState = finalTx.getCfcState();
       if (
         !enforcementDisabled &&
         finalPreparedState.prepare.status !== "prepared"
@@ -4146,9 +4173,9 @@ export class Runtime {
           finalPreparedState,
         );
       }
-      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
-      const consumed = collectConsumedLabel(tx);
-      const source = cell.getAsNormalizedFullLink();
+      const flow = deriveFlowJoin(finalTx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(finalTx);
+      const source = finalCell.getAsNormalizedFullLink();
       const observation = cloneIfNecessary({
         source: {
           space: source.space,
@@ -4175,7 +4202,7 @@ export class Runtime {
       const receipt = Object.freeze({});
       externalObservationReceipts.set(receipt, {
         runtime: this,
-        sourceTx: tx,
+        sourceTx: finalTx,
         targetTx: options.targetTx,
         space: options.space,
         producer: options.producer,
@@ -4187,6 +4214,9 @@ export class Runtime {
     } finally {
       if (tx.status().status === "ready") {
         tx.abort("external content observation recorded");
+      }
+      if (finalTx?.status().status === "ready") {
+        finalTx.abort("external content observation recorded");
       }
     }
   }

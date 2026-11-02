@@ -102,14 +102,17 @@ const interceptObservationProbeState = (
     state: Readonly<CfcTxState>,
   ) => Readonly<CfcTxState>,
 ): void => {
+  // The probe opens two transactions: the staged write's initial admission,
+  // then the final check after traversal.
   const edit = runtime.edit.bind(runtime);
+  const phases: ObservationProbePhase[] = ["initial", "traversal"];
   runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
-    runtime.edit = edit as Runtime["edit"];
+    const next = phases.shift();
+    if (phases.length === 0) runtime.edit = edit as Runtime["edit"];
     let phase: ObservationProbePhase | undefined;
     return interceptTransaction(edit(...args), (method, _args, proceed) => {
       const result = proceed();
-      if (method === "prepareForCommit") phase = "initial";
-      if (method === "prepareCfc") phase = "traversal";
+      if (method === "prepareForCommit") phase = next;
       if (method === "getCfcState" && phase !== undefined) {
         return transform(phase, result as Readonly<CfcTxState>);
       }
