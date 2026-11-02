@@ -1849,11 +1849,41 @@ interface FoundRoomInput {
   kind: string;
 }
 
-/** A catalog entry's room, once found. */
+/** A room, once found. */
 interface FoundRoomOutput {
   /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
 }
+
+/** What knowing a room needs: a link that may reach one. */
+interface KnownRoomInput {
+  /** The link, as a catalog entry's root or a membership holds it. */
+  room?: Cell<ChatRoomLink>;
+}
+
+/**
+ * The room `room` reaches, once its records say it is one. Each room a list
+ * reads is known on its own, so one whose records can't be read holds back
+ * nothing else.
+ */
+const KnownRoom = pattern<KnownRoomInput, FoundRoomOutput>(({ room }) => ({
+  // The room is the document the link finally reaches. A declaration may
+  // reach it through a document holding only a link, as a Loom root's
+  // ensured room is reached through the handler's output for it; that
+  // document stores no labels, so a link to it gives a labeled list nothing
+  // to carry, and the room's own labels are what a link to the room carries.
+  //
+  // It is known once its records say it is a room. A space this replica
+  // can't serve, as one on another host is, leaves those records
+  // unresolved, which holds back this room alone; the list that reads every
+  // room's records never reads one that hasn't resolved.
+  room: computed(() => {
+    const found = room?.resolveAsCell();
+    return found !== undefined && roomKindOf(found) !== undefined
+      ? found
+      : undefined;
+  }),
+}));
 
 /** Locates a standalone root or a container's explicit chat declaration. */
 const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
@@ -1863,27 +1893,10 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       scope: computed(() => isWellFormedDID(space) ? [space] : []),
     });
     const standalone = computed(() => kind === CHAT_ROOM_OFFER_KIND);
-    // The room is the document its root or declaration finally reaches. A
-    // declaration may reach it through a document holding only a link, as a
-    // Loom root's ensured room is reached through the handler's output for
-    // it; that document stores no labels, so a link to it gives a labeled
-    // list nothing to carry, and the room's own labels are what a link to
-    // the room carries.
-    //
-    // It is found once its records say it is a room. A space this replica
-    // can't serve, as one on another host is, leaves those records
-    // unresolved, which holds back this finding alone; the list that reads
-    // every entry's room never reads one that hasn't resolved.
-    return {
-      room: computed(() => {
-        const found =
-          (standalone ? root.result : root.result?.key("chatRoom").get())
-            ?.resolveAsCell();
-        return found !== undefined && roomKindOf(found) !== undefined
-          ? found
-          : undefined;
-      }),
-    };
+    const declared = computed(() =>
+      standalone ? root.result : root.result?.key("chatRoom").get()
+    );
+    return KnownRoom({ room: declared });
   },
 );
 
@@ -1994,12 +2007,21 @@ export const FabriChatManagerCore = pattern<
     const foundForUser = savedRooms.map((entry) =>
       FoundRoom.asScope("user")({ space: entry.space, kind: entry.kind })
     );
+    // The rooms this user keeps by an explicit choice, each known on its own
+    // and per user, as each catalog entry's room is found.
+    const savedMemberships = computed((): RoomMembership[] =>
+      effectiveMemberships(roomMembership.get() ?? [], catalogEntries)
+        .filter((membership) => membership.state === "saved")
+    );
+    const keptForUser = savedMemberships.map((membership) =>
+      KnownRoom.asScope("user")({ room: membership.room })
+    );
     // Each saved room once it resolves and reads as a room, newest first. The
     // room's own records are read here, beside the entry they belong to, so
-    // they are read in the run that lists them; `FoundRoom` has already read
-    // them for each room it found, so none of these reads waits on a space
-    // this replica can't serve. Its binding's name is its cause, as
-    // `foundForUser`'s is.
+    // they are read in the run that lists them; `FoundRoom` or `KnownRoom`
+    // has already read them for each room it gave, so none of these reads
+    // waits on a space this replica can't serve. Its binding's name is its
+    // cause, as `foundForUser`'s is.
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
       const self = profileOwnerOf(myProfile);
       const stored = direct.get() ?? {};
@@ -2007,6 +2029,10 @@ export const FabriChatManagerCore = pattern<
         roomMembership.get() ?? [],
         catalogEntries,
       );
+      const kept = savedMemberships.filter((_membership, index) => {
+        const room = keptForUser[index]?.room;
+        return room !== undefined && roomKindOf(room) !== undefined;
+      });
       const discovered = savedRooms.flatMap(
         (entry, index): ChatIndexEntry[] => {
           const room = foundForUser[index]?.room;
@@ -2033,7 +2059,7 @@ export const FabriChatManagerCore = pattern<
         },
       );
       const listed = [
-        ...memberships.filter((entry) => entry.state === "saved"),
+        ...kept,
         ...discovered.filter((entry) =>
           !memberships.some((known) => equals(known.room, entry.room))
         ),
