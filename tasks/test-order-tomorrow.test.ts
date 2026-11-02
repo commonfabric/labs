@@ -5,6 +5,7 @@ import {
   ciState,
   decide,
   type Get,
+  isEvening,
   type Job,
   main,
   ORDER_WORKFLOW_FILE,
@@ -15,8 +16,11 @@ import {
 const SEED = 20261029;
 const COMMIT = "60cd866374f5b59bdf16c8469ad3f71cd35ac040";
 const SELF = 900;
+// 11:00 and 19:30 in the Pacific zone on the 28th.
 const NOW = new Date("2026-10-28T18:00:00Z");
+const EVENING = new Date("2026-10-29T02:30:00Z");
 const SINCE = new Date("2026-10-26T18:00:00Z");
+const EVENING_SINCE = new Date("2026-10-27T02:30:00Z");
 
 interface Run {
   id: number;
@@ -36,8 +40,9 @@ function going(id: number): Run {
 
 /**
  * A GitHub that knows the CI runs of `COMMIT`, the runs of this workflow
- * created since `SINCE`, and each of those runs' jobs. It answers a path
- * it does not know by throwing, and records every path it is asked.
+ * created since `SINCE` or `EVENING_SINCE`, and each of those runs' jobs.
+ * It answers a path it does not know by throwing, and records every path
+ * it is asked.
  */
 function github(
   ciRuns: Run[],
@@ -53,10 +58,14 @@ function github(
     workflowRuns(WORKFLOW_FILE, { event: "push", head_sha: COMMIT }),
     { workflow_runs: ciRuns },
   );
-  pages.set(
-    workflowRuns(ORDER_WORKFLOW_FILE, { created: `>=${SINCE.toISOString()}` }),
-    { workflow_runs: orderRuns },
-  );
+  for (const since of [SINCE, EVENING_SINCE]) {
+    pages.set(
+      workflowRuns(ORDER_WORKFLOW_FILE, {
+        created: `>=${since.toISOString()}`,
+      }),
+      { workflow_runs: orderRuns },
+    );
+  }
   for (const [id, list] of Object.entries(jobs)) {
     pages.set(`/repos/${REPO}/actions/runs/${id}/jobs?per_page=100&page=1`, {
       jobs: list,
@@ -155,6 +164,34 @@ describe("test-order-tomorrow", () => {
     });
   });
 
+  describe("isEvening()", () => {
+    it("returns true in the last hours of a Pacific day", () => {
+      for (
+        const moment of [
+          "2026-07-15T02:30:00Z",
+          "2026-07-15T06:59:00Z",
+          "2026-12-15T02:30:00Z",
+          "2026-12-15T07:59:00Z",
+        ]
+      ) {
+        expect(isEvening(new Date(moment))).toBe(true);
+      }
+    });
+
+    it("returns false earlier in a Pacific day", () => {
+      for (
+        const moment of [
+          "2026-07-14T18:00:00Z",
+          "2026-07-15T07:30:00Z",
+          "2026-12-15T01:30:00Z",
+          "2026-12-15T08:30:00Z",
+        ]
+      ) {
+        expect(isEvening(new Date(moment))).toBe(false);
+      }
+    });
+  });
+
   describe("seedHasRun()", () => {
     it("returns true when another run ran or is running the seed", async () => {
       for (const conclusion of ["success", "failure", "cancelled", null]) {
@@ -210,7 +247,7 @@ describe("test-order-tomorrow", () => {
   describe("decide()", () => {
     it("runs the seed at a green head no other run ran it at", async () => {
       const { get } = github([finished(1, "success")], [], {});
-      expect(await decide(SEED, COMMIT, SELF, NOW, false, get)).toEqual({
+      expect(await decide(SEED, COMMIT, SELF, NOW, get)).toEqual({
         verdict: "run",
         reason: `Running seed ${SEED} at ${COMMIT}.`,
       });
@@ -224,7 +261,7 @@ describe("test-order-tomorrow", () => {
         ] as const
       ) {
         const { get, asked } = github([run], [], {});
-        const decided = await decide(SEED, COMMIT, SELF, NOW, false, get);
+        const decided = await decide(SEED, COMMIT, SELF, NOW, get);
         expect(decided.verdict).toBe("skip");
         expect(decided.reason).toContain(
           `CI has ${state} on the head of main, ${COMMIT}`,
@@ -238,16 +275,16 @@ describe("test-order-tomorrow", () => {
         id: 2,
         conclusion: "failure",
       }], { 2: ranUnder(SEED, "failure") });
-      expect(await decide(SEED, COMMIT, SELF, NOW, false, get)).toEqual({
+      expect(await decide(SEED, COMMIT, SELF, NOW, get)).toEqual({
         verdict: "skip",
         reason: `Another run has run seed ${SEED}.`,
       });
     });
 
-    describe("as the evening run", () => {
+    describe("in the evening", () => {
       it("runs the seed at a green head no other run ran it at", async () => {
         const { get } = github([finished(1, "success")], [], {});
-        expect((await decide(SEED, COMMIT, SELF, NOW, true, get)).verdict)
+        expect((await decide(SEED, COMMIT, SELF, EVENING, get)).verdict)
           .toBe("run");
       });
 
@@ -257,24 +294,27 @@ describe("test-order-tomorrow", () => {
             id: 2,
             conclusion: "failure",
           }], { 2: ranUnder(SEED, "failure") });
-          expect((await decide(SEED, COMMIT, SELF, NOW, true, get)).verdict)
+          expect((await decide(SEED, COMMIT, SELF, EVENING, get)).verdict)
             .toBe("skip");
         }
       });
 
+      it("leaves the seed to the run CI finishing starts", async () => {
+        const { get, asked } = github([going(1)], [], {});
+        const decided = await decide(SEED, COMMIT, SELF, EVENING, get);
+        expect(decided.verdict).toBe("skip");
+        expect(decided.reason).toContain(
+          `CI has not finished on the head of main, ${COMMIT}`,
+        );
+        expect(asked).toHaveLength(1);
+      });
+
       it("returns untested for a seed no run ran, at a red head", async () => {
-        for (
-          const [run, state] of [
-            [finished(1, "failure"), "failed"],
-            [going(1), "not finished"],
-          ] as const
-        ) {
-          const { get } = github([run], [], {});
-          const decided = await decide(SEED, COMMIT, SELF, NOW, true, get);
-          expect(decided.verdict).toBe("untested");
-          expect(decided.reason).toContain(`No run has run seed ${SEED}`);
-          expect(decided.reason).toContain(`CI has ${state} on the head`);
-        }
+        const { get } = github([finished(1, "failure")], [], {});
+        const decided = await decide(SEED, COMMIT, SELF, EVENING, get);
+        expect(decided.verdict).toBe("untested");
+        expect(decided.reason).toContain(`No run has run seed ${SEED}`);
+        expect(decided.reason).toContain("CI has failed on the head");
       });
     });
   });
@@ -301,15 +341,15 @@ describe("test-order-tomorrow", () => {
       expect(announced).toEqual([`Running seed ${SEED} at ${COMMIT}.`]);
     });
 
-    it("fails without printing when the evening run finds the seed untested", async () => {
+    it("fails without printing when a run in the evening finds the seed untested", async () => {
       const { get } = github([finished(1, "failure")], [], {});
       const printed: string[] = [];
       const announced: string[] = [];
       expect(
         await main(
-          ["--evening", `${SEED}`],
+          [`${SEED}`],
           env,
-          NOW,
+          EVENING,
           get,
           (line) => printed.push(line),
           (line) => announced.push(line),
@@ -328,8 +368,6 @@ describe("test-order-tomorrow", () => {
         [[" "], env],
         [["1e3"], env],
         [["0x10"], env],
-        [["--evening"], env],
-        [[`${SEED}`, "--evening"], env],
         [[`${SEED}`], () => undefined],
         [[`${SEED}`], (name: string) => name === "GITHUB_SHA" ? COMMIT : " "],
       ];
@@ -349,7 +387,7 @@ describe("test-order-tomorrow", () => {
         ).toBe(2);
         expect(printed).toEqual([]);
         expect(asked).toEqual([]);
-        expect(announced[0]).toContain("test-order-tomorrow takes a seed,");
+        expect(announced[0]).toContain("test-order-tomorrow takes a seed");
       }
     });
   });

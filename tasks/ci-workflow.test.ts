@@ -1663,11 +1663,11 @@ Deno.test("the run in tomorrow's order runs once a seed, at a green head", async
     "workflow_run",
   ]);
 
-  // A run that CI failing or a pull request's CI started skips every job. The
-  // runs CI passing on main started wait for one another, the evening run
-  // waits for itself, and the others wait for nothing. Actions reads a
-  // property of a missing object as null, where JavaScript throws, so an
-  // event other than `workflow_run` carries an empty `workflow_run`.
+  // A run that a pull request's CI started skips every job. The runs that CI
+  // finishing on main or the schedule started wait for one another, and the
+  // others wait for nothing. Actions reads a property of a missing object as
+  // null, where JavaScript throws, so an event other than `workflow_run`
+  // carries an empty `workflow_run`.
   const context = (
     event_name: string,
     workflow_run: { event?: string; conclusion?: string } = {},
@@ -1692,20 +1692,18 @@ Deno.test("the run in tomorrow's order runs once a seed, at a green head", async
   const scheduled = context("schedule");
   const dispatched = context("workflow_dispatch");
   const seed = tomorrow.jobs.seed;
-  for (const github of [passed, scheduled, dispatched]) {
+  for (const github of [passed, failed, scheduled, dispatched]) {
     assertEquals(evaluate(seed.if!, github), true, github.event_name);
   }
-  for (const github of [failed, proposed]) {
-    assertEquals(evaluate(seed.if!, github), false, github.event_name);
-  }
+  assertEquals(evaluate(seed.if!, proposed), false);
   const group = (github: unknown) =>
     tomorrow.concurrency!.group.replaceAll(
       /\$\{\{(.*?)\}\}/g,
       (_, expression: string) => String(evaluate(expression, github)),
     );
   assertEquals(group(passed), `${tomorrow.name}-deciding`);
-  assertEquals(group(scheduled), `${tomorrow.name}-evening`);
-  assertEquals(group(failed), `${tomorrow.name}-7`);
+  assertEquals(group(failed), `${tomorrow.name}-deciding`);
+  assertEquals(group(scheduled), `${tomorrow.name}-deciding`);
   assertEquals(group(proposed), `${tomorrow.name}-7`);
   assertEquals(group(dispatched), `${tomorrow.name}-7`);
   assertEquals(tomorrow.concurrency!["cancel-in-progress"], false);
@@ -1720,20 +1718,14 @@ Deno.test("the run in tomorrow's order runs once a seed, at a green head", async
   const echo = (answer: string) => `printf '%s\\n' "$@" >&2\necho ${answer}`;
   const script = "run\n--allow-env\n--allow-net=api.github.com\n" +
     "tasks/test-order-tomorrow.ts\n";
-  // The scheduled run is the evening run, which fails when the seed went
-  // untested.
-  for (
-    const [event, args] of [
-      ["workflow_run", "20261029\n"],
-      ["schedule", "--evening\n20261029\n"],
-    ]
-  ) {
+  // A run in the evening fails when the seed went untested.
+  for (const event of ["workflow_run", "schedule"]) {
     const asked = await runStep(decide, { EVENT: event, SEED: "20261029" }, {
       deno: echo("false"),
     });
     assertStepCode(asked, 0, `a ${event} run's decision fails`);
     assertEquals(asked.output, "run=false\n");
-    assertEquals(asked.stderr, script + args);
+    assertEquals(asked.stderr, `${script}20261029\n`);
   }
   const untested = await runStep(decide, {
     EVENT: "schedule",

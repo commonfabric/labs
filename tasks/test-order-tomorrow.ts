@@ -5,10 +5,10 @@
  * runs the suites under the next Pacific day's seed. It does when the
  * CI workflow passed on the commit the run checks out, which is the head
  * of `main`, and no other run of that workflow has run the suites under
- * that seed yet. The evening run fails when no run has run the seed and
- * CI has not passed on the head of `main`.
+ * that seed yet. In the evening, a run fails when no run has run the seed
+ * and CI failed on the head of `main`.
  *
- * Usage: test-order-tomorrow.ts [--evening] SEED
+ * Usage: test-order-tomorrow.ts SEED
  *
  * The commit is `GITHUB_SHA` and the run asking is `GITHUB_RUN_ID`. It
  * prints `true` or `false` to standard output, and why to standard error.
@@ -20,6 +20,7 @@ import {
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
+import { daySeed } from "@commonfabric/test-support/shuffle";
 
 /** What the jobs of a run under a seed are listed under, before `/`. */
 export const ORDER_JOB_NAME = "Tomorrow's order";
@@ -35,12 +36,20 @@ export const ORDER_WORKFLOW_FILE = "test-order-tomorrow.yml";
  */
 const LOOKBACK_MS = 48 * 60 * 60 * 1000;
 
+/** How long before the next Pacific day starts the evening does. */
+const EVENING_MS = 6 * 60 * 60 * 1000;
+
 export interface Job {
   name: string;
   conclusion: string | null;
 }
 
 export type Get = <T>(path: string) => Promise<T>;
+
+/** Whether `now` is in the evening, the last hours of its Pacific day. */
+export function isEvening(now: Date): boolean {
+  return daySeed(new Date(now.getTime() + EVENING_MS)) !== daySeed(now);
+}
 
 /** The name of the jobs of a run under `seed`, before `/`. */
 export function orderJobName(seed: number): string {
@@ -132,22 +141,23 @@ export async function seedHasRun(
 /**
  * What the run `self` at `now` does about `seed`, and why, in a line: it
  * runs the suites at `commit`, or skips them, or fails because the seed
- * went untested. Only a head CI passed on runs the suites. Another run
- * leaves the seed to a later green head, where the `evening` run fails.
+ * went untested. Only a head CI passed on runs the suites. While CI on
+ * the head has yet to finish, the run its finishing starts decides. When
+ * CI failed on the head, a run outside the evening leaves the seed to a
+ * later green head, and a run in the evening fails.
  */
 export async function decide(
   seed: number,
   commit: string,
   self: number,
   now: Date,
-  evening: boolean,
   get: Get = githubGet,
 ): Promise<{ verdict: "run" | "skip" | "untested"; reason: string }> {
   const state = await ciState(commit, get);
   const unproven = `CI has ${
     state === "running" ? "not finished" : "failed"
   } on the head of main, ${commit}`;
-  if (state !== "passed" && !evening) {
+  if (state === "running" || (state === "failed" && !isEvening(now))) {
     return {
       verdict: "skip",
       reason: `${unproven}; a later green head runs seed ${seed}.`,
@@ -158,11 +168,12 @@ export async function decide(
   ) {
     return { verdict: "skip", reason: `Another run has run seed ${seed}.` };
   }
-  if (state !== "passed") {
+  if (state === "failed") {
     return {
       verdict: "untested",
-      reason: `No run has run seed ${seed}, and ${unproven}. The next ` +
-        `Pacific day's commits will run in an order nothing has tested.`,
+      reason: `No run has run seed ${seed}, and ${unproven}. Unless a ` +
+        `green head comes first, the next Pacific day's commits will run ` +
+        `in an order nothing has tested.`,
     };
   }
   return { verdict: "run", reason: `Running seed ${seed} at ${commit}.` };
@@ -171,7 +182,7 @@ export async function decide(
 /**
  * Runs the command line `args` with `env` at `now`, and returns the
  * status to exit with. It prints whether to run the suites, and fails
- * when the evening run finds the seed untested.
+ * when a run in the evening finds the seed untested.
  */
 export async function main(
   args: readonly string[],
@@ -181,26 +192,23 @@ export async function main(
   print: (line: string) => void = console.log,
   announce: (line: string) => void = console.error,
 ): Promise<number> {
-  const evening = args[0] === "--evening";
-  const rest = evening ? args.slice(1) : args;
   const commit = env("GITHUB_SHA");
   const self = env("GITHUB_RUN_ID") ?? "";
   if (
-    rest.length !== 1 || !/^\d+$/.test(rest[0]) || !commit ||
+    args.length !== 1 || !/^\d+$/.test(args[0]) || !commit ||
     !/^\d+$/.test(self)
   ) {
     announce(
-      "test-order-tomorrow takes a seed, after --evening for the evening " +
-        "run, and reads GITHUB_SHA and GITHUB_RUN_ID.",
+      "test-order-tomorrow takes a seed, and reads GITHUB_SHA and " +
+        "GITHUB_RUN_ID.",
     );
     return 2;
   }
   const { verdict, reason } = await decide(
-    Number(rest[0]),
+    Number(args[0]),
     commit,
     Number(self),
     now,
-    evening,
     get,
   );
   announce(reason);

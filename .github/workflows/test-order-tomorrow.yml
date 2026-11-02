@@ -13,10 +13,9 @@ name: Tomorrow's Test Order
 # passed on the head of main. A head CI failed on would fail this run for
 # reasons that have nothing to do with the order. The workflow starts each time
 # CI finishes on a push to main, and once a day at 02:30 UTC, which is the
-# evening of a Pacific day in summer and in winter. When no run has run the
-# seed, the evening run runs the suites, which covers a day when nothing
-# landed, unless CI has not passed on the head of main. Then it fails instead,
-# so that the seed going untested is seen.
+# evening of a Pacific day in summer and in winter, for a day when nothing
+# lands. In the evening, a run that finds CI failed on the head of main, and
+# no run has run the seed, fails, so that the seed going untested is seen.
 # tasks/test-order-tomorrow.ts decides; a run dispatched by hand runs the
 # suites without asking.
 #
@@ -36,25 +35,22 @@ on:
     - cron: "30 2 * * *" # Daily, 02:30 UTC
   workflow_dispatch: {} # Allow manual trigger
 
-# The runs CI passing on main started wait for one another, so that each sees
-# whether the one before it ran the seed. GitHub keeps only the newest waiting
-# run and cancels the others, which loses nothing, since each decides from the
-# head of main as it stood when its event fired, and the newest waiting run's
-# is the newest. The evening run waits only for itself, so that nothing
-# displaces it. A run that will skip every job, which is any run that CI
-# failing or a pull request's CI started, and a run dispatched by hand, waits
-# for nothing and displaces nothing.
+# The runs that decide wait for one another, so that each sees whether the one
+# before it ran the seed. GitHub keeps only the newest waiting run and cancels
+# the others, which loses nothing, since each decides from the head of main as
+# it stood when its event fired, and the newest waiting run's is the newest. A
+# run that a pull request's CI started skips every job, and it and a run
+# dispatched by hand wait for nothing and displace nothing.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'evening' || (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success') && 'deciding' || github.run_id }}
+  group: ${{ github.workflow }}-${{ (github.event_name == 'schedule' || github.event.workflow_run.event == 'push') && 'deciding' || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   seed:
     name: "Tomorrow's seed"
     if: >-
-      github.event_name != 'workflow_run' || (
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' )
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -85,16 +81,11 @@ jobs:
           SEED: ${{ steps.seed.outputs.seed }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          case "$EVENT" in
-            workflow_dispatch) set -- ;;
-            schedule) set -- --evening "$SEED" ;;
-            *) set -- "$SEED" ;;
-          esac
-          if [ $# -eq 0 ]; then
+          if [ "$EVENT" = workflow_dispatch ]; then
             run=true
           else
             run=$(deno run --allow-env --allow-net=api.github.com \
-              tasks/test-order-tomorrow.ts "$@")
+              tasks/test-order-tomorrow.ts "$SEED")
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
