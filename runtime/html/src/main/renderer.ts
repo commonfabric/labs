@@ -185,7 +185,7 @@ export class VDomRenderer {
     this.#containerElement = null;
 
     const elapsed = logger.timeDetailed(
-      () => `mount ${mountId}`,
+      () => `unmount ${mountId}`,
       unmountStart,
       "unmount",
     );
