@@ -374,7 +374,27 @@ describe("view plan publisher", () => {
       expect(fixture.publications.calls).toHaveLength(1);
     });
 
-    it("returns whether a view is left without its answer", async () => {
+    it("returns `false` for a settled view the server refuses the answer for", async () => {
+      asReadView();
+      fixture.publications.restore();
+      fixture.publications = stub(
+        fixture.server,
+        "setViewSelection",
+        () => Promise.resolve(false),
+      );
+
+      expect(
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        ),
+      ).toBe(false);
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns whether a view has not settled yet", async () => {
       asReadView();
       const publish = (settled: boolean) =>
         fixture.publisher.publish(fixture.runtime, fixture.server, space, {

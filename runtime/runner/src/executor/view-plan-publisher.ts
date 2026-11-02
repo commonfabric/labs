@@ -148,8 +148,9 @@ export class ViewPlanPublisher {
    * ends it, over the snapshot that settlement left. `settled` says whether a
    * `read` view has the answer it waits for, and is asked with the list of
    * views already in hand, since that list can hold a view that registered after
-   * the settlement ended. Returns whether a `read` view is left without its
-   * answer.
+   * the settlement ended. Returns whether a `read` view has not settled yet,
+   * which leaves out one the server refused the answer for: a refusal, such as
+   * of a session that lost READ, is no reason to run another cycle.
    */
   async publish(
     runtime: Runtime,
@@ -213,16 +214,17 @@ export class ViewPlanPublisher {
       }
       if (view.mode === "read") {
         if (this.#published.has(key)) continue;
+        if (!settled(handle)) {
+          readUnanswered = true;
+          continue;
+        }
         if (
-          settled(handle) &&
           await server.setViewSelection(space, handle, {
             ...SETTLED_READ,
             generation: (interest.selectionGeneration ?? 0) + 1,
           })
         ) {
           this.#published.set(key, SETTLED_READ);
-        } else {
-          readUnanswered = true;
         }
         continue;
       }
