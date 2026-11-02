@@ -649,9 +649,7 @@ export class PiecesController<T = unknown> {
       "getDefaultPattern.spaceCell.sync",
       () => this.#spaceCell.key("defaultPattern").sync(),
     );
-    // `get()` makes the link's cell in a read transaction of its own, which
-    // stays open and answers each document with what it first read there.
-    const defaultPattern = cell.get()?.withTx();
+    const defaultPattern = cell.get();
     if (!defaultPattern) {
       return undefined;
     }
@@ -900,9 +898,8 @@ export class PiecesController<T = unknown> {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
     return pieces.map((piece) => {
-      // The registry names pieces without loading their documents. Controllers
-      // load and mutate those documents after this read snapshot was taken.
-      const target = piece.resolveAsCell().withTx();
+      // The registry names pieces without loading their documents.
+      const target = piece.resolveAsCell();
       const space = target.getAsNormalizedFullLink().space;
       const controller = space === this.#space ? this : new PiecesController(
         { as: this.#session.as, space },
