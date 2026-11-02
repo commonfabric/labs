@@ -75,6 +75,9 @@ function selfApiOrigin(host: string, port: number): string {
  */
 const RELEASED_AT_CLOCK_SKEW_MS = 5 * 60_000;
 
+/** The values of ENV that mark a local development or test server. */
+const TEST_ENVIRONMENTS = new Set(["development", "test"]);
+
 // NOTE: This is where we define the environment variable types and defaults.
 // Exported so the parsing rules (e.g. OTEL_ENABLED) can be unit-tested without
 // going through the module-level singleton below.
@@ -373,7 +376,8 @@ export const EnvSchema = z.object({
   // Whether `/api/health/collected-memory` answers: it runs a full garbage
   // collection on every thread it measures, pausing each, for whoever asks.
   // Off, the route answers 404. Local development servers and test servers
-  // turn it on; a deployment reachable by anyone else leaves it off.
+  // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
+  // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),
 
   // The space this deployment keeps its ingest registry in: channel
@@ -480,7 +484,13 @@ export const EnvSchema = z.object({
   // URL that sandboxes should use to reach the toolshed API (injected as
   // CF_API_URL into every sandbox exec). Defaults to API_URL if not set.
   SANDBOX_TOOLSHED_URL: z.string().optional(),
-}).transform((parsed) => ({
+}).refine(
+  (parsed) => !parsed.EXPOSE_GC || TEST_ENVIRONMENTS.has(parsed.ENV),
+  {
+    path: ["EXPOSE_GC"],
+    message: "EXPOSE_GC=true needs ENV=development or ENV=test",
+  },
+).transform((parsed) => ({
   ...parsed,
   // Resolved here, where HOST and PORT (the `--port=` override included) are
   // known, so every reader sees a concrete origin or nothing.

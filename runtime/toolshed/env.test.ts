@@ -326,3 +326,19 @@ Deno.test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () =>
       `clock, which no deploy that has happened is: \`${ahead.value}\``,
   );
 });
+
+Deno.test("EXPOSE_GC parses strictly, and only on a development or test server", () => {
+  const expose = (env: Record<string, string>) =>
+    EnvSchema.parse(env).EXPOSE_GC;
+
+  assertEquals(expose({}), false);
+  assertEquals(expose({ EXPOSE_GC: "false" }), false);
+  assertEquals(expose({ EXPOSE_GC: "true" }), true);
+  assertEquals(expose({ EXPOSE_GC: "true", ENV: "test" }), true);
+  for (const ENV of ["production", "staging", "Production", "prod"]) {
+    expect(() => expose({ EXPOSE_GC: "true", ENV })).toThrow(
+      "EXPOSE_GC=true needs ENV=development or ENV=test",
+    );
+    assertEquals(expose({ EXPOSE_GC: "false", ENV }), false);
+  }
+});
