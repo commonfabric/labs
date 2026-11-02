@@ -285,7 +285,7 @@ export function serverExecutionWorkerFromEnv(
 /**
  * Whether the serving loop reaches every space but the ones it serves through
  * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
- * docs/plans/serving-loop-owner-routing.md): on unless the variable is the
+ * serving-loop.md §2): on unless the variable is the
  * literal `false`, which leaves every crossing on this process's own memory
  * server. `true`, unset and empty select the default; anything else warns
  * and selects it too.

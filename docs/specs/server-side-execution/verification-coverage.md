@@ -4058,7 +4058,7 @@ grant):
   a sender reads to be the documents the inbox's owner reads.
 
 Delta 2026-11-01 — owner routing R3 (reads through the owner, and the
-read row; `docs/plans/serving-loop-owner-routing.md`):
+read row; `docs/history/plans/serving-loop-owner-routing.md`):
 
 - protocol.md §2's read row, restated: the space's own serving session
   — a session from the owner's process (`Connection.inProcess`, set by
@@ -4105,7 +4105,7 @@ read row; `docs/plans/serving-loop-owner-routing.md`):
   it leaves the sender).
 
 Delta 2026-11-01 — stage L (the lease in memory,
-`docs/plans/serving-loop-owner-routing.md`):
+`docs/history/plans/serving-loop-owner-routing.md`):
 
 - serving-loop §2's map: admission is the one equality against the memory
   server's map, a released lease matches nobody, and a stored row names nobody.

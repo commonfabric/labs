@@ -1,5 +1,5 @@
 /**
- * Owner routing (docs/plans/serving-loop-owner-routing.md): a serving loop
+ * Owner routing (serving-loop.md §2): a serving loop
  * reaches a space other than its home through that space's owner. Two memory
  * servers over one file store stand for two processes of a deployment, each
  * with its own ExecutorHost; the route maps a space to the server that owns

@@ -121,7 +121,7 @@ export interface LifecycleDeps {
 
   /**
    * The routed plane to other spaces' owners while the process routes its
-   * crossings (docs/plans/serving-loop-owner-routing.md), as the scope
+   * crossings (serving-loop.md §2), as the scope
    * members a delivery uses; `undefined` while it does not, and then every
    * delivery goes to this process's own server.
    */

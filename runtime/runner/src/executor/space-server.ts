@@ -455,7 +455,7 @@ export type RuntimeFactoryContext = {
 
   /**
    * The deployment's route to each space's owner
-   * (`serving-loop-owner-routing.md`), present while the host has one, for
+   * (`serving-loop.md` §2), present while the host has one, for
    * a factory to hand its storage manager: a session the manager opens as a
    * space's own key, the genesis of a space the serving runtime creates,
    * then dials that space's owner instead of this process's server.
@@ -534,7 +534,7 @@ export type SpaceServerOptions = {
   createWaveCommitSink?: (deps: WaveCommitSinkDeps) => WaveCommitSink;
 
   /**
-   * The host's routed plane (`serving-loop-owner-routing.md`): present, the
+   * The host's routed plane (`serving-loop.md` §5): present, the
    * tenure's outbox delivers each append to the target's owner through a
    * scope of it, held for the tenure. Absent, the appends are delivered to
    * this process's server.
