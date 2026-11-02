@@ -10,9 +10,10 @@
  * sends no second offer, and neither does one from another manager whose
  * notice for her a client reported delivered, though she hasn't joined its
  * room. Carol has joined her room before Bob names her profile, so she is
- * offered nothing, and Dave's profile points at no inbox, so he is offered
- * nothing either; both keep their notices, though the manager lists only
- * Dave's, since Carol is on her room's roster. Each person writes their own
+ * offered nothing and keeps her notice. Dave's profile points at no inbox, so
+ * he is offered nothing either, and gets a notice again, keyed by the start
+ * naming his profile. The manager lists only Dave's, since Carol is on her
+ * room's roster. Each person writes their own
  * profile here, so its label names them, as a Fabric profile's does.
  */
 import {
@@ -509,9 +510,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           participantsOf(aliceRoom).some((known) => equals(known, profile))
         ),
       },
-      // Carol has joined her room, and Dave's profile points at no inbox, so
-      // neither is offered anything, and each keeps the notice their room's
-      // creation queued.
+      // Carol has joined her room, so she is offered nothing, and keeps the
+      // notice her room's creation queued. Dave's profile points at no inbox,
+      // so he is offered nothing either, and the event that finds no inbox
+      // queues his notice again, keyed by the later start.
       {
         action: manager.openDirect,
         event: {
@@ -537,7 +539,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           noticeIdsFor(notices, setup.carolDid).join() ===
             JSON.stringify([setup.carolDid.get(), "d-carol"]) &&
           noticeIdsFor(notices, setup.daveDid).join() ===
-            JSON.stringify([setup.daveDid.get(), "d-dave"])
+            JSON.stringify([setup.daveDid.get(), "d-dave-again"])
         ),
       },
       // Carol is on her room's roster, so the manager lists no notice for

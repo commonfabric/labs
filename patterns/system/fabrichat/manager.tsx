@@ -651,18 +651,19 @@ const offerEnvelope = (
 
 /**
  * Helper for `offerRooms`, which offers `room` to `member`, sending `offer` to
- * each distinct share inbox their profiles point at, and adds to the room's
- * participants the first profile it offered the room through, so that the
- * member is listed once however many inboxes they have.
- * A member whose profiles point at no inbox is offered nothing, and a notice
- * for them, keyed by the offer's `id`, is queued instead. Returns which of the
- * two it did.
+ * each distinct share inbox their profiles point at that isn't among `sent`,
+ * the inboxes `offer` has gone to already, which it adds to. It adds to the
+ * room's participants the first profile it offered the room through, so that
+ * the member is listed once however many inboxes they have. A member whose
+ * profiles point at no inbox is offered nothing, and a notice for them, keyed
+ * by the offer's `id`, is queued instead. Returns which of the two it did.
  */
 const offerToMember = (
   offer: RoomOffer,
   room: Cell<ChatRoomLink>,
   { recipient, profiles }: OfferedMember,
   { outgoingNotices, joinRooms }: OfferRoomsState,
+  sent: Cell<ShareInboxPiece>[],
 ): ChatOfferDelivery => {
   const inboxes = distinctInboxes(profiles ?? []);
   if (inboxes.length === 0) {
@@ -670,6 +671,8 @@ const offerToMember = (
     return "noticed";
   }
   for (const { pointer } of inboxes) {
+    if (sent.some((known) => equals(known, pointer))) continue;
+    sent.push(pointer);
     inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
   }
   joinRooms.send({ room, profile: inboxes[0].profile });
@@ -678,7 +681,9 @@ const offerToMember = (
 
 /**
  * Offers a room to each of the event's `members`, as `offerToMember()` does,
- * naming the principal sending it as its sender. For a request that
+ * naming the principal sending it as its sender. An inbox that profiles of
+ * more than one member point at is sent the offer once, and each of those
+ * members is offered the room through it. For a request that
  * `recordsDelivery`, a member offered nothing, since no profile of theirs
  * points at an inbox, turns the request's delivery to `noticed`.
  *
@@ -692,12 +697,18 @@ const offerToMember = (
  */
 const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
   (event, state) => {
+    // TODO(danfuzz): Under server execution, a run that reads a pointer
+    // carrying its owner's label is refused whole: its sends and the mark
+    // that it handled this event live in this user's space, which doesn't
+    // admit the label, so nothing is offered. Expect it to commit once a
+    // served handler reading another person's labeled data can.
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
     const offer = offerEnvelope(event.id, space, event.title ?? "", from);
+    const sent: Cell<ShareInboxPiece>[] = [];
     for (const member of event.members ?? []) {
-      const delivery = offerToMember(offer, event.room, member, state);
+      const delivery = offerToMember(offer, event.room, member, state, sent);
       if (event.recordsDelivery === true && delivery === "noticed") {
         state.requests.key(event.id).set({ status: "done", delivery });
       }
@@ -1154,37 +1165,11 @@ const performManagerAct = (
       });
       return;
     }
-    // This user is offered nothing, so their own profiles are left out before
-    // any inbox pointer is read: their pointer can carry a label, such as
-    // their own `PersonalSpace`, that the room's space doesn't admit, and a
-    // transaction's writes are held to the labels of everything it reads.
+    // This user is offered nothing, so their own profiles are left out.
     const others = named.filter(({ recipient }) => recipient !== self);
-    // An offer goes to an inbox, so profiles of two people pointing at one
-    // inbox would hand each the other's offer. No setup makes them, so the
-    // request is refused whole, before anything is created.
-    const inboxes = others.map(({ recipient, profile }) => ({
-      recipient,
-      pointer: inboxPointerOf(profile),
-    }));
-    if (
-      inboxes.some((one, index) =>
-        one.pointer !== undefined &&
-        inboxes.slice(index + 1).some((other) =>
-          other.recipient !== one.recipient &&
-          other.pointer !== undefined && equals(other.pointer, one.pointer)
-        )
-      )
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Two members' profiles point at the same inbox.",
-        code: "shared-inbox",
-      });
-      return;
-    }
     // Each other member named by profile is offered the room through every
-    // profile naming them, each inbox once, and added to its participants
-    // once.
+    // profile naming them, by `offerRooms`, which reads where the profiles
+    // point apart from this transaction, and added to its participants once.
     const offerTo = others.reduce<OfferedMember[]>(
       (found, { recipient, profile }) => {
         if (!isPrincipalDID(recipient)) return found;

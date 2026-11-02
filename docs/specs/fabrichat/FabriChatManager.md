@@ -159,14 +159,16 @@ create a space for the conversation, with the room as its root, in four steps:
    member may add others.
 3. Offer the room to each other member whose profile the request names,
    through each distinct share inbox their profiles point at, once per inbox,
-   and add to the room's participants each member it is offered to, once, by
-   the first profile it is offered through. Add a notice to
-   `outgoingNotices`, for a client to deliver, for each other member offered
-   nothing: one the request names only by principal, or one whose profile
-   points at no inbox. Offers and notices alike are made by an event of their
-   own that follows the room's creation, since a notice is added to the
-   manager's own records, which can carry their owner's `PersonalSpace` label
-   as the catalog can.
+   even an inbox profiles of more than one member point at, and add to the
+   room's participants each member it is offered to, once, by the first
+   profile it is offered through. Add a notice to `outgoingNotices`, for a
+   client to deliver, for each other member offered nothing: one the request
+   names only by principal, or one whose profile points at no inbox. Offers and
+   notices alike are made by an event of their own that follows the room's
+   creation. A notice is added to the manager's own records, which can carry
+   their owner's `PersonalSpace` label as the catalog can, and a profile's
+   inbox pointer can carry a label, such as its owner's `PersonalSpace`, that
+   neither the room's space nor this user's records admit.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
    registration, like adding this user to the room's participants, is an

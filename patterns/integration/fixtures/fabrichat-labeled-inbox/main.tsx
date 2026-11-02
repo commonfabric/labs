@@ -1,11 +1,13 @@
 /**
  * Stands in for a person's Home around FabriChat, in the home space of the
  * person who adds others to rooms, with their profiles and their FabriChat
- * manager, whose profile is their first. A profile is either a Fabric profile
- * as `profile-create.tsx` creates one, or one whose inbox pointer carries the
- * `PersonalSpace` label of the person it is offered to, as a pointer can come
- * to carry its inbox's label. That person's stand-in creates a private inbox
- * and points their labeled profile at it, as Home's own steps do. Fixture for
+ * manager, whose profile is their first. A session links its home space's
+ * root here, so that a room's `#chatManager` wish resolves to this manager. A
+ * profile is either a Fabric profile as `profile-create.tsx` creates one, or
+ * one whose inbox pointer carries the `PersonalSpace` label of the person it
+ * is offered to, as a pointer can come to carry its inbox's label. That
+ * person's stand-in creates a private inbox and points their labeled profile
+ * at it, as Home's own steps do. Fixture for
  * `fabrichat-labeled-inbox-multi-runtime.test.ts`.
  */
 
@@ -28,6 +30,7 @@ import {
 import {
   FabriChatManagerCore,
   type FabriChatManagerInput,
+  type FabriChatManagerOutput,
   type ManagerStreamEvent,
 } from "../../../system/fabrichat/manager.tsx";
 import {
@@ -275,6 +278,9 @@ export interface MainOutput {
 
   /** The notices the manager holds for a client to deliver. */
   outgoingNotices: ChatManagerNotice[];
+
+  /** The person's FabriChat manager, where Home keeps its own. */
+  chatManager: FabriChatManagerOutput;
 }
 
 export default pattern<MainInput, MainOutput>((
@@ -310,5 +316,6 @@ export default pattern<MainInput, MainOutput>((
     offerRoom: chats.offerRoom,
     requests: chats.requests,
     outgoingNotices: chats.outgoingNotices,
+    chatManager: chats,
   };
 });

@@ -327,8 +327,9 @@ conversation from splitting.
   inbox the profile points at (see [offers](#offers)). A
   person named by more than one profile is offered the room through each
   distinct inbox those profiles point at, once per inbox, and added to the
-  room's participants once. Profiles of two different people must not point at
-  the same inbox. This user's own profiles are ignored.
+  room's participants once. An inbox that profiles of more than one person
+  point at is sent the offer once, and each of them is offered the room
+  through it. This user's own profiles are ignored.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its
@@ -347,12 +348,14 @@ Creates a group room. This is an outward act: it grants other people access.
   room's participants, produces a notice for each other member, and records the
   entry in `rooms`; adding this user to the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
-  `members` is absent, a member is not a principal's DID, a profile in
-  `profiles` attests no principal, or profiles of two different people point
-  at the same inbox, with the `code` `shared-inbox`. No setup points one
-  person's profile at another's inbox, so the request is refused whole, before
-  anything is created, granted, or offered, rather than handing each person an
-  offer meant for the other.
+  `members` is absent, a member is not a principal's DID, or a profile in
+  `profiles` attests no principal. The creating transaction reads no inbox
+  pointer, since a pointer can carry a label, such as its owner's
+  `PersonalSpace`, that neither the room's space nor this user's records
+  admit, so where the profiles point decides nothing about the outcome. Every
+  member is sent the same offer, so an inbox that profiles of two people point
+  at holds nothing meant for one of them alone. A stored outcome may still
+  carry the `code` `shared-inbox`, which no act records.
 
 ### `offerRoom(requestId: string, room: Cell<ChatRoomOutput>, member?: string, profile?: Cell<ChatProfile>)`
 
