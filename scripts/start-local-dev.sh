@@ -244,7 +244,6 @@ fail_startup() {
     local message=$1
 
     echo "Error: $message" >&2
-    cleanup_started_processes
     show_recent_log "shell" "$SHELL_LOG"
     show_recent_log "toolshed" "$TOOLSHED_LOG"
     exit 1
@@ -266,7 +265,6 @@ ensure_process_running() {
     wait "$pid" 2>/dev/null
     local exit_status=$?
     echo "Error: $name exited before it became ready (exit $exit_status)." >&2
-    cleanup_started_processes
     show_recent_log "$name" "$log_file"
     if [[ "$exit_status" -eq "$PORT_IN_USE_EXIT" ]]; then
         echo "($name could not bind its port; it is already in use.)" >&2
@@ -336,9 +334,27 @@ wait_for_listen() {
     fail_startup "$name did not bind its port within ${LOCAL_DEV_STARTUP_TIMEOUT}s."
 }
 
+# Until the servers are handed over, they end when this script does, whether
+# it fails or a signal ends it.
+trap cleanup_started_processes EXIT
+
+# Each server runs in a process group of its own, so that it keeps running
+# when whatever ran this script ends the script's process group after the
+# script returns. Job control is what gives a background job its own group.
+# It is on only while the servers are launched, since it also gives each
+# foreground command a group of its own and hands it the terminal. A job
+# started under job control keeps the script's standard input, so each server
+# reads /dev/null instead. Under KEEP_ALIVE this script does not return, and
+# the servers stay in its group, to end with it.
+server_job_control() {
+    [[ "$KEEP_ALIVE" == "true" ]] || set -m
+}
+
 # Start shell dev server in background
 cd "$SCRIPT_DIR/../runtime/shell"
-TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local > "$SHELL_LOG" 2>&1 &
+server_job_control
+TOOLSHED_PORT="$TOOLSHED_PORT" deno task dev-local \
+    < /dev/null > "$SHELL_LOG" 2>&1 &
 SHELL_PID=$!
 
 # Start toolshed dev server in background
@@ -361,20 +377,12 @@ SHELL_URL="http://localhost:$SHELL_PORT" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
     deno run --unstable-otel -A $INSPECT_FLAG $WATCH_FLAG \
         --env-file=.env index.ts --port="$TOOLSHED_PORT" \
-        > "$TOOLSHED_LOG" 2>&1 &
+        < /dev/null > "$TOOLSHED_LOG" 2>&1 &
 TOOLSHED_PID=$!
+set +m
 
 wait_for_listen "shell" "Dev server listening on" "$SHELL_PID" "$SHELL_LOG"
 wait_for_http "shell" "http://localhost:$SHELL_PORT" "$SHELL_PID" "$SHELL_LOG"
-
-# # Function to cleanup background processes
-# cleanup() {
-#     kill $SHELL_PID $TOOLSHED_PID 2>/dev/null
-#     exit
-# }
-
-# # Set up trap to cleanup on script exit
-# trap cleanup EXIT INT TERM
 
 wait_for_listen "toolshed" "Server running on" "$TOOLSHED_PID" "$TOOLSHED_LOG"
 wait_for_http \
@@ -452,14 +460,16 @@ if [[ "$CF_HARNESS" == "true" ]]; then
     echo ""
     echo "Starting cf-harness console on port $CONSOLE_PORT..."
     [[ ! -f "$CONSOLE_LOG" ]] || mv -- "$CONSOLE_LOG" "$CONSOLE_LOG.previous"
+    server_job_control
     (
         cd "$SCRIPT_DIR/.."
         # The console resolves its own store from `--store` above; an inherited
         # `MEMORY_DIR` would be the toolshed's `file://` spelling of it.
         unset MEMORY_DIR
         exec deno task --cwd runtime/cf-harness console:launch "${CONSOLE_ARGS[@]}"
-    ) > "$CONSOLE_LOG" 2>&1 &
+    ) < /dev/null > "$CONSOLE_LOG" 2>&1 &
     CONSOLE_PID=$!
+    set +m
 
     console_deadline=$((SECONDS + LOCAL_DEV_STARTUP_TIMEOUT))
     while (( SECONDS < console_deadline )); do
@@ -497,6 +507,12 @@ $console_holder, not the console this launch started"
     fi
 fi
 
+if [[ "$KEEP_ALIVE" != "true" ]]; then
+    # The servers are the caller's from here on, to stop with
+    # stop-local-dev.sh.
+    trap - EXIT
+fi
+
 # Print the server URLs on success
 echo "Development servers started successfully!"
 echo "  Shell:    http://localhost:$SHELL_PORT"
@@ -523,5 +539,4 @@ if [[ "$KEEP_ALIVE" == "true" ]]; then
     echo "Codex detected; keeping this command attached so Codex does not clean up the dev servers."
     echo "Stop this command or run ./scripts/stop-local-dev.sh from another shell to stop them."
     wait "$SHELL_PID" "$TOOLSHED_PID"
-    kill_tree "$CONSOLE_PID"
 fi
