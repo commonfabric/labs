@@ -313,9 +313,9 @@ space, the call has the handler run again once the memory server has answered
 for it, for a served run and for an event its sender allows retries, as an
 ordinary send does. An unserved event sent with `retries: false` is dropped
 instead ([`space-access.md`](space-access.md#a-deleted-space)), so a sender that
-may not have opened the space sends with retries. Without server execution, the
-default, Home's handlers run on the client and are unserved, so this reaches
-every sender there. A runtime with no memory server it can ask about the space
+may not have opened the space sends with retries. Where server execution is
+off, Home's handlers run on the client and are unserved, so this reaches every
+sender there. A runtime with no memory server it can ask about the space
 reads `undefined`, and the handler returns `not-deleted`. Success returns
 `deleted`, advances the entry's revision as a membership change does, and keeps
 `since`, `from`, the title, and every offer receipt naming the space.

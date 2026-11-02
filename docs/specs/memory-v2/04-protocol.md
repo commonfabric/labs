@@ -2200,12 +2200,13 @@ it does when an owner replaces the list; and since `by` still names the
 committing principal, the deletion tombstone is the one place such a space
 records the identity that acted for it. A self-owned profile's space, whose list
 also grants `"*"` WRITE, has that entry removed by an ordinary list replacement
-through the chain before it is deleted. No one deletes a Home space, through a
-chain or without one: a space whose list grants its own DID OWNER and that
-declares no kind, which is how the server already tells a home when it resolves
-the `actingAs` binding. "Nothing else" binds the document's `value`, the
-deletion tombstone itself; the fields beside it are held to what any ACL write
-holds them to.
+through the chain before it is deleted. A Home space is not deleted while its
+list has a Home's shape, through a chain or without one: a space whose list
+grants its own DID OWNER and that declares no kind, which is how the server
+already tells a home when it resolves the `actingAs` binding. INV-15 says what
+that test guarantees and what it leaves to a service identity's trust.
+"Nothing else" binds the document's `value`, the deletion tombstone itself; the
+fields beside it are held to what any ACL write holds them to.
 
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
