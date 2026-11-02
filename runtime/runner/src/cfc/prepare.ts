@@ -4774,6 +4774,20 @@ const isRuntimeTemplateBeneath = (
 };
 
 /**
+ * Whether `entry` is a link entry strictly beneath `slot`. Beneath a slot
+ * that holds a reference, the document has no position of its own, so such
+ * an entry labels a position of the reference's target.
+ */
+const isLinkEntryBeneath = (
+  entry: LabelMapEntry,
+  slot: readonly string[],
+): boolean => {
+  if (entry.origin !== "link") return false;
+  const path = canonicalizeLogicalPath(entry.path);
+  return path.length > slot.length && concretePathHasPrefix(path, slot);
+};
+
+/**
  * Whether `entry` is a writer's stamp as a followed reference's witness takes
  * one: a stamp the flow stage minted that a value read consumes, naming the
  * code that wrote. A link entry is none, whatever integrity it holds, and so
@@ -5093,9 +5107,29 @@ const deriveFlowJoinImpl = (
       // consumed: a declared `observes:"followRef"` entry has no twin, and
       // this probe is what reaches it when a reader takes a whole
       // container's references.
+      //
+      // A probe of a slot that holds a reference drops the link entries
+      // beneath the slot as well. The document has no position there, so
+      // such an entry labels a position of the target, which the target
+      // labels itself and a dereference consumes there: a reference-identity
+      // read consumes no observation of the target (§4.6.3), and a copy of
+      // the target's labels is no part of the reference's own (§8.2.5). A
+      // link write persists none, but a stored envelope can hold them, as
+      // copies of the target's labels. The link entry at the slot, which
+      // carries such an envelope's restrictions on the reference itself,
+      // stays consumed (§18.7).
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
+      let probedSlotHoldsReference: boolean | undefined;
+      const holdsReference = (slot: readonly string[]): boolean => {
+        if (probedSlotHoldsReference === undefined) {
+          const read = valueAsRead({ space, id, scope }, slot);
+          probedSlotHoldsReference = read !== undefined &&
+            isPrimitiveCellLink(read.value);
+        }
+        return probedSlotHoldsReference;
+      };
       const excludesTemplates = observation.coveredByTrace ||
         observation.machinery ||
         ownedContainers !== undefined || probedSlot !== undefined;
@@ -5119,7 +5153,9 @@ const deriveFlowJoinImpl = (
               (ownedContainers !== undefined &&
                 isReplacedMembershipEntry(entry, ownedContainers)) ||
               (probedSlot !== undefined &&
-                isRuntimeTemplateBeneath(entry, probedSlot)),
+                (isRuntimeTemplateBeneath(entry, probedSlot) ||
+                  (isLinkEntryBeneath(entry, probedSlot) &&
+                    holdsReference(probedSlot)))),
           }
           : {};
         const entries = document.metadata === undefined

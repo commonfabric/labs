@@ -22,7 +22,9 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 
 import { recordRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
@@ -33,6 +35,7 @@ import { resolveLink } from "../src/link-resolution.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
 
@@ -387,6 +390,137 @@ describe("link-resolution probes and `*` templates", () => {
           cell.getAsNormalizedFullLink().id
         );
       }))).toBe(true);
+    });
+  });
+
+  describe("a reference whose envelope holds a link entry beneath it", () => {
+    beforeEach(() => makeRuntime(true));
+
+    // A link entry beneath a slot that holds a reference labels a position
+    // of the reference's target: the document holding the reference has no
+    // position there. A link write persists none, but a stored envelope can
+    // hold them, as copies of the target's labels (CFC §18.7 legacy data).
+    const BENEATH_CLAUSE = cfcAtom.personalSpace(space);
+    const SLOT_CLAUSE = cfcAtom.user(space);
+
+    /** The schema of a holder whose `piece` is read as a handle. */
+    const HOLDER_SCHEMA = {
+      type: "object",
+      properties: {
+        piece: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          asCell: ["cell"],
+        },
+      },
+    } as const;
+
+    /**
+     * Stores, without preparing a commit, a document labeling its `offers`
+     * with the beneath clause, and a holder whose `piece` is a link to it,
+     * with a link entry at the slot holding `slotLabel` and one beneath it
+     * holding the beneath clause.
+     */
+    const storedHolder = async (cause: string, slotLabel: FabricValue) => {
+      const schema = { type: "object" } as const;
+      const schemaHash = internSchemaAsTaggedHashString(schema);
+      const at = (id: `of:${string}`) =>
+        ({ space, id, path: [], scope: "space" }) as const;
+      const target = at(`of:${cause}-target`);
+      const holder = at(`of:${cause}-holder`);
+      const envelope = <Value, Entries>(value: Value, entries: Entries) => ({
+        value,
+        cfc: { version: 1, schemaHash, labelMap: { version: 1, entries } },
+      });
+      const seed = runtime.edit() as ExtendedStorageTransaction;
+      expect(
+        seed.tx.write(
+          target,
+          envelope({ offers: [{ kind: "loom" }] }, [{
+            path: ["offers"],
+            origin: "declared",
+            label: { confidentiality: [BENEATH_CLAUSE] },
+          }]),
+        ).error,
+      ).toBeUndefined();
+      expect(
+        seed.tx.write(
+          holder,
+          envelope(
+            {
+              piece: { "/": { "link@1": { id: target.id, space, path: [] } } },
+            },
+            [
+              { path: ["piece"], origin: "link", label: slotLabel },
+              {
+                path: ["piece", "offers"],
+                origin: "link",
+                label: { confidentiality: [BENEATH_CLAUSE] },
+              },
+            ],
+          ),
+        ).error,
+      ).toBeUndefined();
+      expect(
+        seed.tx.write({ ...target, id: `cid:${schemaHash}` }, {
+          value: schema,
+        }).error,
+      ).toBeUndefined();
+      expect((await seed.tx.commit().settled).error).toBeUndefined();
+      const cell = runtime.getCellFromLink<{ piece: Cell<unknown> }>(
+        holder,
+        HOLDER_SCHEMA,
+      );
+      await cell.sync();
+      expect(entriesOf(cell).map((entry) => entry.path)).toEqual([
+        ["piece"],
+        ["piece", "offers"],
+      ]);
+      return cell;
+    };
+
+    it("carries the slot's own label, and not the entry beneath it, into taking the reference", async () => {
+      const holder = await storedHolder("own", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+
+      const join = joinOf((tx) => {
+        holder.withTx(tx).get().piece.getAsNormalizedFullLink();
+      });
+      expect(join).toEqual([SLOT_CLAUSE]);
+    });
+
+    it("commits a write into another space after taking the reference", async () => {
+      const holder = await storedHolder("elsewhere", {
+        integrity: [{
+          type: CFC_ATOM_TYPE.LinkReference,
+          source: { space, id: "of:elsewhere-target", path: [] },
+          target: { space, id: "of:elsewhere-holder", path: ["piece"] },
+        }],
+      });
+      const other = (await Identity.fromPassphrase("runner-cfc-probe-other"))
+        .did();
+
+      const tx = runtime.edit();
+      holder.withTx(tx).get();
+      runtime.getCell(other, "elsewhere-record", undefined, tx).set({
+        added: true,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    });
+
+    it("carries the target's own label into reading through the reference", async () => {
+      const holder = await storedHolder("through", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+
+      const join = joinOf((tx) => {
+        holder.withTx(tx).get().piece.key("offers").get();
+      });
+      expect(join).toEqual(
+        expect.arrayContaining([SLOT_CLAUSE, BENEATH_CLAUSE]),
+      );
     });
   });
 });
