@@ -6,6 +6,7 @@
  * exercisable from tests by feeding keys and inspecting `view()`.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   Document,
   Line,
@@ -3995,7 +3996,7 @@ export class Session {
       }
       return true;
     } catch (e) {
-      this.#message = `Save failed: ${e instanceof Error ? e.message : e}`;
+      this.#message = `Save failed: ${describeFailure(e)}`;
       return false;
     }
   }

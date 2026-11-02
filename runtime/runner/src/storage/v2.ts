@@ -91,6 +91,7 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
 import { getLogger } from "@commonfabric/logger";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -8464,9 +8465,7 @@ export class SpaceReplica
           (reason) => ({
             verdict: {
               withdrawn: {
-                message: `wave verdict rejected: ${
-                  reason instanceof Error ? reason.message : String(reason)
-                }`,
+                message: `wave verdict rejected: ${describeFailure(reason)}`,
               },
             } satisfies SealedCommitVerdict,
           }),
@@ -9258,9 +9257,7 @@ export class SpaceReplica
       ]);
     }, (error) => {
       logger.debug("cascade-late-reject", () => [
-        `late server verdict after local rejection: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `late server verdict after local rejection: ${describeFailure(error)}`,
         { localSeq },
       ]);
     }).finally(() => {
@@ -12576,11 +12573,11 @@ const snapshotState = (
 const toConnectionError = (error: unknown): IConnectionError =>
   ({
     name: "ConnectionError",
-    message: error instanceof Error ? error.message : String(error),
+    message: describeFailure(error),
     address: "",
     cause: {
       name: "SystemError",
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       code: 500,
     },
   }) as IConnectionError;
@@ -12642,7 +12639,7 @@ const toRejectedError = (
   commit: ClientCommit,
   space: MemorySpace,
 ): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const name = error instanceof Error
     ? error.name
     : (error as { name?: unknown })?.name;

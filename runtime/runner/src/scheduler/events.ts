@@ -1,6 +1,7 @@
 import { getLogger } from "@commonfabric/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
@@ -1286,9 +1287,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // disposition was someone else's (e.g. a lineage drop mid-load).
         const alreadySettled = queuedEvent.finalOutcomeNotified === true;
         const reason = `Event dropped: starting the piece for ` +
-          `${args.eventLink.id} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+          `${args.eventLink.id} failed: ${describeFailure(error)}`;
         if (queuedEvent.served === undefined) {
           dropUndeliverableClientEvent(
             state,
@@ -2704,9 +2703,7 @@ export async function dispatchQueuedEvent(state: {
             // behind it. The drop settles the requeued entry's callback; a
             // failed origin that dropped it meanwhile left nothing to drop.
             delete requeued.retryReadinessPending;
-            const detail = cause instanceof Error
-              ? cause.message
-              : String(cause);
+            const detail = describeFailure(cause);
             const failure = cause instanceof ReplicaLoadFailureError
               ? cause.failure
               : {

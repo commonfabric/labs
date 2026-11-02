@@ -7,6 +7,7 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { BaseElement } from "../../core/base-element.ts";
 import {
   AmbientThemeWatch,
@@ -1091,7 +1092,7 @@ export class CFPromptInput extends BaseElement {
       attachment.size = stored.size;
       attachment.error = undefined;
     } catch (err) {
-      attachment.error = err instanceof Error ? err.message : String(err);
+      attachment.error = describeFailure(err);
     } finally {
       attachment.uploading = false;
       this.requestUpdate();

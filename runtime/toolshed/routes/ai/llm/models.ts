@@ -15,6 +15,7 @@ import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
 import { createVertex, vertex } from "@ai-sdk/google-vertex";
 import { createGroq, groq } from "@ai-sdk/groq";
 import { createOpenAI, openai } from "@ai-sdk/openai";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
   isLLMNativeModelToolId,
@@ -467,7 +468,7 @@ async function loadGatewayModels() {
     // The gateway is only reachable on Tailscale; an unreachable URL is
     // expected off-network. Log as a warning and continue without gateway
     // models — direct provider entries (Anthropic, etc.) remain available.
-    const message = err instanceof Error ? err.message : String(err);
+    const message = describeFailure(err);
     console.warn(
       `[gateway] Could not reach ${url} (${message}); skipping gateway models.`,
     );

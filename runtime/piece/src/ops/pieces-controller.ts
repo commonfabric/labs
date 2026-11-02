@@ -98,6 +98,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { prepareSourceClosureVerification } from "../../../runner/src/compilation-cache/cell-cache.ts";
@@ -3130,8 +3131,6 @@ export class PiecesController<T = unknown> {
     // Reuse the canonical official-URL derivation (home.tsx for the home DID,
     // default-app.tsx otherwise) — never hard-code home here.
     const officialUrlPath = deriveSystemPatternSource(space, runtime);
-    const msg = (error: unknown) =>
-      error instanceof Error ? error.message : String(error);
     // Name the check that actually refused. Two signals escalate to this heal —
     // a CFC migration rejection and a refused stored argument — and reporting
     // the second as a migration failure sends the reader to the wrong guard.
@@ -3144,7 +3143,7 @@ export class PiecesController<T = unknown> {
       new Error(
         `default-root heal failed for ${space}: pinned pattern ` +
           `${pinnedRef.identity}#${pinnedRef.symbol} ${pinnedFailure} ` +
-          `(${msg(migrationError)}) and roll-forward to official ` +
+          `(${describeFailure(migrationError)}) and roll-forward to official ` +
           `${officialUrlPath} ${reason}`,
         { cause },
       );
@@ -3181,7 +3180,7 @@ export class PiecesController<T = unknown> {
       // the migration reason is already named in the message, and the compile
       // stack is the new information here.
       throw clearError(
-        `could not be compiled (${msg(compileError)})`,
+        `could not be compiled (${describeFailure(compileError)})`,
         compileError,
       );
     }
@@ -3336,7 +3335,7 @@ export class PiecesController<T = unknown> {
       // Chain the actual commit failure as `cause` (the migration reason is
       // already in the message).
       throw clearError(
-        `identity swap could not commit (${msg(swapResult.error)})`,
+        `identity swap could not commit (${describeFailure(swapResult.error)})`,
         swapResult.error,
       );
     }
@@ -3418,11 +3417,7 @@ export class PiecesController<T = unknown> {
           isCfcMigrationRejection(materializeError)
             ? "CFC migration"
             : "to materialize"
-        } (${
-          materializeError instanceof Error
-            ? materializeError.message
-            : String(materializeError)
-        })`,
+        } (${describeFailure(materializeError)})`,
         materializeError,
       );
     }

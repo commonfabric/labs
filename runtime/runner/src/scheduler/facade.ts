@@ -2,6 +2,7 @@ import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
@@ -4079,7 +4080,7 @@ export class Scheduler {
     const keys = this.#headEventLoadPark.keys.join(", ");
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeFailure(error);
     if (event.served === undefined) {
       this.#dropEvent(
         event,
