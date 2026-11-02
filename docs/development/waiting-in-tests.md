@@ -453,6 +453,18 @@ idling.
 test's own code writes is better still: report the write from the code that
 makes it, and the wait names the write rather than the view of it.
 
+The flush deadline that cuts a settle is a timer the test does not schedule, so
+a pin that needs the cut to land after something else happens — a handler it
+holds having started, say — cannot get that ordering from the deadline's
+length: on the real clock, machine load can delay the handler past the
+deadline. Such a pin puts the deadline on `ManualFlushDeadline` from
+`serving-waits.ts` instead, spreading its `policy`
+(`SpaceServerPolicy.flushDeadlineNow` and `flushDeadlineTimer`) into the
+host's. On that clock a settle runs until it quiesces and is never cut until
+the test calls `cut()`, which waits for a settle to arm its deadline and fires
+it. A pin that needs cut cycles to happen at some point, but not at a particular
+one, keeps the real deadline.
+
 Each of the SpaceServer and ExecutorHost options above is marked `DIAGNOSTIC
 (tests)` where it is declared. So are two more that serve one suite each:
 `EventAppendQueue.onPacedHold`, which reports each pacing hold as it begins, and

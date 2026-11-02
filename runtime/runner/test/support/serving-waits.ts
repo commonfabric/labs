@@ -14,6 +14,7 @@ import type {
   MemorySpace,
 } from "../../src/storage/interface.ts";
 import { waitForSettled } from "../../src/executor/watermark.ts";
+import type { SpaceServerPolicy } from "../../src/executor/space-server.ts";
 
 /**
  * A source of wake-ups. Installing `wake` returns the function that detaches
@@ -141,6 +142,54 @@ export const awaitEach = <T>(
   log: ArrivalLog<T>,
   predicate: () => boolean | Promise<boolean>,
 ): Promise<void> => awaitEdges([log.edge], predicate);
+
+/**
+ * A flush-deadline clock that moves only when the test cuts a settle, for a
+ * pin whose construction needs the deadline to land after an event of its own
+ * choosing — a handler it holds having started, say — rather than at a
+ * real-time instant that machine load can move ahead of that event. Spread
+ * {@link policy} into the host's policy; until {@link cut} is called, every
+ * settle runs to quiescence or waits.
+ */
+export class ManualFlushDeadline {
+  #now = 0;
+
+  /** Each settle's cut while it is armed, against its deadline. */
+  readonly #armed = new Map<() => void, number>();
+
+  /** Every arming, so {@link cut} can wait for a settle to begin. */
+  readonly #arms = new ArrivalLog<number>();
+
+  /** The policy fields that put a host's flush deadline on this clock. */
+  get policy(): Required<
+    Pick<SpaceServerPolicy, "flushDeadlineNow" | "flushDeadlineTimer">
+  > {
+    return {
+      flushDeadlineNow: () => this.#now,
+      flushDeadlineTimer: (deadline, fire) => {
+        this.#armed.set(fire, deadline);
+        this.#arms.record(deadline);
+        return () => {
+          this.#armed.delete(fire);
+        };
+      },
+    };
+  }
+
+  /**
+   * Cuts the settle in progress: waits until a settle has armed its
+   * deadline, then moves the clock to that deadline and fires it. A settle
+   * that arms after the call waits for the next one.
+   */
+  async cut(): Promise<void> {
+    await awaitEach(this.#arms, () => this.#armed.size > 0);
+    for (const [fire, deadline] of [...this.#armed]) {
+      this.#armed.delete(fire);
+      this.#now = Math.max(this.#now, deadline);
+      fire();
+    }
+  }
+}
 
 /** The watch side of the memory server — what {@link admittedCommits}
  * installs on. */

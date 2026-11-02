@@ -58,6 +58,7 @@ import { ReplicaLoadFailureError } from "../src/storage/interface.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import type { SpaceServerPolicy } from "../src/executor/space-server.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { deriveEventKey } from "../src/scheduler/event-identity.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
@@ -87,6 +88,7 @@ import {
   awaitEdges,
   awaitReplica,
   type Edge,
+  ManualFlushDeadline,
   settleServing,
 } from "./support/serving-waits.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
@@ -4510,7 +4512,7 @@ describe("Phase 3 events-down (serving side)", () => {
    * host is active. */
   const w3Setup = async (
     prefix: string,
-    policy: { flushDeadlineMs: number },
+    policy: SpaceServerPolicy & { flushDeadlineMs: number },
     clientSigner: Identity = aliceSigner,
   ) => {
     ({ manager: clientManager, runtime: clientRuntime } = openClient(
@@ -4640,10 +4642,17 @@ describe("Phase 3 events-down (serving side)", () => {
   };
 
   it("purges the QUEUED leftover and refuses the in-flight one, side by side ((α1)+(α1b)+(α4)): a served parent emits TWO LT1 cascade children; the first is still RUNNING when the flush deadline fires (an async handler parked on a test gate), the second sits QUEUED behind it — the deadline decision PURGES the queued copy (no notice on its entry) and the running copy, completing after its wave closed, is REFUSED at the seal; the next drain delivers both entries ONCE each with a streamEntry; per-event: one consequence commit each, the child effect applied exactly twice in total (mutations: purge skipped → the queued copy runs after the close and is refused at the seal instead, `lt1LeftoversPurged` 0 / `lt1LateSealsRefused` 2; seal refusal AND the orphan arm's absent-emitter clause skipped → the effect applied THREE times; all three seats off → four times, observed only with the counter asserts relaxed — as written the pin reddens first on the purge counter)", async () => {
-    const w = await w3Setup("w3-purge", { flushDeadlineMs: 100 });
+    // The pin needs c1 RUNNING and c2 QUEUED when their wave is cut, so the
+    // deadline moves only when the test cuts, and the cut waits for c1 to
+    // start.
+    const deadline = new ManualFlushDeadline();
+    const w = await w3Setup("w3-purge", {
+      flushDeadlineMs: 100,
+      ...deadline.policy,
+    });
     const cancels: Array<() => void> = [];
     const gate = Promise.withResolvers<void>();
-    const childRuns: string[] = [];
+    const childRuns = new ArrivalLog<string>();
     try {
       // The PARENT: bumps its own counter and emits TWO cascade events on
       // s2 — cell.ts's serving arm writes both durable entries INTO this
@@ -4666,7 +4675,7 @@ describe("Phase 3 events-down (serving side)", () => {
       cancels.push(w.serving.scheduler.addEventHandler(
         async (tx: IExtendedStorageTransaction, event: unknown) => {
           const tag = (event as { tag?: string })?.tag ?? "?";
-          childRuns.push(tag);
+          childRuns.record(tag);
           if (tag === "c1") await gate.promise;
           w.servingC.withTx(tx).set({
             n: (w.servingC.withTx(tx).get()?.n ?? 0) + 1,
@@ -4678,6 +4687,11 @@ describe("Phase 3 events-down (serving side)", () => {
       w.s1.send({ tag: "root" } as never);
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
+
+      // c1 is parked inside the settle that ran the parent, so that settle
+      // cannot end on its own; cut it with c1 in flight and c2 queued.
+      await childRuns.reached(1);
+      await deadline.cut();
 
       const s2Sidecar = w.sidecarOf(w.s2);
       // The deadline fired with c1 in flight and c2 queued: c2's copy was
@@ -4691,23 +4705,23 @@ describe("Phase 3 events-down (serving side)", () => {
           w.entriesOf(s2Sidecar).length === 2 &&
           w.entriesOf(s2Sidecar).every((entry) => entry.consequenced !== true),
       );
-      expect(childRuns).toEqual(["c1"]);
+      expect(childRuns.entries).toEqual(["c1"]);
       expect(host!.stats().events.lt1LeftoversPurged).toBe(1);
       expect(host!.stats().events.lt1LateSealsRefused).toBe(0);
 
-      // The purge's DISCRIMINATOR: keep the gate held across several more flush
+      // The purge's DISCRIMINATOR: keep the gate held across two more flush
       // deadlines with the drain's `streamEntry`-bearing copies c1'/c2' sitting
       // QUEUED behind the parked c1 — every cut cycle runs the purge over that
       // queue, and the purge must never reach a drain copy (`served.streamEntry
       // !== undefined`). An over-reaching predicate (`served !== undefined`
       // alone) purges them here: the count climbs past 1 and the drop
       // chokepoint writes a `dropped` notice onto the durable entries — a LOST
-      // delivery the α pins' original timing could not see. The cut cycles
-      // themselves are the measure: each one runs the purge over the queue,
-      // and the first that sees the drain's copies is where an over-reaching
-      // predicate reaches them — so wait past it, rather than for a span of
-      // clock that might hold no cut at all.
+      // delivery. The drain that queued c1'/c2' ended its pass above, so the
+      // next settle to arm is the first with them queued; the test cuts it and
+      // the one after, and waits for both cycles to end.
       const cutsBefore = host!.stats().wavesBudgetExhausted;
+      await deadline.cut();
+      await deadline.cut();
       await awaitEach(
         waveCycles,
         () => host!.stats().wavesBudgetExhausted >= cutsBefore + 2,
@@ -4744,7 +4758,7 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(w.engineN(w.counterP)).toBe(1);
       expect(stats.events.lt1LeftoversPurged).toBe(1);
       expect(stats.events.lt1LateSealsRefused).toBe(1);
-      expect(childRuns).toEqual(["c1", "c1", "c2"]);
+      expect(childRuns.entries).toEqual(["c1", "c1", "c2"]);
       for (const entry of entries) {
         expect(w.consequenceCommitsOf(entry.eventId)).toBe(1);
         expect(entry.status).toBeUndefined();
@@ -4762,10 +4776,16 @@ describe("Phase 3 events-down (serving side)", () => {
   });
 
   it("refuses the IN-FLIGHT residue at the seal ((α1b)+(α4)): an LT1 cascade copy still RUNNING when the deadline closes its appending wave seals into a LATER wave and is REFUSED at the seal destination (before it enters any wave — the drain's copy, running next, reads clean state); the drain's copy is the one completed run (mutation: refusal skipped → the copy's consequences commit unmarked beside the drain's marked copy, the child's effect applied twice)", async () => {
-    const w = await w3Setup("w3-late", { flushDeadlineMs: 150 });
+    // The pin needs the copy RUNNING when its wave is cut, so the deadline
+    // moves only when the test cuts, and the cut waits for the copy to start.
+    const deadline = new ManualFlushDeadline();
+    const w = await w3Setup("w3-late", {
+      flushDeadlineMs: 150,
+      ...deadline.policy,
+    });
     const cancels: Array<() => void> = [];
     const childGate = Promise.withResolvers<void>();
-    let childRuns = 0;
+    const childRuns = new ArrivalLog<string>();
     try {
       // The PARENT: a quick bump + the cascade emission.
       cancels.push(w.serving.scheduler.addEventHandler(
@@ -4780,13 +4800,13 @@ describe("Phase 3 events-down (serving side)", () => {
       // The CHILD: an ASYNC handler (patterns may be async — the gmail
       // importer's fetch) that awaits a test-held gate before bumping.
       // Its first dispatch — the LT1 in-process copy — starts inside the
-      // appending wave and is STILL RUNNING when the 150-ms deadline
-      // closes it; the copy seals only when the test opens the gate, by
-      // which time the entry has landed unmarked and the next cycle's
-      // drain has queued the streamEntry-bearing copy behind it.
+      // appending wave and is STILL RUNNING when the test cuts that wave;
+      // the copy seals only when the test opens the gate, by which time
+      // the entry has landed unmarked and the next cycle's drain has
+      // queued the streamEntry-bearing copy behind it.
       cancels.push(w.serving.scheduler.addEventHandler(
-        async (tx: IExtendedStorageTransaction, _event: unknown) => {
-          childRuns += 1;
+        async (tx: IExtendedStorageTransaction, event: unknown) => {
+          childRuns.record((event as { tag?: string })?.tag ?? "?");
           await childGate.promise;
           w.servingC.withTx(tx).set({
             n: (w.servingC.withTx(tx).get()?.n ?? 0) + 1,
@@ -4798,6 +4818,11 @@ describe("Phase 3 events-down (serving side)", () => {
       w.s1.send({ tag: "root" } as never);
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
+
+      // The copy is parked inside the settle that ran the parent, so that
+      // settle cannot end on its own; cut it with the copy in flight.
+      await childRuns.reached(1);
+      await deadline.cut();
 
       const s2Sidecar = w.sidecarOf(w.s2);
       // The appending wave has committed (the child's entry is durable,
@@ -4811,7 +4836,7 @@ describe("Phase 3 events-down (serving side)", () => {
           w.entriesOf(s2Sidecar).length === 1 &&
           w.entriesOf(s2Sidecar)[0].consequenced !== true,
       );
-      expect(childRuns).toBe(1);
+      expect(childRuns.entries).toEqual(["child"]);
       expect(host!.stats().events.lt1LateSealsRefused).toBe(0);
 
       // Open the gate: the in-flight copy completes OUTSIDE its appending
@@ -4837,7 +4862,7 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(w.engineN(w.counterP)).toBe(1);
       expect(stats.events.lt1LateSealsRefused).toBe(1);
       expect(stats.events.lt1LeftoversPurged).toBe(0);
-      expect(childRuns).toBe(2);
+      expect(childRuns.entries).toEqual(["child", "child"]);
       expect(w.consequenceCommitsOf(childEntry.eventId)).toBe(1);
       expect(childEntry.status).toBeUndefined();
       expect(childEntry.error).toBeUndefined();
@@ -5040,10 +5065,17 @@ describe("Phase 3 events-down (serving side)", () => {
   };
 
   it("leaves the entry UNMARKED when a same-eventId SIBLING tx survives the wave its handler's own tx misses ((α1b)+(α4)): an ASYNC LT1 cascade child commits a separate event-handler-stamped tx carrying its own eventId (the served navigateTo intent shape) BEFORE an await that spans the flush deadline; the sibling seals into the appending wave and survives, the handler's own tx seals late and is REFUSED — the entry must land UNMARKED (only the LT1 copy's OWN run may mark its seq-less entry, never a sibling) so the drain re-delivers it: the child's effect lands exactly once, one consequence commit names the event, the sibling's write stands (mutation: the `lt1 === true` gate on the seq-less marking removed → the sibling's survival marks the entry consequenced, the refused copy is never re-delivered, the effect lands ZERO times — `processed` 1, `counterC` 0)", async () => {
-    const w = await w3Setup("w3-sibling-late", { flushDeadlineMs: 150 });
+    // The pin needs the copy RUNNING, its sibling sealed, when their wave
+    // is cut, so the deadline moves only when the test cuts, and the cut
+    // waits for the copy to start.
+    const deadline = new ManualFlushDeadline();
+    const w = await w3Setup("w3-sibling-late", {
+      flushDeadlineMs: 150,
+      ...deadline.policy,
+    });
     const cancels: Array<() => void> = [];
     const childGate = Promise.withResolvers<void>();
-    let childRuns = 0;
+    const childRuns = new ArrivalLog<string>();
     // The sibling's target doc, created by the client (native commit).
     const sideClient = clientRuntime.getCell<{ n?: number }>(
       space,
@@ -5082,9 +5114,11 @@ describe("Phase 3 events-down (serving side)", () => {
       // engine dedupes at apply — the sibling's effect is one-shot either
       // way, and this pin's witness is the non-idempotent bump.
       cancels.push(w.serving.scheduler.addEventHandler(
-        async (tx: IExtendedStorageTransaction, _event: unknown) => {
-          childRuns += 1;
-          if (childRuns === 1) stampSibling(w.serving, tx, sideServing);
+        async (tx: IExtendedStorageTransaction, event: unknown) => {
+          childRuns.record((event as { tag?: string })?.tag ?? "?");
+          if (childRuns.entries.length === 1) {
+            stampSibling(w.serving, tx, sideServing);
+          }
           await childGate.promise;
           w.servingC.withTx(tx).set({
             n: (w.servingC.withTx(tx).get()?.n ?? 0) + 1,
@@ -5097,11 +5131,17 @@ describe("Phase 3 events-down (serving side)", () => {
       await clientRuntime.idle();
       await clientRuntime.storageManager.synced();
 
+      // The copy stamped its sibling and parked inside the settle that ran
+      // the parent, so that settle cannot end on its own; cut it with the
+      // copy in flight.
+      await childRuns.reached(1);
+      await deadline.cut();
+
       const s2Sidecar = w.sidecarOf(w.s2);
       await awaitAdmitted(server, () => w.entriesOf(s2Sidecar).length === 1);
       // The next drain re-queues the entry's `streamEntry` copy behind
       // the parked in-process one (processed: root + the drain's copy =
-      // 2), which is several deadlines past the appending wave.
+      // 2), in the cycle after the appending wave.
       await awaitEach(
         drainPasses,
         () => host!.stats().events.processed === 2,
@@ -5113,7 +5153,7 @@ describe("Phase 3 events-down (serving side)", () => {
       // would be marked here.)
       expect(w.engineN(sideServing)).toBe(1);
       expect(w.entriesOf(s2Sidecar)[0].consequenced).not.toBe(true);
-      expect(childRuns).toBe(1);
+      expect(childRuns.entries).toEqual(["child"]);
       expect(host!.stats().events.lt1LateSealsRefused).toBe(0);
 
       // Open the gate: the in-flight copy seals outside its appending
@@ -5140,7 +5180,7 @@ describe("Phase 3 events-down (serving side)", () => {
       expect(w.engineN(w.counterC)).toBe(1);
       expect(w.engineN(sideServing)).toBe(1);
       expect(w.engineN(w.counterP)).toBe(1);
-      expect(childRuns).toBe(2);
+      expect(childRuns.entries).toEqual(["child", "child"]);
       expect(stats.events.lt1LateSealsRefused).toBe(1);
       expect(stats.events.lt1LeftoversPurged).toBe(0);
       expect(stats.events.orphanDeliveriesRefused).toBe(0);

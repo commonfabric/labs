@@ -279,10 +279,21 @@ export type SpaceServerPolicy = {
   /**
    * Injected wall clock for deterministic flush-deadline verification. A
    * settle reads its deadline off this clock, and whether the deadline has
-   * passed. The timer that cuts a settle mid-await counts real time
-   * regardless.
+   * passed. The timer that cuts a settle mid-await counts real time unless
+   * `flushDeadlineTimer` is injected beside it.
    */
   flushDeadlineNow?: () => number;
+
+  /**
+   * Injected timer for the same verification. A settle calls it with its
+   * deadline on the clock above, and with `fire`, which cuts the settle
+   * mid-await; it returns the function that disarms the cut, called as the
+   * settle ends either way. With both injected, a settle is cut only when
+   * whatever drives the clock calls `fire`, so a test can place the cut
+   * after an event of its own choosing rather than at an instant that
+   * machine load moves.
+   */
+  flushDeadlineTimer?: (deadline: number, fire: () => void) => () => void;
 
   /**
    * The longest deadline a settle may grow to. A cycle whose settle the
@@ -6844,6 +6855,21 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Helper for `#serveWave()`, which arms the cut of a settle whose
+   * deadline is `deadline` on the flush-deadline clock, and returns the
+   * function that disarms it.
+   */
+  #armFlushDeadline(deadline: number, fire: () => void): () => void {
+    const injected = this.#options.policy?.flushDeadlineTimer;
+    if (injected !== undefined) return injected(deadline, fire);
+    const timer = setTimeout(
+      fire,
+      Math.max(0, deadline - this.#flushDeadlineNow()),
+    );
+    return () => clearTimeout(timer);
+  }
+
+  /**
    * The tenure's space-root ensure (OW45 arm-B server-ensure stage 1;
    * design PR #6209 §1/§4): make sure the space's default pattern
    * EXISTS and is FRESH — the client-era duties 1 and 2, no start (the
@@ -7401,11 +7427,11 @@ export class SpaceServer implements TransactionSealDestination {
     const deadlineMs = this.#settleDeadlineMs();
     this.#options.policy?.onFlushDeadline?.(deadlineMs);
     const deadline = this.#flushDeadlineNow() + deadlineMs;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let disarmDeadline: (() => void) | undefined;
     const deadlinePromise = new Promise<"deadline">((resolve) => {
-      deadlineTimer = setTimeout(
+      disarmDeadline = this.#armFlushDeadline(
+        deadline,
         () => resolve("deadline"),
-        Math.max(0, deadline - this.#flushDeadlineNow()),
       );
     });
     // The demanded-structure load pass runs UNDER the wave's flush
@@ -7600,9 +7626,9 @@ export class SpaceServer implements TransactionSealDestination {
         }
       }
     } finally {
-      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+      disarmDeadline?.();
     }
-    // After the timer is cleared and outside the `finally`, for the reason
+    // After the deadline is disarmed and outside the `finally`, for the reason
     // the cycle span is: a settle that threw is a failed wave, not a slow
     // one, and folding its duration in would blunt the measurement.
     timing.time(settleStart, "executor", "wave", "settle");
