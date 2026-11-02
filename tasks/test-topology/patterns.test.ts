@@ -378,6 +378,19 @@ describe("the pattern and package suites", () => {
     ).toEqual([]);
   });
 
+  it("returns the reload suite's test files as what its unit runs", () => {
+    const suite = byId("pattern-reload");
+    const sources = suite.sourcesOf?.(suite.units[0]!) ?? [];
+    expect(sources.length).toBeGreaterThan(0);
+    expect(
+      sources.every((file) =>
+        file.startsWith("patterns/integration/reload/") &&
+        file.endsWith(".test.ts")
+      ),
+    ).toBe(true);
+    expect(suite.sourcesOf?.("patterns/integration")).toEqual([]);
+  });
+
   it("locates a reload record by the directory it came from", () => {
     const suite = byId("pattern-reload");
     expect(

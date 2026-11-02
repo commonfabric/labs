@@ -113,6 +113,7 @@
     "test-records-key": "./tasks/test-records-key.ts",
     "test-records-compact": "./tasks/test-records-compact.ts",
     "test-selection": "./tasks/test-selection.ts",
+    "test-gap": "./tasks/test-gap.ts",
     "build-binaries": "./tasks/build-binaries.ts",
     "install-hooks": "./scripts/install-git-hooks.sh",
     "install-cf": "./scripts/install-cf.sh",
