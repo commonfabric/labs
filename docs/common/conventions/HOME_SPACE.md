@@ -466,8 +466,8 @@ Archive puts a space away and restore saves it again; both compare the revision
 the rendered control showed and leave space access unchanged. A space recorded
 as deleted
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces))
-appears under **Deleted**, with neither control, once deleting a space is
-implemented. Unfamiliar states remain visible in **Other states**. An
+appears under **Deleted**, with neither control. Unfamiliar states remain
+visible in **Other states**. An
 unavailable collection has an explicit notice rather than an empty list.
 Ordinary space navigation opens a listed space using the runtime's configured
 routing.

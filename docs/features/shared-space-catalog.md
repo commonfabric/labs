@@ -354,9 +354,11 @@ navigation and on regaining focus. A runtime outside the shell asks on
 occasions of its own, and until it does, its person's catalog keeps such an
 entry as it was.
 
-Deleting a space is not implemented yet, and neither are `markDeleted`, its
-flat alias `markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()`, and the
-`deleted` lists.
+Deleting a space is not implemented yet: the memory server sends no refusal
+marked `deleted`, so `markDeleted` answers `not-deleted` for every space, and
+the `deleted` lists stay empty. The command, its flat alias
+`markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()` and the lists are in
+place for when it is.
 
 ## The profile acting in a space
 

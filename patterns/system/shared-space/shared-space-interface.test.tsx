@@ -23,6 +23,7 @@ const LOOM = "did:key:interface-loom";
 const CHAT = "did:key:interface-chat";
 const FUTURE = "did:key:interface-future";
 const OLDER = "did:key:interface-older";
+const GONE = "did:key:interface-gone";
 const HOST = "https://social.example";
 const SEED = {
   entries: {
@@ -205,6 +206,36 @@ export default pattern(() => {
     findNodeByProp(browser[UI], "data-space", FUTURE) === undefined &&
     catalog.get().entries[FUTURE].revision === "future-revision"
   );
+  // An entry whose space is deleted is listed apart from saved, archived and
+  // unfamiliar states, under Deleted, with no membership control.
+  const action_deleted = action(() => {
+    catalog.set({
+      ...SEED,
+      entries: {
+        ...SEED.entries,
+        [GONE]: {
+          space: GONE,
+          host: HOST,
+          kind: "loom",
+          state: "deleted",
+          revision: "3:gone",
+          title: "Gone loom",
+          since: 5000,
+        },
+      },
+    });
+    browser.membership.set("deleted");
+    browser.kind.set("");
+  });
+  const assert_deleted_ui = assert(() =>
+    view.status === "ready" && view.deleted[0]?.space === GONE &&
+    view.byKind.loom.deleted[0]?.space === GONE &&
+    view.other[0]?.space === FUTURE && view.other.length === 1 &&
+    view.saved.length === 2 &&
+    hasText(browser[UI], "Gone loom") && !hasText(browser[UI], "Team loom") &&
+    !hasText(browser[UI], "Future space") &&
+    findNodeByProp(browser[UI], "data-space", GONE) === undefined
+  );
   const action_malformed = action(() =>
     catalog.set({ entries: {}, offers: null })
   );
@@ -233,6 +264,8 @@ export default pattern(() => {
       { assertion: assert_restored },
       { action: action_future },
       { assertion: assert_future_ui },
+      { action: action_deleted },
+      { assertion: assert_deleted_ui },
       { action: action_malformed },
       { assertion: assert_unavailable_ui },
     ],

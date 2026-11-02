@@ -104,6 +104,8 @@ const SharedSpaceCollection = pattern<
       ? view.saved
       : state === "archived"
       ? view.archived
+      : state === "deleted"
+      ? view.deleted
       : view.other;
     const selectedKind = kind.get();
     const query = search.get().trim().toLowerCase();
@@ -146,6 +148,7 @@ const SharedSpaceCollection = pattern<
           items={[
             { label: "Saved", value: "saved" },
             { label: "Archived", value: "archived" },
+            { label: "Deleted", value: "deleted" },
             { label: "Other states", value: "other" },
           ]}
         />
