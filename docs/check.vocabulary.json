@@ -56,6 +56,7 @@
     "schema",
     "spaceAccess",
     "spaceAccessOf",
+    "spaceDeleted",
     "spaceMembers",
     "spaceOf",
     "sqliteDatabase",

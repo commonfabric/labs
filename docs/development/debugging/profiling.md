@@ -637,9 +637,18 @@ process:
   the machine runs. `rss` also moves with when the collector last ran and with
   which pages the operating system has compressed, by hundreds of megabytes on
   a busy server, so a growth in it smaller than that says nothing about a
-  leak. `runtime/runner/integration/derive_array_leak.test.ts` measures its
-  server this way, and measures its own isolate after forcing a full
-  collection, a reading that moves by only a few megabytes without a leak.
+  leak. For a reading that a leak moves and collection timing does not, a
+  server started with `EXPOSE_GC=true` answers `/api/health/collected-memory`.
+  That route runs a full garbage collection of the thread that answers, and of
+  the serving loop's worker where the loop runs in one, then reports
+  `heapUsed` and `external` for each, as `mainThread` and
+  `servingLoopWorker`. Collecting pauses each thread, so the route answers 404
+  on a server started without the variable; local development servers and the
+  servers CI starts set it. Two readings differ by what the server retained
+  between them, give or take a few megabytes of bounded structures still
+  filling. `runtime/runner/integration/derive_array_leak.test.ts` reads its
+  server this way, and its own isolate the same way, through
+  `runtime/runner/src/collected-memory.ts`.
 - `documentCaches` — the memory server's decoded-document cache, one entry per
   open space (`Engine.documentCache` in `runtime/memory/v2/engine.ts`) under
   the server's `totalBudgetBytes` (beside it the total `bytes`, and

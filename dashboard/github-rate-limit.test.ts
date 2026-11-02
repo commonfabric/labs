@@ -5,6 +5,9 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { join } from "@std/path";
+import { describe, it } from "@std/testing/bdd";
 import {
   type GitHubPrimaryRateLimit,
   GitHubRateLimitBudget,
@@ -1281,4 +1284,40 @@ Deno.test("GitHub download helpers return response bodies without JSON decoding"
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+describe("github-rate-limit", () => {
+  describe("GitHubRateLimitBudget", () => {
+    describe("instance members", () => {
+      describe("reserve()", () => {
+        it("removes the temporary files that interrupted ledger writes left beside the ledger", async () => {
+          const directory = await Deno.makeTempDir({
+            prefix: "github-rate-limit-",
+          });
+          try {
+            const leftover = `ledger.json.${crypto.randomUUID()}.tmp`;
+            await Deno.writeTextFile(join(directory, leftover), "{");
+            const budget = new GitHubRateLimitBudget({
+              file: join(directory, "ledger.json"),
+              now: () => 1_900_000_000_000,
+            });
+
+            const reservation = await budget.reserve(
+              "token",
+              () => Promise.resolve(primary(0)),
+            );
+            await reservation.complete(new Response(null));
+
+            const names = [...Deno.readDirSync(directory)].map((entry) =>
+              entry.name
+            );
+            expect(names).not.toContain(leftover);
+            expect(names).toContain("ledger.json");
+          } finally {
+            await Deno.remove(directory, { recursive: true });
+          }
+        });
+      });
+    });
+  });
 });

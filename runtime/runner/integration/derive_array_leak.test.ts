@@ -2,9 +2,11 @@
 
 /**
  * Checks that building and tearing down a view over a derived array, again
- * and again, does not retain memory in the test's own isolate, which runs the
- * derivation and renders the view, and does not grow the resident size of the
- * Toolshed at `API_URL` past a fixed limit.
+ * and again, retains no memory that V8 accounts for in the test's own
+ * isolate, which runs the derivation and renders the view, nor in the
+ * Toolshed at `API_URL`, which stores every commit and, with server execution
+ * on, runs the pattern's handlers and computations too. Memory V8 does not
+ * account for, such as SQLite's, is out of its reach.
  *
  * One cycle clicks the fixture's increment and then its decrement, so the
  * counter returns to zero and the view to no elements, and whatever the
@@ -17,25 +19,19 @@
  * scheduler runs only the computations something reads: with nothing reading
  * the view, a click runs the handler and no derivation at all.
  *
- * The isolate is measured after a full garbage collection, as the heap and
- * the memory outside it that V8 accounts for. That reading does not depend on
- * when the collector last ran, nor on which pages the operating system has
- * compressed or swapped out, so its limit only has to leave room for bounded
- * structures that are still filling, such as timing reservoirs and caches.
- * Retention smaller than that limit across the measured cycles passes. Each
- * test file runs in an isolate of its own, so the reading leaves other files
- * out.
- *
- * Nothing here can make the server collect. Its resident size, its only
- * reading of the whole process, moves by hundreds of megabytes with
- * collection timing, so a server leak smaller than the server's limit
- * passes.
+ * Both are measured after a full garbage collection, as the heap and the
+ * memory outside it that V8 accounts for: the test's isolate here, and the
+ * server's main thread and serving-loop worker through
+ * `/api/health/collected-memory`, which a server started with
+ * `EXPOSE_GC=true` answers. That reading does not depend on when the
+ * collector last ran, nor on which pages the operating system has compressed
+ * or swapped out, so its limit only has to leave room for bounded structures
+ * that are still filling, such as timing reservoirs and caches. Retention
+ * smaller than that limit across the measured cycles passes. Each test file
+ * runs in an isolate of its own, so the client reading leaves other files
+ * out. The server reading covers whatever else the server is doing.
  */
 
-// deno-lint-ignore no-external-import -- Enables `gc()` after startup, whatever flags started the test.
-import { setFlagsFromString } from "node:v8";
-// deno-lint-ignore no-external-import -- Creates the context that holds `gc()`.
-import { runInNewContext } from "node:vm";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -49,6 +45,11 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 
+import {
+  type CollectedMemory,
+  collectedMemory,
+  exposeGarbageCollector,
+} from "../src/collected-memory.ts";
 import { compileAndSavePattern, Runtime } from "../src/index.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -59,54 +60,52 @@ const WARM_UP_CYCLES = 30;
 const MEASURED_CYCLES = 20;
 
 // The most the isolate and the server may grow across the measured cycles.
-// Without a leak, on a Mac in either posture, the isolate grew less than
-// 6 MB, and the server's resident size by up to 260 MB.
+// Without a leak, on a Mac, the isolate grew at most 1 MB and the server at
+// most 5 MB, with server execution off, and on with the serving loop in a
+// worker and on the main thread.
 const MAX_CLIENT_GROWTH_MB = 16;
-const MAX_SERVER_GROWTH_MB = 512;
+const MAX_SERVER_GROWTH_MB = 16;
 
 const MB = 1024 * 1024;
 
-/** Returns V8's `gc()`, which collects this isolate's whole heap. */
-function exposeGarbageCollector(): () => void {
-  // V8 gives `gc()` only to contexts created after the flag is set, so the
-  // function comes from a new context.
-  setFlagsFromString("--expose-gc");
-  const gc: unknown = runInNewContext("gc");
-  if (typeof gc !== "function") throw new Error("V8 did not expose `gc()`");
-  return () => gc();
+/** Returns an isolate's live memory in megabytes. */
+const megabytes = ({ heapUsed, external }: CollectedMemory) =>
+  (heapUsed + external) / MB;
+
+/** Returns the memory this isolate holds live, in megabytes. */
+function getClientMemoryMB(): number {
+  return megabytes(collectedMemory());
 }
 
 /**
- * Returns the memory this isolate holds live, in megabytes: the heap and
- * V8's external memory, after `collectGarbage` has run.
- */
-function getClientMemoryMB(collectGarbage: () => void): number {
-  collectGarbage();
-  const { heapUsed, external } = Deno.memoryUsage();
-  return (heapUsed + external) / MB;
-}
-
-/**
- * Returns the resident size of the Toolshed at `API_URL`, in megabytes, as
- * that server reports it.
+ * Returns the memory the threads of the Toolshed at `API_URL` hold live, in
+ * megabytes.
  */
 async function getServerMemoryMB(): Promise<number> {
-  const url = new URL("api/health/stats", API_URL);
+  const url = new URL("api/health/collected-memory", API_URL);
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(
       `${url} answered ${response.status}: ${await response.text()}`,
     );
   }
-  const rss = (await response.json()).processMemory?.rss;
-  if (typeof rss !== "number") {
-    throw new Error(`${url} reported no \`processMemory.rss\``);
+  const { mainThread, servingLoopWorker }: {
+    mainThread?: CollectedMemory;
+    servingLoopWorker?: CollectedMemory;
+  } = await response.json();
+  if (mainThread === undefined) {
+    throw new Error(`${url} reported no \`mainThread\``);
   }
-  return rss / MB;
+  const total = megabytes(mainThread) +
+    (servingLoopWorker === undefined ? 0 : megabytes(servingLoopWorker));
+  if (!Number.isFinite(total)) {
+    throw new Error(`${url} reported a reading that is not a number`);
+  }
+  return total;
 }
 
 async function runTest() {
-  const collectGarbage = exposeGarbageCollector();
+  exposeGarbageCollector();
   const account = await Identity.generate();
   const space = await createTestSpace(account);
   const session = createSession({ identity: account, spaceDid: space });
@@ -208,11 +207,10 @@ async function runTest() {
       };
 
       for (let i = 0; i < WARM_UP_CYCLES; i++) await cycle();
-      const clientBeforeMB = getClientMemoryMB(collectGarbage);
+      const clientBeforeMB = getClientMemoryMB();
       const serverBeforeMB = await getServerMemoryMB();
       for (let i = 0; i < MEASURED_CYCLES; i++) await cycle();
-      const clientGrowthMB = getClientMemoryMB(collectGarbage) -
-        clientBeforeMB;
+      const clientGrowthMB = getClientMemoryMB() - clientBeforeMB;
       const serverGrowthMB = await getServerMemoryMB() - serverBeforeMB;
       if (failure) throw failure;
 
@@ -235,7 +233,7 @@ async function runTest() {
       }
       if (serverGrowthMB > MAX_SERVER_GROWTH_MB) {
         throw new Error(
-          `The server grew ${serverGrowthMB.toFixed(1)} MB across ` +
+          `The server retained ${serverGrowthMB.toFixed(1)} MB across ` +
             `${MEASURED_CYCLES} cycles (limit ${MAX_SERVER_GROWTH_MB} MB)`,
         );
       }

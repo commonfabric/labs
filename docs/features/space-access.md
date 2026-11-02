@@ -8,9 +8,8 @@ a room it lists is one they belong to. The implementation is
 `runtime/runner/src/builder/space-access.ts`, which also holds
 `spaceMembers(target)`, the principals that space's access list names,
 described [below](#a-spaces-members), and `spaceOf(target)`, the DID of that
-same space, described [below](#the-spaces-own-did). `spaceDeleted(target)`,
-whether that space is deleted, is planned beside them and not implemented yet;
-[below](#a-deleted-space) says what it will return.
+same space, described [below](#the-spaces-own-did), and `spaceDeleted(target)`,
+whether that space is deleted, described [below](#a-deleted-space).
 
 The answer is advisory. A memory server in `enforce` mode, which is toolshed's
 default (`MEMORY_ACL_MODE`), checks every read and write against the space's
@@ -256,8 +255,9 @@ access-list document through the call's transaction as `spaceAccess(target)`
 does, so the memory server answers for it. The run waits for that answer, not
 with a retry or a poll of its own but through a notice of an open's answer,
 which the storage manager gives when the memory server admits or refuses a
-session's open. The storage manager does not give that notice yet: its
-`spaceOpenObserver` says only that an open has started.
+session's open (`subscribeSpaceAnswer()`), and which the runtime's
+`SpaceAccessWatch` and `awaitSpaceAnswer()` wait on. Its `spaceOpenObserver`
+says only that an open has started.
 
 - A reactive computation gets `undefined` at once, and is run again when the
   answer arrives. The runtime waits for the notice of the open's answer, and
@@ -325,8 +325,9 @@ them, uses `spaceDeleted(target)` to put away an entry whose space is gone
 ([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
 
 Deleting a space is not implemented yet; until it is, the memory server
-refuses the commit that would delete one, and `spaceDeleted(target)` and the
-`deleted` marker on `spaceaccesslost` do not exist.
+refuses the commit that would delete one and sends no refusal marked `deleted`,
+so `spaceDeleted(target)` never returns `true` and `spaceaccesslost` never
+carries the marker, though the runtime, the renderer and the shell handle both.
 
 ## Changing the level
 
