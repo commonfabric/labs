@@ -319,6 +319,78 @@ describe("topics command", () => {
       expect(findTopic(read, "of:fid1:p42").number).toBe("42");
     });
 
+    describe("given part of an address", () => {
+      const quoting = {
+        ...read,
+        topics: [
+          {
+            number: "5",
+            address: "of:fid1:3MmaxyNMtCzB8R_FBZ4tE1_Q3z1MQ_12345678",
+            piece: "of:fid1:Wq8vRk2LmPz5",
+          },
+          {
+            number: "6",
+            address: "of:fid1:AEVJwT4HnfruI0_3MmaxyNMtCzB8R",
+            piece: "of:fid1:p6",
+          },
+          {
+            number: "7",
+            address: "of:fid1:e7",
+            piece: "of:fid1:AEVJwT4HnfruI0",
+          },
+        ] as Topic[],
+      };
+
+      it("returns the one Topic whose address or piece's address holds it", () => {
+        expect(findTopic(quoting, "Wq8vRk2LmP").number).toBe("5");
+        for (
+          const reference of [
+            "FBZ4tE1_Q3z1MQ",
+            "B8R_FBZ4tE1",
+            "fid1:3MmaxyNMtCzB8R_FBZ4",
+            "/of:fid1:3MmaxyNMtCzB8R_FB",
+          ]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("5");
+        }
+      });
+
+      it("returns the Topic it names whole, though another's address holds it", () => {
+        for (
+          const reference of ["fid1:AEVJwT4HnfruI0", "/of:fid1:AEVJwT4HnfruI0"]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("7");
+        }
+      });
+
+      it("throws for a part of more than one Topic's address, naming each", () => {
+        expect(() => findTopic(quoting, "AEVJwT4HnfruI0")).toThrow(
+          "it is part of the address or piece address of each of top/6, top/7.",
+        );
+        expect(() => findTopic(quoting, "3MmaxyNMtCzB8R")).toThrow(
+          '`"3MmaxyNMtCzB8R"` names no Topic on this board: it is part of ' +
+            "the address or piece address of each of top/5, top/6.",
+        );
+      });
+
+      it("throws for a part quoting fewer than eight characters of an id", () => {
+        for (
+          const reference of ["Q3z1MQ_", "fid1:3Mmaxy", "/of:fid1:", "of"]
+        ) {
+          expect(() => findTopic(quoting, reference)).toThrow(
+            `The board has no Topic \`"${reference}"\`.`,
+          );
+        }
+        expect(findTopic(quoting, "_Q3z1MQ_").number).toBe("5");
+      });
+
+      it("reads a number as a number, though an address holds it", () => {
+        expect(() => findTopic(quoting, "12345678")).toThrow(
+          "The board has no Topic top/12345678.",
+        );
+      });
+    });
+
     it("returns the Topic a page on the board's server shows", () => {
       for (
         const reference of [
@@ -1279,6 +1351,18 @@ describe("topics command", () => {
         body: "Reproduced with cold oil.",
         sentAt: 2000,
       }]);
+    });
+
+    it("shows a Topic named by part of its address", async () => {
+      await run("show", "topic-alias-1", "c-piece-2", "--json");
+      const shown = JSON.parse(printed());
+
+      expect(shown.map((topic: { number: string }) => topic.number)).toEqual(
+        ["1", "2"],
+      );
+      await expect(run("show", "alias-1")).rejects.toThrow(
+        'The board has no Topic `"alias-1"`.',
+      );
     });
 
     it("shows only the comments `--last` and `--comments-since` leave", async () => {
