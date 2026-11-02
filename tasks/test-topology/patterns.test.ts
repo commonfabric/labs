@@ -285,11 +285,11 @@ describe("the pattern and package suites", () => {
         );
         const label = `${id} with the default ${defaultEnabled}`;
         expect(invocation!.env, label).toMatchObject(lane.environment);
-        // Web view-scoped replication rides the ON arm, whichever role it is.
+        // Web view-scoped replication runs at its default on both arms.
         expect(
           invocation!.env?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
           label,
-        ).toBe(lane.enabled ? "true" : undefined);
+        ).toBeUndefined();
       }
     }
   });

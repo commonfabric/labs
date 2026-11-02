@@ -463,10 +463,7 @@ describe("opening a capability on a machine that answers", () => {
     const lane = serverExecutionCiLane(role);
     const bodies: Record<string, unknown> = {
       "/api/meta": {
-        experimental: {
-          serverExecution: lane.enabled,
-          ...(lane.enabled ? { webViewScopedReplication: true } : {}),
-        },
+        experimental: { serverExecution: lane.enabled },
         shellServerExecutionDefine: lane.experimentalValue ?? null,
       },
       "/api/health/stats": { servingLoop: lane.enabled ? 1 : null },
@@ -728,8 +725,6 @@ describe("opening a capability on a machine that answers", () => {
     // the value for the opposite arm, and none at all for the default.
     const opposite = serverExecutionCiLane("opposite");
     const named = opposite.experimentalValue;
-    // The ON arm's web view-scoped replication, set on that arm alone.
-    const viewScoped = opposite.enabled ? "true" : undefined;
     const before = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
     const beforeViewScoped = Deno.env.get(
       "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
@@ -738,6 +733,8 @@ describe("opening a capability on a machine that answers", () => {
       "EXPERIMENTAL_SERVER_EXECUTION",
       named === "true" ? "false" : "true",
     );
+    // The posture check reads this too, so an ambient value would put an ON
+    // lane on a posture its role does not name.
     Deno.env.set("EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION", "false");
     try {
       const source = machine({
@@ -748,7 +745,7 @@ describe("opening a capability on a machine that answers", () => {
         .toBeUndefined();
       expect(
         envOf(source, "index.ts")?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
-      ).toBe(serverExecutionCiLane("default").enabled ? "true" : undefined);
+      ).toBeUndefined();
 
       const baked = await openBaked(
         "toolshed-baked",
@@ -777,7 +774,7 @@ describe("opening a capability on a machine that answers", () => {
         expect(
           envOf(oppositeServer, step)?.EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION,
           step,
-        ).toBe(viewScoped);
+        ).toBeUndefined();
       }
     } finally {
       if (before === undefined) {
@@ -942,19 +939,15 @@ describe("the binaries a lane caches", () => {
     }
   });
 
-  it("bakes each role's arm, and on the ON arm the flags it runs with besides", () => {
+  it("bakes each role's arm and no other flag", () => {
     for (const [on, off] of [[true, false], [false, true]]) {
       expect(cachedBinaries(on)["toolshed-baked-opposite"].bakes)
         .toEqual({
           EXPERIMENTAL_SERVER_EXECUTION: `${off}`,
-          ...(off ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
           CF_COMPILE_CACHE_VERSION: "inputs",
         });
       expect(cachedBinaries(on)["toolshed-baked-default"].bakes)
-        .toEqual({
-          ...(on ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" } : {}),
-          CF_COMPILE_CACHE_VERSION: "inputs",
-        });
+        .toEqual({ CF_COMPILE_CACHE_VERSION: "inputs" });
     }
   });
 });

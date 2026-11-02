@@ -20,7 +20,7 @@ import * as path from "@std/path";
 
 import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
-  SERVER_EXECUTION_ON_ENVIRONMENT,
+  SERVER_EXECUTION_POSTURE_VARIABLES,
   serverExecutionCiLane,
   type ServerExecutionCiRole,
   verifyServerExecutionPosture,
@@ -500,9 +500,8 @@ const githubApi: Capability = {
 
 /**
  * The environment a Toolshed at `role` runs under: the ambient environment
- * carrying the server-execution define the role names, and carrying none
- * where the role names none, with the ON arm's other flags set on that arm
- * and unset on the other.
+ * without the variables the posture check reads, carrying the server-execution
+ * define the role names, and carrying none where the role names none.
  *
  * An unset define is a third state rather than a synonym for `false`. It
  * follows the first-party default, which is what the default role's posture
@@ -512,10 +511,7 @@ function serverExecutionEnv(
   role: ServerExecutionCiRole,
 ): Record<string, string> {
   const env = Deno.env.toObject();
-  delete env.EXPERIMENTAL_SERVER_EXECUTION;
-  for (const name of Object.keys(SERVER_EXECUTION_ON_ENVIRONMENT)) {
-    delete env[name];
-  }
+  for (const name of SERVER_EXECUTION_POSTURE_VARIABLES) delete env[name];
   return { ...env, ...serverExecutionEnvironment(role) };
 }
 

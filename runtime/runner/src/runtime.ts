@@ -423,7 +423,10 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
-  /** Global default for server-selected view replication. Defaults to off. */
+  /**
+   * Global default for server-selected view replication, which only a web
+   * client under server execution requests. Unset, such a client requests it.
+   */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
@@ -3011,12 +3014,16 @@ export class Runtime {
     return this.#viewReplication ??= new ViewReplicationClient(this);
   }
 
-  /** Whether this client requests view replication, subject to session support. */
+  /**
+   * Whether this client requests view replication, subject to session
+   * support: a web client under server execution does unless the web
+   * override, or else the global default, is `false`.
+   */
   get viewScopedReplicationRequested(): boolean {
     return this.#clientClass === "web" &&
       this.experimental.serverExecution === true && !this.servingPosture &&
       (this.experimental.webViewScopedReplication ??
-        this.experimental.viewScopedReplication ?? false);
+        this.experimental.viewScopedReplication ?? true);
   }
 
   /** DIAGNOSTIC (tests): the lazily-created speculation overlay, if this
