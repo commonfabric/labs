@@ -1128,10 +1128,7 @@ describe("cf piece CFC labels", () => {
         const linked = runtime.getCell<string>(
           signer.did(),
           "cf-piece-label-slot-target",
-          {
-            type: "string",
-            ifc: { confidentiality: [cfcAtom.user(signer.did())] },
-          },
+          { type: "string", ifc: { confidentiality: [signer.did()] } },
         );
         const seed = runtime.edit();
         linked.withTx(seed).set("redirected value");
@@ -1151,7 +1148,9 @@ describe("cf piece CFC labels", () => {
               version: 1,
               entries: [{
                 path: ["body"],
-                label: { confidentiality: [owner] },
+                label: {
+                  confidentiality: [owner, cfcAtom.user(signer.did())],
+                },
                 origin: "link",
                 observes: "followRef",
               }],
@@ -1183,17 +1182,21 @@ describe("cf piece CFC labels", () => {
         expect(slot()).toContainEqual(owner);
         const target = slotEntries(linked);
 
-        await setCellCfcLabel(
+        const shown = await setCellCfcLabel(
           pieceConfig,
           ["body"],
-          { confidentiality: [] },
+          { confidentiality: [cfcAtom.user(signer.did())] },
           { ...lower, linkSlot: true },
           deps as never,
         );
 
-        expect(slot()).toEqual([]);
+        expect(slot()).toEqual([cfcAtom.user(signer.did())]);
         expect(slotEntries(linked)).toEqual(target);
-        expect(target).toEqual([cfcAtom.user(signer.did())]);
+        expect(target).toEqual([signer.did()]);
+        // The view it returns is the slot's, as lowered, without the target's.
+        expect(
+          shown?.entries.flatMap((entry) => entry.label.confidentiality ?? []),
+        ).toEqual([cfcAtom.user(signer.did())]);
       });
 
       it("refuses the slot's label without `linkSlot`, and writes nothing", async () => {

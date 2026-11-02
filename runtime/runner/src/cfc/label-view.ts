@@ -316,7 +316,9 @@ type ResolvedMetadataResult = StoredMetadataResult & {
 /**
  * The stored labels a reader of the doc that actually HOLDS the value at
  * `link` answers to, that doc found by the runtime's own link resolution — the
- * following `.get()` performs. They are read by the reader rule
+ * following `.get()` performs. With `options.lastNode` other than `"value"`,
+ * the resolution stops at a link stored at the path as that option says, and
+ * the doc is then the one holding that link. They are read by the reader rule
  * (`readStoredCfcLabelsForReader`): the doc's own envelope, joined, where the
  * doc is a scoped instance, with the confidentiality a value read of each
  * broader instance consumes. `metadata` is `undefined` only when none of those
@@ -388,7 +390,10 @@ const resolvedTargetLabelView = (
  * answers to, that document found by the runtime's own link resolution, rebased
  * onto that value: the document's own envelope and, where it is a scoped
  * instance, the confidentiality a value read of each broader instance of the
- * same id consumes. Its integrity is the document's own alone.
+ * same id consumes. Its integrity is the document's own alone. With
+ * `options.lastNode` other than `"value"`, a link stored at the path stops the
+ * resolution as that option says, and the document is the one holding the
+ * link rather than the one holding the value.
  *
  * It leaves out the labels of the documents the path passes through on the way
  * there, and any view the cell carries. A label on a document that holds a
@@ -427,7 +432,9 @@ export const cfcLabelViewForResolvedTargetWithStatus = (
  * where no value read has asked for the documents the path reaches. The
  * labels of the doc the path RESOLVES to, as
  * {@link cfcLabelViewForResolvedTarget} reads them, are merged into the view,
- * rebased so its entries stay relative to the selected cell.
+ * rebased so its entries stay relative to the selected cell. Both reads stop
+ * at a link stored at the path as `options.lastNode` says, so a read that
+ * stops there leaves out the labels of where the link leads.
  *
  * Merging is keyed per (observation class, path) with a union of the labels,
  * so the labels both reads find appear once. `readFailed` stays fail-closed

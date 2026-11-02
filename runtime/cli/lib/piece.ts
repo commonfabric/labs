@@ -99,6 +99,7 @@ import {
   redactCaveatSourcesForDisplay,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
+  type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
@@ -332,7 +333,9 @@ export function parseCellCfcLabelUpdate(
 
 /**
  * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
+ * reader — the doc the selected path lands in once its links are followed, or,
+ * with `lastNode: "top"`, the doc holding a link stored at the path, without
+ * the labels of where that link leads.
  *
  * Each command needs that doc for its own reason. An INSPECTION read must not
  * answer "none" for a value carrying a label behind a link the path crosses
@@ -343,8 +346,12 @@ export function parseCellCfcLabelUpdate(
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -5138,7 +5145,13 @@ export async function setCellCfcLabel(
       await pieces.synced();
       noteWroteTo(release.receipt.space);
     }
-    return cfcLabelViewForCommand(targetCell, path);
+    // A lowering of a link slot reports the slot it lowered, not the labels
+    // where the link leads.
+    return cfcLabelViewForCommand(
+      targetCell,
+      path,
+      options.linkSlot === true ? { lastNode: "top" } : {},
+    );
   }
 
   const { observes: requestedObserves, ...label } = update;
