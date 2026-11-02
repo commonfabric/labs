@@ -50,11 +50,11 @@
 
 import { spliceAll } from "@commonfabric/collections/splice";
 import { getLogger } from "@commonfabric/logger";
-import {
-  type ClientCommit,
-  type EventAppendDecl,
-  type StreamEventEntry,
-  type StreamLinkRef,
+import type {
+  ClientCommit,
+  EventAppendDecl,
+  StreamEventEntry,
+  StreamLinkRef,
 } from "@commonfabric/memory/v2";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
 

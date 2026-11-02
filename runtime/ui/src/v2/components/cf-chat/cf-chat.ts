@@ -1,5 +1,5 @@
 import { BuiltInLLMMessagesArraySchema } from "@commonfabric/runner/component-read-contract";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";

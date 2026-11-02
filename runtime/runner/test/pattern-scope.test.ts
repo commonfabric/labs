@@ -14,7 +14,7 @@ import {
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
-import { type FactoryInput } from "../src/builder/types.ts";
+import type { FactoryInput } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

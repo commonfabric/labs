@@ -3,7 +3,7 @@
  * each row names; an unreadable response leaves that fact unknown.
  */
 
-import { type HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
+import type { HarnessPatternIndexClientFactory } from "../src/pattern-index/factory.ts";
 import { PatternIndexError } from "@commonfabric/pattern-index/client";
 import { debugStr } from "@commonfabric/data-model";
 import { isObjectNotArray } from "@commonfabric/js-values/types";

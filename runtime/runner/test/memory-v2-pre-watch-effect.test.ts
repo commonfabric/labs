@@ -10,11 +10,11 @@ import type { JSONSchemaObj } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import {
-  type EntityDocument,
-  type SessionSync,
-  type SessionSyncUpsert,
-  type WatchSpec,
+import type {
+  EntityDocument,
+  SessionSync,
+  SessionSyncUpsert,
+  WatchSpec,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { IStorageProvider } from "../src/storage/interface.ts";

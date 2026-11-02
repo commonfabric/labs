@@ -1,4 +1,4 @@
-import { type BuiltInLLMMessage } from "@commonfabric/api";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
 import {
   type LLMGenerateObjectRequest,
   llmGenerateObjectRequestProblem,

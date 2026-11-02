@@ -10,7 +10,7 @@ import {
 import { decodeDataFile } from "@commonfabric/text/utf8";
 import { isDeno } from "@commonfabric/platform/env";
 
-import { ProgramResolver, Source } from "./interface.ts";
+import type { ProgramResolver, Source } from "./interface.ts";
 
 /**
  * Guard the Deno-only file system entry points. Each caller names itself, so a

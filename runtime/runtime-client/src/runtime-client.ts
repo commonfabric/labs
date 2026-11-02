@@ -9,7 +9,7 @@ import type { CellScope, JSONValue } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
-import { Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type {
   ApplyOpResolution,
   OpCursor,
@@ -18,7 +18,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
-import { NameSchema } from "@commonfabric/runner/schemas";
+import type { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
   JSONSchema,
@@ -43,7 +43,7 @@ import {
   type SubscriptionDiagnostics,
 } from "./client/connection.ts";
 import { EventEmitter } from "./client/emitter.ts";
-import { RuntimeTransport } from "./client/transport.ts";
+import type { RuntimeTransport } from "./client/transport.ts";
 import { PieceHandle } from "./piece-handle.ts";
 import {
   type CellRef,

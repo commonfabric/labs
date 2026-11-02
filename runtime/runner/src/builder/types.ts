@@ -46,10 +46,10 @@ import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { ImplementationIdentity } from "../cfc/types.ts";
 import type { EntityKind } from "../entity-kind.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import { type Runtime } from "../runtime.ts";
-import {
-  type IExtendedStorageTransaction,
-  type MemorySpace,
+import type { Runtime } from "../runtime.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
 } from "../storage/interface.ts";
 import type { PatternBuilder } from "./pattern.ts";
 import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";

@@ -17,7 +17,7 @@ import {
 } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { NAME } from "@commonfabric/runner/shared";
-import { type CellHandle, type CellRef } from "@commonfabric/runtime-client";
+import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 import {
   createMockCellHandle,
   holdReads,

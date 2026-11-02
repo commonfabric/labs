@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { type TransformationContext } from "../../core/mod.ts";
+import type { TransformationContext } from "../../core/mod.ts";
 import {
   classifyArrayMethodCall,
   isFunctionLikeExpression,

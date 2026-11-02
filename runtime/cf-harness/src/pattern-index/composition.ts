@@ -30,7 +30,7 @@ import {
   sourceDocKey,
 } from "@commonfabric/runner";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { type HarnessPatternIndexClientFactory } from "./factory.ts";
+import type { HarnessPatternIndexClientFactory } from "./factory.ts";
 
 /**
  * The `RuntimeProgram` a published program compiles as. Every field the index

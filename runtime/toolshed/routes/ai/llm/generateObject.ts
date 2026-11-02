@@ -1,7 +1,7 @@
 import { DEFAULT_GENERATE_OBJECT_MODEL } from "@commonfabric/llm";
-import {
-  type LLMGenerateObjectRequest,
-  type LLMGenerateObjectResponse,
+import type {
+  LLMGenerateObjectRequest,
+  LLMGenerateObjectResponse,
 } from "@commonfabric/llm/types";
 import { trace } from "@opentelemetry/api";
 import {

@@ -102,7 +102,7 @@ import {
   noteDeclaredReadScope,
   scopeRank,
 } from "./scope.ts";
-import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
+import type { CellLinkRefPayload, SigilLink, URI } from "./sigil-types.ts";
 import {
   type Activity,
   createReadOnlyTransactionError,

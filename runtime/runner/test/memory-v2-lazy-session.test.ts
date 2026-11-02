@@ -4,7 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
-import { type Options as V2StorageOptions } from "../src/storage/v2.ts";
+import type { Options as V2StorageOptions } from "../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
   TEST_MEMORY_SERVER_AUTH,

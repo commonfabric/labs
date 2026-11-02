@@ -1,7 +1,7 @@
 import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { delegationCid } from "@commonfabric/identity";
-import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
+import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   encodeMemoryBoundary,

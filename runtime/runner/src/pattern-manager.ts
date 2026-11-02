@@ -19,7 +19,7 @@ import {
   setPatternSourcePath,
 } from "./builder/pattern-metadata.ts";
 import { namesInstances } from "./builder/instance-name.ts";
-import { Module, Pattern } from "./builder/types.ts";
+import type { Module, Pattern } from "./builder/types.ts";
 import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
 import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
@@ -60,9 +60,9 @@ import type {
   CompiledModuleArtifact,
   EvaluateResult,
   Exports,
+  RuntimeProgram,
   TypeScriptHarnessProcessOptions,
 } from "./harness/types.ts";
-import { RuntimeProgram } from "./harness/types.ts";
 import type { PatternCoverageCollector } from "./pattern-coverage.ts";
 import { snapshotQueryResult } from "./query-result-proxy.ts";
 import type { MemorySpace, Runtime, ServerRunInfo } from "./runtime.ts";

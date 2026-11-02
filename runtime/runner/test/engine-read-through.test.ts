@@ -17,7 +17,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { type ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

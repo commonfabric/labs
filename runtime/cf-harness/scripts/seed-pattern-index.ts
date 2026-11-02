@@ -29,9 +29,9 @@
  */
 
 import { basename, fromFileUrl, join } from "@std/path";
-import {
-  type PatternIndexClient,
-  type PatternIndexPublishRequest,
+import type {
+  PatternIndexClient,
+  PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
 import {
   compileAndSavePattern,

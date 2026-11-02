@@ -4,7 +4,7 @@ import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { type NormalizedFullLink } from "../link-utils.ts";
+import type { NormalizedFullLink } from "../link-utils.ts";
 import {
   isRendererTrustedEvent,
   propagateRendererTrustedEvent,

@@ -3,7 +3,7 @@ import {
   AutocompleteItemArraySchema,
   autocompleteValueSchema,
 } from "@commonfabric/runner/component-read-contract";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html, nothing, PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { classMap } from "lit/directives/class-map.js";

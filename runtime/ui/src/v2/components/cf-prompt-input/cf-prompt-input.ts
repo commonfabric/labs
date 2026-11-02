@@ -16,10 +16,7 @@ import {
 } from "../theme-context.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import { uploadFile } from "../../utils/file-cell-storage.ts";
-import {
-  type Mentionable,
-  type MentionableArray,
-} from "../../core/mentionable.ts";
+import type { Mentionable, MentionableArray } from "../../core/mentionable.ts";
 import { MentionController } from "../../core/mention-controller.ts";
 import { createCellController } from "../../core/cell-controller.ts";
 import { hasIncompleteUpload, toSendAttachment } from "./send-attachments.ts";

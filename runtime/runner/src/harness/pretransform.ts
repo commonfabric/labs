@@ -2,7 +2,7 @@ import type ts from "typescript";
 // Typescript-free contract module (see engine.ts) — safe to import eagerly
 // without pulling the compiler stack onto this module's graph.
 import { compilerStack } from "./deferred-compiler-stack.ts";
-import { RuntimeProgram } from "./types.ts";
+import type { RuntimeProgram } from "./types.ts";
 
 // For each source file in the program, inject the internal helper import used
 // by the AST transformer. Every file is transformed.

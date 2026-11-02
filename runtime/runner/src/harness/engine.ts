@@ -31,7 +31,7 @@ import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";
 import { popFrame, pushFrame } from "../builder/pattern.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import type { PatternCoverageCollector } from "../pattern-coverage.ts";
-import { type MemorySpace, Runtime } from "../runtime.ts";
+import type { MemorySpace, Runtime } from "../runtime.ts";
 import {
   createModuleCompartmentGlobals,
   createSafeConsoleGlobal,
@@ -92,15 +92,15 @@ import {
   pretransformProgramForModules,
   transformInjectHelperModule,
 } from "./pretransform.ts";
-import {
-  type CacheableModule,
-  type CompiledModuleArtifact,
-  type EvaluateResult,
-  type Exports,
-  type HarnessedFunction,
-  type ResolvedFabricPin,
-  type RuntimeProgram,
-  type TypeScriptHarnessProcessOptions,
+import type {
+  CacheableModule,
+  CompiledModuleArtifact,
+  EvaluateResult,
+  Exports,
+  HarnessedFunction,
+  ResolvedFabricPin,
+  RuntimeProgram,
+  TypeScriptHarnessProcessOptions,
 } from "./types.ts";
 import {
   attachDeclaredDataFiles,

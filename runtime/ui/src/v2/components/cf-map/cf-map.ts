@@ -9,7 +9,7 @@ import {
  * Displays markers, circles, and polylines with bidirectional Cell reactivity.
  * Uses OpenStreetMap tiles (no API key required).
  */
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 // @ts-types="@types/leaflet"
 import * as L from "leaflet";
 import { html, PropertyValues } from "lit";

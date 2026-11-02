@@ -14,7 +14,7 @@ import {
   transformCallableValues,
 } from "./callables.ts";
 import { encodeFuseComponent } from "./path-codec.ts";
-import { FsTree } from "./tree.ts";
+import type { FsTree } from "./tree.ts";
 
 type JsonPropName = "input" | "result";
 type PendingJsonRootName = ".input.pending" | ".result.pending";

@@ -8,7 +8,7 @@ import { createBuilder } from "../src/builder/factory.ts";
 import type { Pattern } from "../src/builder/types.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
