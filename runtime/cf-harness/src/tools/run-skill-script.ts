@@ -2,6 +2,7 @@ import { basename, isAbsolute, relative } from "@std/path";
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
@@ -1156,7 +1157,7 @@ export const runSkillScriptTool: HarnessToolDefinition<
         skill: input.skill,
         path: input.path,
         code: "script_path_invalid",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       });
       await context.recordSkillScriptExecution(
         buildExecutionRecord({ output, runId: context.runId, executedAt }),
@@ -1234,7 +1235,7 @@ export const runSkillScriptTool: HarnessToolDefinition<
         skill: skillName,
         path: normalizedPath,
         code,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
         resource,
         acquisition,
       });
@@ -1310,7 +1311,7 @@ export const runSkillScriptTool: HarnessToolDefinition<
         skill: skillName,
         path: normalizedPath,
         code,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
         resource,
         acquisition,
       });

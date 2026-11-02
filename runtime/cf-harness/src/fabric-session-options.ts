@@ -5,6 +5,7 @@
 
 import { resolve } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
 
 import type { HarnessFabricSessionConfig } from "./config.ts";
@@ -115,9 +116,7 @@ export const resolveHarnessFabricSessionConfig = (
       parsedCeiling = JSON.parse(rawMaxConfidentiality);
     } catch (error) {
       throw new Error(
-        `--max-confidentiality must be JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `--max-confidentiality must be JSON: ${describeFailure(error)}`,
       );
     }
     maxConfidentiality = readCeilingFromInput(

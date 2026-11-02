@@ -46,6 +46,7 @@ import {
   type NormalizedFullLink,
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -705,9 +706,6 @@ const fitsPositionCeiling = (
     atomsOutsideCeiling(confidentiality, ceiling).length === 0;
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Maps a failed commit to the writer's typed failure: a
  * `CfcCommitRefusalError` is the boundary's decision and becomes
@@ -811,7 +809,7 @@ export const writeAgentResult = async (
     throw new AgentResultWriteError(
       "invalid_result",
       `the structured result does not satisfy the result schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -855,7 +853,7 @@ export const writeAgentResult = async (
     } catch (error) {
       throw new AgentResultWriteError(
         "unresolvable_handle",
-        `a handle's address does not parse: ${errorMessage(error)}`,
+        `a handle's address does not parse: ${describeFailure(error)}`,
       );
     }
     if (link.space !== space) {

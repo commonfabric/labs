@@ -24,6 +24,7 @@ import {
   type SpaceDb,
 } from "@commonfabric/state-inspector";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HARNESS_CELL_LABELS_TYPE,
@@ -803,7 +804,7 @@ export const readSpaceCellLabels = async (
       ...base,
       status: "unavailable",
       unavailableReason: "space-not-found",
-      unavailableDetail: error instanceof Error ? error.message : String(error),
+      unavailableDetail: describeFailure(error),
       space: { configured: request.space },
       cells: [],
     };
@@ -866,7 +867,7 @@ export const readSpaceCellLabels = async (
       ...base,
       status: "unavailable",
       unavailableReason: "read-failed",
-      unavailableDetail: error instanceof Error ? error.message : String(error),
+      unavailableDetail: describeFailure(error),
       space,
       cells: [],
     };

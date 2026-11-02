@@ -1,4 +1,5 @@
 import { dirname, join, resolve } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   type HarnessModelProviderId,
@@ -24,9 +25,6 @@ export interface HarnessProviderResolution {
   provider: HarnessModelProviderId;
   source: "explicit" | "environment" | "persistent";
 }
-
-const detailOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const parseDocument = (text: string): HarnessProviderSettingsState => {
   let parsed: unknown;
@@ -264,7 +262,7 @@ export class FileHarnessProviderSettingsStore {
       return parseDocument(await Deno.readTextFile(this.path));
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return { state: "missing" };
-      return { state: "unreadable", detail: detailOf(error) };
+      return { state: "unreadable", detail: describeFailure(error) };
     }
   }
 

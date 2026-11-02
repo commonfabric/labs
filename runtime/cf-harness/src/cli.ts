@@ -8,6 +8,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { HarnessRunState } from "./run-state.ts";
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type {
@@ -46,7 +47,6 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
-import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -1024,9 +1024,7 @@ const parseAllowedSkillScripts = (
     );
   } catch (error) {
     throw new Error(
-      `invalid --allow-skill-script: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `invalid --allow-skill-script: ${describeFailure(error)}`,
     );
   }
 };
@@ -2924,7 +2922,7 @@ export const validateCfHarnessStructuredResult = async (
       schema_digest: schemaDigest,
       result_path: options.config.path,
       validation_error: `structured result did not match the schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -3811,7 +3809,7 @@ export const runCfHarnessCli = async (
       } catch (error) {
         throw new HarnessControlError(
           "provider-mismatch",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -4110,7 +4108,9 @@ export const runCfHarnessCli = async (
               engine: continuedEngine,
               config: parsed,
               onGrantsUnavailable: (error) =>
-                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+                io.stderr(
+                  `fabric grants: unavailable (${describeFailure(error)})\n`,
+                ),
             });
             return { messages, runState: continuedEngine.getRunState() };
           },
@@ -4300,9 +4300,7 @@ export const runCfHarnessCli = async (
         config: parsed,
         onGrantsUnavailable: (error) =>
           io.stderr(
-            `fabric grants: unavailable (${
-              error instanceof Error ? error.message : String(error)
-            })\n`,
+            `fabric grants: unavailable (${describeFailure(error)})\n`,
           ),
       });
       // The classification decides how much orientation the run starts
@@ -4398,7 +4396,7 @@ export const runCfHarnessCli = async (
     io.stderr(
       deps.structuredHostFailures
         ? `${JSON.stringify(createCfHarnessHostFailure(hostError))}\n`
-        : `${error instanceof Error ? error.message : String(error)}\n`,
+        : `${describeFailure(error)}\n`,
     );
     return 1;
   } finally {

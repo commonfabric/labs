@@ -17,6 +17,7 @@
  * rather than leaving it to proceed without what the caller attached.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type PatternIndexClient,
   PatternIndexError,
@@ -106,7 +107,7 @@ export const resolvePatternRefs = async (
         error instanceof PatternIndexError && error.status === 404
           ? `patternRefs \`${spec.patternId}\` is not in the pattern index`
           : `patternRefs \`${spec.patternId}\` could not be read from the pattern index: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
       );
     }
