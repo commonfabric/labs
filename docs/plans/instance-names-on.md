@@ -319,13 +319,13 @@ reach a deployment's spaces.
   `RuntimeOptions.experimental.instanceNames`, declares nothing and writes
   named data without marking the space (D3). Nothing on the server can tell it
   from a positional runtime.
-- What a client of a build older than `instanceNameMark` does with the
-  `session/revoked` reason `instance-names`, which its message parser does not
-  recognize, as it does not recognize `deleted`. The commit refusal keeps its
-  later commits out of the store, and its reopen is refused at admission, so
-  the revocation is about what the client shows, not about what reaches the
-  store. A client of such a build that only watches the space and never
-  reopens it keeps its session's view without learning why updates stopped.
+- What a client of a build whose message parser does not recognize the
+  `session/revoked` reason `instance-names` does with it, as such a parser
+  does not recognize `deleted`. The commit refusal keeps its later commits out
+  of the store, and its reopen is refused at admission, so the revocation is
+  about what the client shows, not about what reaches the store. A client of
+  such a build that only watches the space and never reopens it keeps its
+  session's view without learning why updates stopped.
 - Whether a space can be marked other than by a write, for an operator who wants
   a space closed to positional runtimes before anything writes it.
 - Server-side execution runs in the deployment's runtimes, which open spaces
