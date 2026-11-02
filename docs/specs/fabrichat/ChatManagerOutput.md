@@ -291,12 +291,13 @@ outward act when it creates a room, or offers one it finds.
   this user's host has accepted it for them (see [offers](#offers)). A found
   room that was offered `counterpart` nothing, since a notice for them of it is
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
-  `profile` is added to the room's participants, as for a new room, and the
-  notice is removed. The event sending that offer queues a notice for them
-  again when `profile` points at no inbox. A room whose roster already lists a profile
-  attesting `counterpart` is one they have joined, and is offered nothing; so is
-  one whose notice has been delivered. Nor is a room offered, and its notice
-  stays, when `requestId` is longer than an offer's `id` may be.
+  `profile` is added to the room's participants, as for a new room. The notice
+  stays, so that it still tells them of the room should the offer not be sent,
+  as when `profile` points at no inbox; once the offer puts them on the room's
+  roster, `outgoingNotices` leaves it out. A room whose roster already lists a
+  profile attesting `counterpart` is one they have joined, and is offered
+  nothing; so is one whose notice has been delivered. Nor is a room offered,
+  and its notice stays, when `requestId` is longer than an offer's `id` may be.
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct

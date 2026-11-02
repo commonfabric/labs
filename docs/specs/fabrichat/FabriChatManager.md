@@ -99,9 +99,10 @@ rooms this manager created or accepted. `openDirect` finds a direct room there
 and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
-offers a new room, once a request names a profile of theirs, and the notice is
-removed; the event that offers it queues a notice again when the profile points
-at no inbox. A counterpart the room's roster already lists
+offers a new room, once a request names a profile of theirs. The notice stays,
+so that it still tells them of the room should the offer not be sent, and
+`outgoingNotices` leaves it out once the offer puts them on the room's roster. A
+counterpart the room's roster already lists
 has joined the room, and is offered nothing. A room another manager created and
 offered the user is there too once the host's share intake accepts it on the
 user's behalf. `rooms` can also hold a second direct room with the same

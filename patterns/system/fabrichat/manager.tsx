@@ -29,8 +29,9 @@
  * no inbox. A member someone adds to a room later, from the room, is offered
  * it the same way, through `offerRoom`. A direct room's counterpart who got a
  * notice instead is offered the room the same way once a later start with
- * them names a profile of theirs pointing at an inbox, until they join it, and
- * the notice is withdrawn.
+ * them names a profile of theirs pointing at an inbox, until they join it. The
+ * notice stays, and is no longer listed once the offer puts them on the room's
+ * roster.
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
@@ -576,6 +577,12 @@ export interface OfferRoomEvent {
    * records no delivery.
    */
   recordsDelivery?: boolean;
+
+  /**
+   * Whether each member has a notice of the room waiting already, which a
+   * member offered nothing keeps in place of a new one.
+   */
+  noticeWaiting?: boolean;
 }
 
 /** What `offerRooms` is bound to. */
@@ -656,7 +663,8 @@ const offerEnvelope = (
  * room's participants the first profile it offered the room through, so that
  * the member is listed once however many inboxes they have. A member whose
  * profiles point at no inbox is offered nothing, and a notice for them, keyed
- * by the offer's `id`, is queued instead. Returns which of the two it did.
+ * by the offer's `id`, is queued instead, unless `noticeWaiting` says one
+ * waits already. Returns which of the two it did.
  */
 const offerToMember = (
   offer: RoomOffer,
@@ -664,10 +672,13 @@ const offerToMember = (
   { recipient, profiles }: OfferedMember,
   { outgoingNotices, joinRooms }: OfferRoomsState,
   sent: Cell<ShareInboxPiece>[],
+  noticeWaiting: boolean,
 ): ChatOfferDelivery => {
   const inboxes = distinctInboxes(profiles ?? []);
   if (inboxes.length === 0) {
-    outgoingNotices.push(noticeFor(recipient, offer.id, room));
+    if (!noticeWaiting) {
+      outgoingNotices.push(noticeFor(recipient, offer.id, room));
+    }
     return "noticed";
   }
   for (const { pointer } of inboxes) {
@@ -708,7 +719,14 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
     const offer = offerEnvelope(event.id, space, event.title ?? "", from);
     const sent: Cell<ShareInboxPiece>[] = [];
     for (const member of event.members ?? []) {
-      const delivery = offerToMember(offer, event.room, member, state, sent);
+      const delivery = offerToMember(
+        offer,
+        event.room,
+        member,
+        state,
+        sent,
+        event.noticeWaiting === true,
+      );
       if (event.recordsDelivery === true && delivery === "noticed") {
         state.requests.key(event.id).set({ status: "done", delivery });
       }
@@ -924,14 +942,14 @@ const createRoom = (
  * Helper for `openDirect`, which offers `room`, a direct room it found, to
  * `counterpart` through the share inbox `profile` points at, by `offerRooms`
  * as a new one is offered, when the room was offered them nothing: a notice
- * for them of the room is still waiting. The offer replaces each such notice,
- * so they are withdrawn, and `offerRooms` queues a notice again, keyed by
- * `requestId`, when the profile points at no inbox. A counterpart the room's
- * roster lists has joined the room already, and is offered nothing, and so is
- * one named by no profile, whose notice stays. So does the notice when
- * `requestId`, which keys the offer, is longer than a share inbox keeps an
- * offer's `id`, since the inbox would cut it short and could take it for
- * another's.
+ * for them of the room is still waiting. The notice stays, so that it still
+ * tells them of the room should the offer not be sent, as when the profile
+ * points at no inbox; once the offer adds them to the room's roster,
+ * `outgoingNotices` leaves it out. A counterpart the room's roster lists has
+ * joined the room already, and is offered nothing, and so is one named by no
+ * profile. Nothing is offered either when `requestId`, which keys the offer,
+ * is longer than a share inbox keeps an offer's `id`, since the inbox would
+ * cut it short and could take it for another's.
  */
 const reofferDirect = (
   state: ManagerActState,
@@ -940,24 +958,21 @@ const reofferDirect = (
   counterpart: string,
   profile: Cell<ChatManagerProfile> | undefined,
 ): void => {
-  const notices = state.outgoingNotices.get() ?? [];
-  const waiting = notices.filter((notice) =>
+  const waiting = (state.outgoingNotices.get() ?? []).some((notice) =>
     notice.recipient === counterpart && equals(notice.room, room)
   );
-  if (waiting.length === 0 || requestId.length > OFFER_ID_MAX_LENGTH) return;
+  if (!waiting || requestId.length > OFFER_ID_MAX_LENGTH) return;
   if (profile === undefined) return;
   const joined = (room.key("roster").get() ?? []).some((member) =>
     profileOwnerOf(member) === counterpart
   );
   if (joined || !isWellFormedDID(spaceOf(room))) return;
-  state.outgoingNotices.set(
-    notices.filter((notice) => !waiting.includes(notice)),
-  );
   state.offerRooms.send({
     room,
     id: requestId,
     title: "",
     members: [{ recipient: counterpart, profiles: [profile] }],
+    noticeWaiting: true,
   });
 };
 

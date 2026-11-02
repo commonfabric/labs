@@ -6,7 +6,8 @@
  * her manager. Grace has a stand-in of her own, with a private inbox in a space
  * of its own and a profile pointing at it through that labeled pointer. Ada
  * adds Grace to a group from the room, finds a direct room with her again with
- * a notice for her still waiting, and creates a group naming her profile. Each
+ * a notice for her still waiting, which stays until the offer lists her on
+ * the room's roster, and creates a group naming her profile. Each
  * request's outcome lands in Ada's records, and, with handlers run by each
  * session's own runtime, each offer reaches Grace's inbox and lists her on the
  * room's roster.
@@ -217,7 +218,7 @@ describe("fabrichat labeled inbox pointer across runtimes", () => {
     );
   });
 
-  it("offers a direct room found again to its counterpart, and withdraws their notice", async () => {
+  it("offers a direct room found again to its counterpart, and stops listing their notice", async () => {
     // A start naming Grace by principal alone creates the room and queues a
     // notice for her, since it has no profile to offer the room through.
     await ada.send("openDirect", {
@@ -240,8 +241,15 @@ describe("fabrichat labeled inbox pointer across runtimes", () => {
     }, START_ACTION);
     await harness.settle();
     expect(await ada.read(["requests", "d-again", "status"])).toBe("done");
-    expect(await ada.read(["outgoingNotices", "length"])).toBe(0);
     await expectOffered(direct, "d-again", refusedBefore);
+
+    // Her notice stays, should the offer not be sent, and is no longer listed
+    // once the offer puts her on the room's roster. Under server execution
+    // the offer is refused, as `expectOffered()` pins, and the notice is
+    // still listed.
+    expect(await ada.read(["outgoingNotices", "length"])).toBe(
+      SERVER_EXECUTION ? 1 : 0,
+    );
   });
 
   it("offers a group created naming the member's profile", async () => {
