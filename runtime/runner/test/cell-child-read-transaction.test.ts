@@ -50,7 +50,7 @@ describe("cell child read transaction", () => {
       parentSchema as JSONSchema,
       tx,
     );
-    parent.setRaw({ child: { count: 1 } });
+    parent.asSchema<unknown>(undefined).setRaw({ child: { count: 1 } });
     await tx.commit().settled;
     return parent.withTx();
   };
@@ -103,7 +103,9 @@ describe("cell child read transaction", () => {
         } as JSONSchema,
       );
       const tx = runtime.edit();
-      outer.withTx(tx).setRaw({ parent: parent.getAsLink() });
+      outer.withTx(tx).asSchema<unknown>(undefined).setRaw({
+        parent: parent.getAsLink(),
+      });
       await tx.commit().settled;
 
       const grandchild = outer.get().parent.get().child;
