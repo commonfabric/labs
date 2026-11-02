@@ -616,6 +616,7 @@ export class SpaceOutbox {
         // from the host's counter.
         if (this.#route !== undefined) {
           await this.#route.append(row.targetSpace as MemorySpace, entry);
+          this.#stats.routed.appends += 1;
         } else {
           await this.#server.commitDelegatedAppend({
             ...entry,

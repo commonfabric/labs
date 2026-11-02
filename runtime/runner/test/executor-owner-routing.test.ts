@@ -1539,12 +1539,14 @@ export default pattern<
     });
     planes.push(plane);
     const inner = recordingSink();
-    const sink = routedWaveCommitSink(inner, plane.scope(), homeSpace);
+    const stats = emptyServingLoopStats();
+    const sink = routedWaveCommitSink(inner, plane.scope(), homeSpace, stats);
 
     const foreign = await sink.commitWave(foreignBatch(targetSpace));
     expect(foreign.error?.name).toBe("WaveCommitRejected");
     expect(foreign.error?.message).toContain("unreachable");
     expect(inner.batches).toEqual([]);
+    expect(stats.routed.batches).toBe(0);
 
     const home = await sink.commitWave({
       ...foreignBatch(homeSpace),
@@ -1570,7 +1572,8 @@ export default pattern<
       dispose: () => {},
     };
     const inner = recordingSink();
-    const sink = routedWaveCommitSink(inner, scope, homeSpace);
+    const stats = emptyServingLoopStats();
+    const sink = routedWaveCommitSink(inner, scope, homeSpace, stats);
 
     expect((await sink.commitWave(foreignBatch(targetSpace))).ok?.seq).toBe(
       11,
@@ -1589,5 +1592,6 @@ export default pattern<
       { kind: "acl", space: targetSpace },
     ]);
     expect(inner.batches).toEqual([]);
+    expect(stats.routed).toEqual({ appends: 0, batches: 1, aclChanges: 1 });
   });
 });

@@ -285,24 +285,25 @@ export function serverExecutionWorkerFromEnv(
 /**
  * Whether the serving loop reaches every space but the ones it serves through
  * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
- * docs/plans/serving-loop-owner-routing.md): the literal `true` turns the
- * route on; `false`, unset or empty leaves every crossing on this process's
- * own memory server. Anything else warns and leaves it off.
+ * docs/plans/serving-loop-owner-routing.md): on unless the variable is the
+ * literal `false`, which leaves every crossing on this process's own memory
+ * server. `true`, unset and empty select the default; anything else warns
+ * and selects it too.
  */
 export function ownerRoutingFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
 ): boolean {
   const raw = envGet("SERVER_EXECUTION_OWNER_ROUTING");
-  if (raw === "true") return true;
-  if (raw !== undefined && raw !== "" && raw !== "false") {
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "" && raw !== "true") {
     warn(
       "Server-execution v2: ignoring SERVER_EXECUTION_OWNER_ROUTING=" +
         `${JSON.stringify(raw)} (expected "true" or "false"); crossings ` +
-        "stay on this process's memory server",
+        "reach each space's owner, the default",
     );
   }
-  return false;
+  return true;
 }
 
 /**
@@ -397,19 +398,27 @@ export function startServerExecutionHost(options: {
     );
   }
   const ownerRouting = ownerRoutingFromEnv(envGet);
-  if (ownerRouting && options.memoryUrl === undefined) {
+  if (!ownerRouting) {
+    console.log(
+      "Server-execution v2: owner routing OFF by " +
+        "SERVER_EXECUTION_OWNER_ROUTING=false (crossings stay on this " +
+        "process's memory server; default is ON)",
+    );
+  } else if (options.memoryUrl === undefined) {
     console.warn(
-      "Server-execution v2: SERVER_EXECUTION_OWNER_ROUTING=true with no " +
-        "memory endpoint to route through; crossings stay on this process's " +
-        "memory server",
+      "Server-execution v2: owner routing is on with no memory endpoint to " +
+        "route through; crossings stay on this process's memory server",
     );
   }
   const memoryUrl = ownerRouting ? options.memoryUrl : undefined;
   if (memoryUrl !== undefined) {
     console.log(
-      "Server-execution v2: owner routing ON by " +
-        `SERVER_EXECUTION_OWNER_ROUTING=true (crossings reach each space's ` +
-        `owner through ${memoryUrl.href}; default is OFF)`,
+      "Server-execution v2: owner routing ON " +
+        (envGet("SERVER_EXECUTION_OWNER_ROUTING") === "true"
+          ? "by SERVER_EXECUTION_OWNER_ROUTING=true"
+          : "(the default; SERVER_EXECUTION_OWNER_ROUTING=false keeps " +
+            "every crossing on this process's memory server)") +
+        ` (crossings reach each space's owner through ${memoryUrl.href})`,
     );
     route = new RoutedPlane(
       webSocketRoute(memoryUrl, options.identity, toolshedClientBuild()),

@@ -58,8 +58,12 @@ lease holder's process component is minted by the main thread per worker
 start, so a worker started in place of one that died never shares its
 predecessor's holder.
 [`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
-places each crossing; the in-process arrangement, the default, is
-unchanged.)*
+places each crossing. A host with the loop on its main thread
+(`SERVER_EXECUTION_WORKER=false`) does the same work without the port.
+Either way, the loop's crossings into other spaces go to those spaces'
+owners over the deployment's route
+([owner routing](../../plans/serving-loop-owner-routing.md), on by
+default); a host given no route keeps them on its own memory server.)*
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
 events; otherwise it MAY be parked (lease released, loop stopped, and
@@ -775,11 +779,12 @@ executing:
   2026-08-18/19; protocol.md §2b's free-read row carries the full
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
-  With owner routing (`docs/plans/serving-loop-owner-routing.md`) that
-  session reaches the foreign space's owner from the home's process,
-  and the owner's commits wake the home loop over it; without the
-  route the session is on the home's own memory server, which v2 then
-  assumes holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
+  That session reaches the foreign space's owner from the home's
+  process over the deployment's route (owner routing,
+  `docs/plans/serving-loop-owner-routing.md`, on by default), and the
+  owner's commits wake the home loop over it; a host given no route
+  opens the session on its own memory server, which v2 then assumes
+  holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
   the registration; a foreign commit's frames arrive on that session,
   the scheduler runs autonomously off storage notifications, and the
@@ -1882,15 +1887,15 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's `eventId` horizon keeps processing exactly-once.
   This closes the crash window between wave commit and delivery
   that a process-local append queue could not survive.
-  **Delivery path.** Without a route, a row is delivered as a
-  delegated append on the host's own memory server. With the host
-  given a route to each space's owner
-  (`SERVER_EXECUTION_OWNER_ROUTING`,
-  [owner routing](../../plans/serving-loop-owner-routing.md)), a
-  row is delivered as a `served` `append` on the target's routed
-  session (04-protocol.md §4.3.12), which the owner admits exactly
-  as its own host's delegated append; the host keeps one such
-  session per target space for as long as a tenure uses it. The
+  **Delivery path.** A row is delivered as a `served` `append` on
+  the target's routed session (04-protocol.md §4.3.12) over the
+  host's route to each space's owner
+  (`SERVER_EXECUTION_OWNER_ROUTING`, on by default,
+  [owner routing](../../plans/serving-loop-owner-routing.md)),
+  which the owner admits exactly as its own host's delegated
+  append; the host keeps one such session per target space for as
+  long as a tenure uses it. A host given no route delivers the row
+  as a delegated append on its own memory server. The
   owner's `refused` answer is LT4's deterministic rejection, which
   writes the failure notice in the source; `unavailable`,
   `internal` and a transport failure are transient, and the row is
@@ -2044,7 +2049,8 @@ structureLoadConfirmationsSkipped, structureLoadRearmed, originFollows,
 watermarkClamped,
 storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
 foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
-undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
+undemandedNarrowingRuns, earlyEmitRefusals, routed: {appends, batches,
+aclChanges}, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
@@ -2155,7 +2161,14 @@ never a home-space outage; `warmRequests` counts explicit warm
 requests issued — one per foreign provisioning batch a wave durably
 committed (§1's third activation trigger, RULED 2026-08-21) — so a
 provisioning flow whose target never derives its staged setup is
-diagnosable from the issue count against the target's activity) (`effectAcks` counts
+diagnosable from the issue count against the target's activity;
+`routed` counts the crossings sent to another space's owner through
+the deployment's route (serving-loop-owner-routing.md), by kind and
+once the owner answered — the outbox's event appends, the wave's
+foreign batches and its access-list changes into other spaces — so a
+deployment reads there whether routing carries its crossings: zero
+with the route off, and on a process every crossing of which stays
+home) (`effectAcks` counts
 effect-channel ack writes, so the
 §3 amplification metric is computable from counters alone —
 `settleAdvances` counts S1's drain-settle quiescence advances (RULED

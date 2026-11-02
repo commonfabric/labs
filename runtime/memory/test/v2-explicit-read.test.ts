@@ -279,6 +279,54 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
   }
 });
 
+Deno.test("explicit entity_scope_key reads: an anonymous session naming a key is refused, since without a principal it serves nothing (protocol.md §2's read row)", async () => {
+  const server = newServer("memory://explicit-read-anonymous");
+  setServerExecutionConfig(true);
+  try {
+    const anonymous = await connect(server);
+    await anonymous.connection.receive(encodeMemoryBoundary({
+      type: "session.open",
+      requestId: nextRequestId("open-anonymous"),
+      space: SPACE,
+      session: {},
+      invocation: {
+        aud: anonymous.sessionOpen.audience,
+        challenge: anonymous.sessionOpen.challenge.value,
+      },
+    }));
+    const opened = shiftMessage(anonymous.messages) as ResponseMessage<
+      { sessionId: string }
+    >;
+    assertExists(opened.ok, JSON.stringify(opened.error));
+
+    const refused = await server.graphQuery({
+      type: "graph.query",
+      requestId: nextRequestId("anonymous-named"),
+      space: SPACE,
+      sessionId: opened.ok.sessionId,
+      query: {
+        roots: [{
+          id: "of:profile",
+          scope: "user",
+          entityScopeKey: resolveScopeKey("user", { principal: ALICE }),
+          selector: { path: [], schema: false },
+        }],
+      },
+    });
+
+    assertEquals(refused.ok, undefined);
+    assertEquals(refused.error?.name, "ProtocolError");
+    assertEquals(
+      refused.error?.message.includes("not the deployment's service identity"),
+      true,
+      JSON.stringify(refused.error),
+    );
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
+  }
+});
+
 // Delivery to a session admitted an explicit-instance read: the keying it was
 // admitted with is the session's wire vocabulary for its life, and so is the
 // delivery of the instances it named (protocol.md §3). Neither hangs from the

@@ -64,7 +64,7 @@ was last checked against the code.
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
-| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | off | Bernhard Seefeld (serve each space from the process that owns it) | land the routed crossings stage by stage, turn the route on by default, then delete the knob and the in-process crossings | implemented for every crossing, off by default |
+| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | soak with the default on, move the lease into memory, then delete the knob and the in-process crossings | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -2195,9 +2195,9 @@ the per-epic implementation notes).
 - **Toggle via.** The `SERVER_EXECUTION_OWNER_ROUTING` environment variable on
   toolshed, read by the serving-host bootstrap
   ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts)).
-  The literal `true` turns the route on; `false`, unset or empty leaves every
-  crossing on the process's own memory server, and other values warn and do
-  the same. The route is `MEMORY_URL`, the deployment's memory endpoint that
+  The literal `false` leaves every crossing on the process's own memory
+  server; `true`, unset or empty turn the route on, and other values warn and
+  turn it on. The route is `MEMORY_URL`, the deployment's memory endpoint that
   its proxy routes by space. Meaningful only with the serving loop running
   ([`serverExecution`](#serverexecution) on). The runner's tests give their
   `ExecutorHost` a route as an option instead, and every test of a routed
@@ -2223,16 +2223,24 @@ the per-epic implementation notes).
   the owner too, so the owner's commits wake it.
   [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
   is the design and its stages.
-- **Current default and planned end state.** Off by default. The end state is
-  the route on without a knob, every crossing through the owner, and the lease
-  kept in memory rather than in the store.
+- **Current default and planned end state.** On by default in toolshed,
+  which always has `MEMORY_URL`; the runner's harnesses route only where a
+  test hands their host a route. The end state is the route without a knob,
+  every crossing through the owner, and the lease kept in memory rather than
+  in the store.
 - **Status on 2026-11-01.** Implemented for event appends, the registration
-  delivery, foreign wave batches, access-list changes, genesis and reads, off
-  by default. The served request admits every kind, and the memory server's
-  read row admits a routed service-identity session under the read actor's
-  grant.
-- **Path to removal.** Turn the route on by default once a release with it has
-  been deployed, then delete the knob and the in-process crossings.
+  delivery, foreign wave batches, access-list changes, genesis and reads, and
+  on by default in toolshed. The served request admits every kind, and the
+  memory server's read row admits a routed service-identity session under the
+  read actor's grant.
+  [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
+  runs two toolshed processes behind a proxy that routes by space. The
+  crossings a process sent through the route are counted by kind under
+  `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
+  deployment reads there whether routing carries its crossings.
+- **Path to removal.** Once a release with the route on has been deployed to
+  every process, the plan's stage L moves the lease into memory; then delete
+  the knob and the in-process crossings.
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 
