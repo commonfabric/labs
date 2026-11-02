@@ -9,6 +9,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -596,6 +597,54 @@ describe("space access loss notification", () => {
         ]);
       } finally {
         await processor.dispose();
+        subscribe.restore();
+        post.restore();
+        await storage.close();
+      }
+    });
+
+    it("sends the user's Home a mark for a deleted space, and none for another loss", async () => {
+      const identity = await Identity.fromPassphrase(
+        "processor deleted space mark",
+      );
+      const storage = StorageManager.emulate({ as: identity });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager: storage,
+      });
+      let loss: ((space: MemorySpace, error: Error) => void) | undefined;
+      const subscribe = stub(
+        storage,
+        "subscribeSpaceAccessLoss",
+        (observer) => {
+          loss = observer;
+          return () => {};
+        },
+      );
+      const marked: MemorySpace[] = [];
+      const mark = stub(
+        PiecesController.prototype,
+        "markDeletedSpace",
+        (space) => {
+          marked.push(space);
+          return Promise.resolve("sent" as const);
+        },
+      );
+      const post = stub(ownerClient, "post", () => true);
+      const processor = buildProcessor({
+        runtime,
+        identity,
+        space: identity.did(),
+      });
+      try {
+        const gone = "did:key:z6Mk-processor-marked-gone" as MemorySpace;
+        const other = "did:key:z6Mk-processor-marked-other" as MemorySpace;
+        loss!(gone, deletedRefusal());
+        loss!(other, new Error("access denied"));
+        expect(marked).toEqual([gone]);
+      } finally {
+        await processor.dispose();
+        mark.restore();
         subscribe.restore();
         post.restore();
         await storage.close();

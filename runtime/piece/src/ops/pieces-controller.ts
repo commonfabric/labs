@@ -127,6 +127,10 @@ import {
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
 import {
+  type DeletionMarkDecision,
+  markDeletedSpaceOf,
+} from "./mark-deleted-space.ts";
+import {
   advertisedSystemRelease,
   reconcilePieceSource,
 } from "./piece-origin.ts";
@@ -2589,6 +2593,24 @@ export class PiecesController<T = unknown> {
       this.runtime.userIdentityDID,
       space,
     );
+  }
+
+  /**
+   * Records in Home's shared-space catalog that `space` is deleted, as
+   * `markDeletedSpaceOf()` says, for a Home the identity has: a Home is not
+   * created for it, and `no-home` is answered where there is none. This
+   * controller must be over the identity's Home space.
+   *
+   * Resolves with what was decided, once any mark is sent, which is before
+   * Home has handled it.
+   */
+  async markDeletedSpace(
+    space: MemorySpace,
+  ): Promise<DeletionMarkDecision | "no-home"> {
+    this.#assertHomeSpace("mark a deleted space");
+    const home = await this.getDefaultPattern(false);
+    if (home === undefined) return "no-home";
+    return await markDeletedSpaceOf(home, space);
   }
 
   #assertHomeSpace(operation: string): void {

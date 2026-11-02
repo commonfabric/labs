@@ -1130,13 +1130,15 @@ export class RuntimeProcessor {
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
       ?.subscribeSpaceAccessLoss?.((space, error) => {
+        const deleted = isDeletedSpaceError(error);
         for (const client of clients()) {
           client.post({
             type: NotificationType.SpaceAccessLost,
             space,
-            ...(isDeletedSpaceError(error) && { deleted: true as const }),
+            ...(deleted && { deleted: true as const }),
           });
         }
+        if (deleted) this.#markDeletedSpace(space);
       });
     // An access change is a denial or a recovery, and only a recovery leaves
     // the space with no access error. A storage manager that cannot say what
@@ -3015,6 +3017,26 @@ export class RuntimeProcessor {
       space: this.#runtime.userIdentityDID,
     };
     return new PiecesController(homeSession, this.#runtime);
+  }
+
+  /**
+   * Records in the user's Home catalog that `space` is deleted, as the
+   * runtime that hears of a deletion does (`docs/features/shared-space-catalog.md`,
+   * "Deleted spaces"), without creating a Home the user has none of. Home's
+   * handler asks the server itself before it writes, and a mark that loses
+   * the race to another runtime's is an expected conflict, so nothing waits
+   * for the handling. A failure to send is reported and not retried: a
+   * deleted space is refused once more only when the space is asked for
+   * again, and its notice then sends the mark again.
+   */
+  #markDeletedSpace(space: MemorySpace): void {
+    this.#homeController().markDeletedSpace(space).catch((error) => {
+      if (this.#isDisposed) return;
+      console.warn(
+        `[RuntimeProcessor] Marking the deleted space ${space} in Home:`,
+        error,
+      );
+    });
   }
 
   async handleIdle(): Promise<void> {
