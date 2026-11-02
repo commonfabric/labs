@@ -10,7 +10,6 @@ import {
   type FeedItem,
   GLOW_MS,
   kindColor,
-  markdown,
   render,
   type ScreenState,
 } from "./screen.ts";
@@ -26,6 +25,7 @@ function topic(fields: Partial<Topic>): Topic {
     title: "Flaky fryer test",
     body: "The fryer test fails.",
     createdAt: NOW - 86_400_000,
+    updatedAt: NOW - 86_400_000,
     createdBy: "Sol (agent)",
     lastActivityAt: NOW - 86_400_000,
     comments: [],
@@ -433,74 +433,6 @@ describe("screen", () => {
       expect(animating(moving, NOW + GLOW_MS)).toBe(false);
       expect(animating(touched, NOW + GLOW_MS)).toBe(false);
       expect(animating(state({}), NOW)).toBe(false);
-    });
-  });
-
-  describe("markdown()", () => {
-    /** `text` drawn `width` wide, as plain text. */
-    function plain(text: string, width = 30): string[] {
-      return markdown(text, width).map((row) =>
-        row.map((span) => span.text).join("")
-      );
-    }
-
-    it("draws headings, lists, quotes, code, emphasis, and links without their markup", () => {
-      expect(
-        plain(
-          "# Title\n\n- one **two**\n  1. three\n> quoted\n```\ncode()\n```\n*soft* [link](https://x)",
-        ),
-      ).toEqual([
-        "Title",
-        "",
-        "• one two",
-        "  1. three",
-        "▎ quoted",
-        "code()",
-        "soft link",
-      ]);
-    });
-
-    it("wraps at word boundaries, breaking a word longer than the width", () => {
-      expect(plain("aaa bbb ccc", 7)).toEqual(["aaa bbb", "ccc"]);
-      expect(plain("abcdefghij", 4)).toEqual(["abcd", "efgh", "ij"]);
-    });
-
-    it("puts a character wider than the width on a row of its own, and keeps a long list number from taking the row", () => {
-      expect(plain("a 日本 b", 1)).toEqual(["a", "日", "本", "b"]);
-      expect(plain(`${"9".repeat(40)}. item`, 10)).toEqual([
-        "99999… ite",
-        "       m",
-      ]);
-    });
-
-    it("draws an indented heading or quote as one", () => {
-      expect(plain("  ## Head\n  > quoted")).toEqual(["Head", "▎ quoted"]);
-    });
-
-    it("measures an emoji of several code points as two columns, as terminals draw it", () => {
-      for (const emoji of ["⚠️", "👨‍👩‍👧", "👍🏽", "🇺🇸"]) {
-        expect(plain(emoji.repeat(3), 4)).toEqual([emoji.repeat(2), emoji]);
-      }
-    });
-
-    it("wraps a word of a hundred thousand characters in one pass", () => {
-      expect(plain("x".repeat(100_000), 50)).toEqual(
-        Array(2000).fill("x".repeat(50)),
-      );
-    });
-
-    it("wraps the lines of a paragraph together", () => {
-      expect(plain("one two\nthree\nfour five", 10)).toEqual([
-        "one two",
-        "three four",
-        "five",
-      ]);
-    });
-
-    it("drops trailing blank lines and collapses runs of blank lines", () => {
-      expect(plain("one\n\n\n\ntwo\n\n")).toEqual(["one", "", "two"]);
-      expect(plain("\n\n")).toEqual([]);
-      expect(plain("one\n\n```")).toEqual(["one"]);
     });
   });
 });

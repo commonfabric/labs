@@ -79,6 +79,9 @@ export interface Span {
 
   /** Strikethrough, likewise. */
   readonly strikethrough?: boolean;
+
+  /** Where the text links to, for a rendered Markdown link. */
+  readonly href?: string;
 }
 
 /** One logical display line and its colored spans. */
@@ -91,6 +94,44 @@ export interface Line {
 
   /** The rendered text omits source content that a changed diff line must show. */
   readonly renderedSourceHidden?: boolean;
+
+  /**
+   * Set on a rendered Markdown line that continues the paragraph of the line
+   * before it, across a soft line break, so that a view which reflows prose
+   * joins the two. The line's text begins with its {@link hang}.
+   */
+  readonly continues?: true;
+
+  /**
+   * What a rendered Markdown line's container puts before each of its
+   * lines but the first: the quote bars and list indentation a view that
+   * wraps the line starts each further row with.
+   */
+  readonly hang?: string;
+
+  /**
+   * Set on a rendered Markdown line whose columns matter, a line of a code
+   * block or a table, which a view cuts or wraps rather than reflows.
+   */
+  readonly preformatted?: true;
+
+  /**
+   * Set on each line of a rendered Markdown table, so that a view can lay
+   * the table out at its own width, wrapping each cell in its column.
+   */
+  readonly table?: TableRow;
+}
+
+/** A row of a rendered Markdown table, or the rule under its header. */
+export interface TableRow {
+  /** Each cell, rendered; none for the rule. */
+  readonly cells?: readonly Line[];
+
+  /** How each column's cells align. */
+  readonly align: readonly ("left" | "center" | "right")[];
+
+  /** Whether the row is the header. */
+  readonly header: boolean;
 }
 
 /** Kinds of structural nodes surfaced in the navigation tree. */

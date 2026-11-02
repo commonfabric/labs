@@ -13,6 +13,7 @@ function topic(fields: Partial<Topic>): Topic {
     title: "Fryer",
     body: "Body.",
     createdAt: 100,
+    updatedAt: 100,
     createdBy: "Sol (agent)",
     lastActivityAt: 100,
     comments: [],

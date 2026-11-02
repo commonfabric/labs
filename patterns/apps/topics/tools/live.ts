@@ -7,6 +7,7 @@
  */
 
 import type { SpaceSession } from "@commonfabric/memory/v2/client";
+import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 
 import { linkOf, type MirrorData } from "./mirror.ts";
 import {
@@ -23,6 +24,7 @@ import {
   locateBoard,
   queryDocs,
   type Refreshed,
+  ridingHoldings,
   watchOf,
 } from "./sync.ts";
 
@@ -91,22 +93,27 @@ async function follow(
   };
   // Watches afresh what the copy holds or knows to be missing, where entries
   // stop leading anywhere, and `also`.
-  // The first watch declares the revisions the copy holds, with the
-  // content-addressed documents that ride along, as many as one request may,
-  // so that the server sends only what moved; the rest go in watches of
-  // their own.
+  // The first watch declares the revisions the copy holds, with those of
+  // the documents that ride along, a content-addressed one or a piece, as
+  // many as one request may, so that the server sends only what moved; the
+  // rest go in watches of their own.
   const rewatch = async (also: readonly string[] = []) => {
     watched = new Set([...heldContent(data), ...absent, ...waiting, ...also]);
     const all = [...watched];
-    const addressed = Object.keys(data.docs).filter((id) =>
-      id.startsWith("cid:")
+    const riding = ridingHoldings(
+      Object.entries(data.docs).map(([id, doc]) => holding(id, doc)),
+      watched,
     );
-    const declared = all.slice(0, declarable(addressed.length));
+    const declared = all.slice(0, declarable(riding.length));
+    const holdings = declared.flatMap((id) =>
+      id in data.docs ? [holding(id, data.docs[id])] : []
+    );
     const { sync, view } = await session.watchSetSync(
       [watchOf("topics-live", declared)],
-      [...declared, ...addressed].flatMap((id) =>
-        id in data.docs ? [holding(id, data.docs[id])] : []
-      ),
+      [
+        ...holdings,
+        ...riding.slice(0, ROUTED_HOLDINGS_LIMIT - holdings.length),
+      ],
     );
     added = 0;
     return {
@@ -166,8 +173,13 @@ async function follow(
     const newer = docs.filter((doc) =>
       (data.docs[doc.id]?.seq ?? -1) < doc.seq
     );
+    // A new revision of a document the copy holds for its revision alone,
+    // a piece the Topic's run moved, say, changes nothing it shows.
+    const shown = newer.some((doc) =>
+      !doc.riding || data.docs[doc.id]?.value !== undefined
+    );
     applyDocs(data, newer, absent);
-    if (assemble || newer.length > 0) {
+    if (assemble || shown) {
       assemble = false;
       waiting.clear();
       await changed(await assembleBoard(data, boardInput, source, absent));
