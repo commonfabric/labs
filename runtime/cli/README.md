@@ -674,8 +674,9 @@ viewer does not try that file again.
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
-by the width of the line's leading punctuation and whitespace, when the row has
-room for that indentation.
+by the width of the line's leading punctuation and whitespace. A row is drawn
+unindented when it could hold the rest of the line only without the indentation,
+or when it is too narrow for the indentation and any text.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
