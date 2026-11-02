@@ -27,6 +27,7 @@ import {
   processInstanceId,
 } from "../v2/execution-lease.ts";
 import { Server } from "../v2/server.ts";
+import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
 import {
   type ClientCommit,
   resetServerExecutionConfig,
@@ -218,6 +219,7 @@ Deno.test("releaseAllOf: frees every lease of one holder, counts them, and leave
 
 Deno.test("failure notice: the server patches the source entry only under the lease, once, and leaves a compacted entry alone", async () => {
   const server = new Server({
+    ...testSessionOpenServerOptions,
     store: new URL("memory://lease-failure-notice"),
   });
   setServerExecutionConfig(true);
@@ -512,6 +514,10 @@ Deno.test("discipline (C7a): a probe sealed before a release never commits — t
 
     assert(await cycle.acquire());
     const sealedTenure = cycle.tenure; // work seals under the first tenure
+
+    // A double acquire must not abort the tenure's in-flight work.
+    assert(await cycle.acquire());
+    assert(cycle.isCurrentTenure(sealedTenure));
 
     // A park releases the lease: the tenure ends HERE, before any reacquire
     // is possible — "stop committing immediately".

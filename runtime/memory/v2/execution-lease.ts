@@ -22,9 +22,6 @@ export const processInstanceId: string = crypto.randomUUID();
 /** The component holders are minted with: the adopted one, else the realm's. */
 let currentProcessInstance: string = processInstanceId;
 
-/** The process-instance component every holder minted from now on carries. */
-export const currentProcessInstanceId = (): string => currentProcessInstance;
-
 /**
  * Makes `id` the process-instance component of every holder minted from here
  * on. The serving loop's worker adopts the component the process minted for
@@ -50,21 +47,6 @@ export const executionLeaseHolder = (
   serviceIdentity: string,
   processInstance: string = currentProcessInstance,
 ): string => `${serviceIdentity}#${processInstance}`;
-
-/**
- * The service-identity component of a DR1 holder — everything before the
- * process-instance suffix. The lease-holder READ admission (protocol.md
- * §2's read row) matches a session's authenticated principal against
- * this: the holder is `<serviceIdentity>#<processInstance>` and the
- * process instance is a UUID (never containing `#`), so the last `#`
- * splits exactly.
- */
-export const serviceIdentityOfExecutionLeaseHolder = (
-  holder: string,
-): string => {
-  const separator = holder.lastIndexOf("#");
-  return separator === -1 ? holder : holder.slice(0, separator);
-};
 
 /**
  * The map a memory server keeps from space to lease holder. A `Server` shares
