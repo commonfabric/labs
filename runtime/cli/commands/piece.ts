@@ -2177,7 +2177,12 @@ stored clause the input's confidentiality list does not name is removed from
 the declared label, from the labels derived from what was written there (the
 shape and value entries get-label shows), and from a link's own label. The
 input holds confidentiality alone, naming only clauses the path already
-stores. Labels at other paths, an ancestor's included, are not changed.`,
+stores. Labels at other paths, an ancestor's included, are not changed. A write
+redirect at the path is followed, as a write follows it, and the labels where
+it leads are lowered; with --link-slot, the labels of the link stored at the
+path are lowered instead. Use --link-slot when a lowering refuses on the label
+of a write redirect the path follows: the clause is on the link itself, not on
+where it leads.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)
@@ -2199,6 +2204,12 @@ stores. Labels at other paths, an ancestor's included, are not changed.`,
       ),
       "Remove every confidentiality clause stored at a value you own.",
     )
+    .example(
+      cliText(
+        `echo '{"confidentiality":[]}' | cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} profile --dangerously-allow-lowering-confidentiality --link-slot`,
+      ),
+      "Remove the confidentiality clauses a link stores on itself.",
+    )
     .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
     .option(
       "--input",
@@ -2214,8 +2225,18 @@ stores. Labels at other paths, an ancestor's included, are not changed.`,
         "alone: its DID, User, Context or Resource naming it, or its own " +
         "space as Space or PersonalSpace. Refused when the path also shows " +
         "a clause the input does not name from an ancestor's or wildcard " +
-        "label or the piece's own schema. Records a receipt of the removal, " +
-        "readable by the identity alone, in that space.",
+        "label, a write redirect's own label, or the piece's own schema. " +
+        "Records a receipt of the removal, readable by the identity alone, " +
+        "in that space.",
+    )
+    .option(
+      "--link-slot",
+      "With --dangerously-allow-lowering-confidentiality, lower the labels " +
+        "of a link stored at the path itself, write redirect included, " +
+        "rather than following a write redirect there to the labels where " +
+        "it leads. The labels of the link's target are left as they are. " +
+        "Needed when a lowering refuses on the label of a write redirect the " +
+        "path follows.",
     )
     .option(
       "--json",
@@ -3208,6 +3229,12 @@ export interface PieceLabelCLIOptions extends PieceCLIOptions {
 export interface PieceSetLabelCLIOptions extends PieceLabelCLIOptions {
   /** Lower confidentiality at the path rather than adding to it. */
   dangerouslyAllowLoweringConfidentiality?: boolean;
+
+  /**
+   * In a lowering, lower the labels of a link stored at the path itself
+   * rather than following a write redirect there.
+   */
+  linkSlot?: boolean;
 }
 
 export interface PieceLabelCommandDependencies {
@@ -3676,6 +3703,7 @@ export async function setCellCfcLabelFromCommand(
       ...(options.dangerouslyAllowLoweringConfidentiality === true
         ? { lowerConfidentiality: true }
         : {}),
+      ...(options.linkSlot === true ? { linkSlot: true } : {}),
     },
   );
   (deps.render ?? render)(label, { json: true });
