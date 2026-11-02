@@ -2995,6 +2995,9 @@ export class CellImpl<T extends FabricValue>
       if (firedEventId !== undefined && sendOptions?.echo === false) {
         if (settleCallback !== undefined) {
           const unechoed = this.#runtime.edit();
+          // In the stream's space: a served handling's transaction writes the
+          // one space its stream lives in, so a handling that settles wrote
+          // its receipt there (protocol.md §2b).
           unechoed.handlingReceiptLink = this.#runtime.getCell(
             resolvedToValueLink.space,
             servedReceiptCause(firedEventId),

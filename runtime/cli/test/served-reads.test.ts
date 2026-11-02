@@ -22,10 +22,12 @@ import {
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { parseCellSelectionOptions } from "../lib/cell-selection.ts";
 import {
   executePieceCallable,
   getCellValue,
   type PieceConfig,
+  PieceVerbReadError,
   stepPiece,
 } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
@@ -221,6 +223,27 @@ describe("served reads and calls", () => {
       expect(
         await getCellValue(config, ["upper"], { run: false }, depsFor(pieces)),
       ).toBeUndefined();
+    });
+
+    it("returns `undefined` under `run: false` for a selection of a value nothing has derived", async () => {
+      const pieces = await clientPieces();
+
+      expect(
+        await getCellValue(config, ["upper"], {
+          run: false,
+          selection: (await parseCellSelectionOptions({
+            schema: '{"type":"string"}',
+          }))!,
+        }, depsFor(pieces)),
+      ).toBeUndefined();
+    });
+
+    it("refuses a verb's path under `run: false` as it does for any read", async () => {
+      const pieces = await clientPieces();
+
+      await expect(
+        getCellValue(config, ["setName"], { run: false }, depsFor(pieces)),
+      ).rejects.toThrow(PieceVerbReadError);
     });
 
     it("starts nothing for a read with `step`", async () => {

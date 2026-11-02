@@ -62,8 +62,9 @@ does that with a view of mode `read`. Its roots hold execution demand as any
 view's do. The planner walks nothing for it and selects nothing, and sends one
 plan marked `settled` once the serving loop owes nothing it knows of
 ([protocol.md §3](../specs/server-side-execution/protocol.md#3-subscription-and-push)).
-A `read` view needs no matching component contract, so a client and a server of
-different builds can use one, and it holds no handler observations.
+A `read` view needs a server that accepts that mode, and no matching component
+contract, and it holds no handler observations. `pullFromServer()` returns `false`
+from a server that refuses the mode or has no view protocol.
 
 Any runtime can make such a read. It does not depend on the web client class or
 on view-scoped replication being requested for the runtime.

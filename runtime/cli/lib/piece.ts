@@ -5284,15 +5284,25 @@ function servedPieces(pieces: PiecesController): boolean {
  * Under server execution, asks the server for `cell` and waits until it holds
  * what the server derives for it, having covered every send at or below the
  * server's head as of now. Does nothing in the OFF arm, where this runtime runs
- * what it reads.
+ * what it reads. Against a server that cannot be asked, it says so on stderr,
+ * and a read that follows gets what the server has stored.
  */
-async function pullServed(
+export async function pullServed(
   pieces: PiecesController,
   cell: Cell<unknown>,
 ): Promise<void> {
   if (!servedPieces(pieces)) return;
   await timeCliPhase("served.head", () => waitForServedHead(pieces));
-  await timeCliPhase("served.pull", () => pullFromServer(pieces.runtime, cell));
+  const pulled = await timeCliPhase(
+    "served.pull",
+    () => pullFromServer(pieces.runtime, cell),
+  );
+  if (!pulled) {
+    console.warn(
+      "This server accepts no read views, so it was not asked to recompute " +
+        "this value; reading what it has stored, which may be stale.",
+    );
+  }
 }
 
 export async function getCellValue(
@@ -5366,6 +5376,20 @@ export async function getCellValue(
     }
 
     const prop = options.input ? "input" : "result";
+    // A path whose result the schema could not project. A verb there is refused
+    // either way. A derived value nothing has demanded has no stored value yet,
+    // which a read that asks for nothing reports as absent.
+    const projectionFailed = async (): Promise<undefined> => {
+      const verbRefusal = await verbReadRefusalOrNull(
+        piece,
+        prop,
+        path,
+        resolvedConfig.piece,
+      );
+      if (verbRefusal) throw verbRefusal;
+      if (options.run === false) return undefined;
+      throw new PieceResultProjectionError(path, shouldStep);
+    };
     if (options.selection !== undefined) {
       const selection = options.selection;
       const targetCell = options.input
@@ -5401,7 +5425,7 @@ export async function getCellValue(
           error.message.startsWith("Cannot access path") &&
           await resultProjectionFailedAtPath(piece, path)
         ) {
-          throw new PieceResultProjectionError(path, shouldStep);
+          return await projectionFailed();
         }
         throw error;
       }
@@ -5422,12 +5446,7 @@ export async function getCellValue(
         !options.input && selected === undefined &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       if (selected === undefined && !sourceWasAbsent) {
         throw new CellSelectionError(
@@ -5452,29 +5471,16 @@ export async function getCellValue(
         error.message.startsWith("Cannot access path") &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        if (options.run === false) return undefined;
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       throw error;
     }
 
-    // A derived value nothing has demanded has no stored value yet, which is
-    // what a read that asks for nothing reports rather than a refusal.
     if (
-      !options.input && value === undefined && options.run !== false &&
+      !options.input && value === undefined &&
       await resultProjectionFailedAtPath(piece, path)
     ) {
-      throw await verbReadRefusalOrNull(
-        piece,
-        prop,
-        path,
-        resolvedConfig.piece,
-      ) ?? new PieceResultProjectionError(path, shouldStep);
+      return await projectionFailed();
     }
 
     // Read-path guard (verb contract WS-F): a path that lands ON a verb would
@@ -5612,8 +5618,9 @@ export async function callPieceHandler<T = any>(
  * for {@link stepPiece}. The two differ in what they are for and so in what
  * they do around the start: a step exists to commit what recomputation
  * produced, so it pulls, settles, receipts the space and stops the piece
- * again; this one leaves the pattern running, writes nothing, and receipts
- * nothing, because starting a piece is not a write.
+ * again, except under server execution, where it starts nothing and only pulls
+ * from the server; this one leaves the pattern running, writes nothing, and
+ * receipts nothing, because starting a piece is not a write.
  *
  * `addressedPath` is the path the caller was aiming at, and what it decides is
  * which piece runs: a walk that reaches a collection's member spends the

@@ -93,7 +93,7 @@ deno task cf piece inspect --cell <ID> --identity cf.key --api-url $CF_API_URL -
 
 ```bash
 deno task cf piece call --cell PIECE_ID handlerName
-deno task cf piece step --cell PIECE_ID    # Required! Triggers recomputation
+deno task cf piece step --cell PIECE_ID    # Required with server execution off
 deno task cf piece inspect --cell PIECE_ID  # Now shows updated state
 ```
 

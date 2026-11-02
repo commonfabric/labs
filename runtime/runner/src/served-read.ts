@@ -18,8 +18,8 @@ import { ContextualFlowControl } from "./cfc.ts";
  * sees what the server derived for it.
  *
  * @returns `false`, without the wait, against a server with no view protocol,
- * or one a reconnect finds no longer offers it. A deployment that serves offers
- * it.
+ * one a reconnect finds no longer offers it, or one that refuses a `read` view
+ * because it predates them.
  * @throws Error when another view owner replaces this one on the replica.
  */
 export async function pullFromServer(
@@ -72,6 +72,9 @@ export async function pullFromServer(
       componentContractVersion: COMPONENT_READ_CONTRACT_VERSION,
     }]);
     return registered && await answered.promise;
+  } catch (error) {
+    if (error instanceof Error && error.name === "ProtocolError") return false;
+    throw error;
   } finally {
     cancelPlans();
     lease.release();

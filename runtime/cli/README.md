@@ -2314,19 +2314,23 @@ receipt, without loading the pattern unless a payload needs its event contract.
 A tool is the exception: it runs to completion in the command's own process.
 
 `cf cell get`, `cf piece inspect`, `cf piece view`, `cf piece step`, and
-`cf
-piece render` pull what they read from the server. A pull first waits until
+`cf piece
+render` pull what they read from the server. A pull first waits until
 the serving runtime has reacted to every authored commit at or below the
 server's head as it stands when the read begins. A `cf cell set` that sends an
 event returns with the event committed and that run still ahead, and a
-`cf
-piece call` returns that way under `--no-wait`, so this is what makes a read
-that follows one, from the same process or another, see what the run stored. It
-then asks the server for the value, as a client rendering it would, and waits
-until the serving loop has settled with that demand included
+`cf piece call` returns that way under `--no-wait`, so this is what makes a read
+that follows one, from the same process or another, see what the run stored. A
+server that does not report which commits are authored gets no such wait, and
+the command says so on stderr, since the read may not show a run a send just
+started.
+
+A pull then asks the server for the value, as a client rendering it would, and
+waits until the serving loop has settled with that demand included
 (`pullFromServer()`, `docs/features/view-scoped-client-replication.md`), so a
-derived value nothing else was demanding is current when it is read. Against a
-server with no view protocol the read goes ahead after the first wait.
+derived value nothing else was demanding is current when it is read. A server
+with no view protocol, or one that predates `read` views, gets no such request:
+the command says so on stderr and reads what the server has stored.
 
 `cf piece step` is therefore only a pull, and writes nothing, and `--step` on
 `cf
@@ -2430,10 +2434,11 @@ cf cell get --cell ID items \
 
 A path read first resolves the piece's canonical result and metadata, then pulls
 the selected path. It does not first synchronize the producer's entire result
-schema. Reading the root still requests the whole result. `--step` also starts
-the piece and waits for asynchronous work, including session-scoped store
-queries and their reactive updates, to settle before reading. Its execution can
-demand inputs beyond the selected output. Missing-path diagnostics can require a
+schema. Reading the root still requests the whole result. With server execution
+off, `--step` also starts the piece and waits for asynchronous work, including
+session-scoped store queries and their reactive updates, to settle before
+reading, and its execution can demand inputs beyond the selected output. Under
+server execution it starts nothing. Missing-path diagnostics can require a
 broader root read.
 
 `cf piece call` writes them **past the `--` that closes the callable's

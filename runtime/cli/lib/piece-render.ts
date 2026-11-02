@@ -1,15 +1,14 @@
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { MockDoc } from "@commonfabric/html/mock-doc";
-import {
-  type Cell,
-  pullFromServer,
-  type Runtime,
-  UI,
-} from "@commonfabric/runner";
+import { type Cell, type Runtime, UI } from "@commonfabric/runner";
 import { uiSchema } from "@commonfabric/runner/schemas";
 import { getLogger } from "@commonfabric/logger";
 
-import { loadPieces, resolveAddressedPieceConfig } from "./piece.ts";
+import {
+  loadPieces,
+  pullServed,
+  resolveAddressedPieceConfig,
+} from "./piece.ts";
 import type { PieceConfig, PieceResolutionDeps } from "./piece.ts";
 
 const logger = getLogger("piece-render", { level: "info", enabled: false });
@@ -207,7 +206,7 @@ export async function renderPiece(
   >;
   // Under server execution the server derives the view and this process only
   // reads it, so it asks for the view as a renderer does.
-  if (served) await pullFromServer(pieces.runtime, cell);
+  await pullServed(pieces, cell);
 
   // Check if piece has UI
   if (!cell.get()?.[UI]) {

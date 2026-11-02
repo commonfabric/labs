@@ -63,12 +63,14 @@ export function mintEventId(
  * caller minting an unguessable one keeps its outcomes out of reach of anyone
  * who can guess a piece, a verb, and a word like that id.
  *
- * Every minted id above ends in `eventLink.id`, and that is load-bearing: the
- * handling's receipt derives from the handler's input bindings plus the event
- * id (`runner.ts`, `cause.$event`), and the bindings alone do not identify the
- * verb — two handlers on one piece that close over the same state have
- * byte-identical bindings. The stream component is what keeps their receipts
- * apart. A raw caller id carries no such component, so without this an agent
+ * Every minted id above ends in `eventLink.id`, and that is load-bearing. Under
+ * server execution the handling's receipt derives from the event id alone
+ * ({@link servedReceiptCause}). Otherwise it derives from the handler's input
+ * bindings plus the event id (`runner.ts`, `cause.$event`), and the bindings
+ * alone do not identify the verb — two handlers on one piece that close over the
+ * same state have byte-identical bindings. Either way the stream component is
+ * what keeps their receipts apart. A raw caller id carries no such component, so
+ * without this an agent
  * reusing one invocation id across two verbs would have its second call
  * collide on the first's receipt and be reported as an already-settled
  * success it never made.
