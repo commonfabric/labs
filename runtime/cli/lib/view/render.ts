@@ -288,7 +288,7 @@ export interface ViewState {
   viewMode?: ViewMode;
 
   /** Whether the content holds non-printable characters, so the navigation help
-   * advertises the display-mode key `C`. */
+   * advertises the display-mode key `c`. */
   hasNonPrintables?: boolean;
 
   /** Lines shown just above the status/prompt bar (e.g. the list of files an
@@ -1253,7 +1253,7 @@ function browseHints(view: ViewState): KeyHint[] {
     });
   }
   if (view.canEdit) hints.push({ key: "e", label: "Edit" });
-  if (view.hasNonPrintables) hints.push({ key: "C", label: "Chars" });
+  if (view.hasNonPrintables) hints.push({ key: "c", label: "Chars" });
   const wrapLabel = view.wrapMode === "off"
     ? "Hard wrap"
     : view.wrapMode === "hard"
