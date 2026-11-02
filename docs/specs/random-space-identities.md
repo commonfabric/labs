@@ -177,18 +177,25 @@ leaves it in place.
   DID, so its access list grants its own DID OWNER, and it declares no kind,
   which is how the Memory server tells it from a self-owned space of a declared
   kind such as a profile's.
-- From that commit on, wherever the Memory server checks access, the space
-  refuses every principal, a deployment's service identities included, and takes
-  no further commit, so deletion is not undone. The refusal says that the space
-  is deleted, which a reader can tell apart from a refusal of access to a space
-  that goes on.
+- From that commit on, the Memory server refuses the space to every principal,
+  a deployment's service identities included, in every access-control mode, and
+  the space takes no further commit on any write path, the serving plane's
+  included, so deletion is not undone. The refusal says that the space is
+  deleted, which a reader can tell apart from a refusal of access to a space
+  that goes on, and it comes before every check of access, shape and genesis.
+- Every invitation operation on a deleted space is refused with a code of its
+  own, `space-deleted`, once the request has passed rate limiting, proof
+  verification and body validation
+  ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
+  so an invitation to a deleted space reads differently from one that has
+  expired or been revoked.
 
 Deleting a space reclaims no storage by itself. A deleted space's contents
-become unreadable at once, and its storage is the operator's to reclaim, which
-leaves the tombstone in place. A store removed outright would leave a DID with
-no history, and that DID would then be a space its key could create again: no
-one holds the key of a space created under this specification, but a legacy
-space's key can be recomputed from its name.
+become unreadable at once, and its storage is the operator's to reclaim by
+reaping the space, below, which leaves the tombstone in place. A store removed
+outright would leave a DID with no history, and that DID would then be a space
+its key could create again: no one holds the key of a space created under this
+specification, but a legacy space's key can be recomputed from its name.
 
 References to a deleted space keep their DID: a Home list entry, a link stored
 in another space, an `inSpace` allocation record. They reach the refusal.
@@ -206,6 +213,51 @@ The admission rule and the refusal are
 Deleting a space is not implemented yet: the Memory server refuses a
 tombstone as it refuses any access-control document that is not an access
 list.
+
+### Reaping a deleted space
+
+Reaping reclaims a deleted space's storage. It is an operation of its own rather
+than a compaction, which refuses a store whose access-control document is not an
+access list, and it is not a Memory protocol command, since the protocol refuses
+a deleted space to every principal, service identities included. Like
+compaction, it runs offline against the space's store file and never against a
+file a server has open
+([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
+and its authority is the operator's access to that file.
+`cf space reap <store.sqlite>` performs it.
+
+- A reap takes only a store whose access-control document holds a tombstone,
+  and refuses any other.
+- It keeps the deletion commit and what that commit needs to stand: the
+  commit's own row in the commit log, the invocation and authorization rows it
+  references, and the tombstone's revision and head rows. The server sequence
+  is the highest `seq` in the commit log, so keeping the deletion commit keeps
+  it at that commit's `seq`. The space therefore goes on refusing every
+  principal as deleted, its refusal names the same `aclRevision` as before,
+  and its DID never again has no history.
+- It removes everything else the store holds for the space: every earlier
+  commit, every other document and its history, the earlier revisions of the
+  access-control document, the genesis receipt, the private tables such as an
+  invitation's admission records and receipts, the outbox, and the cell
+  databases beside the store. Rows the engine's schema itself needs to open a
+  store, such as the default branch's, stay.
+
+Reaping is not implemented yet.
+
+### Deleting a space from the command line
+
+`cf space delete` deletes a space as its sole member. While the access list
+names any principal besides the one the command connects as, it refuses, and
+names those principals, so that each one's removal is an ordinary
+`cf acl remove` of its own. Since deletion cannot be undone, it also refuses to
+run without `--confirm <space-DID>`, whose DID has to be the space's own, so
+that a mistyped `--space` deletes nothing. It deletes only a space whose list
+names the connecting principal; deleting a self-owned space through a
+delegation chain is not part of this command.
+
+`cf space delete` is not implemented yet. Once it is, the CLI's own
+documentation describes it beside `cf space create`, and `cf space reap` beside
+`cf space compact`.
 
 ## Routing across provider processes
 
