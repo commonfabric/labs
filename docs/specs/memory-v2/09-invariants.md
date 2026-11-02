@@ -951,8 +951,14 @@ sessions with the `session/revoked` reason `instance-names`, as it revokes the
 sessions an ACL commit deauthorizes. The revocation tells their clients, which
 make the message `Space <space> now holds data written with instance names,
 which this runtime does not use` from it and keep it as they keep the open
-refusal; a late or lost revocation admits nothing, since every commit is
-checked against the mark as it arrives.
+refusal; a late or lost revocation admits nothing, since every commit a
+session makes is checked against the mark as it arrives.
+
+The commit clause and the marking cover the commits sessions make. The commits
+the server makes itself, on a principal's behalf or its own (blob writes,
+delegated appends, served access-list changes, invitations, and resolving an
+event's attention), run no pattern and bind no parent's children, so they
+neither check the mark nor set it.
 
 The mark is not access control, so it holds in every ACL mode, `off` included:
 a server that checks no access still keeps a positional runtime from a space a
@@ -978,14 +984,20 @@ a naming session admitted to an unmarked space of a server whose posture names
 none lets one client close the space to every positional runtime the
 deployment serves.
 
-Checked by: nothing yet. The server does not record or enforce the mark, the
-client declares no mode, and the `instanceNames` flag stays off until both do
-([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)). The
-client's handling of the `instance-names` revocation is tested on its own: it
-ends the session with a `SessionRevokedError` that carries
-`clientUpdateRequired: true` and the message above, and the client keeps it
+Checked by: `runtime/memory/test/instance-naming-admission.test.ts`, one case
+per clause: the mark a naming commit records in its own transaction, genesis
+included; the positional commit and the positional open and resume a marked
+space refuses; the revocation of its positional sessions; the posture an
+unmarked space's naming open is admitted under; and the `off` ACL mode.
+`runtime/memory/test/session-open-auth.test.ts` checks that the declaration is
+bound to the signed descriptor. The client's handling of the `instance-names`
+revocation is tested on its own: it ends the session with a
+`SessionRevokedError` that carries `clientUpdateRequired: true` and the message
+above, and the client keeps it
 (`runtime/memory/test/v2-session-termination.test.ts`), as does the storage
-manager (`runtime/runner/test/storage-retry-space-access.test.ts`).
+manager (`runtime/runner/test/storage-retry-space-access.test.ts`). No client
+declares a mode yet, and the `instanceNames` flag stays off until one does
+([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
 
 ## Change discipline
 

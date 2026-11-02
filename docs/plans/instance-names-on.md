@@ -1,7 +1,7 @@
 # Turning instance names on
 
-Stages 3 and 4 of this plan are done, and so is the client and shell part of
-stage 1 that needs nothing from the server; nothing else is.
+Stages 3 and 4 of this plan are done, and so is stage 1 apart from the
+client's declaration of its mode and its capability check; nothing else is.
 The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
@@ -218,9 +218,12 @@ deployment.
 ### 1. The boundary, with the posture off
 
 The memory server records the mark, enforces INV-16, and advertises
-`instanceNameMark`. In routed mode, the router's public offer is the
-intersection of its endpoints' flags, including flags the router does not
-know, so the router needs no change
+`instanceNameMark`, which is built: the mark is the one row of the
+`instance_name_mark` table in the space's database, written in the commit's
+own transaction and naming that commit, and the toolshed gives the server its
+posture from `experimentalPosture()`, which names no instances. In routed
+mode, the router's public offer is the intersection of its endpoints' flags,
+including flags the router does not know, so the router needs no change
 ([`routed-mode-a.md`](../specs/memory-v2/routed-mode-a.md)). The memory
 client declares the runtime's mode, fails the connection permanently when it
 names instances and the server does not advertise the capability, and marks the
@@ -229,11 +232,11 @@ The shell's card gets the guidance D5 gives it. The flag stays unreachable from
 the environment, so every runtime is positional, and D8 refuses a naming one
 anywhere.
 
-Of this stage, the client's handling of the `instance-names` revocation and
-the shell's card are built: the client ends the session with the
+Of the client's half, its handling of the `instance-names` revocation and the
+shell's card are built: the client ends the session with the
 `clientUpdateRequired` refusal D5 gives, and the client and storage manager
-keep it. The server records no mark and sends neither that revocation nor
-the open refusals, and the client declares no mode.
+keep it. What remains of this stage is the client's declaration of its mode
+and its capability check, and the hazards below becoming refusals.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
 refusals: the positional runtime is refused the space, the test asserts the

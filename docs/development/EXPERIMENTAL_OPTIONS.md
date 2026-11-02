@@ -1134,12 +1134,15 @@ holds the measurements and the conditions for revisiting.
   update alike run the inserted sibling on the carried child's document and the
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones. The mechanism is
-  specified and not built: a one-way mark on each space, recorded at the first
-  commit from a naming runtime and only where the deployment's posture names
-  instances, after which the memory server admits no runtime with naming off
-  to the space (INV-16 in
+  set up shows fresh children in place of the named ones. The mechanism is a
+  one-way mark on each space, recorded at the first commit from a naming
+  runtime and only where the deployment's posture names instances, after which
+  the memory server admits no runtime with naming off to the space (INV-16 in
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  The memory server's half is built: it records the mark, enforces INV-16,
+  advertises `instanceNameMark`, and takes its posture from this flag's
+  deployment value, which toolshed gives it from `experimentalPosture()`. The
+  client's half is not: no runtime declares its mode yet.
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
@@ -1916,6 +1919,14 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`instanceNameMark`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server records a space's instance-naming
+>   mark and admits sessions and commits by it (INV-16 in
+>   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+>   with the server's posture taken from the
+>   [`instanceNames`](#instancenames) flag. Only the server's advertisement
+>   is read. Older servers omit it, which parses as `false`; such a server
+>   records no mark. It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
