@@ -1,5 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { copy } from "@std/fs";
 import * as path from "@std/path";
 
 import ports from "@commonfabric/ports" with { type: "json" };
@@ -9,6 +10,10 @@ const repoRoot = path.resolve(import.meta.dirname!, "..");
 // `scripts/start-local-dev.sh` reports this when a port it was asked for is one
 // clients refuse to connect to.
 const PORT_UNREACHABLE_EXIT = 4;
+
+// `scripts/start-local-dev.sh` exits with this when a server's port is already
+// in use.
+const PORT_IN_USE_EXIT = 3;
 
 // The offset that puts the shell dev server on port 6000.
 const UNREACHABLE_SHELL_OFFSET = 6000 - ports.shell;
@@ -56,6 +61,153 @@ async function runScript(
   } finally {
     await Deno.remove(binDir, { recursive: true });
   }
+}
+
+/** Distinct ports nothing listens on at the time of the call. */
+function freePorts(count: number): number[] {
+  const listeners = Array.from(
+    { length: count },
+    () => Deno.listen({ port: 0 }),
+  );
+  const chosen = listeners.map((listener) => listener.addr.port);
+  for (const listener of listeners) listener.close();
+  return chosen;
+}
+
+/** The variables of this process's environment that `names` lists. */
+function inheritedEnv(names: string[]): Record<string, string> {
+  return Object.fromEntries(
+    names.flatMap((name) => {
+      const value = Deno.env.get(name);
+      return value === undefined ? [] : [[name, value]];
+    }),
+  );
+}
+
+/**
+ * Run `start-local-dev.sh` with a `deno` that starts the stand-in servers in
+ * `fixtures/fake-dev-server.ts` on ports of their own. The script runs from a
+ * copy of `scripts/` in a temporary tree, which takes its logs, and leads a
+ * session and a process group of its own, as it does when a command runner
+ * starts it. `ended()` settles once every server it started has exited, and
+ * `stop()` stops them with `stop-local-dev.sh`, as disposing of the run does
+ * before it removes the tree.
+ * `printed` settles once the script has printed `awaitedLine` on its standard
+ * output, `drained` with that output once it has ended, and `errors` with its
+ * standard error.
+ */
+async function startWithFakeServers(
+  options: {
+    args?: string[];
+    env?: Record<string, string>;
+    awaitedLine?: string;
+    toolshedPort?: number;
+  } = {},
+) {
+  const dir = await Deno.makeTempDir();
+  await copy(path.join(repoRoot, "scripts"), path.join(dir, "scripts"));
+  await Deno.copyFile(
+    path.join(repoRoot, "ports.json"),
+    path.join(dir, "ports.json"),
+  );
+  for (const server of ["shell", "toolshed", "cf-harness"]) {
+    await Deno.mkdir(path.join(dir, "runtime", server), { recursive: true });
+  }
+  const binDir = path.join(dir, "bin");
+  await Deno.mkdir(binDir);
+  const fixture = path.join(
+    import.meta.dirname!,
+    "fixtures/fake-dev-server.ts",
+  );
+  await Deno.writeTextFile(
+    path.join(binDir, "deno"),
+    `#!/bin/sh\nexec '${Deno.execPath()}' run --no-config --no-lock -A ` +
+      `'${fixture}' "$@"\n`,
+  );
+  await Deno.chmod(path.join(binDir, "deno"), 0o755);
+  const lockFile = path.join(dir, "servers.lock");
+  await Deno.writeTextFile(lockFile, "");
+
+  const [shell, toolshed, consolePort] = freePorts(3);
+  const ports = {
+    shell,
+    toolshed: options.toolshedPort ?? toolshed,
+    console: consolePort,
+  };
+  const env = {
+    ...inheritedEnv(["HOME", "DENO_DIR"]),
+    ...options.env,
+    CF_HARNESS_CONSOLE_PORT: String(ports.console),
+    FAKE_DEV_SERVER_LOCK: lockFile,
+    PATH: `${binDir}:${Deno.env.get("PATH")}`,
+  };
+  const portArgs = [
+    "--shell-port",
+    String(ports.shell),
+    "--toolshed-port",
+    String(ports.toolshed),
+  ];
+  const child = new Deno.Command("bash", {
+    args: ["scripts/start-local-dev.sh", ...portArgs, ...(options.args ?? [])],
+    cwd: dir,
+    env,
+    clearEnv: true,
+    stdout: "piped",
+    stderr: "piped",
+    detached: true,
+  }).spawn();
+  const errors = new Response(child.stderr).text();
+
+  const printed = Promise.withResolvers<void>();
+  const drained = (async () => {
+    let output = "";
+    for await (
+      const chunk of child.stdout.pipeThrough(new TextDecoderStream())
+    ) {
+      output += chunk;
+      if (options.awaitedLine && output.includes(options.awaitedLine)) {
+        printed.resolve();
+      }
+    }
+    if (options.awaitedLine) {
+      printed.reject(
+        new Error(`the script ended without printing "${options.awaitedLine}"`),
+      );
+    }
+    return output;
+  })();
+
+  return {
+    child,
+    ports,
+    printed: printed.promise,
+    drained,
+    errors,
+    async ended() {
+      using file = await Deno.open(lockFile);
+      await file.lock(true);
+    },
+    async stop() {
+      await new Deno.Command("bash", {
+        args: ["scripts/stop-local-dev.sh", "--cf-harness", ...portArgs],
+        cwd: dir,
+        env,
+        clearEnv: true,
+      }).output();
+    },
+    async [Symbol.asyncDispose]() {
+      await this.stop();
+      await Promise.all([drained, errors]);
+      await Deno.remove(dir, { recursive: true });
+    },
+  };
+}
+
+/** Whether the server on `port` answers. */
+async function answers(port: number): Promise<boolean> {
+  const response = await fetch(`http://127.0.0.1:${port}/`);
+  await response.body?.cancel();
+  return response.ok;
 }
 
 /**
@@ -188,6 +340,81 @@ describe("local-dev-scripts", () => {
       );
       expect(code).toBe(PORT_UNREACHABLE_EXIT);
       expect(stderr).toContain("shell port 6000");
+    });
+
+    it("leaves its servers serving after its process group ends, until stop-local-dev.sh stops them", async () => {
+      // A command runner that ends what a command leaves in its process
+      // group, once the command returns, ends the group this way.
+
+      await using run = await startWithFakeServers({ args: ["--cf-harness"] });
+      expect((await run.child.status).code).toBe(0);
+      expect(await run.drained).toContain("Console:  http://");
+      expect(() => Deno.kill(-run.child.pid, "SIGKILL")).toThrow(
+        Deno.errors.NotFound,
+      );
+      for (const port of Object.values(run.ports)) {
+        expect(await answers(port)).toBe(true);
+      }
+
+      await run.stop();
+      await run.ended();
+    });
+
+    it("ends its servers and exits 3 when a server's port is already in use", async () => {
+      const occupant = Deno.listen({ port: 0 });
+      await using run = await startWithFakeServers({
+        toolshedPort: occupant.addr.port,
+      });
+      // Declared after the run so that it closes first: `stop-local-dev.sh`
+      // stops every `deno` listening on the run's ports, and this one is the
+      // process running the test.
+      using _occupant = occupant;
+      expect((await run.child.status).code).toBe(PORT_IN_USE_EXIT);
+      expect(await run.errors).toContain(
+        "toolshed could not bind its port; it is already in use",
+      );
+      await run.ended();
+    });
+
+    it("ends its servers when Ctrl-C interrupts it before they are ready", async () => {
+      // Ctrl-C sends SIGINT to the terminal's foreground process group,
+      // which holds the script and not the servers.
+
+      await using run = await startWithFakeServers({
+        env: { FAKE_DEV_SERVER_SILENT: "toolshed" },
+        awaitedLine: "Waiting for toolshed to bind its port",
+      });
+      await run.printed;
+      Deno.kill(-run.child.pid, "SIGINT");
+      expect((await run.child.status).signal).toBe("SIGINT");
+      await run.ended();
+    });
+
+    for (const signal of ["SIGHUP", "SIGTERM"] as const) {
+      it(`ends its servers when it alone is sent ${signal} before they are ready`, async () => {
+        await using run = await startWithFakeServers({
+          env: { FAKE_DEV_SERVER_SILENT: "toolshed" },
+          awaitedLine: "Waiting for toolshed to bind its port",
+        });
+        await run.printed;
+        Deno.kill(run.child.pid, signal);
+        expect((await run.child.status).signal).toBe(signal);
+        await run.ended();
+      });
+    }
+
+    it("ends its servers with its process group when it stays attached for Codex", async () => {
+      // SIGKILL leaves the script no chance to stop them, so they end only
+      // if they share its group.
+
+      await using run = await startWithFakeServers({
+        env: { CODEX_SANDBOX: "1" },
+        awaitedLine: "Stop this command or run",
+      });
+      await run.printed;
+      Deno.kill(-run.child.pid, "SIGKILL");
+      await run.child.status;
+      await run.ended();
     });
   });
 

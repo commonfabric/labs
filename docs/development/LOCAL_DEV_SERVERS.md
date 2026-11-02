@@ -134,6 +134,18 @@ back; that is the one probe covering the hop between the two servers, which
 can be broken while each of them answers on its own port. Set
 `LOCAL_DEV_STARTUP_TIMEOUT` to adjust the readiness timeout in seconds.
 
+Each server runs in a process group of its own, so the servers keep running
+after the script returns, even under a tool that ends whatever a command leaves
+in its process group once the command exits. They run until
+`stop-local-dev.sh` stops them, which finds them by the ports they listen on.
+Until the script reports success, the servers end with it: a failed startup,
+Ctrl-C, or a hangup or termination signal sent to the script stops every
+server it started. A SIGKILL sent to the script's process group during
+startup cannot be caught, so it leaves the servers it started running, and
+`stop-local-dev.sh` stops them. When `CODEX_SANDBOX` is set, the script stays
+attached after startup, the servers stay in its process group, and stopping
+the script stops them.
+
 **Exit codes (`start-local-dev.sh`):**
 | Code | Meaning |
 |------|---------|
