@@ -87,6 +87,8 @@ describe("room", () => {
   ) => {
     const list = room.key("messages");
     await list.pull();
+    // A room that derives nothing reads `undefined` here.
+    expect(list.get()).toBeDefined();
     expect(list.get()).toEqual(expect.objectContaining({
       count: 2,
       oldestAt: new FabricEpochNsec(1n),
