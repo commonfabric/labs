@@ -55,24 +55,24 @@ export interface BenchmarkStats {
 /** One attempt of one benchmark workflow run and what it measured. */
 export interface CachedBenchmarkRun {
   /** The workflow run. */
-  runId: number;
+  readonly runId: number;
   /** The attempt of that run. */
-  runAttempt: number;
+  readonly runAttempt: number;
   /** When the run was created, in milliseconds since the epoch. */
-  at: number;
+  readonly at: number;
   /**
    * The processor the benchmarks ran on. Entries written before
    * processor-specific charts are fetched again.
    */
-  cpu?: string;
+  readonly cpu?: string;
   /** Each benchmark's statistics, by name. */
-  metrics: ReadonlyMap<string, BenchmarkStats>;
+  readonly metrics: ReadonlyMap<string, BenchmarkStats>;
 }
 
 /** A run as the store holds it. */
 interface StoredBenchmarkRun extends CachedBenchmarkRun {
   /** The run's measurements, packed. */
-  metrics: StoredMetrics;
+  readonly metrics: StoredMetrics;
 }
 
 /** Names one attempt of one workflow run. */
