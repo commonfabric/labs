@@ -505,6 +505,17 @@ CREATE TABLE IF NOT EXISTS blob_store (
   size          INTEGER NOT NULL
 );
 
+-- The instance-naming mark (INV-16, docs/specs/memory-v2/09-invariants.md):
+-- present once the space holds data a runtime that names instances wrote. At
+-- most one row, which the memory server writes in the store transaction of
+-- the first commit it admits from a session declaring instanceNames: true,
+-- and which names that commit. Nothing updates or deletes it.
+CREATE TABLE IF NOT EXISTS instance_name_mark (
+  singleton   INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+  commit_seq  INTEGER NOT NULL,
+  FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
+);
+
 COMMIT;
 `;
 
@@ -965,6 +976,16 @@ FROM blob_store
 WHERE hash = :hash
 `;
 
+const INSERT_INSTANCE_NAME_MARK = `
+INSERT OR IGNORE INTO instance_name_mark (singleton, commit_seq)
+VALUES (1, :commit_seq)
+`;
+
+const SELECT_INSTANCE_NAME_MARK = `
+SELECT 1 AS marked
+FROM instance_name_mark
+`;
+
 type PreparedStatement = ReturnType<Database["prepare"]>;
 
 interface PreparedStatements {
@@ -972,6 +993,7 @@ interface PreparedStatements {
   insertBlob: PreparedStatement;
   insertBranch: PreparedStatement;
   insertCommit: PreparedStatement;
+  insertInstanceNameMark: PreparedStatement;
   insertInvocation: PreparedStatement;
   insertRevision: PreparedStatement;
   insertSnapshot: PreparedStatement;
@@ -990,6 +1012,7 @@ interface PreparedStatements {
   selectExistingCommit: PreparedStatement;
   selectOldestRevisionAttribution: PreparedStatement;
   selectHead: PreparedStatement;
+  selectInstanceNameMark: PreparedStatement;
   selectLatestBase: PreparedStatement;
   selectLatestSnapshot: PreparedStatement;
   selectLatestSnapshotBelow: PreparedStatement;
@@ -1774,6 +1797,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
   insertBlob: database.prepare(INSERT_BLOB),
   insertBranch: database.prepare(INSERT_BRANCH),
   insertCommit: database.prepare(INSERT_COMMIT),
+  insertInstanceNameMark: database.prepare(INSERT_INSTANCE_NAME_MARK),
   insertInvocation: database.prepare(INSERT_INVOCATION),
   insertRevision: database.prepare(INSERT_REVISION),
   insertSnapshot: database.prepare(INSERT_SNAPSHOT),
@@ -1796,6 +1820,7 @@ const prepareStatements = (database: Database): PreparedStatements => ({
     SELECT_OLDEST_REVISION_ATTRIBUTION,
   ),
   selectHead: database.prepare(SELECT_HEAD),
+  selectInstanceNameMark: database.prepare(SELECT_INSTANCE_NAME_MARK),
   selectLatestBase: database.prepare(SELECT_LATEST_BASE),
   selectLatestSnapshot: database.prepare(SELECT_LATEST_SNAPSHOT),
   selectLatestSnapshotBelow: database.prepare(SELECT_LATEST_SNAPSHOT_BELOW),
@@ -2973,6 +2998,36 @@ export const headSeq = (
 
 export const serverSeq = (engine: Engine): number => {
   return (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+};
+
+/**
+ * Whether the store holds the instance-naming mark (INV-16): whether a commit
+ * from a session that names instances has been admitted to the space.
+ */
+export const hasInstanceNameMark = (engine: Engine): boolean =>
+  engine.statements.selectInstanceNameMark.get() !== undefined;
+
+/**
+ * Records the instance-naming mark (INV-16) as set by the commit at
+ * `commitSeq`, unless the store already holds it. The mark belongs to the
+ * transaction of that commit, so this throws outside a transaction; a
+ * transaction that rolls back takes the mark with it.
+ *
+ * @returns Whether this call recorded the mark.
+ */
+export const recordInstanceNameMark = (
+  engine: Engine,
+  commitSeq: number,
+): boolean => {
+  if (!engine.database.inTransaction) {
+    throw new Error(
+      "The instance-naming mark is recorded only inside its commit's " +
+        "transaction",
+    );
+  }
+  return engine.statements.insertInstanceNameMark.run({
+    commit_seq: commitSeq,
+  }) > 0;
 };
 
 /** Highest authored commit through a captured head, excluding bookkeeping. */

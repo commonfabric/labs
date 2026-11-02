@@ -10,6 +10,7 @@ import { experimentalOptionsFromEnv } from "@commonfabric/runner/experimental-po
 import { MemoryRouterPolicy } from "./memory-router.ts";
 import { memoryEngineStoreUrl } from "./memory-store-url.ts";
 import env from "@/env.ts";
+import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import { identity } from "@/lib/identity.ts";
 import {
   memoryAclPrincipalsFor,
@@ -112,6 +113,10 @@ export const memoryServer = new MemoryServer.Server({
   // Invitations issued here name this deployment's public origin, so the
   // HTTP routes and `space.invite` requests check codes against the same host.
   inviteHost: normalizeInviteHost(env.API_URL),
+  // The posture this process publishes on `/api/meta`, read when an open asks
+  // rather than now: it is published once the Runtime exists, after this
+  // server is constructed, and until then it names no instances.
+  namesInstances: () => experimentalPosture()?.instanceNames === true,
   sessionOpenAuth: {
     audience: memoryAudience,
   },

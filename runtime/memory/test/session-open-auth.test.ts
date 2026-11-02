@@ -62,6 +62,7 @@ const buildOpen = async (
     resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    instanceNames?: true;
     invite?: { inviteId: string; code: string };
   } = {},
 ) => {
@@ -233,6 +234,35 @@ describe("verifySessionOpenAuthorization", () => {
       () =>
         verifySessionOpenAuthorization(
           { ...unsigned, session: { spaceKind: "fabrichat-room" } },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+  });
+
+  it("binds the declared naming mode to the signed descriptor", async () => {
+    const message = await buildOpen(signedFields(), alice, {
+      instanceNames: true,
+    });
+    assertEquals(
+      await verifySessionOpenAuthorization(message, verifyOptions()),
+      alice.did(),
+    );
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...message, session: {} },
+          verifyOptions(),
+        ),
+      Error,
+      "authorization mismatch",
+    );
+    const unsigned = await buildOpen(signedFields());
+    await assertRejects(
+      () =>
+        verifySessionOpenAuthorization(
+          { ...unsigned, session: { instanceNames: true } },
           verifyOptions(),
         ),
       Error,

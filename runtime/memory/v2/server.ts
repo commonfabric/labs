@@ -919,6 +919,29 @@ const spaceInviteRefusal = (
   },
 });
 
+/**
+ * The response refusing a `session.open` or a commit whose naming mode INV-16
+ * does not admit to its space: a `SessionRevokedError` carrying
+ * `clientUpdateRequired`, which a client keeps across mounts and never
+ * retries, since only a runtime of the other mode is admitted.
+ */
+const instanceNamingRefusal = <Result>(
+  requestId: string,
+  message: string,
+): ResponseMessage<Result> =>
+  respondTypedError<Result>(requestId, {
+    ...toError("SessionRevokedError", message),
+    clientUpdateRequired: true,
+  });
+
+/**
+ * The message of the refusal INV-16 gives a positional session's open of, or
+ * commit to, `space` once the space is marked.
+ */
+const markedSpaceRefusalMessage = (space: string): string =>
+  `Space ${space} holds data written with instance names, which this ` +
+  "runtime does not use";
+
 /** The response refusing a `pattern.lifecycle` request for `code`. */
 const patternLifecycleRefusal = (
   requestId: string,
@@ -3318,6 +3341,14 @@ export class Server {
    */
   #spaceKinds = new WeakMap<Engine.Engine, string | undefined>();
 
+  /**
+   * The engines whose store holds the instance-naming mark, as
+   * {@link #hasInstanceNameMark} found it or this server recorded it. Nothing
+   * removes a mark, so an entry never goes stale; an engine not listed is
+   * read afresh, since another writer to its store may have marked it.
+   */
+  #instanceNameMarked = new WeakSet<Engine.Engine>();
+
   #store?: URL;
   #operationCodecs: OperationCodecRegistry;
 
@@ -3441,6 +3472,15 @@ export class Server {
        * refuses every `space.invite`.
        */
       inviteHost?: string;
+
+      /**
+       * Whether this server's posture names instances (INV-16): the
+       * deployment's value of the `instanceNames` experimental flag. Asked at
+       * every `session.open` that declares `instanceNames: true` of a space
+       * not yet marked, which is admitted only while it returns `true`. A
+       * server given none names no instances, and refuses every such open.
+       */
+      namesInstances?: () => boolean;
 
       /**
        * Authentication data advertised in `hello.ok` and enforced for
@@ -4059,6 +4099,40 @@ export class Server {
       this.#spaceKinds.set(engine, readSpaceKind(engine));
     }
     return this.#spaceKinds.get(engine);
+  }
+
+  /**
+   * Whether the store of the space `engine` holds the instance-naming mark
+   * (INV-16).
+   */
+  #hasInstanceNameMark(engine: Engine.Engine): boolean {
+    if (this.#instanceNameMarked.has(engine)) return true;
+    if (!Engine.hasInstanceNameMark(engine)) return false;
+    this.#instanceNameMarked.add(engine);
+    return true;
+  }
+
+  /**
+   * After a commit marked `space` (INV-16), drop its live sessions that do
+   * not declare `instanceNames: true`, as {@link #revokeDeauthorizedSessions}
+   * drops the sessions an access-list change leaves without READ, and tell
+   * each one's connection with the `session/revoked` reason
+   * `instance-names`. The commit refusal is what keeps their commits out;
+   * this tells their clients. The marking commit's own session declares
+   * naming, so it is never among them.
+   */
+  #revokePositionalSessions(space: string): void {
+    for (const session of this.#sessions.sessionsForSpace(space)) {
+      if (session.instanceNames === true) continue;
+      this.#sessions.remove(space, session.id);
+      if (session.ownerConnectionId !== null) {
+        this.#connections.get(session.ownerConnectionId)?.revokeSession(
+          space,
+          session.id,
+          "instance-names",
+        );
+      }
+    }
   }
 
   /** Enforce ACL document shape and fresh-space genesis in the `observe` and
@@ -6155,6 +6229,26 @@ export class Server {
           ),
         );
       }
+      // INV-16's open clauses. After authorization, so a principal the space
+      // refuses learns nothing of its mark, and in every ACL mode, since the
+      // mark is not access control.
+      if (this.#hasInstanceNameMark(engine)) {
+        if (message.session.instanceNames !== true) {
+          return instanceNamingRefusal<SessionOpenResult>(
+            message.requestId,
+            markedSpaceRefusalMessage(message.space),
+          );
+        }
+      } else if (
+        message.session.instanceNames === true &&
+        this.options.namesInstances?.() !== true
+      ) {
+        return instanceNamingRefusal<SessionOpenResult>(
+          message.requestId,
+          `The server of space ${message.space} does not name instances, ` +
+            "and this runtime does",
+        );
+      }
       // Admission awaited, and the connection may have closed meanwhile: its
       // sessions were detached at the close, so one opened now would be held
       // by a connection that is gone, and never expire.
@@ -7200,6 +7294,18 @@ export class Server {
               deny,
             );
           }
+          // INV-16's commit clause, after authorization like the open
+          // clauses. A commit from a session that names instances marks a
+          // space not yet marked, in the commit's own transaction.
+          const marked = this.#hasInstanceNameMark(engine);
+          if (marked && session.instanceNames !== true) {
+            return instanceNamingRefusal<Engine.AppliedCommit>(
+              message.requestId,
+              markedSpaceRefusalMessage(message.space),
+            );
+          }
+          const marks = !marked && session.instanceNames === true;
+          let markedNow = false;
           // Fold-in SQLite writes: ATTACH their cell-db(s) BEFORE applyCommit (ATTACH
           // cannot run inside a transaction); the engine executes them inside the
           // commit txn (atomic with cell ops). Detach in finally.
@@ -7219,19 +7325,29 @@ export class Server {
               (persistSpan) => {
                 try {
                   engineDecided = true;
-                  return Engine.applyCommit(engine, {
-                    sessionId: message.sessionId,
-                    space: message.space,
-                    principal: session.principal,
-                    commit: message.commit,
-                    sqliteAttachments,
-                    ...(session.elidedVerdicts === true
-                      ? { elidedVerdicts: true }
-                      : {}),
-                    // Session-facing transact admission: `authored`, always.
-                    // The class is determined HERE, by the admission path —
-                    // never read from the client payload (protocol.md §1).
-                    commitClass: "authored",
+                  return Engine.runAtomicCommit(engine, (apply) => {
+                    const applied = apply({
+                      sessionId: message.sessionId,
+                      space: message.space,
+                      principal: session.principal,
+                      commit: message.commit,
+                      sqliteAttachments,
+                      ...(session.elidedVerdicts === true
+                        ? { elidedVerdicts: true }
+                        : {}),
+                      // Session-facing transact admission: `authored`,
+                      // always. The class is determined HERE, by the
+                      // admission path — never read from the client payload
+                      // (protocol.md §1).
+                      commitClass: "authored",
+                    });
+                    if (marks) {
+                      markedNow = Engine.recordInstanceNameMark(
+                        engine,
+                        applied.seq,
+                      );
+                    }
+                    return applied;
                   });
                 } finally {
                   persistSpan.end();
@@ -7358,6 +7474,10 @@ export class Server {
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
           );
+          if (markedNow) {
+            this.#instanceNameMarked.add(engine);
+            this.#revokePositionalSessions(message.space);
+          }
           if (aclTouched) {
             this.#invalidateAclCapabilities(message.space);
             // Pass the writing session so it isn't sent the terminal revocation
@@ -12192,6 +12312,13 @@ const parseDecodedClientMessage = (
       parsed.session.spaceKind !== undefined &&
       !isSpaceKind(parsed.session.spaceKind)
     ) return null;
+    // Only the literal `true` declares naming: any other value refuses the
+    // message rather than open the session in a mode its client did not ask
+    // for.
+    if (
+      parsed.session.instanceNames !== undefined &&
+      parsed.session.instanceNames !== true
+    ) return null;
     const client = parseClientInfo(parsed.session.client) ?? undefined;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
@@ -12242,6 +12369,9 @@ const parseDecodedClientMessage = (
           : {}),
         ...(isSpaceKind(parsed.session.spaceKind)
           ? { spaceKind: parsed.session.spaceKind }
+          : {}),
+        ...(parsed.session.instanceNames === true
+          ? { instanceNames: true as const }
           : {}),
         ...(invite === undefined ? {} : { invite }),
       },
