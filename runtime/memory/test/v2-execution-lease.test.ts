@@ -9,7 +9,7 @@
 // is closed by the in-process abort-before-reacquire discipline. Nothing about
 // the lease is stored, so a restarted process waits for nobody.
 
-import { assert, assertEquals, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import {
@@ -18,12 +18,15 @@ import {
   type Engine,
   open,
   ProtocolError,
+  read,
+  serverSeq,
 } from "../v2/engine.ts";
 import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
   processInstanceId,
 } from "../v2/execution-lease.ts";
+import { Server } from "../v2/server.ts";
 import {
   type ClientCommit,
   resetServerExecutionConfig,
@@ -210,6 +213,93 @@ Deno.test("releaseAllOf: frees every lease of one holder, counts them, and leave
     assertEquals(engine.executionLeases.releaseAllOf(mine), 0);
   } finally {
     close(engine);
+  }
+});
+
+Deno.test("failure notice: the server patches the source entry only under the lease, once, and leaves a compacted entry alone", async () => {
+  const server = new Server({
+    store: new URL("memory://lease-failure-notice"),
+  });
+  setServerExecutionConfig(true);
+  try {
+    const engine = await server.engineForSpace(SPACE);
+    const sidecarId = "of:notice-stream";
+    applyCommit(engine, {
+      sessionId: "session-a",
+      principal: "user:alice",
+      space: SPACE,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: sidecarId,
+          value: {
+            value: { entries: [{ eventId: "other" }, { eventId: "source" }] },
+          },
+        }],
+      },
+    });
+    const holder = executionLeaseHolder(SERVICE);
+    const notice = (
+      localSeq: number,
+      eventId: string,
+      sourceEventId = "source",
+    ) =>
+      server.commitDeliveryFailureNotice({
+        space: SPACE,
+        holder,
+        localSeq,
+        sourceEvent: { sidecarId, eventId: sourceEventId },
+        failure: { eventId, targetSpace: "did:key:target", reason: "refused" },
+      });
+    const refused = {
+      eventId: "refused",
+      targetSpace: "did:key:target",
+      reason: "refused",
+    };
+
+    await assertRejects(
+      () => notice(1, "refused"),
+      ProtocolError,
+      "execution lease",
+    );
+
+    assert(server.executionLeases.acquire(SPACE, holder));
+    await notice(1, "refused");
+    assertEquals(read(engine, { id: sidecarId })?.value, {
+      entries: [
+        { eventId: "other" },
+        { eventId: "source", deliveryFailures: [refused] },
+      ],
+    });
+
+    // Already on the entry, an entry compacted away, and a document with no
+    // entries at all: nothing is due, so nothing commits.
+    const head = serverSeq(engine);
+    await notice(2, "refused");
+    await notice(3, "other-refusal", "compacted-away");
+    await server.commitDeliveryFailureNotice({
+      space: SPACE,
+      holder,
+      localSeq: 4,
+      sourceEvent: { sidecarId: "of:no-such-stream", eventId: "source" },
+      failure: refused,
+    });
+    assertEquals(serverSeq(engine), head);
+
+    // Nothing due is not admission, so only a notice that is due is refused.
+    server.executionLeases.release(SPACE, holder);
+    await notice(5, "refused");
+    await assertRejects(
+      () => notice(6, "later"),
+      ProtocolError,
+      "execution lease",
+    );
+    assertEquals(serverSeq(engine), head);
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
   }
 });
 
