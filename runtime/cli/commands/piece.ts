@@ -24,6 +24,10 @@ import { listFlags } from "@commonfabric/piece/refusal";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { isSlugAddress, parseCellPath, UI } from "@commonfabric/runner";
 import {
+  pagePathSegments,
+  readSpaceSegment,
+} from "@commonfabric/runner/fabric-url";
+import {
   encodeJsonPointer,
   linkPathSegmentToCellPathSegment,
   parseCellReference,
@@ -5696,10 +5700,12 @@ function decomposeUrl(
     );
   }
   const apiUrl = `${url.protocol}//${url.host}`;
-  const segments = url.pathname.split("/").filter(Boolean);
+  const segments = pagePathSegments(url.pathname);
+  // The space is read as the shell reads it, and a segment that cannot be
+  // read is refused by `decodeUrlSegment`, which says why.
   const space = segments[0] === undefined
     ? undefined
-    : decodeUrlSegment(segments[0]);
+    : readSpaceSegment(segments[0]) ?? decodeUrlSegment(segments[0]);
   if (!space) {
     throw new ValidationError(
       `"--url" does not contain a space.`,
