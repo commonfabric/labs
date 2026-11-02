@@ -20,6 +20,7 @@
  * and its badge says whether it can hear the server.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { TICK_MS } from "./config.ts";
 import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
 import { faviconHref } from "./favicon.ts";
@@ -120,7 +121,7 @@ export function livePages(
     } catch (error) {
       console.error(
         `live page ${key}:`,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
     }
   };

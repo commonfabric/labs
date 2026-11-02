@@ -18,6 +18,7 @@
 import { pooledMap } from "@std/async/pool";
 import { z } from "zod";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type Manifest,
   MANIFESTS_LOOKED_BACK,
@@ -237,7 +238,7 @@ export function makeTestSelectionSource(options: {
                   keptRefusals.set(name, error);
                 }
                 errors.push(
-                  `${name}: ${error instanceof Error ? error.message : error}`,
+                  `${name}: ${describeFailure(error)}`,
                 );
               }
             }

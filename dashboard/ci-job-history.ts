@@ -6,6 +6,7 @@
  */
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type CachedCiGanttJob,
   type CachedCiRun,
@@ -271,7 +272,7 @@ interface CiJobLoad {
 
 class CiJobCacheWriteError extends Error {
   constructor(error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     super(`Could not persist CI job history: ${message}`, { cause: error });
     this.name = "CiJobCacheWriteError";
   }
@@ -1444,7 +1445,7 @@ export class CiJobHistoryCollector {
               timing.ganttJobs,
             );
           } catch (error) {
-            const message = error instanceof Error ? error.message : `${error}`;
+            const message = describeFailure(error);
             console.error(
               `CI Gantt detail for run ${run.id} attempt ${run.run_attempt} was not stored: ${message}`,
             );
@@ -1653,9 +1654,7 @@ export class CiJobHistoryCollector {
     });
     if (failures.length) {
       const first = failures[0];
-      const message = first.error instanceof Error
-        ? first.error.message
-        : String(first.error);
+      const message = describeFailure(first.error);
       console.error(
         `CI job history could not read ${failures.length} sampled run(s); ` +
           `first was ${first.run.id} attempt ${first.run.run_attempt}: ${message}`,
@@ -2216,7 +2215,7 @@ export class CiJobHistoryCollector {
       // Reported rather than raised: the chart is already decided, and a
       // filesystem that cannot take this also fails the run index save.
       await this.#pruneGanttDetail(source).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : `${error}`;
+        const message = describeFailure(error);
         console.error(`CI Gantt detail was not pruned: ${message}`);
       });
     }
@@ -2283,9 +2282,7 @@ export class CiJobHistoryCollector {
         : [];
       if (drawable.length) {
         if (progress) {
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
+          const message = describeFailure(error);
           this.#updateProgress(progress, {
             warning: `Showing cached runs because workflow discovery reported ${
               friendlyError(message)
@@ -2409,9 +2406,7 @@ export class CiJobHistoryCollector {
     if (progress) this.#updateProgress(progress, { phase: "saving" });
     await this.#saveCache(now);
     if (reportedFailure) {
-      const message = reportedFailure.error instanceof Error
-        ? reportedFailure.error.message
-        : String(reportedFailure.error);
+      const message = describeFailure(reportedFailure.error);
       console.error(
         `CI Gantt could not read ${failures.length} run(s); ` +
           `reported run ${reportedFailure.run.id} attempt ${reportedFailure.run.run_attempt}: ${message}`,
@@ -2471,9 +2466,7 @@ export class CiJobHistoryCollector {
       );
     }
     if (progress && reportedFailure) {
-      const message = reportedFailure.error instanceof Error
-        ? reportedFailure.error.message
-        : String(reportedFailure.error);
+      const message = describeFailure(reportedFailure.error);
       this.#updateProgress(progress, {
         warning: `${failures.length} run check${
           failures.length === 1 ? "" : "s"
@@ -2535,7 +2528,7 @@ export class CiJobHistoryCollector {
         return result;
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         this.#updateProgress(progress, {
           phase: "error",
           error: friendlyError(message),
@@ -2709,9 +2702,7 @@ export class CiJobHistoryCollector {
           }
         }
         this.#refreshFailureAt.set(source.key, Date.now());
-        const message = reportedError instanceof Error
-          ? reportedError.message
-          : String(reportedError);
+        const message = describeFailure(reportedError);
         const safeMessage = friendlyError(message);
         this.#refreshFailureError.set(key, safeMessage);
         console.error(

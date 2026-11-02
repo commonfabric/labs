@@ -10,6 +10,7 @@
  *   - ci-lane.ts                (records the compile cache state)
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { packageDirOf } from "./package-layout.ts";
 
 //
@@ -264,7 +265,7 @@ function githubApiError(
  */
 export function isNotFound(error: unknown): boolean {
   return /^GitHub API (?:GET|POST|PATCH) 404\b/.test(
-    error instanceof Error ? error.message : String(error),
+    describeFailure(error),
   );
 }
 

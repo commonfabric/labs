@@ -3,6 +3,7 @@ import type {
   FabricRegExpConstructor as ApiFabricRegExpConstructor,
 } from "@/api.ts";
 import { backtickQuote } from "@commonfabric/text/markdown";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
@@ -230,7 +231,7 @@ export class FabricRegExp extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            `RegExp: ${e instanceof Error ? e.message : String(e)}`,
+            `RegExp: ${describeFailure(e)}`,
             mutable,
           );
         }
@@ -282,7 +283,7 @@ export class FabricRegExp extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            (e instanceof Error) ? e.message : String(e),
+            describeFailure(e),
             mutable,
           );
         }

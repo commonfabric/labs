@@ -64,6 +64,7 @@
  */
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -681,9 +682,6 @@ function benchmarkUnavailable(sub: string, aside?: string): TileView {
     sub,
   };
 }
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 // The geometric mean of the per-benchmark ratios between two runs on the same
 // processor, over the benchmarks they share that match `select` (each with a
@@ -1348,9 +1346,7 @@ function startBenchmarkRefresh(
   const result = collection().then((outcome) => {
     finishRefresh();
     if (outcome.error) {
-      const message = outcome.error instanceof Error
-        ? outcome.error.message
-        : String(outcome.error);
+      const message = describeFailure(outcome.error);
       if (scope === "bench") {
         benchmarkRefreshFailedAt = Date.now();
         benchmarkRefreshError = friendlyError(message);
@@ -1465,7 +1461,7 @@ async function collectBenchmarkTileRuns(
   await refresh;
   return {
     runs: runs ?? [],
-    offline: runs ? undefined : friendlyError(errorMessage(listError)),
+    offline: runs ? undefined : friendlyError(describeFailure(listError)),
   };
 }
 

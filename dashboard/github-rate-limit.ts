@@ -5,6 +5,7 @@
  * spend is known before collection starts.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
@@ -308,9 +309,7 @@ export class GitHubRateLimitBudget {
         try {
           primary = await probe();
         } catch (error) {
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
+          const message = describeFailure(error);
           throw new GitHubRateLimitBudgetError(
             `GitHub rate limit status could not be read: ${message}`,
           );
@@ -373,7 +372,7 @@ export class GitHubRateLimitBudget {
       if (error instanceof Deno.errors.NotFound) {
         return { version: LEDGER_VERSION, tokens: [] };
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeFailure(error);
       throw new GitHubRateLimitBudgetError(
         `GitHub rate limit ledger could not be read: ${message}`,
       );
@@ -411,7 +410,7 @@ export class GitHubRateLimitBudget {
 
   #ledgerError(error: unknown): GitHubRateLimitBudgetError {
     if (error instanceof GitHubRateLimitBudgetError) return error;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     return new GitHubRateLimitBudgetError(
       `GitHub rate limit ledger could not be updated: ${message}`,
     );
@@ -638,9 +637,7 @@ export class GitHubRateLimitBudget {
           primary = this.#normalizeProbe(await probe());
         } catch (error) {
           if (error instanceof GitHubRateLimitBudgetError) throw error;
-          const message = error instanceof Error
-            ? error.message
-            : String(error);
+          const message = describeFailure(error);
           throw new GitHubRateLimitBudgetError(
             `GitHub rate limit status could not be read: ${message}`,
           );
