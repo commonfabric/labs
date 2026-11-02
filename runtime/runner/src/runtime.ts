@@ -4122,6 +4122,14 @@ export class Runtime {
         options.schema,
         finalTx,
       ).get({ traverseCells: true });
+      // The staged traversal loaded everything this read reaches; a load it
+      // starts here would leave a hole the input check reads as nothing.
+      if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
+        throw externalObservationRefusal(
+          "external content observation reached an unloaded document",
+          finalTx.getCfcState(),
+        );
+      }
       const finalCell = this.getCell<unknown>(
         options.space,
         options.cause,
