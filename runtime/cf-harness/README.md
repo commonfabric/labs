@@ -2119,11 +2119,11 @@ not grant access to another store.
 
 The action path is checked before collecting execution details: a read-only
 mailbox does not establish the ability to send, and an unavailable send path
-calls for an upfront limitation and an offered draft. The guidance favors the
-closest achievable outcome without silently substituting data or claiming the
-original task is complete. Unavailable or withheld evidence remains unknown; the
-agent follows the not-checked verification rule and never asks for a nonexistent
-permission to release it.
+calls for an upfront limitation and an offered draft. The guidance states
+capability limits and offers useful achievable work without silently
+substituting a source or claiming the original goal is complete. Unavailable or
+withheld evidence remains unknown; the agent follows the not-checked
+verification rule and never asks for a nonexistent permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
 for a specific remaining uncertainty, with `followUpTo` naming the research
