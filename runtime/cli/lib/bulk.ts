@@ -353,9 +353,10 @@ export async function runRetarget(
     await (deps.readTextFile ?? Deno.readTextFile)(request.planPath),
   );
   const sessions = groupSessions(config, deps.loadPieces ?? loadPieces);
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  const library = await import("@commonfabric/piece/ops/bulk-retarget");
-  return await (deps.retargetPieces ?? library.retargetPieces)(sessions, {
+  const retarget = deps.retargetPieces ??
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    (await import("@commonfabric/piece/ops/bulk-retarget")).retargetPieces;
+  return await retarget(sessions, {
     plan,
     ...(request.accept === undefined ? {} : { accepted: request.accept }),
     ...(request.apply === true ? { apply: true } : {}),

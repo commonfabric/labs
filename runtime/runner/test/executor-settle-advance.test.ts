@@ -61,7 +61,12 @@ import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
-import { SERVER_EXECUTION_WATERMARK_DOC_ID, waitForSettled, watermarkCell, watermarkDocLink } from "../src/executor/watermark.ts";
+import {
+  SERVER_EXECUTION_WATERMARK_DOC_ID,
+  waitForSettled,
+  watermarkCell,
+  watermarkDocLink,
+} from "../src/executor/watermark.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { stampSpeculationRunContext } from "../src/speculation/overlay-destination.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";

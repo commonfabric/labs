@@ -8,7 +8,7 @@
  * process, and the launcher does not grant that.
  *
  *   CF_PROF_OUT=/tmp/run CF_PROF_CPU=1 CF_TIMING_MEASURES=1 \
- *     deno run --quiet --config deno.jsonc --allow-net --allow-ffi \
+ *     deno run --quiet --unstable-lazy-dynamic-imports --config deno.jsonc --allow-net --allow-ffi \
  *     --allow-read --allow-write --allow-env --allow-run --allow-sys \
  *     skills/perf-investigation/scripts/profile-cf.ts cell get <address> ...
  *
