@@ -125,8 +125,10 @@ and `spaceaccessrestored` with the space once a retry admits the principal
 again; it does not send the server's diagnostic error text to the UI. For a
 deleted space
 ([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
-carries `deleted: true`, the one marker of the refusal it forwards; that marker
-is not implemented yet.
+carries `deleted: true`, the one marker of the refusal it forwards. A space
+already refused that turns out to be deleted is reported again, with the
+marker, to the storage provider's loss and access-change observers alike; that
+marker is not implemented yet.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized

@@ -491,16 +491,16 @@ commit and every commit carrying delegated carriage included, with a
 `ProtocolError` naming the deletion, and that refusal is deterministic: no
 successor tenure could have it admitted.
 
-- Activation reads the space's access list before it acquires a lease. When
-  it finds a tombstone there, it starts no tenure, and §1's re-evaluation
+- Activation reads the space's access list before it acquires a lease. When it
+  finds a deletion tombstone there, it starts no tenure, and §1's re-evaluation
   starts none for that space again, whatever demand it sees.
 - A tenure reads and commits its own space engine-direct, and holds no session
-  on it, so no session revocation tells it of the deletion. What tells it is
-  the host's notice that an admitted commit wrote the space's ACL document
-  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs.
-  On that notice for its own space the SpaceServer reads the ACL document, and
-  when it holds a tombstone it ends the tenure for good. It stops committing at
-  once, as on a lease loss, disposes of the runtime, releases the lease, and
+  on it, so no session revocation tells it of the deletion. What tells it is the
+  host's notice that an admitted commit wrote the space's ACL document
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs. On
+  that notice for its own space the SpaceServer reads the ACL document, and when
+  it holds a deletion tombstone it ends the tenure for good. It stops committing
+  at once, as on a lease loss, disposes of the runtime, releases the lease, and
   does not re-acquire it. A refused commit naming the deletion ends it the same
   way, which is the backstop for a deletion committed through another process,
   whose commit the host does not see.

@@ -753,8 +753,16 @@ none existed would lock the space's members out. The tool therefore writes
 the audit revision only where an ACL document exists, reports `absent`
 otherwise, and leaves the compaction commit — a `system` commit under the
 `compaction:` session with the run's plan as its payload — as the run's one
-record in such a store. A tombstoned ACL document is left as it is for the
-same reason: a `set` would recreate it. The member is
+record in such a store. An ACL document that a document `delete` removed,
+which INV-12 forbids, is left as it is for the same reason: a `set` would
+recreate it. A
+[deleted space](../specs/random-space-identities.md#deleting-a-space) is a
+different case: its ACL document is a `set` of a deletion tombstone, which is
+not an ACL, so the run refuses the store, as it refuses any whose ACL document
+holds something other than an ACL. Once deleting a space is implemented, that
+refusal names `cf space reap`, which is how such a store is reclaimed
+([reaping a deleted space](../specs/random-space-identities.md#reaping-a-deleted-space)).
+The member is
 a sibling of `value` rather than inside it because `value` is the ACL, with
 its own schema and its own admission, and because the state inspector
 classifies an entity by its top-level paths and can learn one more. The

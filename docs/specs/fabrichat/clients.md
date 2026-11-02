@@ -142,6 +142,10 @@ A client that draws natively MUST:
   [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+- **Show a deleted room as deleted, with no controls**: an entry of the
+  manager's `deletedRooms`, or a placement whose `state` is `"deleted"` (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#facts)). Deleting a room is
+  deleting its space, which FabriChat itself offers no way to do.
 
 A client MUST NOT copy a room's contents into any other space, including as a
 cache inside a piece. A copy loses the room's label and is readable by everyone
