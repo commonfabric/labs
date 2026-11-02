@@ -17,6 +17,7 @@
  */
 
 import * as path from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   awaitReadyMarker,
@@ -338,11 +339,6 @@ function spawnOf(context: CapabilityContext): Spawn {
     context.report?.(`ci-lane: starting ${[command, ...args].join(" ")}`);
     return start(command, args, options);
   };
-}
-
-/** What a thrown value says, whether or not it is an `Error`. */
-export function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** A probe answering whether `command` is on the path. */
@@ -719,7 +715,7 @@ async function startToolshed(
     // the log is carried in the throw or it goes with the work directory
     // unread.
     throw new Error(
-      `${messageOf(error)}\ntoolshed log:\n${await logTail(logFile)}`,
+      `${describeFailure(error)}\ntoolshed log:\n${await logTail(logFile)}`,
       { cause: error },
     );
   }
@@ -1001,7 +997,7 @@ export async function openCapabilities(
       try {
         await open.close();
       } catch (error) {
-        failures.push(`${id} failed to close: ${messageOf(error)}`);
+        failures.push(`${id} failed to close: ${describeFailure(error)}`);
       }
     }
     opened.length = 0;
@@ -1028,9 +1024,10 @@ export async function openCapabilities(
     try {
       await close();
     } catch (closing) {
-      throw new Error(`${messageOf(error)}\n${messageOf(closing)}`, {
-        cause: error,
-      });
+      throw new Error(
+        `${describeFailure(error)}\n${describeFailure(closing)}`,
+        { cause: error },
+      );
     }
     throw error;
   }
