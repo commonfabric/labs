@@ -17,6 +17,7 @@ import {
   toMemorySpaceAddress,
 } from "./scheduler-test-utils.ts";
 import type {
+  Cell,
   EventHandler,
   IExtendedStorageTransaction,
   SchedulerTestStorageManager,
@@ -235,6 +236,169 @@ describe("event handling", () => {
 
     await eventResultCell.pull();
     expect(eventResultCell.get()).toBe(3);
+  });
+
+  describe("with a head event whose presync is pending", () => {
+    // The presync waits on `release` until each test resolves it, standing in
+    // for a load that never answers. Every test registers a demanded
+    // computation over `input` and an event, `held`, whose handler records
+    // into `order`.
+
+    let release: () => void;
+    let presyncStarted: Promise<void>;
+    let order: string[];
+    let held: NormalizedFullLink;
+    let input: Cell<number>;
+    let output: Cell<number>;
+
+    beforeEach(async () => {
+      const gate = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<void>();
+      release = gate.resolve;
+      presyncStarted = started.promise;
+      order = [];
+      const heldCell = runtime.getCell<number>(
+        space,
+        "presync hold held stream",
+        undefined,
+        tx,
+      );
+      heldCell.set(0);
+      input = runtime.getCell<number>(
+        space,
+        "presync hold input",
+        undefined,
+        tx,
+      );
+      input.set(0);
+      output = runtime.getCell<number>(
+        space,
+        "presync hold output",
+        undefined,
+        tx,
+      );
+      output.set(0);
+      await tx.commit().settled;
+      tx = runtime.edit();
+
+      runtime.scheduler.subscribe(
+        (actionTx) => {
+          output.withTx(actionTx).send(input.withTx(actionTx).get() * 10);
+        },
+        {
+          reads: [toMemorySpaceAddress(input.getAsNormalizedFullLink())],
+          shallowReads: [],
+          writes: [toMemorySpaceAddress(output.getAsNormalizedFullLink())],
+        },
+        {},
+      );
+      await output.pull();
+
+      const handler: EventHandler = () => {
+        order.push("held");
+      };
+      handler.presyncInputs = async () => {
+        started.resolve();
+        await gate.promise;
+      };
+      held = heldCell.getAsNormalizedFullLink();
+      runtime.scheduler.addEventHandler(handler, held);
+    });
+
+    /**
+     * Writes `value` to `input` and waits until the computation over it has
+     * delivered `value * 10` to `output`.
+     */
+    async function deriveFrom(value: number): Promise<void> {
+      const derived = Promise.withResolvers<void>();
+      const cancel = output.withTx(runtime.edit()).sink((seen) => {
+        if (seen === value * 10) derived.resolve();
+      });
+      try {
+        const writeTx = runtime.edit();
+        input.withTx(writeTx).set(value);
+        await writeTx.commit().settled;
+        await waitForSignal(derived.promise, "the derivation did not run");
+      } finally {
+        cancel();
+      }
+    }
+
+    it("runs derivations while the presync waits", async () => {
+      runtime.scheduler.queueEvent(held, 1);
+      await waitForSignal(presyncStarted, "the presync did not start");
+
+      await deriveFrom(5);
+      expect(output.get()).toBe(50);
+      expect(order).toEqual([]);
+
+      release();
+      await runtime.idle();
+      expect(order).toEqual(["held"]);
+    });
+
+    it("dispatches a later event on another stream only after the head", async () => {
+      const laterCell = runtime.getCell<number>(
+        space,
+        "presync hold later stream",
+        undefined,
+        tx,
+      );
+      laterCell.set(0);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      const later = laterCell.getAsNormalizedFullLink();
+      runtime.scheduler.addEventHandler(() => {
+        order.push("later");
+      }, later);
+
+      runtime.scheduler.queueEvent(held, 1);
+      await waitForSignal(presyncStarted, "the presync did not start");
+      runtime.scheduler.queueEvent(later, 2);
+
+      // The derivation runs in a pass that began with `later` queued, so a
+      // pass that could dispatch it has run.
+      await deriveFrom(5);
+      expect(order).toEqual([]);
+
+      release();
+      await runtime.idle();
+      expect(order).toEqual(["held", "later"]);
+    });
+
+    it("dispatches the next event once the held head is dropped", async () => {
+      const laterCell = runtime.getCell<number>(
+        space,
+        "presync hold dropped later stream",
+        undefined,
+        tx,
+      );
+      laterCell.set(0);
+      await tx.commit().settled;
+      tx = runtime.edit();
+      const later = laterCell.getAsNormalizedFullLink();
+      const laterRan = Promise.withResolvers<void>();
+      runtime.scheduler.addEventHandler(() => {
+        order.push("later");
+        laterRan.resolve();
+      }, later);
+
+      runtime.scheduler.queueEvent(held, 1);
+      await waitForSignal(presyncStarted, "the presync did not start");
+      runtime.scheduler.queueEvent(later, 2);
+      const purged = runtime.scheduler.purgeQueuedEvents(
+        (event) => event.eventLink.id === held.id,
+        "dropped while its presync waits",
+      );
+
+      await waitForSignal(laterRan.promise, "the later event did not run");
+      expect(purged).toBe(1);
+      expect(order).toEqual(["later"]);
+
+      release();
+      await runtime.idle();
+      expect(order).toEqual(["later"]);
+    });
   });
 
   it("should remove event handlers", async () => {

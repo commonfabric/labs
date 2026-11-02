@@ -735,7 +735,17 @@ each ready event behind it in turn, the handlers running back to back ahead
 of the pass's one settle, so that derivations several events invalidate run
 once; an event the gate below holds ends that run, and the settle serves it):
 
-1. **Preflight.** Compute the handler's read closure in a read-only,
+1. **Presync.** Bring the handler's input documents into the local replica
+   (`presyncInputs`). The head holds its lane slot while the presync's I/O
+   runs, as it does while its handler's piece loads, and the pass ends there:
+   the events behind the head wait, and the derivations the pass owes still
+   settle. The presync's settlement queues the pass that goes on to the
+   preflight. An unguarded handler presyncs ahead of its preflight, so the
+   closure is computed over what the presync loaded; a guarded stream
+   presyncs once the preflight has selected the actor's implementation, and
+   then runs its preflight again. A presync that fails counts as done, and
+   the handler's own read reports the failure.
+2. **Preflight.** Compute the handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input
    links when present, else the `$event`-scoped schema closure — the one
    place a deep schema read survives in v2. **Default is
@@ -745,7 +755,7 @@ once; an event the gate below holds ends that run, and the settle serves it):
    is the one place where an under-approximated closure weakens a
    user-visible guarantee (I4), so correctness-by-default wins until the
    cache is proven.
-2. **Consistency gate.** Treat the closure as a transient demand root: any
+3. **Consistency gate.** Treat the closure as a transient demand root: any
    invalid upstream nodes of the closure join the pass's work set (they are
    demanded *by the event*, live or not). The invalid-upstream set is computed
    by **inverted reachability** from the maintained invalid-node set into the
@@ -770,13 +780,12 @@ once; an event the gate below holds ends that run, and the settle serves it):
    that was already in flight at the preflight snapshot re-parks; a generation
    first kicked by that same preflight is history-suppressed, avoiding a
    self-created park livelock.
-3. **Dispatch** once the closure is clean: presync handler inputs
-   (`presyncInputs`, unchanged), run the handler in an immediate transaction
-   stamped with the handler's id, commit optimistically (changes propagate
-   through the one channel), retry a stale-basis rejection by re-queueing at
-   the lane head (backoff-parked via `notBefore`), then run the internal
-   `onCommit` callback (success or final failure; no external side effects —
-   unchanged contract).
+4. **Dispatch** once the closure is clean: run the handler in an immediate
+   transaction stamped with the handler's id, commit optimistically (changes
+   propagate through the one channel), retry a stale-basis rejection by
+   re-queueing at the lane head (backoff-parked via `notBefore`), then run the
+   internal `onCommit` callback (success or final failure; no external side
+   effects — unchanged contract).
 
 ### 7.6 Event-initiated work and commit failure
 

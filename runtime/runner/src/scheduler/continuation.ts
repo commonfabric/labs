@@ -10,11 +10,16 @@ export interface ExecuteContinuationState {
   readonly idlePromises: (() => void)[];
   readonly consumeRerunAfterCurrentExecute: () => boolean;
   readonly hasPendingLineageHeadEvent: () => boolean;
-  readonly hasLoadParkedHeadEvent: () => boolean;
+  /**
+   * Whether the head waits out of the pass for loads: its closure's, in a load
+   * park, or its handler's inputs, in a presync.
+   */
+  readonly hasLoadWaitingHeadEvent: () => boolean;
 
   /**
-   * Whether the pass just ended deferred its settle to the pass a load park's
-   * release starts, so the work it left is not cause for another pass.
+   * Whether the pass just ended deferred its settle to the pass that the end
+   * of the head's load wait starts, so the work it left is not cause for
+   * another pass.
    */
   readonly settleDeferredForLoadPark: () => boolean;
 
@@ -113,11 +118,11 @@ export function applyPullExecuteContinuation(
   // ready nor parked, letting idle() resolve with it still queued.
   const now = performance.now();
   const hasPendingLineageHeadEvent = state.hasPendingLineageHeadEvent();
-  const hasLoadParkedHeadEvent = state.hasLoadParkedHeadEvent();
-  // A pass that deferred its settle to a parked head's release waits for that
+  const hasLoadWaitingHeadEvent = state.hasLoadWaitingHeadEvent();
+  // A pass that deferred its settle to a waiting head's release waits for that
   // release, which queues the next pass; queueing one for the derivations it
   // left would run passes that defer again until the loads settle.
-  if (hasLoadParkedHeadEvent && state.settleDeferredForLoadPark()) {
+  if (hasLoadWaitingHeadEvent && state.settleDeferredForLoadPark()) {
     // The release's pass settles whatever this one was asked to run again
     // for, so the request is taken here rather than left latched, where it
     // would queue a pass behind the release's own.
@@ -128,10 +133,10 @@ export function applyPullExecuteContinuation(
   const hasQueuedEventReadyNow = state.eventQueue.length > 0 &&
     !isHeadEventParked(state, now) &&
     !hasPendingLineageHeadEvent &&
-    !hasLoadParkedHeadEvent;
+    !hasLoadWaitingHeadEvent;
   const hasParkedHeadEvent = state.eventQueue.length > 0 &&
     (isHeadEventParked(state, now) || hasPendingLineageHeadEvent ||
-      hasLoadParkedHeadEvent);
+      hasLoadWaitingHeadEvent);
   const shouldRerunAfterCurrentExecute = state
     .consumeRerunAfterCurrentExecute();
 
