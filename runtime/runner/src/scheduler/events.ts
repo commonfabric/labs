@@ -2474,13 +2474,16 @@ export async function dispatchQueuedEvent(state: {
     // that has now been resolved, so re-running resolves it synchronously from
     // the cache. On the access-list path the run's access-list commit
     // conflicted, and the re-run stages its change against the list as it now
-    // stands. No count guards this loop. Name resolution is monotonic (each
+    // stands. On the space-answer path the run asked `spaceDeleted()` about a
+    // space the memory server has since answered for, and the re-run reads
+    // the answer. No count guards this loop. Name resolution is monotonic (each
     // re-run resolves at least one previously-unresolved name, and a resolved name
     // never becomes pending again), so a handler with finitely many distinct
     // inSpace names terminates; an access-list re-run repeats only when another
     // writer changed the same list in between, and a change it makes itself is
     // a no-op on the re-run; a Home-root re-run follows the root being linked,
-    // and a linked root stays linked. Dispatch released the lineage registration above,
+    // and a linked root stays linked; a space-answer re-run waits for the
+    // answer it re-runs with. Dispatch released the lineage registration above,
     // so the fresh QueuedEvent must be re-recorded: otherwise an origin that fails
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
@@ -2796,9 +2799,10 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
       // A RetryImmediately signal means the handler referenced an inSpace("name")
-      // target that has now been resolved into the runtime cache, or that its
-      // access-list commit conflicted. Abort this run's transaction and re-queue
-      // the event so the handler re-runs.
+      // target that has now been resolved into the runtime cache, that its
+      // access-list commit conflicted, or that a space it asked `spaceDeleted()`
+      // about has now been answered for. Abort this run's transaction and
+      // re-queue the event so the handler re-runs.
       if (error instanceof RetryImmediately) {
         const rerun = retry || served !== undefined;
         // Before the abort, whose settle callback drops the follow-ups this

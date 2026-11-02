@@ -250,9 +250,12 @@ export function spaceOf(
  * space's access list through the call's transaction, as {@link spaceAccess}
  * does. Until the server answers, a reactive computation gets `undefined`, and
  * runs again when the answer arrives, through `runtime.spaceAccessWatch`,
- * whether or not the space has a list to deliver. A handler gets `undefined`
- * too. A runtime no memory server answers for the space returns `undefined`,
- * as does a `target` passed as `undefined`.
+ * whether or not the space has a list to deliver. A handler records the space
+ * in its frame's `pendingSpaceAnswers` instead, and the runner waits for the
+ * answer once the run ends and raises `RetryImmediately`, which runs it again,
+ * or drops an unserved event sent with `retries: false` as it drops one for an
+ * `inSpace()` name. A runtime no memory server answers for the space returns
+ * `undefined`, as does a `target` passed as `undefined`.
  *
  * Deletion is the same for every principal, so the answer does not depend on
  * who asks, and a call in a computation leaves its read scope as it is. It can
@@ -311,7 +314,9 @@ export function spaceDeleted(
   if (refusal !== undefined) return isDeletedSpaceError(refusal);
   const answered = runtime.storageManager.spaceAnswered?.(space);
   if (answered !== false) return answered === undefined ? undefined : false;
-  if (kind === "lift" && action !== null) {
+  if (kind === "handler") {
+    (frame!.pendingSpaceAnswers ??= new Set()).add(space);
+  } else if (action !== null) {
     runtime.spaceAccessWatch.rerunOnAnswer(space, action);
   }
   return undefined;

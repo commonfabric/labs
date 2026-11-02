@@ -13659,6 +13659,28 @@ export class Runner {
   }
 
   /**
+   * Waits for the memory server's answer for each space a `spaceDeleted()`
+   * call in the just-finished handler run asked about before the server had
+   * answered for it, then throws {@link RetryImmediately} so the scheduler
+   * runs the handler again, and the call returns the answer. The wait comes
+   * first: raised before the answers arrive, the retry would run the handler
+   * again against spaces still unanswered.
+   *
+   * @throws The failure of a space's open that ended with no answer, which
+   *   fails the event rather than running it again.
+   */
+  async #awaitPendingSpaceAnswersAndRetry(frame: Frame): Promise<never> {
+    const pending = [...(frame.pendingSpaceAnswers ?? [])];
+    const storage = this.#runtime.storageManager;
+    await Promise.all(
+      pending.map((space) => storage.awaitSpaceAnswer?.(space)),
+    );
+    throw new RetryImmediately(
+      `Awaiting the memory server's answer for spaces: ${pending.join(", ")}`,
+    );
+  }
+
+  /**
    * Brings up the Home root of the user the handler run on `tx` acts for, when
    * its write beneath that Home's empty slot was refused with `error`, then
    * throws {@link RetryImmediately} so the scheduler runs the handler again,
@@ -14092,6 +14114,9 @@ export class Runner {
                 this.#handlingReceiptCell(resultCell, cause, tx),
               );
             }
+            if ((frame.pendingSpaceAnswers?.size ?? 0) > 0) {
+              return this.#awaitPendingSpaceAnswersAndRetry(frame);
+            }
             const handleResult = () => {
               const normalized = normalizeSandboxResult(result, name);
               return this.#handleJavaScriptHandlerResult(
@@ -14145,6 +14170,16 @@ export class Runner {
             tx,
             this.#handlingReceiptCell(resultCell, cause, tx),
           ).finally(() => popFrame(frame));
+        }
+        // The body may also throw on the `undefined` a `spaceDeleted()` call
+        // returned for a space the memory server had not answered for yet.
+        if (
+          !(error instanceof RetryImmediately) &&
+          (frame.pendingSpaceAnswers?.size ?? 0) > 0
+        ) {
+          popFrameAfterReturn = false;
+          return this.#awaitPendingSpaceAnswersAndRetry(frame)
+            .finally(() => popFrame(frame));
         }
         // A write beneath the user's Home before Home has a root is refused;
         // the root is brought up, and the handler runs again.
