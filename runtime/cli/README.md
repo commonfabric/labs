@@ -678,6 +678,15 @@ by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
 or when it is too narrow for the indentation and any text.
 
+Press `C` to cycle how non-printable characters are shown. The first mode draws
+each control character as its control-picture glyph, such as `␉` for a tab, one
+column per character. The ANSI color mode applies color escape sequences to the
+text that follows them instead of showing them. It also advances each tab to the
+next column that is a multiple of 4, measured in the columns drawn. Other
+control characters still appear as control pictures. The hidden mode drops every
+escape sequence and shows each run of other control characters as one `…`.
+Editing always uses the first mode.
+
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
 hex-dump view by default. Pass `--rendered` to start in, or print, another

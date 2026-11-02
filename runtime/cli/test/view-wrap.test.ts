@@ -314,6 +314,22 @@ Deno.test("word wrap plan: hidden control runs retain every boundary", () => {
   }
 });
 
+Deno.test("word wrap plan: a break after a tab follows all of its cells", () => {
+  const doc = parseDocument("ab\tcdefgh");
+  const plan = buildWrapPlan(
+    doc.lines,
+    "ansi",
+    6,
+    new Map(),
+    "word",
+  );
+
+  assertEquals(
+    Array.from(plan.wordRows?.[0]?.offsets ?? []),
+    [0, 4],
+  );
+});
+
 Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {
   const doc = parseDocument("\x1b[31m# alpha beta");
   const plan = buildWrapPlan(

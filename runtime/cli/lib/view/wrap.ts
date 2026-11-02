@@ -555,16 +555,15 @@ function classifyDisplayCells(
     ) {
       displayCol++;
     }
-    if (
-      displayCol < cells.length &&
-      sourceCol >= cells[displayCol].col
+    // Every cell drawn for this code point (a tab can draw several) takes its
+    // classes.
+    for (
+      let d = displayCol;
+      d < cells.length && sourceCol >= cells[d].col;
+      d++
     ) {
-      if (!isPrefixCharacter(codePoint)) {
-        classes[displayCol] &= ~PREFIX_CHARACTER;
-      }
-      if (isBreakWhitespaceCharacter(codePoint)) {
-        classes[displayCol] |= BREAK_WHITESPACE;
-      }
+      if (!isPrefixCharacter(codePoint)) classes[d] &= ~PREFIX_CHARACTER;
+      if (isBreakWhitespaceCharacter(codePoint)) classes[d] |= BREAK_WHITESPACE;
     }
     sourceCol++;
   }
