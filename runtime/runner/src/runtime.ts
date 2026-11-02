@@ -1379,13 +1379,18 @@ const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
  * since writing the value stores each link whether its schema describes the
  * place or not.
  */
-const linksInValue = (value: unknown, links: CellLink[] = []): CellLink[] => {
+const linksInValue = (
+  value: unknown,
+  links: CellLink[] = [],
+  seen = new WeakSet<object>(),
+): CellLink[] => {
   if (isCellLink(value)) {
     links.push(value);
-  } else if (Array.isArray(value)) {
-    for (const item of value) linksInValue(item, links);
-  } else if (typeof value === "object" && value !== null) {
-    for (const item of Object.values(value)) linksInValue(item, links);
+  } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+    // A Cell is a link (`isCellLink`), so only plain data is walked, and an
+    // object reached twice is walked once.
+    seen.add(value);
+    for (const item of Object.values(value)) linksInValue(item, links, seen);
   }
   return links;
 };
