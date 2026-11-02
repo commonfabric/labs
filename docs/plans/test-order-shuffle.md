@@ -18,7 +18,7 @@ describes it.
 A workflow runs every CI test suite under the next Pacific day's seed, once
 for each seed, the first time it finds that CI passed on the head of `main`.
 It differs from the first design of this stage in two ways. It starts when CI
-passes on `main`, and at 11:17 UTC, which is early on a Pacific day in summer
+finishes on `main`, and at 11:17 UTC, which is early on a Pacific day in summer
 and in winter, so one schedule entry serves the whole year and no step has to
 check the Pacific hour. Its result is its conclusion: a failed test fails the
 run.

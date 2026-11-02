@@ -246,10 +246,11 @@ break.
 The workflow runs the suites once for each seed, the first time it finds that
 the CI workflow passed on the head of `main`. A head that CI has not passed on
 would fail the run for reasons unrelated to the order. The workflow starts each
-time the CI workflow passes on a push to `main`. It also starts at 11:17 UTC
-every day, for a day when nothing lands. That is 04:17 in the Pacific zone in
-summer and 03:17 in winter, early on a Pacific day either way, so a scheduled
-run that GitHub starts hours late still asks for the same seed.
+time the CI workflow finishes on `main`, and a run goes on to decide only when
+that CI passed on a push. It also starts at 11:17 UTC every day, for a day when
+nothing lands. That is 04:17 in the Pacific zone in summer and 03:17 in winter,
+early on a Pacific day either way, so a scheduled run that GitHub starts hours
+late still asks for the same seed.
 
 Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
 Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the

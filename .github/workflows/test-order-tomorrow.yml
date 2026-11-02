@@ -12,11 +12,12 @@ name: Tomorrow's Test Order
 # The suites run once per seed, the first time this workflow finds that CI
 # passed on the head of main. A head CI has not passed on would fail this run
 # for reasons that have nothing to do with the order. The workflow starts each
-# time CI passes on a push to main, and once a day at 11:17 UTC for a day when
-# nothing lands. 11:17 UTC is early on a Pacific day in summer and in winter,
-# so a scheduled run that GitHub starts hours late still asks for the same
-# seed. tasks/test-order-tomorrow.ts decides; a run dispatched by hand runs
-# the suites without asking.
+# time CI finishes on main, and a run goes on to decide only when that CI passed
+# on a push. It also starts once a day at 11:17 UTC, for a day when nothing
+# lands. 11:17 UTC is early on a Pacific day in summer and in winter, so a
+# scheduled run that GitHub starts hours late still asks for the same seed.
+# tasks/test-order-tomorrow.ts decides; a run dispatched by hand runs the
+# suites without asking.
 #
 # The suites are the CI workflow's own, called with the seed, which runs every
 # test the way a push to main does. The CI workflow skips the job that gates
