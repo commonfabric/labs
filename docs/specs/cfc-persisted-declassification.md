@@ -282,6 +282,18 @@ decision is `planConfidentialityRelease()` in
   it as it is. The stored schema's declarations at a `*` are those of every
   named property, tuple position and `items` there, and of the
   `additionalProperties` of a schema naming no property.
+- **At a link.** A link stored at the path is a slot whose own labels, the
+  link-carried component, are stored at the path; its target's labels are
+  stored at the target, and are not that component (§8.12.8). A release
+  lowers a link's own labels and leaves its target's. By default it follows a
+  write redirect at the path, as a write does, and lowers the labels where the
+  redirect leads; asked to address the link slot itself
+  (`cf cell set-label --link-slot`, `releaseCellConfidentiality()`'s
+  `linkSlot`), it lowers the redirect's own labels instead. Whether that
+  default conforms to §8.12.7 route 2c, whose request names its own document,
+  is an open question pending a ruling;
+  [`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8 records
+  it.
 - **Who may.** The runtime refuses the release unless the transaction runs
   under the `cfc-confidentiality-release` builtin identity, its acting
   principal is authenticated, and the document is in the space whose DID is
@@ -295,11 +307,14 @@ decision is `planConfidentialityRelease()` in
 - **What it refuses to leave behind.** The path's effective label view is
   read again in the releasing transaction, and a clause it still shows from a
   position the release does not rewrite — an ancestor's entry, a wildcard
-  entry covering a segment the path names concretely, a branch of the stored
-  schema, or the cell's own schema — refuses the whole release, and a change
-  to a label that view read fails the commit. The request may keep only
-  clauses stored at the path (§8.12.7), so a path such a position also labels
-  is released only once that position is.
+  entry covering a segment the path names concretely, the slot of a write
+  redirect the release follows, a branch of the stored schema, or the cell's
+  own schema — refuses the whole release, and a change to a label that view
+  read fails the commit. The view is read with the path resolved as the
+  release resolved it, so the labels of the target of a link the release
+  lowers are not in it. The request may keep only clauses stored at the path
+  (§8.12.7), so a path such a position also labels is released only once that
+  position is.
 - **The record.** Each release commits with a create-only receipt in the same
   space, labeled `User(actor)` and writable only by the release writer,
   holding the actor, the document and path, the positions the clauses were

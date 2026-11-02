@@ -32,8 +32,9 @@ rewrite. In particular:
   validity clause, as it refuses any ACL document that is not an access list
 - instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
   by the server, which advertises `instanceNameMark`, records the mark and
-  admits opens and commits by it; no client declares `instanceNames` yet, so
-  no space is marked
+  admits opens and commits by it, and a client keeps the `session/revoked`
+  reason `instance-names` as the refusal `clientUpdateRequired` marks; no
+  client declares `instanceNames` yet, so no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -946,8 +947,8 @@ interface SessionRevoked {
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
   // `instance-names`: a naming commit marked the space and the session
-  // declares no naming (INV-16); a client of a build that knows
-  // `instanceNameMark` treats it as `clientUpdateRequired`.
+  // declares no naming (INV-16); a client treats it as
+  // `clientUpdateRequired`.
   reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 

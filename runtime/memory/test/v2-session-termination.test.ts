@@ -2,12 +2,46 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
-import { connect, loopback } from "../v2/client.ts";
+import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
+import {
+  connect,
+  isClientUpdateRequiredError,
+  loopback,
+  type Transport,
+} from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+
+/**
+ * Wraps a loopback transport to `server`, so that a test can hand the client
+ * a server frame of its own and count the `session.open` requests sent.
+ */
+const injectingTransport = (server: Server) => {
+  const transport = loopback(server);
+  let receiver = (_payload: string) => {};
+  let opens = 0;
+  const wrapped: Transport = {
+    ...transport,
+    setReceiver(next) {
+      receiver = next;
+      transport.setReceiver(next);
+    },
+    send(payload) {
+      const message = decodeMemoryBoundary(payload) as { type: string };
+      if (message.type === "session.open") opens++;
+      return transport.send(payload);
+    },
+  };
+  return {
+    transport: wrapped,
+    inject: (message: Record<string, string>) =>
+      receiver(encodeMemoryBoundary(message)),
+    opens: () => opens,
+  };
+};
 
 describe("memory session termination", () => {
   for (const name of ["AuthorizationError", "ClientUpdateRequiredError"]) {
@@ -239,5 +273,140 @@ describe("memory session termination", () => {
       await client.close();
       await server.close();
     }
+  });
+
+  describe("a revocation's reason", () => {
+    it("ends the session with an update-required refusal naming the space", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://instance-names-revocation"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      const space = "did:key:z6Mk-instance-names-revocation";
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const observed: Error[] = [];
+        session.subscribeTermination((error) => observed.push(error));
+        injecting.inject({
+          type: "session/revoked",
+          space,
+          sessionId: session.sessionId,
+          reason: "instance-names",
+        });
+        expect(observed).toEqual([session.closeError]);
+        const error = observed[0];
+        expect(isClientUpdateRequiredError(error)).toBe(true);
+        expect(error.name).toBe("SessionRevokedError");
+        expect(error.message).toBe(
+          `Space ${space} now holds data written with instance names, ` +
+            "which this runtime does not use",
+        );
+        await expect(session.queryGraph({ roots: [] })).rejects.toBe(error);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("refuses every later mount on the client with the same refusal, sending no open", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://instance-names-revocation-kept"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      const space = "did:key:z6Mk-instance-names-revocation-kept";
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        injecting.inject({
+          type: "session/revoked",
+          space,
+          sessionId: session.sessionId,
+          reason: "instance-names",
+        });
+        const opens = injecting.opens();
+        await expect(client.mount(space, {}, testSessionOpenAuthFactory))
+          .rejects.toBe(session.closeError);
+        await expect(
+          client.mount(
+            "did:key:z6Mk-instance-names-other-space",
+            {},
+            testSessionOpenAuthFactory,
+          ),
+        ).rejects.toBe(session.closeError);
+        expect(injecting.opens()).toBe(opens);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("leaves a takeover revocation unmarked, so a later mount opens a session", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://takeover-revocation-unmarked"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      const space = "did:key:z6Mk-takeover-revocation-unmarked";
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        injecting.inject({
+          type: "session/revoked",
+          space,
+          sessionId: session.sessionId,
+          reason: "taken-over",
+        });
+        expect(session.closeError?.name).toBe("SessionRevokedError");
+        expect(isClientUpdateRequiredError(session.closeError)).toBe(false);
+        const opens = injecting.opens();
+        await client.mount(space, {}, testSessionOpenAuthFactory);
+        expect(injecting.opens()).toBe(opens + 1);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("leaves the session open for a revocation reason the client does not know", async () => {
+      const server = new Server({
+        ...testSessionOpenServerOptions,
+        store: new URL("memory://unknown-revocation-reason"),
+      });
+      const injecting = injectingTransport(server);
+      const client = await connect({ transport: injecting.transport });
+      const space = "did:key:z6Mk-unknown-revocation-reason";
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        injecting.inject({
+          type: "session/revoked",
+          space,
+          sessionId: session.sessionId,
+          reason: "a-reason-no-build-sends",
+        });
+        expect(session.closeError).toBeUndefined();
+        await session.queryGraph({ roots: [] });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
   });
 });

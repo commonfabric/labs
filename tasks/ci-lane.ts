@@ -63,9 +63,11 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import { maxOf } from "@commonfabric/collections/math";
 import {
+  type Capability,
   type CapabilityId,
   COMPILE_CACHE_FILE,
   logTail,
+  messageOf,
   openCapabilities,
   takeGithubToken,
 } from "./ci-capabilities.ts";
@@ -2192,6 +2194,12 @@ export interface LaneDeps {
    * SIGTERM; a lane run from inside a test is stopped by the test.
    */
   stop?: () => LaneStop;
+
+  /**
+   * The capabilities a lane can open, by name. A caller that supplies them
+   * is saying what opening and closing each one would do.
+   */
+  capabilities?: ReadonlyMap<CapabilityId, Capability>;
 }
 
 /**
@@ -2736,9 +2744,13 @@ export async function runLane(
   // the directory from the job's temporary directory. Anywhere else
   // nothing would collect it, and one directory would accumulate per
   // failed run.
+  // A removal that fails is reported rather than thrown, so that it never
+  // replaces the error a failing lane is ending with.
   const leaveWorkDir = async (passed: boolean) => {
     if (passed || temp === undefined) {
-      await Deno.remove(workDir, { recursive: true }).catch(() => {});
+      await Deno.remove(workDir, { recursive: true }).catch((error) =>
+        console.log(`ci-lane: could not remove ${workDir}: ${messageOf(error)}`)
+      );
     }
   };
   const spool = (deps.spool ?? recordsDir)();
@@ -2755,7 +2767,7 @@ export async function runLane(
       workDir,
       ...(githubToken === undefined ? {} : { githubToken }),
       report: console.log,
-    });
+    }, deps.capabilities);
   } catch (error) {
     await leaveWorkDir(false);
     throw error;
@@ -2947,13 +2959,23 @@ export async function runLane(
     ok = false;
     throw error;
   } finally {
-    // Read while the servers are still up: closing one signals it and
-    // returns, so a read after that races a shutdown still writing.
+    // Closing a server waits for it to exit, so after this its log is
+    // whole and nothing writes into the work directory. A capability that
+    // failed to close fails the lane without displacing whatever the loop
+    // threw.
+    try {
+      await opened.close();
+    } catch (error) {
+      ok = false;
+      notes.push(messageOf(error));
+      console.log(`ci-lane: ${messageOf(error)}`);
+    }
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
-    if (!ok) await describeCapabilityLogs(opened.logs);
-    await opened.close();
-    if (!ok) await leaveWorkDir(false);
+    if (!ok) {
+      await describeCapabilityLogs(opened.logs);
+      await leaveWorkDir(false);
+    }
   }
   // A lane that has passed so far keeps its directory until its coverage
   // is converted, which can still fail it.

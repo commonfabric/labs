@@ -1,7 +1,7 @@
 # Turning instance names on
 
-Stages 3 and 4 of this plan are done, and so is the server half of stage 1;
-nothing else is.
+Stages 3 and 4 of this plan are done, and so is stage 1 apart from the
+client's declaration of its mode and its capability check; nothing else is.
 The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
@@ -150,18 +150,16 @@ carries its own message:
 
 The second refusal reaches the client as a `session/revoked` with the reason
 `instance-names`, which carries no message, so the client makes the message
-from the reason and the space. A client today turns every revocation into a
-plain `SessionRevokedError` without `clientUpdateRequired`, and the storage
-manager keeps only a refusal that carries it; stage 1 makes the client mark
-this one, so it is kept like the others.
+from the reason and the space. The client marks the `SessionRevokedError` it
+ends the session with `clientUpdateRequired`, so the client and the storage
+manager keep it like the others.
 
 The shell's card for a kept refusal shows the refusal's message under "Update
-required", and then a fixed line: "Reload this tab to load the current
-version." That line is wrong for a deployment switched back to off, where a
-reload loads a positional runtime that a marked space still refuses. Stage 1
-replaces the fixed line with one that fits every refusal it shows: reloading
+required", and then a fixed line that fits every refusal it shows: reloading
 loads the runtime this deployment serves, and if the same message comes back,
-this deployment cannot open that space.
+this deployment cannot open that space. A line that only promised the current
+version would be wrong for a deployment switched back to off, where a reload
+loads a positional runtime that a marked space still refuses.
 
 ### D6. A rollback fails closed
 
@@ -223,10 +221,9 @@ The memory server records the mark, enforces INV-16, and advertises
 `instanceNameMark`, which is built: the mark is the one row of the
 `instance_name_mark` table in the space's database, written in the commit's
 own transaction and naming that commit, and the toolshed gives the server its
-posture from `experimentalPosture()`, which names no instances. What remains
-of this stage is the client's half below. In routed mode, the router's public
-offer is the intersection of its endpoints' flags, including flags the router
-does not know, so the router needs no change
+posture from `experimentalPosture()`, which names no instances. In routed
+mode, the router's public offer is the intersection of its endpoints' flags,
+including flags the router does not know, so the router needs no change
 ([`routed-mode-a.md`](../specs/memory-v2/routed-mode-a.md)). The memory
 client declares the runtime's mode, fails the connection permanently when it
 names instances and the server does not advertise the capability, and marks the
@@ -234,6 +231,12 @@ three refusals and the `instance-names` revocation `clientUpdateRequired` (D5).
 The shell's card gets the guidance D5 gives it. The flag stays unreachable from
 the environment, so every runtime is positional, and D8 refuses a naming one
 anywhere.
+
+Of the client's half, its handling of the `instance-names` revocation and the
+shell's card are built: the client ends the session with the
+`clientUpdateRequired` refusal D5 gives, and the client and storage manager
+keep it. What remains of this stage is the client's declaration of its mode
+and its capability check, and the hazards below becoming refusals.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
 refusals: the positional runtime is refused the space, the test asserts the
@@ -319,13 +322,13 @@ reach a deployment's spaces.
   `RuntimeOptions.experimental.instanceNames`, declares nothing and writes
   named data without marking the space (D3). Nothing on the server can tell it
   from a positional runtime.
-- What a client of a build older than `instanceNameMark` does with the
-  `session/revoked` reason `instance-names`, which its message parser does not
-  recognize, as it does not recognize `deleted`. The commit refusal keeps its
-  later commits out of the store, and its reopen is refused at admission, so
-  the revocation is about what the client shows, not about what reaches the
-  store. A client of such a build that only watches the space and never
-  reopens it keeps its session's view without learning why updates stopped.
+- What a client of a build whose message parser does not recognize the
+  `session/revoked` reason `instance-names` does with it, as such a parser
+  does not recognize `deleted`. The commit refusal keeps its later commits out
+  of the store, and its reopen is refused at admission, so the revocation is
+  about what the client shows, not about what reaches the store. A client of
+  such a build that only watches the space and never reopens it keeps its
+  session's view without learning why updates stopped.
 - Whether a space can be marked other than by a write, for an operator who wants
   a space closed to positional runtimes before anything writes it.
 - Server-side execution runs in the deployment's runtimes, which open spaces

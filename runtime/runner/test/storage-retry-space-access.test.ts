@@ -401,6 +401,28 @@ describe("storage space access retry", () => {
     expect(guestMounts).toBe(1);
   });
 
+  it("retains an `instance-names` revocation of an established session across reads, Retry, ACL notices, and new spaces", async () => {
+    await setAccess(true);
+    expect((await manager.open(space).sync("of:first")).error).toBeUndefined();
+    const notices: unknown[] = [];
+    manager.subscribeClientUpdateRequired((status) => notices.push(status));
+    guestSessions[0].handleRevoked("instance-names");
+    const status = {
+      message: `Space ${space} now holds data written with instance names, ` +
+        "which this runtime does not use",
+      unconfirmedWrites: false,
+    };
+    expect(manager.clientUpdateRequired()).toEqual(status);
+    expect(notices).toEqual([status]);
+    expect(manager.spaceAccessError(space)).toBeUndefined();
+    manager.noteSpaceAclChanged(space);
+    await manager.retrySpaceAccess(space);
+    expect((await manager.open(space).sync("of:second")).error).toBeDefined();
+    expect((await manager.open(guest.did()).sync("of:another-space")).error)
+      .toBeDefined();
+    expect(guestMounts).toBe(1);
+  });
+
   it("opens the session again after a revocation and a later grant, and notifies the change", async () => {
     await setAccess(true);
     expect((await manager.open(space).sync(`of:${space}`)).error)

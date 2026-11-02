@@ -147,10 +147,12 @@ function defaultSpawn(
   };
 }
 
-// Read the child's stdout until the readiness marker arrives or the stream ends.
-// Returns true when the marker was seen, false when the child's stdout closed
-// first -- which means the child exited before it bound its port.
-async function awaitReadyMarker(
+/**
+ * Reads the stdout of the server copy until the readiness marker arrives or the
+ * stream ends. Returns `true` when the marker was seen, and `false` when the
+ * stdout closed first, which means the server exited before it bound its port.
+ */
+export async function awaitReadyMarker(
   stdout: ReadableStream<Uint8Array>,
 ): Promise<boolean> {
   const reader = stdout.getReader();
@@ -169,9 +171,7 @@ async function awaitReadyMarker(
     }
   } finally {
     reader.releaseLock();
-    // Not awaited: cancelling a live child's stdout waits for the child to close
-    // it, which a listening server never does. The parent detaches and exits
-    // right after this returns, which closes the read end anyway.
+    // Not awaited, because nothing after this depends on the cancel finishing.
     void stdout.cancel().catch(() => {});
   }
 }

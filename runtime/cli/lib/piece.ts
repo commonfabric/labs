@@ -99,6 +99,7 @@ import {
   redactCaveatSourcesForDisplay,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
+  type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
@@ -332,7 +333,9 @@ export function parseCellCfcLabelUpdate(
 
 /**
  * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
+ * reader — the doc the selected path lands in once its links are followed, or,
+ * with `lastNode: "top"`, the doc holding a link stored at the path, without
+ * the labels of where that link leads.
  *
  * Each command needs that doc for its own reason. An INSPECTION read must not
  * answer "none" for a value carrying a label behind a link the path crosses
@@ -343,8 +346,12 @@ export function parseCellCfcLabelUpdate(
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -5069,15 +5076,27 @@ const confidentialityToKeep = (
  * there, which rewrites the stored metadata. A `*` segment of the path names
  * every stored position it matches at its depth, the wildcard entry there
  * among them. The input then holds `confidentiality` alone, naming only
- * clauses the path already stores.
+ * clauses the path already stores. A write redirect at the path is followed
+ * to the labels where it leads, unless `linkSlot`, which lowers the labels of
+ * the link stored at the path itself.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
   addressedPath: (string | number)[],
   input: unknown,
-  options: { input?: boolean; lowerConfidentiality?: boolean } = {},
+  options: {
+    input?: boolean;
+    lowerConfidentiality?: boolean;
+    linkSlot?: boolean;
+  } = {},
   deps: PieceOperationDependencies = {},
 ): Promise<CfcLabelView | null> {
+  if (options.linkSlot === true && options.lowerConfidentiality !== true) {
+    throw new Error(
+      "`--link-slot` applies to a lowering alone: pass it with " +
+        "`--dangerously-allow-lowering-confidentiality`.",
+    );
+  }
   const update = parseCellCfcLabelUpdate(input);
   const keep = options.lowerConfidentiality === true
     ? confidentialityToKeep(update)
@@ -5117,12 +5136,22 @@ export async function setCellCfcLabel(
   }
 
   if (keep !== undefined) {
-    const release = await releaseCellConfidentiality(targetCell, keep);
+    const release = await releaseCellConfidentiality(
+      targetCell,
+      keep,
+      options.linkSlot === true ? { linkSlot: true } : {},
+    );
     if (release.receipt !== undefined) {
       await pieces.synced();
       noteWroteTo(release.receipt.space);
     }
-    return cfcLabelViewForCommand(targetCell, path);
+    // A lowering of a link slot reports the slot it lowered, not the labels
+    // where the link leads.
+    return cfcLabelViewForCommand(
+      targetCell,
+      path,
+      options.linkSlot === true ? { lastNode: "top" } : {},
+    );
   }
 
   const { observes: requestedObserves, ...label } = update;

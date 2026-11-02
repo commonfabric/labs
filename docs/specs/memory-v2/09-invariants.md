@@ -911,8 +911,13 @@ included; the positional commit and the positional open and resume a marked
 space refuses; the revocation of its positional sessions; the posture an
 unmarked space's naming open is admitted under; and the `off` ACL mode.
 `runtime/memory/test/session-open-auth.test.ts` checks that the declaration is
-bound to the signed descriptor. No client declares a mode yet, and the
-`instanceNames` flag stays off until one does
+bound to the signed descriptor. The client's handling of the `instance-names`
+revocation is tested on its own: it ends the session with a
+`SessionRevokedError` that carries `clientUpdateRequired: true` and the message
+above, and the client keeps it
+(`runtime/memory/test/v2-session-termination.test.ts`), as does the storage
+manager (`runtime/runner/test/storage-retry-space-access.test.ts`). No client
+declares a mode yet, and the `instanceNames` flag stays off until one does
 ([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
 
 ## Change discipline

@@ -493,7 +493,18 @@ stated, its recommended refusal of a request the path would still show an
 unkept clause after included; the request is an authenticated host command
 and the record a create-only receipt
 ([`cfc-persisted-declassification.md`](cfc-persisted-declassification.md)
-§3.3).
+§3.3). A release at a link slot lowers the link-carried component stored
+there, and its refusal reads the path without the link's target, whose content
+labels §8.12.8 excludes from that component.
+
+Whether a release at a path holding a write redirect conforms is an open
+question pending a ruling. By default the release follows the redirect, as a
+write follows it, and lowers the document it leads to; it addresses the link
+slot itself only when the request asks for that. Route 2c requires the
+document and path to come from the request "and from nothing a computation
+derived", and a write redirect stored at the path is data a computation wrote,
+so the default lets that data choose the document a release lowers. This
+statement does not claim the default conforms.
 
 A release path holding a `*` segment reaches every stored position the segment
 matches at its depth, the wildcard entry there and each concrete position's
