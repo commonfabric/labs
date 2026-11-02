@@ -1372,17 +1372,17 @@ otherwise, with the status and selected headers.
 
 A final assistant reply must contain non-whitespace text. A reply with no text
 and no function tool calls fails the run with `provider-unavailable`, including
-when the provider returned HTTP 200. The one exception is a run that has
-`submit_result`: when a turn that still offers tools follows, its first such
-reply is answered with a host notice asking it to submit the answer, or why it
-cannot be given, and only a second fails it. Tool-only replies continue through
-normal tool dispatch. The normalized assistant message stays in the transcript,
-and the run report retains the model attempts and token usage. This failure does
-not trigger a retry. A Codex attempt that reached its terminal response records
-that response's `status` as `terminalStatus` and the type of each of its output
-items as `outputItemTypes`, which together say whether a blank reply was a
-`completed` response with an empty message, a reasoning item alone, or no item
-at all.
+when the provider returned HTTP 200. A run that has `submit_result` or
+`finish_task` gets one completion notice per prompt-loop invocation when a turn
+that still offers tools follows. The notice asks it to call `submit_result` if
+available, otherwise `finish_task`, with the answer or why it cannot be given. A
+second blank reply fails the run. Tool-only replies continue through normal tool
+dispatch. The normalized assistant message stays in the transcript, and the run
+report retains the model attempts and token usage. This failure does not trigger
+a retry. A Codex attempt that reached its terminal response records that
+response's `status` as `terminalStatus` and the type of each of its output items
+as `outputItemTypes`, which together say whether a blank reply was a `completed`
+response with an empty message, a reasoning item alone, or no item at all.
 
 A blank reply also writes `model-turn-<n>-<uuid>-empty-reply.json` beside the
 run report. The UUID preserves each reply when a resumed invocation repeats a
