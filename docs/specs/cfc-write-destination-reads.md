@@ -44,6 +44,11 @@ clause an exchange rule opened, would refuse every later writer, even one
 writing a constant. A read the program makes of its destination carries no
 marker and still gates.
 
+A caller whose own check rests on what a write reaches has to read it before
+the write. `Runtime.prepareExternalContentObservation()` is one: it reads
+through the observed value, and every link the value stores, before it writes
+the value, so the linked content is an input to that write.
+
 **The type probe.** `CellImpl.set()` asks whether the cell holds a stream
 before choosing between delivering the value as an event and storing it. The
 stream marker is a scalar at one known key of the stored value, named by

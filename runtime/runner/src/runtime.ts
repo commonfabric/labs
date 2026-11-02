@@ -4029,6 +4029,21 @@ export class Runtime {
       tx,
     );
     let finalTx: IExtendedStorageTransaction | undefined;
+    // Reads every document a link in the value names, through the link's
+    // own schema, wherever the link sits; relative links resolve against
+    // the target. Links inside a linked document follow that document's
+    // schema, as any read of it does.
+    const readStoredLinks = (
+      readTx: IExtendedStorageTransaction,
+      target: Cell<unknown>,
+    ) => {
+      for (const link of linksInValue(options.value)) {
+        const linked = parseLink(link, target);
+        this.getCellFromLink(linked, linked.schema, readTx).get({
+          traverseCells: true,
+        });
+      }
+    };
     try {
       await cell.sync();
       cell.set(options.value);
@@ -4104,6 +4119,7 @@ export class Runtime {
       for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
         tx.resetCurrentReadMemoization();
         cell.get({ traverseCells: true });
+        readStoredLinks(tx, cell);
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the
         // manager's settled pool, or a just-kicked load looks absent here.
@@ -4129,8 +4145,7 @@ export class Runtime {
       // Writing the same value again in the staged transaction would not do:
       // a write that changes nothing records no write attempt, so the bound
       // stays at the first one. Everything the fresh transaction reads is
-      // loaded by now, and nothing awaits between the loop's last pass and
-      // this one.
+      // loaded by now.
       tx.abort("external content observation staged");
       finalTx = this.edit();
       const finalCell = this.getCell<unknown>(
@@ -4146,16 +4161,14 @@ export class Runtime {
         finalTx,
       ).get({ traverseCells: true });
       // The schema-guided read above follows only what the target schema
-      // describes; each link the value stores is read as well, through its
-      // own schema, so a link in a place the schema leaves out still gates.
-      for (const link of linksInValue(options.value)) {
-        const target = parseLink(link, finalCell);
-        this.getCellFromLink(target, target.schema, finalTx).get({
-          traverseCells: true,
-        });
-      }
-      // The staged traversal loaded everything this read reaches; a load it
-      // starts here would leave a hole the input check reads as nothing.
+      // describes; each link the value stores is read as well, so a link in
+      // a place the schema leaves out still gates.
+      readStoredLinks(finalTx, finalCell);
+      // The staged traversal loaded everything these reads reach; a load
+      // they start would leave a hole the input check reads as nothing.
+      // Link resolution registers its load in a promise continuation, so
+      // let that run before asking.
+      await Promise.resolve();
       if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
         throw externalObservationRefusal(
           "external content observation reached an unloaded document",
