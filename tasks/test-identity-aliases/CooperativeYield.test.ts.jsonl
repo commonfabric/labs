@@ -1,0 +1,1 @@
+{"date":"2026-11-01","from":{"k":"unit","s":"runner","n":"CooperativeYield > instance members > maybeYield() > calls `onYield` before the turn, and starts a fresh slice when the turn ends"},"to":{"k":"unit","s":"runner","n":"CooperativeYield > instance members > maybeYield() > starts a fresh slice when the turn ends"}}

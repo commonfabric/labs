@@ -17,13 +17,10 @@ MUST/NEVER language is binding on implementers.
 - Store: engine-v3 sqlite per space DID (the on-disk layout is
   composed by `resolveMemoryEngineStoreRootUrl` and
   `resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`),
-  tables `commit`, `revision`, `head`, `branch`, and `execution_lease`
-  in the reduced §2 shape (`runtime/memory/v2/engine.ts` schema;
-  `runtime/memory/v2/execution-lease.ts` holder side). The v1
-  branch's richer shape was prior art, not substrate (its `engine.ts`:
-  branch PK, `lease_generation`, `host_id`, `on_behalf_of`, state
-  `active|draining|revoked`, `expires_at`) and none of it carried
-  over.
+  tables `commit`, `revision`, `head` and `branch`
+  (`runtime/memory/v2/engine.ts` schema). The lease (§2) is held in the
+  memory server's memory (`runtime/memory/v2/execution-lease.ts`), so
+  nothing about it is stored.
 - Memory server + protocol: `runtime/memory/v2.ts`, mounted in toolshed
   at `/api/storage/memory`
   (`runtime/toolshed/routes/storage/memory/memory.routes.ts`).
@@ -34,7 +31,7 @@ MUST/NEVER language is binding on implementers.
 toolshed process
 └─ ExecutorHost (one per process)
    ├─ SpaceServer (one per ACTIVE space)
-   │  ├─ lease        (execution_lease row, renewed on a timer)
+   │  ├─ lease        (an entry in the memory server's map, §2)
    │  ├─ runtime      (ordinary Runtime, flag ON, server posture)
    │  ├─ subscription (accepted-commit feed for the space, from the
    │  │                activation scan's head — §3, §6)
@@ -51,10 +48,11 @@ commits cross to a sink on the main thread (plane (a)'s commits, applied
 where the server sees each one land), its serving runtimes' storage
 sessions cross as frames, the server's observer crosses as events, and the
 three session questions the loop asks synchronously are answered from a
-mirror the server's session lifecycle keeps current. The lease rows (plane
-(c)) and the outbox's own bookkeeping, its retirement of a delivered row
-and its notice of a refused append, stay the worker's own writes. The
-lease holder's process component is minted by the main thread per worker
+mirror the server's session lifecycle keeps current. Lease acquire and
+release (plane (c)) cross the port as requests, since the map is the memory
+server's, and so does the outbox's notice of a refused append, a derived commit
+admitted against that map. The outbox's retirement of a delivered row stays the
+worker's own write. The lease holder's process component is minted by the main thread per worker
 start, so a worker started in place of one that died never shares its
 predecessor's holder.
 [`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
@@ -62,7 +60,7 @@ places each crossing. A host with the loop on its main thread
 (`SERVER_EXECUTION_WORKER=false`) does the same work without the port.
 Either way, the loop's crossings into other spaces go to those spaces'
 owners over the deployment's route
-([owner routing](../../plans/serving-loop-owner-routing.md), on by
+([owner routing](#2-the-lease-single-deriver-operationally), on by
 default); a host given no route keeps them on its own memory server.)*
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
@@ -83,17 +81,13 @@ to the store on its own instead of sealing, ahead of the wave; the source
 update's setup transaction is one, per §3e.)*
 
 A park can leave a space that still meets the ACTIVE criteria: a serving
-loop that throws, an initialization that fails, and a lease lapse that
-aborts a wave (§2) each park the space whatever its demand. So when any
-park completes, the host re-evaluates the criteria — live client
-sessions, undelivered events, and outstanding warm requests (below) —
-and re-activates a space that meets them without waiting for another
-trigger. The exception is a park caused by another process's live lease
-refusing an acquire or a re-acquire (§2): that process serves the space,
-and an activation here would be refused again. A park during which a
-rival took the lease for some other reason, such as a lapse that
-aborted a wave, is re-evaluated like any other, and its one activation
-attempt is refused. Every park other than an idle one or one on a
+loop that throws and an initialization that fails each park the space
+whatever its demand. So when any park completes, the host re-evaluates the
+criteria — live client sessions, undelivered events, and outstanding warm
+requests (below) — and re-activates a space that meets them without waiting
+for another trigger. The exception is a park caused by another holder's lease
+refusing an acquire (§2): that holder serves the space, and an activation here
+would be refused again. Every park other than an idle one or one on a
 rival's lease extends the space's failure-park backoff, which delays its
 next activation by base·2^(n−1) for the nth consecutive such park, up
 to a cap. An idle park or a committed wave clears the backoff. An
@@ -174,7 +168,7 @@ bootstrap, and auto-start-on-event are client-era framings with no
 server analog (runtime-mapping.md N22/N31).
 
 Activation mechanics: the memory server notifies the ExecutorHost on
-any AUTHORED admission into a space with no live lease — an
+any AUTHORED admission into a space with no lease holder — an
 admission-side hook, not a poll (prior art: the no-handler auto-load
 path in `queueSchedulerEvent`, `scheduler/events.ts`). Host boot
 discovery is a per-space check: stream head past `eventWatermark`
@@ -205,7 +199,7 @@ demand); a request stays outstanding until a tenure that received it
 parks idle, which is the tenure's own verdict that nothing is left to
 serve. A request racing a park is carried into the successor
 activation. Any other end of a tenure that received one — a refused or
-failed activation, a loop failure, a lease loss — hands the request
+failed activation, a loop failure — hands the request
 back to the host. Where the re-evaluation after a park (above) follows,
 it counts the request, and the successor captures it again. A park on
 a rival's lease has no re-evaluation, so there the request waits for
@@ -224,8 +218,7 @@ sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
-lost lease, a failed loop, a failed initialization or a closing host
-disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
+failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
 open wave and left no effect unretired in its outbox (§4: an effect
 dispatched or held when the park closes the outbox is recovered by a
 fresh runtime's memo re-miss, and its completion carries identity only
@@ -283,8 +276,8 @@ commit the host produces)            carries no commit, ever)
 SpaceServer runtime ◄──────────┐     ExecutorHost
   │ (a)                    (d) │       │ (c)
   ▼                            │       ▼
-IStorageManager                │     execution_lease table
-  │ (a)                        │     (same engine-v3 store)
+IStorageManager                │     the memory server's lease map,
+  │ (a)                        │     engine-v3 store (outbox rows)
   ▼                            │
 memory server ─────────────────┘
   │ (b)
@@ -335,16 +328,11 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   foreign-space reads stay on the session. Two rules a session frame
   follows hold here in the read-through's own form. Protocol.md §3's
   lease-holder delivery rule — another principal's instance reaches
-  only the live holder of the space's lease — is applied per read: a
-  read of such an instance that finds the lease row lapsed runs the
-  renew arm first (the lost-then-reacquire step the renew timer takes,
-  taken at the moment the lapse is found) and is served under the
-  reacquired tenure, or withheld as the tenure parks. During initialization,
-  lease loss withholds the read and invalidates activation; that partially
-  initialized runtime is disposed rather than reused under a new tenure.
-  Space-scoped
+  only the holder of the space's lease — is applied per read: a read of such
+  an instance is withheld once the tenure has ended, from a runtime that
+  outlived its tenure. Space-scoped
   documents and the service's own instances are delivered to any
-  session, so they are read without consulting the row. And an address
+  session, so they are read without consulting the tenure. And an address
   the store holds nothing at leaves no record, as a pull that delivered
   nothing leaves none: a transaction's read of it stays an unexamined
   absence for commit to reconcile, and the store is asked again only
@@ -353,7 +341,7 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   present. Counted: `storeReads`, `storeRefreshes` (§7).
 - **(b) memory server → ExecutorHost**, in-process: the
   admission-hook activation feed — an authored admission into a
-  space with no live lease NOTIFIES the host, and activation then
+  space with no lease holder NOTIFIES the host, and activation then
   follows this section's ACTIVE criteria (≥1 live session or
   undelivered events; never a poll). The distinction matters for
   provisioning: an `.inSpace` write is an authored admission into
@@ -361,11 +349,11 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
   minted space stays parked until its first session or event —
   reconciling protocol.md §2b's "activates later" with this hook
   (trace finding T11.Q7).
-- **(c) ExecutorHost → engine tables**: lease acquire and renew by
-  direct table update, and — since Phase 1 stage G — the outbox's
-  delivery-acked row retirement (§5's deleted-on-delivery-ack; the
-  rows were WRITTEN inside the wave's own plane-(a) transaction, so
-  only the delete rides here) — the direct-engine plane's ONLY
+- **(c) ExecutorHost → memory server's lease map and engine tables**: lease
+  acquire and release on the map (§2), and — since Phase 1 stage G — the
+  outbox's delivery-acked row retirement by direct table update (§5's
+  deleted-on-delivery-ack; the rows were WRITTEN inside the wave's own
+  plane-(a) transaction, so only the delete rides here) — the plane's ONLY
   traffic, none of it ever a commit (§2).
 - **(d) memory server → runtime**: the space subscription delivers
   accepted commits from the activation scan's head (§3, §6); the
@@ -378,109 +366,161 @@ SpaceServer outbox ──(e)──► network; results re-enter via (a)
 ## 2. The lease (single-deriver, operationally)
 
 The invariant "derived state has exactly one deriving committer" holds by
-construction against *clients* (no code path). Against *other server
-processes* (deploy overlap, partition) it holds via the lease:
+construction against *clients* (no code path). Against *other serving loops*
+it holds through two things: each space's owner, and the lease.
 
-- One row per space in `execution_lease`: `(space, holder, expiresAt)`.
-  The table reduces the v1 branch's richer shape (see Anchors) to
-  exactly these three fields — prior art, not substrate.
-- **`holder` is a PER-PROCESS identity (DR1, RULED 2026-08-03):**
+- **Precondition: one owner.** A deployment's route assigns each space to one
+  process, its owner: the process a socket to `MEMORY_URL` with `?space=<did>`
+  reaches. A toolshed never computes the owner; it dials the route, and in a
+  single-process deployment the route names the process itself. Under owner
+  routing (`SERVER_EXECUTION_OWNER_ROUTING`, on by default) a serving loop
+  reaches every space other than its home through that space's owner: event
+  appends (§5), foreign wave batches and access-list changes (protocol.md §2b),
+  the genesis of a space it creates, and reads (§3b). Production clients always
+  name the space, and a loop never activates a space it reached through the
+  route, so everything that activates a space reaches its owner, a space is
+  served only by its owner, and two processes never contend for one space. The
+  route never moves a space between running processes: a change to
+  the set of processes behind it drains and restarts them all. With the lease
+  in memory, nothing stored stops an old owner from serving a space a new owner
+  starts to serve, so this is what the invariant rests on across processes.
+- Each memory server keeps a map from space to holder in memory, and no more
+  than that. Nothing about the lease is stored or rides the commit stream, and
+  an acquire or a release is never a commit. Impl:
+  `runtime/memory/v2/execution-lease.ts`.
+- **`holder` is a PER-START identity (DR1, RULED 2026-08-03):**
   the SpaceServer's service identity plus a process-instance
   component minted at process start, or at each serving-worker generation
   when the loop runs in a worker. Both realms adopt that component before
-  leases are acquired. A replacement worker waits for its predecessor's
-  teardown and lease release and adopts a fresh component. Within a serving
-  generation it is stable across every renew and reacquire (it stays a nameable,
+  leases are acquired. A replacement worker adopts a fresh component, after
+  waiting for its predecessor's teardown and lease release unless the watchdog
+  below killed that predecessor. Within a serving
+  generation it is stable across every reacquire (it stays a nameable,
   attestable identity, so protocol.md §1's "the envelope principal
-  IS the lease holder" reads literally). The equality check below fences
-  worker-generation succession as well as every CROSS-process succession (deploy overlap, a successor host) for
-  free. The one residue — a same-process reacquire after a pause
-  that outlived the TTL (a runtime GC pause is the canonical cause;
-  nothing to do with the deferred session-data GC of scopes.md §8)
-  during which a rival took the row —
-  is covered by the stop-committing-immediately MUST below,
-  enforced IN-PROCESS before reacquiring (an in-memory generation
-  counter suffices; co-hosting makes the abort-before-reacquire
-  sequencing local and cheap). This is also why the FORBIDDEN list
-  bans per-commit fencing tokens: v1's `lease_generation` is not
-  needed — not because fencing is unwanted, but because the
-  holder's process component already fences across processes and
-  the in-process residue is a local obligation, not wire machinery.
-- Acquire with a conditional write; TTL 15 s; renew every 5 s **by direct
-  table update — a lease renewal is NEVER a commit** (v1's renewal-adjacent
-  traffic was part of the storm). Periodic renewal has two drivers (stage C
-  tuning T3, 2026-08-18): the interval timer, and a MID-WAVE renew issued
-  from the serving scheduler's cooperative macrotask yield (§3) once the
-  tenure has gone TTL/3 without a renewal — the timer rides the macrotask
-  queue a long settle used to starve (the stage-C attribution's t2:
-  renew gaps to 10 s against the 15-s TTL, then `lease-lost` on every
-  active space at once), so the belt renews at the same cadence without
-  depending on the timer queue being serviced. Neither driver is a
-  commit. Impl: `space-server.ts` `#renewIfDue` on
-  `Runtime.servingYieldObserver`; pinned in
-  `executor-cooperative-yield.test.ts` (ii).
-- Renewal starts immediately after acquisition and covers runtime creation,
-  foreign basis reads, and delegated append recovery. Initialization remains
-  distinct from an active serving loop. Before launch, a direct renewal checks
-  that the lease is still live even if synchronous work delayed timer callbacks.
-  A renewal failure or lease-store exception invalidates initialization: the
-  outstanding initialization await finishes, then its runtime is disposed,
-  its renewal timer is cleared, and its lease is released. Observer cleanup
-  failures cannot skip the factory disposer; observer cleanup and disposer
-  failures cannot skip lease release. Host shutdown waits
-  for this lifecycle before returning. Initialization that loses its lease
-  parks, and §1's re-evaluation after a park follows once that activation
-  has finished: matching demand starts a fresh tenure after the
-  failure-park backoff. Warm notices arriving during initialization or its
-  cleanup remain obligations of the successor. Initial acquisition refusal
-  on a rival's lease does not schedule another attempt, and host shutdown
-  cancels a pending backoff. A lifecycle-verb request whose activation fails
-  receives the not-served error; the request alone is not a persistent
-  reactivation criterion. These boundaries are covered by
+  IS the lease holder" reads literally). The component keys commit replay, and
+  the equality check below fences the in-flight commits of a replaced worker.
+  The one residue — a same-process reacquire after a park, with work still in
+  flight that sealed under the tenure the park ended — is covered by the
+  stop-committing-immediately MUST below, enforced IN-PROCESS by the tenure
+  counter (an in-memory generation counter suffices; co-hosting makes the
+  abort-before-reacquire sequencing local and cheap). This is also why the
+  FORBIDDEN list bans per-commit fencing tokens: v1's `lease_generation` is not
+  needed — not because fencing is unwanted, but because the holder's component
+  already fences across workers and the in-process residue is a local
+  obligation, not wire machinery.
+- **Acquire and release** are calls on the memory server's thread. A loop in a
+  worker makes them across the port as requests, so `SpaceServer.activate()`
+  awaits its acquire. An acquire takes a free space and keeps the holder's own;
+  another holder's lease refuses it. A second `ExecutorHost` on the same memory
+  server is a rival refused this way, and the host leaves a space parked on a
+  rival's lease to the rival rather than retrying.
+- **Holding has no expiry and no renewal.** A tenure ends at a park, and only
+  there. Nothing reads a clock to keep one or end one, so a settle, a compile or
+  a stall of any length costs the lease nothing. The worker's watchdog below is
+  the one exception, and it replaces the worker rather than ending a tenure in
+  it.
+- **Restart.** A process starts with an empty map. Nothing an earlier process
+  held is consulted or waited for, so a restarted owner serves its spaces at
+  once.
+- The lease covers initialization, which remains distinct from an active
+  serving loop: runtime creation, foreign basis reads, and delegated append
+  recovery run under it. A failed initialization disposes its runtime and then
+  releases its lease. Observer cleanup failures cannot skip the factory
+  disposer; observer cleanup and disposer failures cannot skip lease release.
+  Host shutdown waits for this lifecycle before returning. §1's re-evaluation
+  after a park follows once that activation has finished: matching demand starts
+  a fresh tenure after the failure-park backoff. Warm notices arriving during
+  initialization or its cleanup remain obligations of the successor. Initial
+  acquisition refusal on a rival's lease does not schedule another attempt, and
+  host shutdown cancels a pending backoff. A lifecycle-verb request whose
+  activation fails receives the not-served error; the request alone is not a
+  persistent reactivation criterion. These boundaries are covered by
   `test/executor/activation-lease.test.ts`.
-- A renewal extends the row that still names the holder, live or lapsed: a
-  lapse nobody claimed (synchronous work, a compile, holding both renewal
-  drivers past the TTL) refused the holder's commits while it lasted and
-  admitted no one else's, so the next renewal extends the row and the tenure
-  continues, and the SpaceServer counts the recovery
-  (`lease.lapsesRecovered` in §7). A lapse the memory server reveals by refusing a derived commit is not recovered: the
-  refused wave's work is withdrawn, so the renew arm the refusal runs ends
-  the tenure as a loss, and the loop parks on the abort as below. A rival's
-  acquire during the lapse names the rival, and its release deletes the row,
-  so the holder's renewal then matches nothing: that is renewal failure.
-- On renewal failure: the SpaceServer MUST stop committing
-  immediately (in-flight transaction aborts), then re-acquire or park.
-  A wave aborted this way parks the tenure even when the re-acquire
-  succeeds. §1's re-evaluation after a park then starts a new tenure for
-  a space that still has demand, and that tenure's fresh runtime
-  recomputes the withdrawn derivations (§6 step 2). A failed re-acquire
-  parks on the rival's lease, and the host leaves the space to the
-  rival.
-- The memory server rejects a derived-class commit whose `holder` does not
-  match the live lease. This is one equality check, not admission
+- When a tenure ends, the SpaceServer MUST stop committing immediately: the
+  release ends the tenure before it reaches the memory server, and an in-flight
+  wave aborts at its commit step. A wave aborted this way parks the tenure. §1's
+  re-evaluation after a park then starts a new tenure for a space that still has
+  demand, and that tenure's fresh runtime recomputes the withdrawn derivations
+  (§6 step 2).
+- The memory server rejects a derived-class commit whose `holder` is not the one
+  its map names for the space. This is one equality check, not admission
   machinery. It binds fresh commits: an exact replay of an already-accepted
   commit answers from the store first (replay detection precedes
   current-authority admission), so a network retry of an accepted commit is
   never re-admitted against current authority. (Stage F adds the
   envelope-session half of the same check — protocol.md §2's
   derived-envelope defense-in-depth, RULED 2026-08-05.)
-- Liveness is judged by the MEMORY SERVER's clock: admission compares
-  `expiresAt` against its own clock, and an expired row matches NOBODY —
-  a derived commit under an expired lease is rejected even before any
-  successor acquires. Holder clocks never arbitrate liveness.
-- A refused derived commit can be the holder's first sign of a lapse:
-  neither renewal driver may come due until well after the TTL has run
-  out, for example when the host process was suspended. When the memory
-  server refuses a derived commit and the lease row no longer names the
-  holder live, the SpaceServer runs the renew arm at once, as the store
-  read-through does (§1 plane (a)). The tenure therefore ends at the
-  first refused commit. A wave refused this way aborts as a lease loss
-  and parks, as above. Impl: `space-server.ts` `#confirmLease`, called
-  from the wave sink's refusal hook; pinned in
-  `executor-serving-loop.test.ts`.
+
+**The watchdog.** A loop in a worker has one wait the design keeps, because a
+thread that has stopped cannot report that it has stopped, and a stalled worker
+holds its leases with nothing else to take them back. It is the only timer in
+the lease:
+
+- The worker posts a heartbeat every 10 s from a timer of its own.
+- The main thread checks every 10 s. After six consecutive intervals with no
+  message of any kind from the worker, which is at least 60 s of silence, it
+  terminates the worker and releases the worker's leases, then starts a successor
+  under a fresh component through the replacement path a worker failure takes.
+- The check counts its own firings rather than reading a clock, so nothing but
+  the worker's silence moves the count: a main thread that itself stalled, or a
+  process that was suspended, fires it once on waking.
+- The count starts at the worker's first message. Until its modules have loaded
+  a worker has no timer to post from and no lease to release.
+- Nothing waits for a killed worker's teardown. `terminate()` takes effect when
+  its thread next reaches its event loop, which a stalled thread may never do, and
+  such a thread keeps whatever core it was spinning on until the process restarts.
+  A thread that does wake has lost its port to the memory server, so no commit of
+  its own reaches the store.
+- Each lease a kill releases counts in `lease.lost` (§7), summed across the
+  worker's successors. A commit the killed worker left in flight reaches
+  admission naming a holder the map no longer holds, and is refused.
+- A stalled worker's spaces wait up to the watchdog's limit for a successor, and
+  no two workers serve one space in between.
+- The in-process arrangement has no watchdog: the thread that would watch is the
+  thread that stopped.
 
 FORBIDDEN: per-action leases, lease fencing tokens per commit, lease
-renewal via the commit stream, more than one lease shape.
+renewal via the commit stream, more than one lease shape, a stored lease.
+
+### A deleted space
+
+A deleted space
+([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) is not served,
+in any ACL mode. The memory server refuses every commit to one, a derived
+commit and every commit carrying delegated carriage included, with a
+`ProtocolError` naming the deletion, and that refusal is deterministic: no
+successor tenure could have it admitted.
+
+- Activation reads the space's access list before it acquires a lease. When
+  it finds a tombstone there, it starts no tenure, and §1's re-evaluation
+  starts none for that space again, whatever demand it sees.
+- A tenure reads and commits its own space engine-direct, and holds no session
+  on it, so no session revocation tells it of the deletion. What tells it is
+  the host's notice that an admitted commit wrote the space's ACL document
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs.
+  On that notice for its own space the SpaceServer reads the ACL document, and
+  when it holds a tombstone it ends the tenure for good. It stops committing at
+  once, as on a lease loss, disposes of the runtime, releases the lease, and
+  does not re-acquire it. A refused commit naming the deletion ends it the same
+  way, which is the backstop for a deletion committed through another process,
+  whose commit the host does not see.
+- A tenure serving another space that holds a session on the deleted one, as a
+  cross-space replica, learns of the deletion from that session's `deleted`
+  revocation. It goes on serving its own space.
+- An outbox row whose target space is deleted is refused at delivery like any
+  other deterministic admission refusal (§5), and is deleted with the
+  source-side notice written first.
+- An outbox drain reads its own space's ACL document before it starts each
+  row, and stops at the first row it finds the space deleted before, leaving
+  that row and every later one in place for a reap to remove with the rest of
+  the store. So once a drain has read the deletion it starts no further row.
+  The window that remains is one row: a row whose read found the space live
+  may still be admitted at its target, even when the deletion commits while
+  that row's delivery is under way. A drain's own commits after the deletion,
+  such as a failure notice or a row's retirement, are refused like any other
+  commit to the space, and the drain stops there too.
+
+Deletion is not implemented yet.
 
 ## 3. The loop, normatively
 
@@ -508,7 +548,6 @@ that input can sit below the shadow floor. The retry clears it.
 ```
 on activate(space):
   acquire lease (else park)
-  start lease renewal through initialization
   runtime = new Runtime(serverPosture)   // flag ON, egress allow,
                                          // builtins registered
   load graph structure for demanded values + queued events (§1 —
@@ -780,9 +819,8 @@ executing:
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
   That session reaches the foreign space's owner from the home's
-  process over the deployment's route (owner routing,
-  `docs/plans/serving-loop-owner-routing.md`, on by default), and the
-  owner's commits wake the home loop over it; a host given no route
+  process over the deployment's route (owner routing, §2, on by default), and
+  the owner's commits wake the home loop over it; a host given no route
   opens the session on its own memory server, which v2 then assumes
   holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
@@ -1891,7 +1929,7 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's routed session (04-protocol.md §4.3.12) over the
   host's route to each space's owner
   (`SERVER_EXECUTION_OWNER_ROUTING`, on by default,
-  [owner routing](../../plans/serving-loop-owner-routing.md)),
+  [owner routing](#2-the-lease-single-deriver-operationally)),
   which the owner admits exactly as its own host's delegated
   append; the host keeps one such session per target space for as
   long as a tenure uses it. A host given no route delivers the row
@@ -1998,7 +2036,7 @@ On activate after crash or deploy:
 3. The first wave recomputes the dirty frontier; memo hits suppress
    re-firing completed effects; memo misses re-fire effects whose
    results never landed. External effects are therefore at-least-once
-   across crash/lease-handover (the request may have left the process
+   across crash or restart (the request may have left the process
    before the crash) — RULED and accepted (owner, 2026-08-02). A
    fired-marker (a durable "request left" write ahead of each effect)
    was considered and REJECTED: it costs a commit per effect yet
@@ -2067,7 +2105,7 @@ maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
 needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
 dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
-budgetDeferrals}, lease: {held, lost, lapsesRecovered}, parkedRuntimes: {retained, reused,
+budgetDeferrals}, lease: {held, lost}, parkedRuntimes: {retained, reused,
 discarded, held}, push: {prioritizedSessions, followerSessions,
 mixedFlushes} }`
 (`parkedRuntimes` counts the runtimes idle parks kept, those a successor
@@ -2163,7 +2201,7 @@ committed (§1's third activation trigger, RULED 2026-08-21) — so a
 provisioning flow whose target never derives its staged setup is
 diagnosable from the issue count against the target's activity;
 `routed` counts the crossings sent to another space's owner through
-the deployment's route (serving-loop-owner-routing.md), by kind and
+the deployment's route (§2), by kind and
 once the owner answered — the outbox's event appends, the wave's
 foreign batches and its access-list changes into other spaces — so a
 deployment reads there whether routing carries its crossings: zero
@@ -2371,11 +2409,9 @@ only the first let inventories undercount it — was deleted from main
 by plan Phase 1 stage C, so a reappearing identifier is a revival, not
 a leftover.
 
-The intentional exceptions: `execution_lease` (§2 — CREATED in
-Phase 1; the v1 branch's shape is prior art, not existing substrate)
-and the basis index tables (§3b — a NEW reduced schema of ids + seqs
-only, overwritten in place; correctness-bearing for recovery but never
-payloads, so NOT the evidence log).
+The intentional exception: the basis index tables (§3b — a NEW reduced
+schema of ids + seqs only, overwritten in place; correctness-bearing for
+recovery but never payloads, so NOT the evidence log).
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

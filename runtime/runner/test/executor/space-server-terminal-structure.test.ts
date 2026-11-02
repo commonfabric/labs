@@ -180,7 +180,7 @@ describe("SpaceServer", () => {
             return result;
           };
           const facade = new Proxy(server, {
-            get(target, key, receiver) {
+            get(target, key) {
               if (key === "demandForSpace") {
                 return (
                   requestedSpace: string,
@@ -191,7 +191,7 @@ describe("SpaceServer", () => {
                       .map((row) => ({ ...row, root: row.id === rootId })),
                   );
               }
-              const value = Reflect.get(target, key, receiver);
+              const value = Reflect.get(target, key);
               return typeof value === "function" ? value.bind(target) : value;
             },
           });

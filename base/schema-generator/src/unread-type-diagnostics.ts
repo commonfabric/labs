@@ -1,6 +1,7 @@
 /**
- * Reports unread schema types, CFC recursions whose nesting limit would
- * discard policies, and recursive aliases read in place of `any`.
+ * Reports unread schema types, symbol types (which no schema describes), CFC
+ * recursions whose nesting limit would discard policies, and recursive aliases
+ * read in place of `any`.
  */
 
 import { getLogger } from "@commonfabric/logger";
@@ -20,6 +21,12 @@ const NAMED_LIMIT = 5;
 /** How much of one printed type a message shows. */
 const TYPE_TEXT_LIMIT = 80;
 
+/** Prints the type nodes messages name. */
+const printer = ts.createPrinter({ removeComments: true });
+
+/** The file a node built afresh, which has none, prints against. */
+const blank = ts.createSourceFile("unread.ts", "", ts.ScriptTarget.Latest);
+
 /**
  * Reports `unread`, the type nodes one schema could not read and no caller
  * recovered, as a single warning naming each distinct type once.
@@ -29,21 +36,7 @@ export function reportUnreadTypes(
   unread: readonly ts.TypeNode[],
   node: ts.Node | undefined = context.typeNode,
 ): void {
-  const printer = ts.createPrinter({ removeComments: true });
-  const blank = ts.createSourceFile("unread.ts", "", ts.ScriptTarget.Latest);
-  // A parsed node's literals are read from its own file's text, so it prints
-  // against that file. A node built afresh has no file and prints alone.
-  const texts = [
-    ...new Set(
-      unread.map((typeNode) =>
-        printer.printNode(
-          ts.EmitHint.Unspecified,
-          typeNode,
-          sourceFileOf(typeNode) ?? blank,
-        ).replace(/\s+/g, " ")
-      ),
-    ),
-  ];
+  const texts = [...new Set(unread.map(printTypeNode))];
   const named = texts.slice(0, NAMED_LIMIT).map((text) =>
     backtickQuote(
       text.length > TYPE_TEXT_LIMIT
@@ -64,6 +57,43 @@ export function reportUnreadTypes(
     ...(node && { node }),
   };
   report(context, diagnostic);
+}
+
+/**
+ * Reports `type`, a symbol type reached at `context`, as an error: the schema
+ * dialect has no symbol type, and leaving the symbol out would refuse the
+ * registered symbols a value of the type can hold. Names the type as written
+ * at the nearest node, and suggests `Exclude` where that node is a union
+ * holding the symbol.
+ */
+export function reportSymbolType(
+  context: GenerationContext,
+  type: ts.Type,
+): void {
+  const checker = context.typeChecker;
+  const around = context.typeNode ? undefined : context.writtenAround;
+  const node = context.typeNode ?? around;
+  const written = node && printTypeNode(node);
+  const symbolText = backtickQuote(
+    checker.typeToString(type, node, ts.TypeFormatFlags.UseFullyQualifiedType),
+  );
+  const subject = !written
+    ? `${symbolText} is a symbol type`
+    : around
+    ? `${backtickQuote(written)} includes the symbol type ${symbolText}`
+    : `${backtickQuote(written)} is a symbol type`;
+  const aroundType = around &&
+    (context.typeRegistry?.get(around) ?? checker.getTypeFromTypeNode(around));
+  const advice = aroundType?.isUnion() && aroundType.types.includes(type)
+    ? "Leave the symbols out of the type, as " +
+      `${backtickQuote(`Exclude<${written}, symbol>`)} does.`
+    : "Store a string in its place, such as a registered symbol's key.";
+  report(context, {
+    severity: "error",
+    type: "schema-type:symbol",
+    message: `${subject}, which no schema can describe. ${advice}`,
+    ...(node && { node }),
+  });
 }
 
 /** Reports a CFC alias chain whose nesting limit would discard its policies. */
@@ -117,6 +147,19 @@ function report(
   } else {
     logger.warn("schema-gen", () => diagnostic.message);
   }
+}
+
+/**
+ * `typeNode` as source text on one line. A parsed node's literals are read from
+ * its own file's text, so it prints against that file. A node built afresh has
+ * no file and prints alone.
+ */
+function printTypeNode(typeNode: ts.TypeNode): string {
+  return printer.printNode(
+    ts.EmitHint.Unspecified,
+    typeNode,
+    sourceFileOf(typeNode) ?? blank,
+  ).replace(/\s+/g, " ");
 }
 
 /** The file `node` was parsed from, or `undefined` for a node built afresh. */

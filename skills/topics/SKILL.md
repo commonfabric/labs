@@ -77,7 +77,12 @@ it as an agent.
   in the CLI's runtime and writes one commit per Topic every time, which is the
   cost the client exists to avoid.
 - A Topic's number is the board's name for it. Cite it as `top/42`; the commands
-  take `42`, `#42`, `top/42`, or the Topic's address.
+  take `42`, `#42`, `top/42`, or `//<space>/top/42`. They also take the Topic's
+  address, with `of:` or without it and with a leading `/` or `//<space>/` or
+  without one, and the URL of its page on the board's server, as a person pastes
+  it from a browser (`https://estuary.saga-castor.ts.net/<space>/fid1:…` for the
+  team's board). A reference naming another space or server, or a part of a
+  Topic such as its `title`, is refused with a message saying so.
 - An authored-content write carries `--agent-name` (or `CF_AGENT_NAME`): one
   stable agent name, and no second signature in titles, bodies, labels, or
   comments. Fabric retains the human principal behind the key; Topics stores the

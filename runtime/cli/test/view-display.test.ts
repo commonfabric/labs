@@ -34,6 +34,10 @@ Deno.test("displayWidth: matches the rendered cell count", () => {
     "a\x01\x1b[2J\x02b",
     "a\x1b[",
     "\x1b[0 qx",
+    "a\tb\t\tc",
+    "\x1b[31mab\tc",
+    "\udc7baB",
+    "a\ud835",
   ];
   for (const mode of DISPLAY_MODES) {
     for (const text of samples) {
@@ -129,6 +133,45 @@ Deno.test("ansi: 256-color and truecolor foregrounds", () => {
   assertEquals(truecolor.ansi?.fg, [10, 20, 30]);
 });
 
+Deno.test("ansi: a tab advances to the next multiple-of-4 column", () => {
+  assertEquals(glyphs("\tx", "ansi"), "    x");
+  assertEquals(glyphs("a\tx", "ansi"), "a   x");
+  assertEquals(glyphs("abc\tx", "ansi"), "abc x");
+  assertEquals(
+    glyphs("abcd\tx", "ansi"),
+    "abcd    x",
+    "a tab on a stop is 4 wide",
+  );
+  assertEquals(glyphs("a\t\tx", "ansi"), "a       x");
+});
+
+Deno.test("ansi: tab stops count drawn cells, not hidden color sequences", () => {
+  assertEquals(glyphs("\x1b[31mab\tx", "ansi"), "ab  x");
+});
+
+Deno.test("ansi: every cell a tab draws stands for the tab's source column", () => {
+  const cells = displayLine(ln("a\tb"), "ansi");
+  assertEquals(
+    cells.map((c) => [c.ch, c.col, c.sourceEnd]),
+    [["a", 0, 1], [" ", 1, 2], [" ", 1, 2], [" ", 1, 2], ["b", 2, 3]],
+  );
+});
+
+Deno.test("ansi: a cell visitor sees each cell a tab draws", () => {
+  const ranges: [number, number][] = [];
+  visitDisplayCellSources("ab\tc", "ansi", (start, end) => {
+    ranges.push([start, end]);
+    return true;
+  });
+
+  assertEquals(ranges, [[0, 1], [1, 2], [2, 3], [2, 3], [3, 4]]);
+});
+
+Deno.test("pictures and hidden: a tab is one cell", () => {
+  assertEquals(glyphs("a\tb", "pictures"), "a␉b");
+  assertEquals(glyphs("a\tb", "hidden"), "a…b");
+});
+
 //
 // hidden mode
 //
@@ -205,6 +248,14 @@ Deno.test("displayColumnOf: ansi skips a hidden color sequence", () => {
     "inside the escape → the next cell",
   );
   assertEquals(displayColumnOf(line, "ansi", 6), 1, "b");
+});
+
+Deno.test("displayColumnOf and sourceColumnOf: a tab spans its expanded cells", () => {
+  const line = ln("a\tb"); // display cells stand at source cols 0, 1, 1, 1, 2
+  assertEquals(displayColumnOf(line, "ansi", 1), 1, "the tab's first cell");
+  assertEquals(displayColumnOf(line, "ansi", 2), 4, "b");
+  assertEquals(sourceColumnOf(line, "ansi", 3), 1, "inside the tab");
+  assertEquals(sourceColumnOf(line, "ansi", 4), 2, "b");
 });
 
 Deno.test("sourceColumnOf: maps compact display offsets back to source", () => {

@@ -1291,14 +1291,14 @@ describe("Phase 5 cross-space serving", () => {
     const badSigner = await Identity.fromPassphrase("x-space bad engine");
     const badSpace = badSigner.did() as MemorySpace;
     const proxiedServer = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "engineForSpace") {
           return (s: string) =>
             s === badSpace
               ? Promise.reject(new Error("engine open failed (test)"))
               : target.engineForSpace(s);
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as MemoryV2Server.Server;

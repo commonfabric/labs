@@ -99,8 +99,10 @@ rooms this manager created or accepted. `openDirect` finds a direct room there
 and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
-offers a new room, once a request names a profile of theirs that points at an
-inbox, and the notice is removed. A counterpart the room's roster already lists
+offers a new room, once a request names a profile of theirs. The notice stays,
+so that it still tells them of the room should the offer not be sent, and
+`outgoingNotices` leaves it out once the offer puts them on the room's roster. A
+counterpart the room's roster already lists
 has joined the room, and is offered nothing. A room another manager created and
 offered the user is there too once the host's share intake accepts it on the
 user's behalf. `rooms` can also hold a second direct room with the same
@@ -158,14 +160,16 @@ create a space for the conversation, with the room as its root, in four steps:
    member may add others.
 3. Offer the room to each other member whose profile the request names,
    through each distinct share inbox their profiles point at, once per inbox,
-   and add to the room's participants each member it is offered to, once, by
-   the first profile it is offered through. Add a notice to
-   `outgoingNotices`, for a client to deliver, for each other member offered
-   nothing: one the request names only by principal, or one whose profile
-   points at no inbox. Offers and notices alike are made by an event of their
-   own that follows the room's creation, since a notice is added to the
-   manager's own records, which can carry their owner's `PersonalSpace` label
-   as the catalog can.
+   even an inbox profiles of more than one member point at, and add to the
+   room's participants each member it is offered to, once, by the first
+   profile it is offered through. Add a notice to `outgoingNotices`, for a
+   client to deliver, for each other member offered nothing: one the request
+   names only by principal, or one whose profile points at no inbox. Offers and
+   notices alike are made by an event of their own that follows the room's
+   creation. A notice is added to the manager's own records, which can carry
+   their owner's `PersonalSpace` label as the catalog can, and a profile's
+   inbox pointer can carry a label, such as its owner's `PersonalSpace`, that
+   neither the room's space nor this user's records admit.
 4. Record the entry in `rooms`, and in `direct` for a direct room, register the
    room's space in the user's catalog, and mark the request `done`. The
    registration, like adding this user to the room's participants, is an
@@ -195,8 +199,12 @@ the room's `addMember` sends once it has granted them access. It runs as an
 event of its own, after the add has committed, and offers the room through the
 same steps as step 3: through the profile the add named, or, for an add naming
 only an address, through the profiles `people` lists for that person, as the
-user sending it reads `people`. It records `offered` or `noticed` under the
-request's id, which the room reads back as the add's `delivery`.
+user sending it reads `people`, from an event of its own like step 3's, so
+that its own transaction reads no inbox pointer. It records `noticed` under the
+request's id at once for a person with no profile known for them, and
+`offered` for anyone else, which the event offering the room turns to
+`noticed` when no profile points at an inbox. The room reads it back as the
+add's `delivery`.
 
 ## Prerequisites
 

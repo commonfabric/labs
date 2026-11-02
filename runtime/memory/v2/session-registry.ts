@@ -42,6 +42,11 @@ export type SessionState = {
   /** Immutable kind intent authenticated by this session's latest open. */
   spaceKind?: SessionDescriptor["spaceKind"];
 
+  /** Whether this session's latest open declared that its runtime names
+   * instances (`SessionDescriptor.instanceNames`, INV-16); fresh per open,
+   * never inherited. */
+  instanceNames?: true;
+
   seenSeq: number;
   lastSyncedSeq: number;
   watches: WatchSpec[];
@@ -420,6 +425,11 @@ export class SessionRegistry {
         : {}),
       ...(session.spaceKind !== undefined
         ? { spaceKind: session.spaceKind }
+        : {}),
+      // Fresh per open (never inherited), like the ceiling: a resume that
+      // declares no naming is a positional session.
+      ...(session.instanceNames === true
+        ? { instanceNames: true as const }
         : {}),
       // Fresh per open (never inherited): the binding reflects THIS
       // open's resolution against the current ACL; an open without the

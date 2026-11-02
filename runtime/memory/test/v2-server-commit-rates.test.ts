@@ -3,10 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { connect, loopback } from "../v2/client.ts";
 import { applyCommit, applyWaveCommit, serverSeq } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import { getCommitRates, Server } from "../v2/server.ts";
 import { resetServerExecutionConfig, setServerExecutionConfig } from "../v2.ts";
 import {
@@ -159,7 +156,7 @@ describe("server", () => {
       // holds the space's execution lease.
       const engine = await server.engineForSpace(space);
       const holder = executionLeaseHolder("did:key:z6Mk-commit-rates-service");
-      expect(acquireExecutionLease(engine, { space, holder })).toBeTruthy();
+      expect(engine.executionLeases.acquire(space, holder)).toBeTruthy();
       applyCommit(engine, {
         sessionId: holder,
         space,

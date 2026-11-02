@@ -978,7 +978,7 @@ export class Session {
           ? 0
           : selected.startCol,
         endCol: this.#renderedLineChangesColumns(selected.endLine)
-          ? codePointLength(
+          ? cpLen(
             this.#currentDoc.lines[selected.endLine]?.text ?? "",
           )
           : selected.endCol,
@@ -998,7 +998,7 @@ export class Session {
       endLine,
       startCol: startSynthetic ? 0 : node.startCol,
       endCol: endSynthetic
-        ? codePointLength(fold.displayLines[endLine]?.text ?? "")
+        ? cpLen(fold.displayLines[endLine]?.text ?? "")
         : node.endCol,
     };
   }
@@ -1013,7 +1013,7 @@ export class Session {
       ...match,
       line,
       start: 0,
-      end: codePointLength(fold.displayLines[line]?.text ?? ""),
+      end: cpLen(fold.displayLines[line]?.text ?? ""),
     };
   }
 
@@ -1056,12 +1056,6 @@ export class Session {
     }
     if (section) return section.name ?? section.label.replace(/^[▸▾]\s*/, "");
     return this.#source?.label ?? null;
-  }
-
-  get #maxLineLen(): number {
-    let m = 0;
-    for (const l of this.#currentDoc.lines) m = Math.max(m, l.text.length);
-    return m;
   }
 
   /** The folded line and display column at the viewport's top-left content. */
@@ -1653,7 +1647,7 @@ export class Session {
       return plan ? plan.lastRow[folded] ?? 0 : folded;
     }
     const endCol = this.#renderedLineChangesColumns(node.endLine)
-      ? codePointLength(this.#currentDoc.lines[node.endLine]?.text ?? "")
+      ? cpLen(this.#currentDoc.lines[node.endLine]?.text ?? "")
       : node.endCol;
     return this.#toDisplayWithPlan(
       node.endLine,
@@ -2882,7 +2876,7 @@ export class Session {
                 0,
                 [`${prefix}${transport}`],
                 0,
-                [...prefix].length,
+                cpLen(prefix),
               );
             } else {
               this.#splitDiffLine(prefix);
@@ -2988,7 +2982,7 @@ export class Session {
       1,
       [`${before}${transport}`, `${prefix}${after}${transport}`],
       1,
-      [...prefix].length,
+      cpLen(prefix),
     );
   }
 
@@ -3193,7 +3187,7 @@ export class Session {
   #logicalLineEnd(row = this.#buffer!.row): number {
     const b = this.#buffer!;
     const line = b.lines[row] ?? "";
-    const physicalEnd = [...line].length;
+    const physicalEnd = cpLen(line);
     const ordinaryEnd = line.endsWith("\r") && row < b.lines.length - 1
       ? physicalEnd - 1
       : physicalEnd;
@@ -3666,7 +3660,7 @@ export class Session {
   #maxLeft(
     annotations: readonly DiffAnnotation[] = this.#activeDiffAnnotations(),
   ): number {
-    if (!this.#hasDiffMargin()) return this.#maxLineLen;
+    if (!this.#hasDiffMargin()) return this.#maxDisplayWidth();
     const contentWidth = this.#contentWidth();
     let width = this.#maxDisplayWidth() - contentWidth;
     const lines = this.#foldPlan().displayLines;
@@ -5501,12 +5495,6 @@ export class Session {
     const onLine = nodeAtLine(nodes, this.#toDoc(this.top));
     return onLine >= 0 ? onLine : 0;
   }
-}
-
-function codePointLength(text: string): number {
-  let length = 0;
-  for (const _ of text) length++;
-  return length;
 }
 
 function isArrowName(name: string): boolean {

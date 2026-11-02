@@ -1124,6 +1124,18 @@ export class Client {
   }
 
   /**
+   * Refuses every later `session.open` from this client with `error`, a
+   * refusal `isClientUpdateRequiredError()` recognizes, as a response that
+   * carries `clientUpdateRequired` does. Once one is kept, a later one changes
+   * nothing.
+   *
+   * @internal For `SpaceSession`.
+   */
+  noteClientUpdateRequired(error: Error): void {
+    this.#clientUpdateError ??= error;
+  }
+
+  /**
    * Sends `message` and returns the `ok` of the server's response, or throws
    * its error. A request made while the connection is down waits for the
    * reconnect, unless `options.whileConnected` is set, in which case it
@@ -2199,8 +2211,8 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle`, `servedRequests` and `spaceInvites` are the
-    // server's capabilities alone: the client reads them from `hello.ok` and
+    // `patternLifecycle`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client reads them from `hello.ok` and
     // never offers them. Other flags an endpoint does not know are ignored
     // there, since the routed flag allowlists were removed (infra DEVIATIONS
     // row 41).
@@ -2211,6 +2223,7 @@ export class Client {
       patternLifecycle: _lifecycleServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      instanceNameMark: _instanceNameMarkServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3644,7 +3657,8 @@ export class SpaceSession {
 
   /**
    * Observes this session ending with an error, which `closeError` then
-   * holds: a revocation (a takeover or an authorization denial), a permanent
+   * holds: a revocation (a takeover, an authorization denial, or a space
+   * marked for instance names, which requires an update), a permanent
    * reopen denial, a restore the server cannot base on declared holdings, or
    * a client that gives up reconnecting. A session that has already ended
    * that way reports to a late observer synchronously. Normal closure and
@@ -4211,6 +4225,20 @@ export class SpaceSession {
 
   handleRevoked(reason: SessionRevokedMessage["reason"]): void {
     if (this.#closed) {
+      return;
+    }
+    if (reason === "instance-names") {
+      // A naming commit marked the space (INV-16). The revocation carries no
+      // message, so the refusal's message is made from the space.
+      const error = Object.assign(
+        new Error(
+          `Space ${this.space} now holds data written with instance names, ` +
+            "which this runtime does not use",
+        ),
+        { name: "SessionRevokedError", clientUpdateRequired: true as const },
+      );
+      this.#client.noteClientUpdateRequired(error);
+      this.#terminateSession(error);
       return;
     }
     const error = new Error(`memory session revoked: ${reason}`);
@@ -5779,7 +5807,8 @@ const isSessionRevoked = (
   return type === "session/revoked" &&
     typeof space === "string" &&
     typeof sessionId === "string" &&
-    (reason === "taken-over" || reason === "unauthorized");
+    (reason === "taken-over" || reason === "unauthorized" ||
+      reason === "instance-names");
 };
 
 const isSessionAdmissible = (

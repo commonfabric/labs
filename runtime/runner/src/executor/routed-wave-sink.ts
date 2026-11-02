@@ -1,6 +1,6 @@
 /**
  * The wave commit sink of a tenure with a route
- * (docs/plans/serving-loop-owner-routing.md): a home batch, and a change to
+ * (serving-loop.md §2): a home batch, and a change to
  * the home's access list, go to the sink it wraps, which commits them against
  * this process's store; every other batch and change is a crossing into a
  * space another process may own, and goes to that space's owner through the
@@ -11,6 +11,7 @@
  * re-checks the batch when it applies it.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { ServedAclChange } from "@commonfabric/memory/v2/server";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { isServedRefusal, type RoutedScope } from "./routed-plane.ts";
@@ -21,10 +22,6 @@ import type {
   WaveCommitSink,
   WaveSpaceCommit,
 } from "./wave.ts";
-
-/** The message of `error`, for the rejection that carries it. */
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The sink described in the file header: `inner`'s reads and home commits,
@@ -72,7 +69,7 @@ export function routedWaveCommitSink(
           error: {
             name: "WaveCommitRejected",
             message: `foreign wave batch into ${batch.space} failed at its ` +
-              `owner: ${messageOf(error)}`,
+              `owner: ${describeFailure(error)}`,
           },
         };
       }
@@ -109,7 +106,7 @@ export function routedWaveCommitSink(
               ? "AclDocumentWriteRefused"
               : "WaveCommitRejected",
             message: `access-list change to ${change.space} failed at its ` +
-              `owner: ${messageOf(error)}`,
+              `owner: ${describeFailure(error)}`,
           },
         };
       }

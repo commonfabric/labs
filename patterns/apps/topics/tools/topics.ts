@@ -16,7 +16,14 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { urlToAppView } from "@commonfabric/navigation";
+import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import {
+  parseCellReference,
+  type ReferenceParts,
+} from "@commonfabric/runner/shared";
 
 import {
   FIELDS,
@@ -268,31 +275,37 @@ async function readTopics(
       board.board,
       copySource(data.space),
     );
-    return read(deps, refreshed, [board.space, data.space]);
+    return read(deps, refreshed, board, data.space);
   }
   const source = await deps.openDocSource(board);
   try {
     const refreshed = await refreshMirror(data, board.board, source);
     await saveMirror(board.mirror, data);
-    return read(deps, refreshed, [board.space, source.space]);
+    return read(deps, refreshed, board, source.space);
   } finally {
     await source.close();
   }
 }
 
-/** The board's Topics, and the names a reference may give the board's space. */
+/** The board's Topics, and where a reference may say the board is. */
 interface Read extends Refreshed {
+  /** The names of the board's space: the one configured, then the one read. */
   spaces: string[];
+
+  /** The server the board is on. */
+  apiUrl: string;
 }
 
 /**
  * Helper for {@link readTopics}, which reports Topics that read as blank and
- * records the space's names.
+ * records the board's server and the two names of its space: the one `board`
+ * gives and `space`, the one the copy was read under.
  */
 function read(
   deps: TopicsDeps,
   refreshed: Refreshed,
-  spaces: string[],
+  board: Board,
+  space: string,
 ): Read {
   if (refreshed.unreached.length > 0) {
     deps.warn(
@@ -309,17 +322,20 @@ function read(
         refreshed.unreadable.map((number) => `top/${number}`).join(", "),
     );
   }
-  return { ...refreshed, spaces };
+  return { ...refreshed, spaces: [board.space, space], apiUrl: board.apiUrl };
 }
 
 /**
- * The Topic `reference` names among `topics`: a number, written `42`, `#42`,
- * `top/42`, or `//<space>/top/42`, or an address, written `/of:…` or `of:…`.
+ * The Topic `reference` names among `topics`: a number, written `42` or `#42`,
+ * or `top/42` alone or after `/` or `//<space>/`; an address, written `fid1:…`
+ * or `of:fid1:…`, alone or after `/` or `//<space>/`; or the URL of the board
+ * server's page for either.
  *
- * @throws Error naming the Topic when the board has none by that name.
+ * @throws Error naming the Topic when the board has none by that name, or
+ * saying why `reference` names no Topic on this board.
  */
 export function findTopic(
-  read: Pick<Read, "topics" | "spaces">,
+  read: Pick<Read, "topics" | "spaces" | "apiUrl">,
   reference: string,
 ): Topic {
   const topic = lookUp(read, reference);
@@ -329,20 +345,80 @@ export function findTopic(
   return topic;
 }
 
-/** Helper for {@link findTopic}, which is `undefined` for no such Topic. */
+/**
+ * Helper for {@link findTopic}, which is `undefined` for no such Topic.
+ *
+ * @throws Error saying why `reference` names no Topic on this board.
+ */
 function lookUp(
-  { topics, spaces }: Pick<Read, "topics" | "spaces">,
+  read: Pick<Read, "topics" | "spaces" | "apiUrl">,
   reference: string,
 ): Topic | undefined {
-  const [, space, number] = NUMBERED.exec(reference) ?? [];
-  const address = reference.replace(/^\//, "");
-  return space !== undefined && !spaces.includes(space)
-    ? undefined
-    : topics.find((t) =>
-      number === undefined
-        ? t.address === address || t.piece === address
-        : t.number === number
+  try {
+    return read.topics.find(matcher(read, reference));
+  } catch (error) {
+    throw new Error(
+      debugStr`$quote,long${reference} names no Topic on this board: ` +
+        describeFailure(error),
+      { cause: error },
     );
+  }
+}
+
+/**
+ * Helper for {@link lookUp}, which is a test for the Topic `reference` names.
+ *
+ * @throws Error saying why `reference` names no Topic on this board.
+ */
+function matcher(
+  { spaces, apiUrl }: Pick<Read, "spaces" | "apiUrl">,
+  reference: string,
+): (topic: Topic) => boolean {
+  const parts = referenceParts(apiUrl, numberName(reference) ?? reference);
+  if (parts.space !== undefined && !spaces.includes(parts.space)) {
+    throw new Error(
+      `it names the space ${parts.space}, not the board's, ${spaces[0]}.`,
+    );
+  }
+  const plain = (parts.member ?? "result") === "result" &&
+    parts.pin === undefined && (parts.scope ?? "space") === "space";
+  if (plain && parts.id === "top" && parts.path.length === 1) {
+    return (t) => t.number === parts.path[0];
+  }
+  if (!plain || !parts.id || parts.path.length > 0) {
+    throw new Error("it names neither a Topic's number nor a piece.");
+  }
+  const id = `of:${hashStringForEntityAddress(parts.id)}`;
+  return (t) => t.address === id || t.piece === id;
+}
+
+/**
+ * Helper for {@link matcher}, which reads the URL of a page on the server at
+ * `apiUrl`, or a cell reference, with the leading `/` that roots it optional.
+ */
+function referenceParts(apiUrl: string, reference: string): ReferenceParts {
+  const url = URL.parse(reference);
+  if (url?.protocol !== "http:" && url?.protocol !== "https:") {
+    return parseCellReference(
+      reference.startsWith("/") ? reference : `/${reference}`,
+    );
+  }
+  const server = new URL(apiUrl).origin;
+  if (url.origin !== server) {
+    throw new Error(
+      `it is a page on ${url.origin}, not on the board's server, ${server}.`,
+    );
+  }
+  const view = urlToAppView(url);
+  if ("builtin" in view) return { id: "", path: [] };
+  return {
+    space: "spaceName" in view ? view.spaceName : view.spaceDid,
+    id: view.pieceSlug ?? view.pieceId ?? "",
+    scope: view.pieceScope,
+    path: view.pieceMember === undefined
+      ? view.piecePath ?? []
+      : [view.pieceMember, ...view.pieceExtraPath?.split("/") ?? []],
+  };
 }
 
 /** A Topic named by its number, with the space it is in or without. */
@@ -350,9 +426,17 @@ const NUMBERED = /^(?:\/\/([^/]+)\/)?(?:top\/|#)?(\d+)$/;
 
 /** How a message names the Topic `reference` names: `top/42`, or the address. */
 function topicName(reference: string): string {
+  return numberName(reference) ?? debugStr`$quote,long${reference}`;
+}
+
+/**
+ * `reference` written as `top/42`, or as `//<space>/top/42` when it names its
+ * space, if it names a Topic by its number alone.
+ */
+function numberName(reference: string): string | undefined {
   const [, space, number] = NUMBERED.exec(reference) ?? [];
   return number === undefined
-    ? debugStr`$quote${reference}`
+    ? undefined
     : `${space === undefined ? "" : `//${space}/`}top/${number}`;
 }
 
@@ -493,7 +577,7 @@ async function invoke<T>(
   // names the phase it reached; only one that never dispatched cannot have
   // committed, so any other failure, named or not, names this id to settle it.
   const unsettled = (error: unknown): Error => {
-    const message = messageOf(error);
+    const message = describeFailure(error);
     const phases = [...message.matchAll(/^invocation: \S+ phase: (\S+)$/gm)];
     return phases.at(-1)?.[1] === "initial_sync"
       ? new Error(message, { cause: error })
@@ -543,11 +627,6 @@ async function invoke<T>(
   });
 }
 
-/** What `error` says. */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /**
  * Runs the Topic at `cell` to completion once, after the write `written` to
  * it. The board lists each Topic with a comment count and a last activity
@@ -566,7 +645,7 @@ async function step(
     await cf(deps, board, ["piece", "step", "--cell", cell]);
   } catch (error) {
     throw new Error(
-      `${messageOf(error)}\nThe write was made, but the board will not ` +
+      `${describeFailure(error)}\nThe write was made, but the board will not ` +
         `show it until ${cell} runs: run the same command with ` +
         `\`--invocation ${written.invocation}\` to run it without writing ` +
         "again.",
@@ -746,7 +825,9 @@ function patternOf(term: string): RegExp {
 
 /**
  * Runs the `show` command: prints each Topic named that the board holds, in
- * the order named, then fails naming any it does not.
+ * the order named, then fails naming any it does not. A reference that names
+ * no Topic on this board, such as one in another space, fails the command
+ * before anything is printed.
  */
 export async function showAction(
   options: TopicsOptions & { window?: ThreadWindow; json?: boolean },
@@ -1044,7 +1125,8 @@ Writing:
 
 A body or a text omitted from the arguments is read from stdin; give one that
 begins with - there, or after --. A Topic is named by its number (42, #42,
-top/42, //<space>/top/42) or its address.
+top/42, //<space>/top/42), by its address (fid1:..., of:fid1:..., /of:fid1:...,
+//<space>/of:fid1:...), or by the URL of its page on the board's server.
 
 Writes of authored content need --agent-name <name> (or CF_AGENT_NAME). Every
 write is a new one, and prints its invocation id before it is made. When a
@@ -1256,7 +1338,7 @@ export async function main(
 
 /** Reports `error` as what the command failed with, giving the exit status. */
 function failure(error: unknown): number {
-  console.error(messageOf(error));
+  console.error(describeFailure(error));
   return 1;
 }
 

@@ -49,7 +49,10 @@ import {
   unsupportedIntersectionSchema,
   withoutDocumentation,
 } from "./formatters/intersection-formatter.ts";
-import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
+import {
+  isDefaultLibrarySourceFile,
+  isWellKnownSymbol,
+} from "./typescript/default-library.ts";
 import {
   denotesSameType,
   getTypeAliasDeclaration,
@@ -85,6 +88,7 @@ import {
   resolveWrapperNode,
   soleNonNullishMember,
   type TypeWithInternals,
+  withoutTypeNode,
 } from "./type-utils.ts";
 import { extractDocFromType } from "./doc-utils.ts";
 import {
@@ -98,6 +102,7 @@ import {
 } from "./schema-origins.ts";
 import {
   reportRecursiveAliasOfAny,
+  reportSymbolType,
   reportUnreadCfcRecursion,
   reportUnreadTypes,
 } from "./unread-type-diagnostics.ts";
@@ -2395,12 +2400,11 @@ export class SchemaGenerator {
     // inherit the parent's typeNode which leads to mismatched type/node pairs.
     // A printed node is not read as a node, and the hints attached to it apply.
     const {
-      typeNode: _,
-      hintsNode: __,
-      instantiatedAs: ___,
-      carriersRead: ____,
+      hintsNode: _,
+      instantiatedAs: __,
+      carriersRead: ___,
       ...unplaced
-    } = context;
+    } = withoutTypeNode(context);
     const baseContext: GenerationContext = instantiatedAs
       ? { ...unplaced, instantiatedAs }
       : unplaced;
@@ -3441,6 +3445,14 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
+    // The schema dialect has no symbol type, so a symbol reads as `false`,
+    // which a union drops. A well-known symbol is never stored, so nothing
+    // more is needed. Any other symbol could be a registered one, which the
+    // runtime stores, so it is also refused (`reportSymbolType()`).
+    if ((type.flags & ts.TypeFlags.ESSymbolLike) !== 0) {
+      if (!isWellKnownSymbol(type, context)) reportSymbolType(context, type);
+      return false;
+    }
     context = this.#withGenericBindings(type, context);
     // Alternatives that share a type remain separate readings. Their type
     // identity cannot name either reading or mark one as a cycle of the other.
@@ -3904,13 +3916,12 @@ export class SchemaGenerator {
     // own, and what reading it only for its labels leaves unread is no
     // problem to report.
     const {
-      typeNode: _,
-      hintsNode: __,
-      arrayItemsOverride: ___,
-      boundTypeParameters: ____,
-      uninterpretedTypeNodes: _____,
+      hintsNode: _,
+      arrayItemsOverride: __,
+      boundTypeParameters: ___,
+      uninterpretedTypeNodes: ____,
       ...rest
-    } = context;
+    } = withoutTypeNode(context);
     return this.#labelsOf(narrowedFrom.type, narrowedFrom.typeNode, {
       ...rest,
       onDiagnostic: () => {},
@@ -4609,6 +4620,10 @@ export class SchemaGenerator {
         return { type: "unknown" };
       case ts.SyntaxKind.VoidKeyword:
         return PrimitiveFormatter.getSchemaType(checker.getVoidType(), context);
+      case ts.SyntaxKind.SymbolKeyword:
+        // Refused as the type is (`#formatType()`), not guessed at.
+        reportSymbolType({ ...context, typeNode }, checker.getESSymbolType());
+        return false;
       case ts.SyntaxKind.AnyKeyword:
         // Accept any value
         return true;

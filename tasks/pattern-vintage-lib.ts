@@ -13,6 +13,7 @@
 
 import { exists } from "@std/fs";
 import * as posix from "@std/path/posix";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   acceptedDropKey,
   type AcceptedStateDrop,
@@ -455,11 +456,6 @@ export interface ReplayFailure {
   path: string;
 
   detail: string;
-}
-
-/** A readable message for anything thrown across the task's I/O boundary. */
-export function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** An absolute path back to a repo-relative one, for readable output. */
@@ -1203,7 +1199,7 @@ export function reportNoVerdict(reason?: unknown): string {
     "",
     reason === undefined
       ? "  (no rejection was observed; look for an unresolved await)"
-      : `  last unhandled rejection: ${describeError(reason)}`,
+      : `  last unhandled rejection: ${describeFailure(reason)}`,
   ].join("\n");
 }
 

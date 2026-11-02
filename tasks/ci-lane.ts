@@ -63,9 +63,11 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import { maxOf } from "@commonfabric/collections/math";
 import {
+  type Capability,
   type CapabilityId,
   COMPILE_CACHE_FILE,
   logTail,
+  messageOf,
   openCapabilities,
   takeGithubToken,
 } from "./ci-capabilities.ts";
@@ -488,16 +490,19 @@ export function manifestMoment(
 
 /**
  * What a git command prints in `root`, or an error opening with
- * `failure` and carrying what git said.
+ * `failure` and carrying what git said. Given `env`, that is the whole of
+ * the command's environment, and otherwise it inherits this process's.
  */
-async function gitOutput(
+export async function gitOutput(
   root: string,
   args: readonly string[],
   failure: string,
+  env?: Record<string, string>,
 ): Promise<string> {
   const result = await new Deno.Command("git", {
     args: [...args],
     cwd: root,
+    ...(env === undefined ? {} : { env, clearEnv: true }),
     stdout: "piped",
     stderr: "piped",
   }).output();
@@ -513,7 +518,7 @@ async function gitOutput(
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
 /** The paths in what `git … -z` printed. */
-function pathsOf(listing: string): Set<string> {
+export function pathsOf(listing: string): Set<string> {
   return new Set(listing.split("\0").filter((path) => path.length > 0));
 }
 
@@ -1601,6 +1606,50 @@ function registersNoSuchTest(
   );
 }
 
+/** What a batch's records came to, and whether it passed. */
+export interface Verdict {
+  passed: boolean;
+  accounting: Accounting;
+
+  /**
+   * Whether the batch accounted for everything it was asked to run that the
+   * tree holds, which is what lets a flake rate excuse a failure.
+   */
+  excusing: boolean;
+}
+
+/**
+ * Judges one batch that ran `asked`, and says what its records came to.
+ *
+ * The records decide, rather than the command's exit status: a runner that
+ * failed only on identities a flake rate excuses exits non-zero and has told
+ * the run nothing it should stop for, and a runner that exited zero having
+ * run none of its unit has. What the exit status is still read for is an
+ * execution that ended badly having recorded no failure at all, which the
+ * records by themselves cannot describe.
+ *
+ * An invocation is excused only when it accounted for every identity it was
+ * asked to run that the tree holds: one that recorded a failure and then
+ * stopped has run almost nothing while satisfying any weaker test.
+ */
+export function judgeBatch(
+  batch: Batch,
+  asked: readonly Selection[],
+  result: { executions: readonly Execution[]; unexplained: number },
+  nonGating: ReadonlySet<string>,
+): Verdict {
+  const accounting = accountFor(batch, asked, result.executions, nonGating);
+  const excusing = accounting.unaccounted.length === 0;
+  describeAccounting(batch.suite.id, accounting, excusing);
+  return {
+    passed: accounting.gating.length === 0 &&
+      accounting.silent.length === 0 && result.unexplained === 0 &&
+      (accounting.excused.length === 0 || excusing),
+    accounting,
+    excusing,
+  };
+}
+
 /** Says what a batch's records came to, where they came to anything. */
 export function describeAccounting(
   suite: string,
@@ -2192,6 +2241,12 @@ export interface LaneDeps {
    * SIGTERM; a lane run from inside a test is stopped by the test.
    */
   stop?: () => LaneStop;
+
+  /**
+   * The capabilities a lane can open, by name. A caller that supplies them
+   * is saying what opening and closing each one would do.
+   */
+  capabilities?: ReadonlyMap<CapabilityId, Capability>;
 }
 
 /**
@@ -2291,6 +2346,9 @@ async function read(
 
 /** What one run makes of a tree: the tree as it prices it, and packed. */
 export interface PlanOver {
+  /** The tree read against the manifest, before any pricing. */
+  read: Census;
+
   /** The tree read against the manifest, priced the way the run prices it. */
   seen: PricedCensus;
 
@@ -2395,6 +2453,7 @@ export function planOver(input: RunInput & { lanes?: number }): PlanOver {
     ({ seen, laid } = packed(gates, measured));
   }
   return {
+    read,
     seen,
     laid,
     coverage: coverageGateSelection(input.suites, read.gates, laid.gates),
@@ -2736,9 +2795,13 @@ export async function runLane(
   // the directory from the job's temporary directory. Anywhere else
   // nothing would collect it, and one directory would accumulate per
   // failed run.
+  // A removal that fails is reported rather than thrown, so that it never
+  // replaces the error a failing lane is ending with.
   const leaveWorkDir = async (passed: boolean) => {
     if (passed || temp === undefined) {
-      await Deno.remove(workDir, { recursive: true }).catch(() => {});
+      await Deno.remove(workDir, { recursive: true }).catch((error) =>
+        console.log(`ci-lane: could not remove ${workDir}: ${messageOf(error)}`)
+      );
     }
   };
   const spool = (deps.spool ?? recordsDir)();
@@ -2755,7 +2818,7 @@ export async function runLane(
       workDir,
       ...(githubToken === undefined ? {} : { githubToken }),
       report: console.log,
-    });
+    }, deps.capabilities);
   } catch (error) {
     await leaveWorkDir(false);
     throw error;
@@ -2798,7 +2861,7 @@ export async function runLane(
   // by identity, and what failed with no failing test to say why.
   const tests = new Map<string, TestResult>();
   const annotated = new Set<string>();
-  let members: Map<string, string> | undefined;
+  const addReruns = rerunCommands(options.root);
   const commands: FailedCommand[] = [];
   const notes: string[] = [];
   try {
@@ -2820,25 +2883,12 @@ export async function runLane(
         stop,
       );
       for (const conflict of result.conflicts) conflicts.push(conflict);
-      // The records decide, rather than the command's exit status: a
-      // runner that failed only on identities a flake rate excuses
-      // exits non-zero and has told this run nothing it should stop
-      // for, and a runner that exited zero having run none of its unit
-      // has. What the exit status is still read for is an execution
-      // that ended badly having recorded no failure at all, which the
-      // records by themselves cannot describe.
-      const accounting = accountFor(
+      const { passed, accounting, excusing } = judgeBatch(
         batch,
         mine.selections,
-        result.executions,
+        result,
         nonGating,
       );
-      // An invocation is excused only when it accounted for every
-      // identity it was asked to run that the tree holds: one that
-      // recorded a failure and then stopped has run almost nothing while
-      // satisfying any weaker test.
-      const excusing = accounting.unaccounted.length === 0;
-      describeAccounting(batch.suite.id, accounting, excusing);
       addLaneResults(
         tests,
         result.records,
@@ -2848,31 +2898,7 @@ export async function runLane(
           ...(excusing ? [] : accounting.excused),
         ]),
       );
-      const failing = [...tests.values()].filter(({ record }) =>
-        record.outcome === "fail"
-      );
-      if (
-        members === undefined &&
-        failing.some(({ record }) => record.test.k === "unit")
-      ) {
-        try {
-          members = new Map(
-            (await readWorkspaceMembers(path.join(options.root, "deno.jsonc")))
-              .map((member) => [getPackageName(member), member]),
-          );
-        } catch (error) {
-          members = new Map();
-          console.warn(
-            "ci-lane: could not look up unit-test rerun commands:",
-            error,
-          );
-        }
-      }
-      for (const test of failing) {
-        const rerun = laneRerun(test.record, members ?? new Map());
-        if (rerun !== undefined) test.rerun = rerun;
-      }
-      annotateLaneFailures(failing, annotated);
+      annotateLaneFailures(await addReruns(tests.values()), annotated);
       for (const { name } of accounting.silent) {
         commands.push({
           label: `${batch.suite.id} ${name}`,
@@ -2886,13 +2912,7 @@ export async function runLane(
             "no failing test",
         });
       }
-      if (
-        accounting.gating.length > 0 || accounting.silent.length > 0 ||
-        result.unexplained > 0 ||
-        (accounting.excused.length > 0 && !excusing)
-      ) {
-        ok = false;
-      }
+      if (!passed) ok = false;
       for (const unit of accounting.failedUnits) {
         failedUnits.add(`${batch.suite.id}\t${unit}`);
       }
@@ -2947,13 +2967,23 @@ export async function runLane(
     ok = false;
     throw error;
   } finally {
-    // Read while the servers are still up: closing one signals it and
-    // returns, so a read after that races a shutdown still writing.
+    // Closing a server waits for it to exit, so after this its log is
+    // whole and nothing writes into the work directory. A capability that
+    // failed to close fails the lane without displacing whatever the loop
+    // threw.
+    try {
+      await opened.close();
+    } catch (error) {
+      ok = false;
+      notes.push(messageOf(error));
+      console.log(`ci-lane: ${messageOf(error)}`);
+    }
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
-    if (!ok) await describeCapabilityLogs(opened.logs);
-    await opened.close();
-    if (!ok) await leaveWorkDir(false);
+    if (!ok) {
+      await describeCapabilityLogs(opened.logs);
+      await leaveWorkDir(false);
+    }
   }
   // A lane that has passed so far keeps its directory until its coverage
   // is converted, which can still fail it.
@@ -3028,6 +3058,44 @@ export async function runLane(
   }
   reportLane(summary, Deno.env.get, annotated);
   return ok;
+}
+
+/**
+ * Returns what gives each failing test among the tests it is handed the
+ * command `laneRerun()` says runs it again, where there is one, and
+ * returns those failing tests. The workspace's members are read from the
+ * tree at `root` the first time a failing unit test needs one; a failure
+ * to read them costs only the unit tests' commands.
+ */
+export function rerunCommands(
+  root: string,
+): (tests: Iterable<TestResult>) => Promise<TestResult[]> {
+  let members: Map<string, string> | undefined;
+  return async (tests) => {
+    const failing = [...tests].filter(({ record }) =>
+      record.outcome === "fail"
+    );
+    if (
+      members === undefined &&
+      failing.some(({ record }) => record.test.k === "unit")
+    ) {
+      try {
+        members = new Map(
+          (await readWorkspaceMembers(path.join(root, "deno.jsonc"))).map(
+            (member) => [getPackageName(member), member],
+          ),
+        );
+      } catch (error) {
+        members = new Map();
+        console.warn("could not look up unit-test rerun commands:", error);
+      }
+    }
+    for (const test of failing) {
+      const rerun = laneRerun(test.record, members ?? new Map());
+      if (rerun !== undefined) test.rerun = rerun;
+    }
+    return failing;
+  };
 }
 
 /**
@@ -3239,16 +3307,19 @@ export async function main(
  * stops it: the signals a job stops a step with. A lane that only plans
  * or counts leaves those signals to end it as they would any process.
  */
-const store: LaneDeps = {
-  manifest: fetchManifest,
-  stop: () => {
-    const stop = new LaneStop();
-    for (const signal of ["SIGINT", "SIGTERM"] as const) {
-      Deno.addSignalListener(signal, () => stop.receive(signal));
-    }
-    return stop;
-  },
-};
+const store: LaneDeps = { manifest: fetchManifest, stop: stopOnSignals };
+
+/**
+ * A stop that receives SIGINT and SIGTERM: what a job stops a step with,
+ * and what an interrupt at a terminal sends.
+ */
+export function stopOnSignals(): LaneStop {
+  const stop = new LaneStop();
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    Deno.addSignalListener(signal, () => stop.receive(signal));
+  }
+  return stop;
+}
 
 // `Deno.exitCode` rather than `Deno.exit`, which would end the process
 // before the unload handlers run — and one of those is what writes a

@@ -33,6 +33,7 @@ import {
 } from "@/lib/server-execution.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
+import { runShutdown } from "@/lib/shutdown.ts";
 
 // Create a global runtime instance for the server
 let runtime: Runtime;
@@ -105,6 +106,9 @@ let isShuttingDown = false;
 const SHUTDOWN_TIMEOUT = 10000; // 10 seconds
 
 const handleShutdown = async () => {
+  // The signal listeners stay installed while shutdown runs, so a second
+  // signal arrives here. With no listener, its default action would end the
+  // process before the memory system has closed.
   if (isShuttingDown) {
     console.log("Shutdown already in progress...");
     return;
@@ -112,45 +116,25 @@ const handleShutdown = async () => {
 
   isShuttingDown = true;
   console.log("Shutdown signal received, closing server...");
+  // Non-zero when any part of the shutdown failed, so that whoever started
+  // the server learns that from its exit status.
+  const code = await runShutdown(async () => {
+    ac.abort();
 
-  // Create a timeout promise
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("Shutdown timed out")), SHUTDOWN_TIMEOUT);
-  });
+    console.log("Closing memory system...");
+    memoryServer.setPatternLifecycleHandler(undefined);
+    memoryServer.setServedRequestHandler(undefined);
+    await stopServerExecutionHost();
+    await memory.close();
+    console.log("Memory system closed successfully");
 
-  try {
-    // Race between graceful shutdown and timeout
-    await Promise.race([
-      (async () => {
-        // Remove signal listeners to prevent multiple shutdown attempts
-        Deno.removeSignalListener("SIGINT", handleShutdown);
-        Deno.removeSignalListener("SIGTERM", handleShutdown);
+    // Flush buffered spans so the last batch isn't dropped on exit. No-op
+    // when telemetry is disabled; bounded by SHUTDOWN_TIMEOUT.
+    await shutdownOpenTelemetry();
+  }, SHUTDOWN_TIMEOUT);
 
-        ac.abort();
-
-        console.log("Closing memory system...");
-        memoryServer.setPatternLifecycleHandler(undefined);
-        memoryServer.setServedRequestHandler(undefined);
-        await stopServerExecutionHost();
-        const result = await memory.close();
-        if ("error" in result) {
-          console.error("Error closing memory:", result.error);
-        } else {
-          console.log("Memory system closed successfully");
-        }
-
-        // Flush buffered spans so the last batch isn't dropped on exit. No-op
-        // when telemetry is disabled; bounded by the SHUTDOWN_TIMEOUT race above.
-        await shutdownOpenTelemetry();
-      })(),
-      timeoutPromise,
-    ]);
-  } catch (err) {
-    console.error("Error during shutdown:", err);
-  }
-
-  console.log("Shutdown complete");
-  Deno.exit(0);
+  console.log(code === 0 ? "Shutdown complete" : "Shutdown failed");
+  Deno.exit(code);
 };
 
 // Start server with the abort controller

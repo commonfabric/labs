@@ -295,7 +295,13 @@ normative from C1 on:
   covering trace: `lastNode:"top"` link reads, raw link handles, unfollowed
   redirect checks) are row-3 followRef observations. A list coordinator's
   scaffolding probes carry the machinery marker (§6.2) and consume nothing,
-  so a coordinator's J does not join every slot's transport label.
+  so a coordinator's J does not join every slot's transport label. A probe
+  of a slot that holds a reference consumes no link entry beneath the slot.
+  The document has no position there: such an entry labels a position of
+  the target, as a copy of the target's labels that a stored envelope can
+  carry although no link write persists one, and a dereference consumes the
+  target's own labels where it reads them (spec §4.6.3, §8.2.5). The link
+  entry at the slot stays consumed (spec §18.7).
 - **An `enumerate` entry applies at its container only.** It labels a
   container's membership, order and count, so it is consumed by a read of
   the container. A read of an array's native `length`, which the journal

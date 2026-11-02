@@ -64,6 +64,7 @@ import {
   LOOM_REPO,
   REPO,
 } from "../config.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import { detailList } from "../detail-list.ts";
@@ -86,7 +87,6 @@ import {
   GITHUB_REQUEST_CONCURRENCY,
   inParallel,
   memo,
-  messageOf,
   runDurationMs,
   STATUS_RANK,
 } from "../lib.ts";
@@ -217,7 +217,7 @@ async function repoWorkflows(
       if (batch.length < 100) break;
     }
   } catch (error) {
-    inventory.error = messageOf(error);
+    inventory.error = describeFailure(error);
   }
   return inventory;
 }
@@ -266,7 +266,7 @@ async function readRuns(
     );
     return { inventory, workflow, runs };
   } catch (error) {
-    return { inventory, workflow, runs: [], error: messageOf(error) };
+    return { inventory, workflow, runs: [], error: describeFailure(error) };
   }
 }
 
@@ -370,7 +370,7 @@ async function jobOf(
   try {
     deciding = await settle(listing.runs, attempts);
   } catch (error) {
-    return unreadable(friendlyError(messageOf(error)));
+    return unreadable(friendlyError(describeFailure(error)));
   }
 
   if (deciding === undefined) {
@@ -583,7 +583,7 @@ export function createCiHealth(
             redefined.delete(run.id);
             console.error(
               `ci: could not read ${shortName(failing.inventory.repo)} · ${failing.workflow.name}'s history:`,
-              messageOf(error),
+              describeFailure(error),
             );
             return false;
           });
@@ -645,7 +645,7 @@ export function createCiHealth(
         sweepFailure = undefined;
       },
       (error) => {
-        sweepFailure = messageOf(error);
+        sweepFailure = describeFailure(error);
         console.error(
           "ci: could not read the repository inventory:",
           sweepFailure,

@@ -20,7 +20,6 @@ import {
   autoGenerationsToPrune,
   collectVintages,
   describeCaptureOutcome,
-  describeError,
   describePinOutcome,
   hoistSupersessionReason,
   isClean,
@@ -676,14 +675,6 @@ describe("path and error helpers", () => {
       "runtime/x.gz",
     );
     expect(relativeToRepo("/elsewhere/x.gz", "/repo")).toBe("/elsewhere/x.gz");
-  });
-
-  it("describes a non-Error throw without rendering it useless", () => {
-    // `String({})` is "[object Object]", which satisfies a truthiness check
-    // while destroying the reason — the class of bug that made an earlier
-    // rejection assertion pass for nothing.
-    expect(describeError(new Error("boom"))).toBe("boom");
-    expect(describeError("plain string")).toBe("plain string");
   });
 });
 

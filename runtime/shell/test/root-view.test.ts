@@ -160,6 +160,9 @@ describe("XRootView", () => {
         generation,
       );
       expect(templateMarkup(view.render())).toContain("Update required");
+      expect(templateMarkup(view.render())).toContain(
+        "If the same message comes back after reloading, this site cannot open that space.",
+      );
       expect(templateMarkup(view.render())).not.toContain(
         "Copy any recent edits",
       );

@@ -676,8 +676,10 @@ with them.
   carry none. An add the stream doesn't admit, as one without the gesture,
   records nothing.
 - **Delivery:** a `done` add carries `delivery`, how the person was told of
-  the room: `offered`, sent to at least one share inbox, which says nothing of
-  whether it arrived; `noticed`, a notice in the manager's `outgoingNotices`
+  the room: `offered`, sent, or about to be, to at least one share inbox,
+  which says nothing of whether it arrived, and which the manager turns to
+  `noticed` should no profile it offers through point at an inbox; `noticed`,
+  a notice in the manager's `outgoingNotices`
   for a client to deliver; or `access-only`, told nothing, so that the adder
   has to send them the room's link. An add with no manager to send to records
   `access-only` in that event: the reader has no manager, or theirs hasn't

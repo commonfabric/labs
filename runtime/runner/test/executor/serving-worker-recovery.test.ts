@@ -1,9 +1,19 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
+import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
+import {
+  acquireServerExecutionEnabler,
+  encodeMemoryBoundary,
+} from "@commonfabric/memory/v2";
+import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  executionLeaseHolder,
+  ExecutionLeases,
+} from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
@@ -98,16 +108,23 @@ function fakeWorkers(): Disposable & {
 const server = {
   setServerExecutionObserver() {},
   engineForSpace: () => Promise.resolve({}),
+  executionLeases: new ExecutionLeases(),
 } as unknown as Server;
+
+/** One note of any kind from the worker's side of the port. */
+const anyMessage = {
+  t: "note",
+  method: "host.activationSettled",
+  params: { space, outcome: "active" },
+};
 
 describe("serving-worker-recovery", () => {
   for (const source of ["init", "error"] as const) {
     for (const closing of [false, true]) {
-      it(`${closing ? "suppresses replacement after close" : "waits for lease release before replacement"} when ${source} fails`, async () => {
+      it(`${closing ? "suppresses replacement after close" : "releases the worker's leases before replacement"} when ${source} fails`, async () => {
         using fakes = fakeWorkers();
         const { workers } = fakes;
         const init = Promise.withResolvers<{ lifetimeLock: undefined }>();
-        const release = Promise.withResolvers<void>();
         const releasing = Promise.withResolvers<void>();
         let restart: (() => void) | undefined;
         using _timer = stub(
@@ -131,7 +148,7 @@ describe("serving-worker-recovery", () => {
           "releaseLeasesOf",
           () => {
             releasing.resolve();
-            return release.promise;
+            return 0;
           },
         );
         using _close = stub(
@@ -160,12 +177,10 @@ describe("serving-worker-recovery", () => {
             host.runLifecycleVerb(space, { name: "upload", request: {} }),
           ).rejects.toThrow(SpaceNotServedError);
           expect(restart).toBeDefined();
-          restart!();
-          await Promise.resolve();
           expect(workers).toHaveLength(1);
           const closed = closing ? host.close() : undefined;
           const replacement = fakes.next();
-          release.resolve();
+          restart!();
           if (closing) {
             await closed;
             expect(workers).toHaveLength(1);
@@ -175,7 +190,6 @@ describe("serving-worker-recovery", () => {
             expect(workers).toHaveLength(2);
           }
         } finally {
-          release.resolve();
           await host.close();
         }
       });
@@ -206,7 +220,7 @@ describe("serving-worker-recovery", () => {
       "releaseLeasesOf",
       (holder: string) => {
         released.push(holder);
-        return Promise.resolve();
+        return 0;
       },
     );
     const host = new ServingWorker({
@@ -247,7 +261,7 @@ describe("serving-worker-recovery", () => {
       "releaseLeasesOf",
       (holder: string) => {
         released.push(holder);
-        return Promise.resolve();
+        return 0;
       },
     );
     const host = new ServingWorker({
@@ -287,7 +301,7 @@ describe("serving-worker-recovery", () => {
     using _release = stub(
       ServingPortBridge.prototype,
       "releaseLeasesOf",
-      () => Promise.resolve(),
+      () => 0,
     );
     const host = new ServingWorker({
       server,
@@ -317,7 +331,7 @@ describe("serving-worker-recovery", () => {
     using _release = stub(
       ServingPortBridge.prototype,
       "releaseLeasesOf",
-      () => Promise.resolve(),
+      () => 0,
     );
     const host = new ServingWorker({
       server,
@@ -362,7 +376,7 @@ describe("serving-worker-recovery", () => {
     using _release = stub(
       ServingPortBridge.prototype,
       "releaseLeasesOf",
-      () => Promise.resolve(),
+      () => 0,
     );
     using _close = stub(
       ServingPortBridge.prototype,
@@ -415,5 +429,263 @@ describe("serving-worker-recovery", () => {
     } finally {
       await host.close();
     }
+  });
+
+  describe("the watchdog", () => {
+    /** Lets `intervals` of the worker's watchdog intervals pass. */
+    const pass = (intervals: number) => clock.tick(intervals * 10_000);
+
+    /** A running worker whose memory server keeps `leases`. */
+    const serving = async (
+      leases: ExecutionLeases,
+      over: Partial<Server> = {},
+    ) => {
+      const host = new ServingWorker({
+        server: {
+          ...server,
+          executionLeases: leases,
+          ...over,
+        } as unknown as Server,
+        identity,
+        apiUrl: new URL(import.meta.url),
+      });
+      await host.ready;
+      return host;
+    };
+
+    it("kills a worker after six intervals without a message, releases its leases, counts them lost, and starts a successor under a fresh holder", async () => {
+      using fakes = fakeWorkers();
+      const { workers } = fakes;
+      let restart: (() => void) | undefined;
+      using _timer = stub(
+        globalThis,
+        "setTimeout",
+        ((callback: () => void) => {
+          restart = callback;
+          return 1;
+        }) as typeof setTimeout,
+      );
+      using _init = stub(
+        ServingPortBridge.prototype,
+        "init",
+        () => Promise.resolve({ lifetimeLock: undefined }),
+      );
+      using _close = stub(
+        ServingPortBridge.prototype,
+        "closeHost",
+        () => Promise.resolve(),
+      );
+      const leases = new ExecutionLeases();
+      const host = await serving(leases);
+      try {
+        const holder = executionLeaseHolder(identity.did());
+        expect(leases.acquire(space, holder)).toBe(true);
+        workers[0].post(anyMessage);
+
+        // The first check reads the message; five silent ones are not enough.
+        await pass(6);
+        expect(workers[0].terminated).toBe(false);
+        expect(leases.holderOf(space)).toBe(holder);
+
+        await pass(1);
+        expect(workers[0].terminated).toBe(true);
+        expect(leases.holderOf(space)).toBeUndefined();
+        expect(getServingLoopStats()?.lease.lost).toBe(1);
+
+        const replacement = fakes.next();
+        restart!();
+        await replacement;
+        await host.ready;
+        const successor = executionLeaseHolder(identity.did());
+        expect(successor).not.toBe(holder);
+        expect(leases.acquire(space, successor)).toBe(true);
+
+        // A successor's counters start over, and the loss still shows.
+        workers[1].post({
+          t: "note",
+          method: "host.stats",
+          params: { stats: emptyServingLoopStats() },
+        });
+        expect(host.stats()?.lease.lost).toBe(1);
+        expect(getServingLoopStats()?.lease.lost).toBe(1);
+      } finally {
+        await host.close();
+      }
+    });
+
+    it("restarts its count at a message of any kind", async () => {
+      using fakes = fakeWorkers();
+      const { workers } = fakes;
+      using _timer = stub(
+        globalThis,
+        "setTimeout",
+        (() => 1) as unknown as typeof setTimeout,
+      );
+      using _init = stub(
+        ServingPortBridge.prototype,
+        "init",
+        () => Promise.resolve({ lifetimeLock: undefined }),
+      );
+      using _close = stub(
+        ServingPortBridge.prototype,
+        "closeHost",
+        () => Promise.resolve(),
+      );
+      const host = await serving(new ExecutionLeases());
+      try {
+        workers[0].post(anyMessage);
+        await pass(6);
+        workers[0].post({
+          t: "note",
+          method: "worker.heartbeat",
+          params: null,
+        });
+        await pass(6);
+        workers[0].post({
+          t: "req",
+          id: 1,
+          method: "server.idle",
+          params: null,
+        });
+        await pass(6);
+        expect(workers[0].terminated).toBe(false);
+        await pass(1);
+        expect(workers[0].terminated).toBe(true);
+      } finally {
+        await host.close();
+      }
+    });
+
+    it("counts nothing before a worker's first message, since its modules may still be loading", async () => {
+      using fakes = fakeWorkers();
+      const { workers } = fakes;
+      using _init = stub(
+        ServingPortBridge.prototype,
+        "init",
+        () => new Promise<never>(() => {}),
+      );
+      using _release = stub(
+        ServingPortBridge.prototype,
+        "releaseLeasesOf",
+        () => 0,
+      );
+      const host = new ServingWorker({
+        server,
+        identity,
+        apiUrl: new URL(import.meta.url),
+      });
+      try {
+        await pass(100);
+        expect(workers[0].terminated).toBe(false);
+      } finally {
+        await host.close();
+      }
+    });
+
+    it("fences a commit the killed worker left in flight", async () => {
+      using fakes = fakeWorkers();
+      const { workers } = fakes;
+      using _timer = stub(
+        globalThis,
+        "setTimeout",
+        (() => 1) as unknown as typeof setTimeout,
+      );
+      using _init = stub(
+        ServingPortBridge.prototype,
+        "init",
+        () => Promise.resolve({ lifetimeLock: undefined }),
+      );
+      const leases = new ExecutionLeases();
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const engine = await Engine.open({
+        url: toFileUrl(path),
+        executionLeases: leases,
+      });
+      let opening = Promise.resolve();
+      const host = await serving(leases, {
+        engineForSpace: async () => {
+          await opening;
+          return engine;
+        },
+        noteExecutorCommit: () => {},
+      });
+      const commit = async (id: number, doc: string) => {
+        const answered = workers[0].answered(id);
+        workers[0].post({
+          t: "req",
+          id,
+          method: "sink.commitWave",
+          params: {
+            sessionId: holder,
+            localSeq: id,
+            batch: encodeMemoryBoundary({
+              space,
+              home: true,
+              basisSeq: Engine.serverSeq(engine),
+              rebasedHeads: [],
+              operations: [{ op: "set", id: doc, value: { value: { id } } }],
+              preconditions: [],
+              holder,
+              annotations: [],
+              consequenceOf: [],
+              basisInstances: [],
+            } as unknown as FabricValue),
+          },
+        });
+        return await answered as {
+          result: { ok?: unknown; error?: { message: string } };
+        };
+      };
+      const holder = executionLeaseHolder(identity.did());
+      // A process's own claim on the flag, which outlasts the killed worker's
+      // bridge, so that the lease is what refuses the commit.
+      const releaseServerExecution = acquireServerExecutionEnabler();
+      try {
+        expect(leases.acquire(space, holder)).toBe(true);
+        expect((await commit(1, "of:before-the-kill")).result.ok).toBeDefined();
+        const head = Engine.serverSeq(engine);
+
+        // The commit waits on the engine past the kill, and the lease has gone
+        // by the time it reaches admission.
+        const held = defer<void>();
+        opening = held.promise;
+        const inFlight = commit(2, "of:after-the-kill");
+        await pass(7);
+        expect(workers[0].terminated).toBe(true);
+        held.resolve();
+        const { result } = await inFlight;
+        expect(result.ok).toBeUndefined();
+        expect(result.error?.message).toContain("execution lease");
+        expect(Engine.serverSeq(engine)).toBe(head);
+      } finally {
+        await host.close();
+        releaseServerExecution();
+        Engine.close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("settles a close whose worker stalled before its host could answer", async () => {
+      using fakes = fakeWorkers();
+      const { workers } = fakes;
+      using _init = stub(
+        ServingPortBridge.prototype,
+        "init",
+        () => Promise.resolve({ lifetimeLock: undefined }),
+      );
+      const leases = new ExecutionLeases();
+      const host = await serving(leases);
+      const holder = executionLeaseHolder(identity.did());
+      expect(leases.acquire(space, holder)).toBe(true);
+      workers[0].post(anyMessage);
+
+      const closed = host.close();
+      await pass(7);
+      await closed;
+
+      expect(workers[0].terminated).toBe(true);
+      expect(workers).toHaveLength(1);
+      expect(leases.holderOf(space)).toBeUndefined();
+    });
   });
 });

@@ -389,7 +389,8 @@ design, as below.
   and queues a notice only for a member offered nothing. An `openDirect` that
   names `profile` and finds a direct room with a notice for its counterpart
   still waiting offers them the room then, unless its roster lists them, and
-  withdraws the notice. A room is offered only
+  keeps the notice, which is no longer listed once the offer puts them on the
+  room's roster. A room is offered only
   to someone the request names by profile, when the profile points at an inbox:
   an `openDirect` naming `profile`, a participant's chip, whose click names
   the participant's profile, or a `createGroup` naming `profiles`, as the

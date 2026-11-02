@@ -29,6 +29,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "scheduler_basis",
   "execution_lease",
   "execution_outbox",
+  "instance_name_mark",
   "_cf_commit_watermark",
 ];
 

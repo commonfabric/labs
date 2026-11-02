@@ -1440,6 +1440,18 @@ export type MemoryProtocolFlags = {
    */
   spaceInvites?: boolean;
 
+  /**
+   * Server capability: the server records a space's instance-naming mark and
+   * enforces INV-16 (04-protocol.md §4.1.1): a marked space admits only
+   * sessions, and commits, that declare `instanceNames: true`; the first
+   * commit from such a session marks the space; and a declaring session is
+   * admitted to an unmarked space only while the server's posture names
+   * instances. Build-inherent, so a server of this version always advertises
+   * it. Absent (an older server) parses to false; such a server admits a
+   * declaring session's commits and marks nothing.
+   */
+  instanceNameMark?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1498,6 +1510,7 @@ export type WireMemoryProtocolFlags = {
   patternLifecycle?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
+  instanceNameMark?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1536,6 +1549,17 @@ export type SessionDescriptor = {
 
   /** Assert the immutable declared kind when mounting or resuming. */
   spaceKind?: string;
+
+  /**
+   * Present when the session's runtime names instances, and absent when it
+   * binds a parent's children by position (INV-16, 04-protocol.md §4.1.2).
+   * Declared afresh on every open, and signed into the session.open
+   * invocation with the rest of this descriptor. A server advertising
+   * `instanceNameMark` admits only declaring sessions, and their commits, to a
+   * space it has marked, and marks a space at the first commit it admits from
+   * one.
+   */
+  instanceNames?: true;
 
   sessionId?: SessionId;
   seenSeq?: number;
@@ -2586,7 +2610,7 @@ export type SessionRevokedMessage = {
   type: "session/revoked";
   space: string;
   sessionId: SessionId;
-  reason: "taken-over" | "unauthorized";
+  reason: "taken-over" | "unauthorized" | "instance-names";
 };
 
 /**
@@ -2920,6 +2944,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records the diagnostics a client
   // reports about its session.
   sessionReportV1: true,
+  // Build-inherent: this build's server records a space's instance-naming
+  // mark and admits sessions and commits by it (INV-16).
+  instanceNameMark: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3187,6 +3214,13 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const instanceNameMark = value.instanceNameMark;
+  if (
+    instanceNameMark !== undefined && typeof instanceNameMark !== "boolean"
+  ) {
+    return null;
+  }
+
   const syncCrossingsV1 = value.syncCrossingsV1;
   if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
     return null;
@@ -3271,6 +3305,9 @@ export const parseMemoryProtocolFlags = (
     // treats the owner as unavailable.
     servedRequests: servedRequests === true,
     spaceInvites: spaceInvites === true,
+    // Absent (an older server) parses to false: the server records no mark
+    // and admits a declaring session's commits without one.
+    instanceNameMark: instanceNameMark === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3330,6 +3367,7 @@ export const wireMemoryProtocolFlags = (
   patternLifecycle: flags.patternLifecycle,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
+  instanceNameMark: flags.instanceNameMark,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

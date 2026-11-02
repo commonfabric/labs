@@ -10,6 +10,7 @@
  */
 
 import { basename, dirname, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 
@@ -147,9 +148,6 @@ const CACHE_BASENAME = "fabric-wall-ci-run-index.json";
 const SUPERSEDED_BASENAMES = ["fabric-wall-ci-job-history.json"];
 
 const defaultFile = (): string => dashboardCacheFile(CACHE_BASENAME);
-
-const describeError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const runKey = (
   repo: string,
@@ -552,7 +550,7 @@ export class CiJobHistoryStore {
       // them leaves the volume full.
       if (!(error instanceof Deno.errors.NotFound)) {
         console.error(
-          `CI run index could not list ${directory}: ${describeError(error)}`,
+          `CI run index could not list ${directory}: ${describeFailure(error)}`,
         );
       }
     }
@@ -562,7 +560,7 @@ export class CiJobHistoryStore {
       } catch (error) {
         if (!(error instanceof Deno.errors.NotFound)) {
           console.error(
-            `CI run index could not remove ${path}: ${describeError(error)}`,
+            `CI run index could not remove ${path}: ${describeFailure(error)}`,
           );
         }
       }

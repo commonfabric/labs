@@ -29,6 +29,7 @@
  * origin is the operator's statement that nothing sits on it.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeFetch } from "@commonfabric/runner";
 import type { env as ToolshedEnv } from "@/env.ts";
 
@@ -192,9 +193,7 @@ export function describeError(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
   for (let depth = 0; current !== undefined && depth < 5; depth++) {
-    const message = current instanceof Error
-      ? current.message
-      : String(current);
+    const message = describeFailure(current);
     if (parts[parts.length - 1] !== message) parts.push(message);
     current = current instanceof Error ? current.cause : undefined;
   }
