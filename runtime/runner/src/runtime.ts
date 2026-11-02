@@ -4071,8 +4071,11 @@ export class Runtime {
         posture: [...externalObservationPosture(preparedState)],
       };
 
-      // This read runs only after the staged write passed preparation, or in
-      // disabled mode where preparation is intentionally a no-op. Traversal
+      // The staged transaction is never committed: it admits the write before
+      // anything linked is loaded, and its traversal below loads what the
+      // value reaches. This read runs only after the staged write passed
+      // preparation, or in disabled mode where preparation is intentionally
+      // a no-op. Traversal
       // can discover an unloaded linked document and start its sync, so each
       // arrival is followed by another read until no link-target load remains.
       // Each pass drops current-instant read memoization so a value materialized
@@ -4106,8 +4109,11 @@ export class Runtime {
       // the reads before that write (§8.10.3). The final check therefore runs
       // in a fresh transaction that reads through the value first and writes
       // it after, so what the traversal reaches is an input to the write.
-      // Everything it reads is loaded by now, and nothing awaits between the
-      // loop's last pass and this one.
+      // Writing the same value again in the staged transaction would not do:
+      // a write that changes nothing records no write attempt, so the bound
+      // stays at the first one. Everything the fresh transaction reads is
+      // loaded by now, and nothing awaits between the loop's last pass and
+      // this one.
       tx.abort("external content observation staged");
       finalTx = this.edit();
       this.getImmutableCell(
@@ -4123,9 +4129,10 @@ export class Runtime {
         finalTx,
       );
       finalCell.set(options.value);
-      // Read the written value back as well, so the receipt's flow and
-      // consumed labels carry the labels its schema gives it, as the staged
-      // transaction's traversal did.
+      // Read the written value back as well: the read through the immutable
+      // cell carries only the labels of the documents the value links to,
+      // and the receipt's flow and consumed labels also need the ones the
+      // target schema gives the written value itself.
       finalCell.get({ traverseCells: true });
       this.prepareTxForCommit(finalTx);
       const finalPreparedState = finalTx.getCfcState();

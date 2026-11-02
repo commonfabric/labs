@@ -102,23 +102,35 @@ const interceptObservationProbeState = (
     state: Readonly<CfcTxState>,
   ) => Readonly<CfcTxState>,
 ): void => {
-  // The probe opens two transactions: the staged write's initial admission,
-  // then the final check after traversal.
+  // The probe opens two transactions: the staged write, prepared once for
+  // initial admission, and then the final check after traversal. Every
+  // transaction opened during the next probe call is intercepted, and
+  // `edit` is restored when that call ends, however it ends.
   const edit = runtime.edit.bind(runtime);
-  const phases: ObservationProbePhase[] = ["initial", "traversal"];
-  runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
-    const next = phases.shift();
-    if (phases.length === 0) runtime.edit = edit as Runtime["edit"];
-    let phase: ObservationProbePhase | undefined;
-    return interceptTransaction(edit(...args), (method, _args, proceed) => {
-      const result = proceed();
-      if (method === "prepareForCommit") phase = next;
-      if (method === "getCfcState" && phase !== undefined) {
-        return transform(phase, result as Readonly<CfcTxState>);
-      }
-      return result;
-    });
-  }) as Runtime["edit"];
+  const probe = runtime.prepareExternalContentObservation.bind(runtime);
+  runtime.prepareExternalContentObservation = async (options) => {
+    runtime.prepareExternalContentObservation = probe;
+    let opened = 0;
+    runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
+      const phase: ObservationProbePhase = opened++ === 0
+        ? "initial"
+        : "traversal";
+      let prepared = false;
+      return interceptTransaction(edit(...args), (method, _args, proceed) => {
+        const result = proceed();
+        if (method === "prepareForCommit") prepared = true;
+        if (method === "getCfcState" && prepared) {
+          return transform(phase, result as Readonly<CfcTxState>);
+        }
+        return result;
+      });
+    }) as Runtime["edit"];
+    try {
+      return await probe(options);
+    } finally {
+      runtime.edit = edit as Runtime["edit"];
+    }
+  };
 };
 
 describe("external content observation", () => {
