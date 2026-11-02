@@ -569,6 +569,13 @@ export interface OfferRoomEvent {
 
   /** The members to offer it to. */
   members: OfferedMember[];
+
+  /**
+   * Whether the request `id` names recorded `offered` as its delivery, which
+   * a member offered nothing turns to `noticed`. Absent for a request that
+   * records no delivery.
+   */
+  recordsDelivery?: boolean;
 }
 
 /** What `offerRooms` is bound to. */
@@ -578,6 +585,9 @@ interface OfferRoomsState {
 
   /** Adds a profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
+
+  /** Each request's outcome. */
+  requests: RequestsCell;
 }
 
 /** The share inbox `profile` points at; absent when it points at none. */
@@ -640,10 +650,10 @@ const offerEnvelope = (
 };
 
 /**
- * Helper for `offerRooms` and `offerRoom`, which offers `room` to `member`,
- * sending `offer` to each distinct share inbox their profiles point at, and
- * adds to the room's participants the first profile it offered the room
- * through, so that the member is listed once however many inboxes they have.
+ * Helper for `offerRooms`, which offers `room` to `member`, sending `offer` to
+ * each distinct share inbox their profiles point at, and adds to the room's
+ * participants the first profile it offered the room through, so that the
+ * member is listed once however many inboxes they have.
  * A member whose profiles point at no inbox is offered nothing, and a notice
  * for them, keyed by the offer's `id`, is queued instead. Returns which of the
  * two it did.
@@ -668,12 +678,17 @@ const offerToMember = (
 
 /**
  * Offers a room to each of the event's `members`, as `offerToMember()` does,
- * naming the principal sending it as its sender.
+ * naming the principal sending it as its sender. For a request that
+ * `recordsDelivery`, a member offered nothing, since no profile of theirs
+ * points at an inbox, turns the request's delivery to `noticed`.
  *
- * It runs as an event of its own, queued by the one that creates the room, so
- * that it reads the room's space once the room's creation has committed, and
- * the members' profiles are read apart from that creation. While the space is
- * not known, nothing is sent.
+ * It runs as an event of its own, queued by the act that creates or offers
+ * the room, so that it reads the room's space once the room's creation has
+ * committed, and the members' profiles are read apart from the act's own
+ * writes. A profile's inbox pointer can carry a label, such as its owner's
+ * `PersonalSpace`, that neither the room's space nor this user's records
+ * admit, and a transaction's writes are held to the labels of everything it
+ * reads. While the space is not known, nothing is sent.
  */
 const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
   (event, state) => {
@@ -682,7 +697,10 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
     if (!isWellFormedDID(space) || from === undefined) return;
     const offer = offerEnvelope(event.id, space, event.title ?? "", from);
     for (const member of event.members ?? []) {
-      offerToMember(offer, event.room, member, state);
+      const delivery = offerToMember(offer, event.room, member, state);
+      if (event.recordsDelivery === true && delivery === "noticed") {
+        state.requests.key(event.id).set({ status: "done", delivery });
+      }
     }
   },
 );
@@ -893,14 +911,16 @@ const createRoom = (
 
 /**
  * Helper for `openDirect`, which offers `room`, a direct room it found, to
- * `counterpart` through the share inbox `profile` points at, as `offerRooms`
- * offers a new one, when the room was offered them nothing: a notice for them
- * of the room is still waiting. The offer replaces each such notice, so they
- * are withdrawn. A counterpart the room's roster lists has joined the room
- * already, and is offered nothing, and so is one whose profile points at no
- * inbox, whose notice stays. So does the notice when `requestId`, which keys
- * the offer, is longer than a share inbox keeps an offer's `id`, since the
- * inbox would cut it short and could take it for another's.
+ * `counterpart` through the share inbox `profile` points at, by `offerRooms`
+ * as a new one is offered, when the room was offered them nothing: a notice
+ * for them of the room is still waiting. The offer replaces each such notice,
+ * so they are withdrawn, and `offerRooms` queues a notice again, keyed by
+ * `requestId`, when the profile points at no inbox. A counterpart the room's
+ * roster lists has joined the room already, and is offered nothing, and so is
+ * one named by no profile, whose notice stays. So does the notice when
+ * `requestId`, which keys the offer, is longer than a share inbox keeps an
+ * offer's `id`, since the inbox would cut it short and could take it for
+ * another's.
  */
 const reofferDirect = (
   state: ManagerActState,
@@ -914,22 +934,20 @@ const reofferDirect = (
     notice.recipient === counterpart && equals(notice.room, room)
   );
   if (waiting.length === 0 || requestId.length > OFFER_ID_MAX_LENGTH) return;
-  if (profile === undefined || inboxPointerOf(profile) === undefined) return;
+  if (profile === undefined) return;
   const joined = (room.key("roster").get() ?? []).some((member) =>
     profileOwnerOf(member) === counterpart
   );
-  const space = spaceOf(room);
-  const from = currentPrincipal();
-  if (joined || !isWellFormedDID(space) || from === undefined) return;
+  if (joined || !isWellFormedDID(spaceOf(room))) return;
   state.outgoingNotices.set(
     notices.filter((notice) => !waiting.includes(notice)),
   );
-  offerToMember(
-    offerEnvelope(requestId, space, "", from),
+  state.offerRooms.send({
     room,
-    { recipient: counterpart, profiles: [profile] },
-    state,
-  );
+    id: requestId,
+    title: "",
+    members: [{ recipient: counterpart, profiles: [profile] }],
+  });
 };
 
 /**
@@ -1346,18 +1364,23 @@ const performManagerAct = (
     const profiles = named === undefined
       ? [...(state.people?.[member] ?? [])]
       : [named];
-    const delivery = offerToMember(
-      offerEnvelope(
-        requestId,
-        space,
-        room.key("about").get()?.title ?? "",
-        from,
-      ),
+    // A member with no profile to offer through gets a notice at once. Any
+    // other is offered the room by an event of its own, which reads where the
+    // profiles point apart from this request's outcome, and which turns the
+    // outcome to `noticed` when none points at an inbox.
+    if (profiles.length === 0) {
+      outgoingNotices.push(noticeFor(member, requestId, room));
+      recordOutcome(state, requestId, { status: "done", delivery: "noticed" });
+      return;
+    }
+    state.offerRooms.send({
       room,
-      { recipient: member, profiles },
-      state,
-    );
-    recordOutcome(state, requestId, { status: "done", delivery });
+      id: requestId,
+      title: room.key("about").get()?.title ?? "",
+      members: [{ recipient: member, profiles }],
+      recordsDelivery: true,
+    });
+    recordOutcome(state, requestId, { status: "done", delivery: "offered" });
     return;
   }
 
@@ -2063,7 +2086,11 @@ export const FabriChatManagerCore = pattern<
       direct,
       requests,
       outgoingNotices,
-      offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
+      offerRooms: offerRooms({
+        outgoingNotices,
+        joinRooms: joining,
+        requests,
+      }),
       joinRooms: joining,
       listRooms: listRooms({ catalog: sharedSpaceCatalog }),
       draft,

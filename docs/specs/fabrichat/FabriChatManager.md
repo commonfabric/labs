@@ -99,8 +99,9 @@ rooms this manager created or accepted. `openDirect` finds a direct room there
 and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
-offers a new room, once a request names a profile of theirs that points at an
-inbox, and the notice is removed. A counterpart the room's roster already lists
+offers a new room, once a request names a profile of theirs, and the notice is
+removed; the event that offers it queues a notice again when the profile points
+at no inbox. A counterpart the room's roster already lists
 has joined the room, and is offered nothing. A room another manager created and
 offered the user is there too once the host's share intake accepts it on the
 user's behalf. `rooms` can also hold a second direct room with the same
@@ -195,8 +196,12 @@ the room's `addMember` sends once it has granted them access. It runs as an
 event of its own, after the add has committed, and offers the room through the
 same steps as step 3: through the profile the add named, or, for an add naming
 only an address, through the profiles `people` lists for that person, as the
-user sending it reads `people`. It records `offered` or `noticed` under the
-request's id, which the room reads back as the add's `delivery`.
+user sending it reads `people`, from an event of its own like step 3's, so
+that its own transaction reads no inbox pointer. It records `noticed` under the
+request's id at once for a person with no profile known for them, and
+`offered` for anyone else, which the event offering the room turns to
+`noticed` when no profile points at an inbox. The room reads it back as the
+add's `delivery`.
 
 ## Prerequisites
 
