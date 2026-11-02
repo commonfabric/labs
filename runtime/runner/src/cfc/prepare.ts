@@ -117,6 +117,7 @@ import {
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
+  isPayloadRead,
   isReadMarkedAsAttemptedWrite,
   isSchedulerDependencyRead,
   isWriteDestinationRead,
@@ -4537,7 +4538,11 @@ const forEachFlowObservation = (
       }
       shape = "followRef";
     } else {
-      shape = read.nonRecursive === true ? "shape" : "value";
+      // A read marked `payloadRead` stopped at a scalar and returned it: a
+      // value observation, whatever the storage flag says.
+      shape = read.nonRecursive === true && !isPayloadRead(read.meta)
+        ? "shape"
+        : "value";
     }
     if (
       consume(

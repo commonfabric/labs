@@ -124,6 +124,7 @@ import {
   excludeReadFromConflict,
   ignoreReadForScheduling,
   linkResolutionProbe,
+  payloadRead,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import {
@@ -153,6 +154,12 @@ const READ_FOR_SCHEDULING: IReadOptions = {
 };
 const READ_NON_RECURSIVE_FOR_SCHEDULING: IReadOptions = {
   nonRecursive: true,
+  trackReadWithoutLoad: true,
+};
+/** A scalar the traversal returns: shallow for storage, a value read for CFC. */
+const READ_PAYLOAD: IReadOptions = { nonRecursive: true, meta: payloadRead };
+const READ_PAYLOAD_FOR_SCHEDULING: IReadOptions = {
+  ...READ_PAYLOAD,
   trackReadWithoutLoad: true,
 };
 
@@ -540,9 +547,21 @@ type PlainSchemaPlan =
     properties: ReadonlyMap<string, PlainSchemaPlan>;
   };
 
+/**
+ * The reads a plain-schema traversal makes of one document: `paths` are the
+ * containers it stepped into, read for their shape, and `values` the scalars
+ * it returned, marked `payloadRead`. A scalar has no members, so what the
+ * traversal returns from it is the payload: a value read (CFC spec §4.5.2),
+ * as the general traversal marks the scalar it returns. The flow join
+ * consumes a document's `value` label for a value read and only its `shape`
+ * label for a shape read, and the two differ once the document's value has
+ * changed: the shape label is minted at creation (§8.12.8), the value label
+ * on every write. Storage sees the same shallow reads either way.
+ */
 type PlainSchemaReads = {
   address: Omit<IMemorySpaceValueAddress, "path">;
   paths: (readonly string[])[];
+  values: (readonly string[])[];
 };
 
 const _plainSchemaPlanCache = new WeakMap<
@@ -4253,6 +4272,22 @@ export class SchemaObjectTraverser<V extends FabricValue>
   }
 
   // Traversal stats counters
+  /**
+   * How many enclosing traversals resolve a reference to mint a handle. A
+   * scalar read inside one is not returned to the caller, so it is read for
+   * its shape rather than marked as a payload read.
+   */
+  #mintingHandle = 0;
+
+  #whileMintingHandle<T>(body: () => T): T {
+    this.#mintingHandle++;
+    try {
+      return body();
+    } finally {
+      this.#mintingHandle--;
+    }
+  }
+
   traverseWithSchemaCalls = 0;
   traversePointerCalls = 0;
   traverseArrayCalls = 0;
@@ -5294,7 +5329,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> | undefined {
     const { path: _path, ...address } = doc.address;
-    const reads: PlainSchemaReads = { address, paths: [] };
+    const reads: PlainSchemaReads = { address, paths: [], values: [] };
     const result = this.#traversePlainSchemaWithReads(doc, plan, link, reads);
     this.#trackPlainSchemaReads(reads);
     return result;
@@ -5303,20 +5338,32 @@ export class SchemaObjectTraverser<V extends FabricValue>
   #trackPlainSchemaReads(
     reads: PlainSchemaReads,
   ): void {
-    if (reads.paths.length === 0) return;
+    // A traversal that resolves a reference to mint a handle returns no
+    // scalar to its caller, so its scalars are read for their shape.
+    const values = this.#mintingHandle > 0 ? [] : reads.values;
+    const paths = this.#mintingHandle > 0
+      ? [...reads.paths, ...reads.values]
+      : reads.paths;
     if (this.tx.trackReadPaths) {
-      this.tx.trackReadPaths(reads.address, reads.paths, {
-        nonRecursive: true,
-      });
+      if (paths.length > 0) {
+        this.tx.trackReadPaths(reads.address, paths, { nonRecursive: true });
+      }
+      if (values.length > 0) {
+        this.tx.trackReadPaths(reads.address, values, READ_PAYLOAD);
+      }
     } else {
-      for (const path of reads.paths) {
+      for (const path of paths) {
         this.tx.read(
           { ...reads.address, path },
           READ_NON_RECURSIVE_FOR_SCHEDULING,
         );
       }
+      for (const path of values) {
+        this.tx.read({ ...reads.address, path }, READ_PAYLOAD_FOR_SCHEDULING);
+      }
     }
     reads.paths.length = 0;
+    reads.values.length = 0;
   }
 
   #createPlainSchemaObject(
@@ -5340,9 +5387,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (isSigilLink(doc.value)) return undefined;
 
     if (plan.kind === "primitive") {
-      return matchesPlainType(doc.value, plan.type)
-        ? { ok: doc.value }
-        : fail(TRAVERSE_FAILURES.invalidType);
+      // A scalar the plan rejects is not returned: its kind was observed,
+      // its value was not.
+      if (matchesPlainType(doc.value, plan.type)) {
+        reads.values.push(doc.address.path);
+        return { ok: doc.value };
+      }
+      reads.paths.push(doc.address.path);
+      return fail(TRAVERSE_FAILURES.invalidType);
     }
 
     if (plan.kind === "array") {
@@ -5360,17 +5412,21 @@ export class SchemaObjectTraverser<V extends FabricValue>
       reads.paths.push(doc.address.path);
       let valid = true;
       doc.value.forEach((item, index) => {
-        reads.paths.push(appendToPath(doc.address.path, index.toString()));
+        const itemPath = appendToPath(doc.address.path, index.toString());
         if (matchesPlainType(item, itemPlan.type)) {
+          reads.values.push(itemPath);
           newValue[index] = item;
         } else if (itemPlan.type === "undefined") {
+          reads.paths.push(itemPath);
           newValue[index] = undefined;
         } else if (itemPlan.type === "null") {
+          reads.paths.push(itemPath);
           newValue[index] = null;
         } else {
           // Keep visiting later indices after a failure: those reads are part
           // of the scheduler/subscription surface even when the array result
-          // is invalid.
+          // is invalid. A rejected item's kind was observed, not its value.
+          reads.paths.push(itemPath);
           valid = false;
         }
       });
@@ -5383,7 +5439,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // A `FabricPrimitive` is an opaque leaf; see the value-type dispatch's
       // arm (the plan compiles from the same schema family, so the same
       // posture applies here).
-      if (doc.value instanceof FabricPrimitive) return { ok: doc.value };
+      if (doc.value instanceof FabricPrimitive) {
+        reads.values.push(doc.address.path);
+        return { ok: doc.value };
+      }
       // TODO(danfuzz): a `FabricInstance` is not yet handled here either —
       // see the dispatch's `FabricInstance` arm. Fail loudly until it is.
       throw new Error(
@@ -5403,12 +5462,15 @@ export class SchemaObjectTraverser<V extends FabricValue>
         continue;
       }
       const propPath = appendToPath(doc.address.path, propKey);
-      reads.paths.push(propPath);
       if (childPlan.kind === "primitive" && !isSigilLink(propValue)) {
         if (matchesPlainType(propValue, childPlan.type)) {
+          reads.values.push(propPath);
           newValue[propKey] = propValue;
+        } else {
+          reads.paths.push(propPath);
         }
       } else {
+        reads.paths.push(propPath);
         const propDoc = {
           address: { ...doc.address, path: propPath },
           value: propValue,
@@ -5892,9 +5954,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
         // resolve the reference and are not conflict dependencies.
         const { ok: val, error } = !this.traverseCells &&
             SchemaObjectTraverser.hasAsCell(curSelector.schema)
-          ? this.tx.runWithAmbientReadMeta(
-            excludeReadFromConflict,
-            traverseElement,
+          ? this.#whileMintingHandle(() =>
+            this.tx.runWithAmbientReadMeta(
+              excludeReadFromConflict,
+              traverseElement,
+            )
           )
           : traverseElement();
         if (error !== undefined) {
@@ -6014,21 +6078,31 @@ export class SchemaObjectTraverser<V extends FabricValue>
       } else {
         const propDoc = { address: propAddress, value: propValue };
         // When the property is asCell (and reaches here as a sigil link rather
-        // than the inline-value branch above), the descent + pointer resolution
-        // only RESOLVE THE REFERENCE to construct the Cell — they read the link
-        // target's shape, not a value the holder consumes. Those reads must not
-        // become commit-time conflict dependencies (a holder of a reference must
-        // not collide with disjoint writers under the referent's container). They
-        // stay in the journal for reactivity; the holder takes a real dependency
-        // only when it reads THROUGH the Cell in its body. A by-value property
-        // (`hasAsCell` false) is a genuine dependency and is left unmarked.
+        // than the inline-value branch above) and the walk does not traverse
+        // cells, the descent + pointer resolution only RESOLVE THE REFERENCE
+        // to construct the Cell — they read the link target's shape, not a
+        // value the holder consumes, and the scalars they pass are not marked
+        // as read. A walk that traverses cells returns the target's data
+        // instead, and marks the scalars it returns. In both cases those
+        // reads must not become commit-time conflict dependencies (a holder
+        // of a reference must not collide with disjoint writers under the
+        // referent's container). They stay in the journal for reactivity; the
+        // holder takes a real dependency only when it reads THROUGH the Cell
+        // in its body. A by-value property (`hasAsCell` false) is a genuine
+        // dependency and is left unmarked.
         const descend = () => {
           this.tx.read(propDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
           return this.traverseWithSchema(propDoc, propSchema);
         };
         const missesBefore = this.context.missingLinkTargets;
+        // A walk that traverses cells returns the target's data, not a
+        // handle, so the scalars it reads there are the reader's.
         const { ok: val, error } = SchemaObjectTraverser.hasAsCell(propSchema)
-          ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+          ? this.traverseCells
+            ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+            : this.#whileMintingHandle(() =>
+              this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
+            )
           : descend();
         if (error === undefined) {
           filteredObj[propKey] = val;
@@ -6321,6 +6395,15 @@ export class SchemaObjectTraverser<V extends FabricValue>
         doc.value,
       );
     } else {
+      // What this returns is the scalar itself, so the read is of its value
+      // (CFC spec §4.5.2). The shape read the walk records at the document's
+      // top consumes the document's shape label alone, which is minted at
+      // creation and does not follow the value (§8.12.8). A handle returned
+      // above, or minted by the traversal this runs in, names the scalar
+      // without reading it.
+      if (this.#mintingHandle === 0) {
+        this.tx.read(doc.address, READ_PAYLOAD_FOR_SCHEDULING);
+      }
       return doc.value;
     }
   }

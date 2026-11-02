@@ -1872,20 +1872,22 @@ export function sqliteQuery(
                   rowLabel: (i) => perRow[i],
                 });
                 let writeSchema = rowWriteSchema;
-                // The store's declaration is grow-only, so the prior is read
-                // whether or not THIS settle carries anything: a refresh whose
-                // rows lost their labels, or whose parameter did, would
-                // otherwise re-mint the path empty and take the declaration
-                // back. A parameter's label is the one that moves.
+                // The store's declaration is grow-only, so the prior
+                // declaration is read whether or not THIS settle carries
+                // anything: a refresh whose rows lost their labels, or whose
+                // parameter did, would otherwise re-mint the path empty and
+                // take the declaration back. A parameter's label is the one
+                // that moves. What is carried is the declaration itself, the
+                // one class this settle re-declares; the derived stamps the
+                // settle leaves on the same document are not a declaration.
                 const storedMetadata = readStoredCfcMetadata(wtx, base);
-                const priorShape = cfcConfidentialityForObservationNode({
-                  labelView: cfcLabelViewFromMetadata(
+                const shapeIfcAtoms = joinCfcObservedConfidentiality([
+                  cfcDeclaredLabelAt(
                     storedMetadata,
                     [...base.path, "result"],
-                  ),
-                });
-                const shapeIfcAtoms = joinCfcObservedConfidentiality([
-                  priorShape,
+                    "enumerate",
+                    "node",
+                  ).confidentiality,
                   shapeConfidentiality,
                 ]);
                 // Which reference sits at a slot is a function of the
