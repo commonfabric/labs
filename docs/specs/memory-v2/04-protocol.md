@@ -32,7 +32,10 @@ rewrite. In particular:
   validity clause, as it refuses any ACL document that is not an access list
 - instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is specified
   and not yet implemented: no server advertises `instanceNameMark`, no client
-  declares `instanceNames`, and no space is marked
+  declares `instanceNames`, and no space is marked. Only the client's handling
+  of the `session/revoked` reason `instance-names` is built: a client ends the
+  session with the refusal `clientUpdateRequired` marks, and keeps it the same
+  way, though no server sends that reason
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -427,7 +430,8 @@ advertise `stableExpressionResultIds`, with guidance to update the server. A
 client whose runtime names none declares nothing and is unaffected on any
 server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
-`clientUpdateRequired` marks, and keeps it the same way.
+`clientUpdateRequired` marks, and keeps it the same way; a client already does
+so, before the capability is built.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -943,9 +947,9 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  // `instance-names` (specified, not yet built): a naming commit marked the
-  // space and the session declares no naming (INV-16); a client of a build
-  // that knows `instanceNameMark` treats it as `clientUpdateRequired`.
+  // `instance-names` (no server sends it yet): a naming commit marked the
+  // space and the session declares no naming (INV-16); a client treats it as
+  // `clientUpdateRequired`.
   reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }
 

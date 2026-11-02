@@ -150,7 +150,10 @@ again.
 
 An admission refusal marked `clientUpdateRequired: true` says that this runtime
 cannot mount until its code is replaced. It is independent of the error name;
-the expression-result identity check sends it on a `SessionRevokedError`.
+the expression-result identity check sends it on a `SessionRevokedError`. A
+`session/revoked` with the reason `instance-names` (INV-16) carries no message,
+so the memory client ends that session with a `SessionRevokedError` that carries
+the marker and a message made from the space.
 A refused restore keeps the server's actual reason. The memory client remembers
 the update requirement across mounts, and the storage manager retains it across
 spaces and route changes. Reads, access Retry, and ACL notices cannot trigger
@@ -174,7 +177,10 @@ conservative warning, not proof that a write was lost or saved.
 The worker reports this status with `RuntimeErrorCode.ClientUpdateRequired` to
 its connected clients and replays it to clients that attach later. The shell
 shows persistent reload guidance, including a request to copy recent edits
-when writes were unconfirmed. It preserves the browser's leave-page warning
+when writes were unconfirmed. The guidance fits every refusal it shows: a reload
+loads the runtime the deployment serves, retrying access cannot change the
+runtime, and a refusal that comes back after a reload means that the deployment
+cannot open that space. It preserves the browser's leave-page warning
 for those writes and never reloads automatically. Updating the CLI checkout
 and starting a new process is the equivalent recovery for a command-line host.
 This recovery mechanism does not enable client-generation retirement.

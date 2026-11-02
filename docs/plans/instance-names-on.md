@@ -1,6 +1,7 @@
 # Turning instance names on
 
-Stages 3 and 4 of this plan are done; nothing else is.
+Stages 3 and 4 of this plan are done, and so is the client and shell part of
+stage 1 that needs nothing from the server; nothing else is.
 The plan is the sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
@@ -149,18 +150,16 @@ carries its own message:
 
 The second refusal reaches the client as a `session/revoked` with the reason
 `instance-names`, which carries no message, so the client makes the message
-from the reason and the space. A client today turns every revocation into a
-plain `SessionRevokedError` without `clientUpdateRequired`, and the storage
-manager keeps only a refusal that carries it; stage 1 makes the client mark
-this one, so it is kept like the others.
+from the reason and the space. The client marks the `SessionRevokedError` it
+ends the session with `clientUpdateRequired`, so the client and the storage
+manager keep it like the others.
 
 The shell's card for a kept refusal shows the refusal's message under "Update
-required", and then a fixed line: "Reload this tab to load the current
-version." That line is wrong for a deployment switched back to off, where a
-reload loads a positional runtime that a marked space still refuses. Stage 1
-replaces the fixed line with one that fits every refusal it shows: reloading
+required", and then a fixed line that fits every refusal it shows: reloading
 loads the runtime this deployment serves, and if the same message comes back,
-this deployment cannot open that space.
+this deployment cannot open that space. A line that only promised the current
+version would be wrong for a deployment switched back to off, where a reload
+loads a positional runtime that a marked space still refuses.
 
 ### D6. A rollback fails closed
 
@@ -229,6 +228,12 @@ three refusals and the `instance-names` revocation `clientUpdateRequired` (D5).
 The shell's card gets the guidance D5 gives it. The flag stays unreachable from
 the environment, so every runtime is positional, and D8 refuses a naming one
 anywhere.
+
+Of this stage, the client's handling of the `instance-names` revocation and
+the shell's card are built: the client ends the session with the
+`clientUpdateRequired` refusal D5 gives, and the client and storage manager
+keep it. The server records no mark and sends neither that revocation nor
+the open refusals, and the client declares no mode.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
 refusals: the positional runtime is refused the space, the test asserts the
