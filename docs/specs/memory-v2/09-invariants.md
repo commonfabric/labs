@@ -901,7 +901,12 @@ deployment serves.
 
 Checked by: nothing yet. The server does not record or enforce the mark, the
 client declares no mode, and the `instanceNames` flag stays off until both do
-([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
+([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)). The
+client's handling of the `instance-names` revocation is tested on its own: it
+ends the session with a `SessionRevokedError` that carries
+`clientUpdateRequired: true` and the message above, and the client keeps it
+(`runtime/memory/test/v2-session-termination.test.ts`), as does the storage
+manager (`runtime/runner/test/storage-retry-space-access.test.ts`).
 
 ## Change discipline
 
