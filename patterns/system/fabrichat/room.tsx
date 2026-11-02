@@ -999,7 +999,10 @@ export interface ChatThreadSummary {
 
 /** A room's messages: facts, the newest, and its threads. */
 export interface ChatMessageList {
-  /** How many messages the room holds, obliterated tombstones included. */
+  /**
+   * How many messages the room holds, obliterated tombstones included, and
+   * those it can't read left out (see `messageEntries()`).
+   */
   count: number;
 
   /** The oldest message's `sentAt`; absent while there are none. */
@@ -1142,7 +1145,10 @@ export interface ChatRoomView {
   /** The room's messages. */
   messages: ChatMessageList;
 
-  /** Whether this reader can send, edit, delete, and react. */
+  /**
+   * Whether this reader can send, edit, delete, and react. Absent until this
+   * session has derived it.
+   */
   canSend: PerSession<boolean>;
 
   /** Who is reading the room: their profile, its principal, and their access. */
@@ -1567,10 +1573,10 @@ export const FabriChatRoomCore = pattern<
   // sessions would let one whose profile hasn't resolved tell another, whose
   // profile has, that it can't send. Each binding's name is its cause, the
   // identity of the document that stores it, so renaming one moves its data.
-  // It defaults to `false`, which a reader reads until this session has
-  // derived it.
+  // It has no default: `false` is the answer for a reader who can't send, so
+  // until this session has derived it, a reader reads it absent.
   const canSendForSession = computed(
-    (): PerSession<boolean | Default<false>> => canActIn(messages, myProfile),
+    (): PerSession<boolean> => canActIn(messages, myProfile),
   );
   const addMember = AddMember({
     room: messages,

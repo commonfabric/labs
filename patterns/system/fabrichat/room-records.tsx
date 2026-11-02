@@ -510,12 +510,30 @@ const cellAt = (
 };
 
 /**
- * Every stored message of `messages`, as an entry, with the authors among
- * them, in one walk of the list that reads each record once. It writes
- * nothing, which its parameter declares by being a `Cell` where
- * `MessagesCell` is a `Writable`: a computation that hands a cell to a
- * helper of another module is scheduled as a writer of that cell when the
- * helper's parameter is a `Writable`.
+ * The stored message `message`, or `undefined` where it lacks a field its
+ * schema requires or holds a `sentAt` or a `body` of a type the schema doesn't
+ * accept. A field like that, read through the list or through the message,
+ * refuses the whole computation reading it, so the message is read as the
+ * value of its own cell, and each of those two fields as the value of a cell
+ * of its own, where it reads as `undefined` instead.
+ */
+const readableMessage = (message: MessageCell): MessageRecord | undefined => {
+  const record = message.get();
+  if (record === undefined) return undefined;
+  if (message.key("sentAt").get() === undefined) return undefined;
+  if (message.key("body").get() === undefined) return undefined;
+  return record;
+};
+
+/**
+ * Every stored message of `messages` the room can read (see
+ * `readableMessage()`), as an entry, with the authors among them, in one walk
+ * of the list. A message it can't read is one no handler stores, and has no
+ * entry, so the other messages' entries don't depend on it. It writes nothing,
+ * which its parameter declares by being a `Cell` where `MessagesCell` is a
+ * `Writable`: a computation that hands a cell to a helper of another module is
+ * scheduled as a writer of that cell when the helper's parameter is a
+ * `Writable`.
  */
 export const messageEntries = (
   messages: Cell<MessagesValue>,
@@ -524,10 +542,17 @@ export const messageEntries = (
   const authors: ProfileCell[] = [];
   const records = new Map<string, MessageRecord>();
   let legacyReplies = 0;
-  const entries = ((messages.get() ?? []) as MessageRecord[]).flatMap(
-    (record, index): MessageEntry[] => {
-      if (record?.sentAt === undefined) return [];
+  // Only the list's length is read through the list: an element read
+  // through it is a message read through the list.
+  const indexes = Array.from(
+    { length: (messages.get() ?? []).length },
+    (_, index) => index,
+  );
+  const entries = indexes.flatMap(
+    (index): MessageEntry[] => {
       const cell = cellAt(messages, index).resolveAsCell();
+      const record = readableMessage(cell);
+      if (record === undefined) return [];
       const key = entityKeyOf(cell);
       if (key === undefined) return [];
       records.set(key, record);
