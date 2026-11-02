@@ -12,7 +12,7 @@
 import { basename, dirname, join } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import { dashboardCacheFile } from "./history-files.ts";
+import { CacheFile, dashboardCacheFile } from "./history-files.ts";
 
 export const CI_JOB_CACHE_DAYS = 60;
 export const CI_JOB_HISTORY_SAMPLING_VERSION = 2;
@@ -280,7 +280,7 @@ interface CiJobHistoryContents {
 }
 
 export class CiJobHistoryStore {
-  #file: string | undefined;
+  #file: CacheFile | undefined;
   #loadRequest: Promise<void> | null = null;
   #runs = new Map<string, CachedCiRun>();
   #refreshes = new Map<string, CachedCiHistoryRefresh>();
@@ -292,11 +292,15 @@ export class CiJobHistoryStore {
   #sourceRevisions = new Map<string, number>();
 
   constructor(file?: string) {
-    this.#file = file;
+    this.#file = file === undefined ? undefined : new CacheFile(file);
   }
 
   get file(): string {
-    return this.#file ??= defaultFile();
+    return this.#cacheFile.path;
+  }
+
+  get #cacheFile(): CacheFile {
+    return this.#file ??= new CacheFile(defaultFile());
   }
 
   async #read(strict = false): Promise<CiJobHistoryContents> {
@@ -533,27 +537,13 @@ export class CiJobHistoryStore {
     const current = basename(this.file);
     const superseded = SUPERSEDED_BASENAMES.filter((name) => name !== current);
     if (!superseded.length) return;
-    const paths = superseded.flatMap((name) => [name, `${name}.lock`]);
     // An interrupted save leaves a temporary file as large as the one it was
-    // replacing, so these are swept too.
-    try {
-      for await (const entry of Deno.readDir(directory)) {
-        if (
-          entry.isFile && entry.name.endsWith(".tmp") &&
-          superseded.some((name) => entry.name.startsWith(`${name}.`))
-        ) paths.push(entry.name);
-      }
-    } catch (error) {
-      // A directory that is not there yet has nothing in it to remove. Any
-      // other reason it cannot be listed is reported: these files are the
-      // largest thing in the cache directory, and a process that cannot reach
-      // them leaves the volume full.
-      if (!(error instanceof Deno.errors.NotFound)) {
-        console.error(
-          `CI run index could not list ${directory}: ${describeFailure(error)}`,
-        );
-      }
+    // replacing, so these are swept too. Nothing writes these files any more,
+    // so they are swept without their lock.
+    for (const name of superseded) {
+      await new CacheFile(join(directory, name)).removeLeftoverTemporaries();
     }
+    const paths = superseded.flatMap((name) => [name, `${name}.lock`]);
     for (const path of paths) {
       try {
         await Deno.remove(join(directory, path));
@@ -857,15 +847,11 @@ export class CiJobHistoryStore {
     if (!this.dirty) return;
     const write = async () => {
       if (!this.dirty) return;
-      const lock = await Deno.open(`${this.file}.lock`, {
-        create: true,
-        write: true,
-      });
-      let locked = false;
-      try {
-        await lock.lock(true);
-        locked = true;
-        this.#merge(await this.#read(true));
+      const file = this.#cacheFile;
+      await file.locked(async () => {
+        // The version this process last wrote holds only what it wrote, so
+        // the file is merged only once another process has replaced it.
+        if (!await file.isUnchanged()) this.#merge(await this.#read(true));
         this.#prune(now);
 
         const revision = this.#revision;
@@ -883,27 +869,13 @@ export class CiJobHistoryStore {
           ),
           runs: [...this.#runs.values()].sort((a, b) => a.at - b.at),
         };
-        const temporary = `${this.file}.${crypto.randomUUID()}.tmp`;
-        try {
-          await Deno.writeTextFile(temporary, JSON.stringify(value));
-          await Deno.rename(temporary, this.file);
-        } catch (error) {
-          try {
-            await Deno.remove(temporary);
-          } catch {
-            // Ignore cleanup when no temporary file remains.
-          }
-          throw error;
-        }
+        await file.write(JSON.stringify(value));
         this.#persistedRevision = Math.max(
           this.#persistedRevision,
           revision,
         );
         this.#futureQuarantines.clear();
-      } finally {
-        if (locked) await lock.unlock();
-        lock.close();
-      }
+      });
     };
     this.#write = this.#write.then(write, write);
     await this.#write;
