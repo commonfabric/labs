@@ -6,6 +6,7 @@ import {
   isLink,
   resolveEntryIdentity,
   resolveSystemPatternSource,
+  resultSchemaMetaSpelling,
   Runtime,
 } from "@commonfabric/runner";
 import {
@@ -481,19 +482,23 @@ describe("default-app golden replay (state survives an in-place roll-forward)", 
     const metadataOnlyRoot = (await controller.getDefaultPattern(false))!;
     expect(getPatternIdentityRef(metadataOnlyRoot)).toEqual(currentRef);
     expect(metadataOnlyRoot.getMetaRaw("schema")).not.toEqual(
-      currentPattern.resultSchema,
+      resultSchemaMetaSpelling(currentPattern.resultSchema!),
     );
-    await controller.startPiece(metadataOnlyRoot);
     expect(metadataOnlyRoot.key("profileName").getRaw()).toBeUndefined();
+    await controller.startPiece(metadataOnlyRoot);
+    expect(getPatternSetupIdentityRef(metadataOnlyRoot)).not.toEqual(
+      currentRef,
+    );
 
     // Opening the root re-stages a document its pinned pattern did not set
-    // up, which is what repairs the projection. The repair writes through a
-    // transaction of its own, so read the root it hands back rather than the
-    // one captured before it: the older cell still describes the metadata the
-    // re-stage replaced.
+    // up. Running V2 can already publish its output, but the stored schema and
+    // setup marker still need repair. Read the root the repair hands back.
     const repaired = await controller.ensureDefaultPattern();
     await runtime.idle();
     expect(getPatternSetupIdentityRef(repaired.getCell())).toEqual(currentRef);
+    expect(repaired.getCell().getMetaRaw("schema")).toEqual(
+      resultSchemaMetaSpelling(currentPattern.resultSchema!),
+    );
 
     const repairedRoot = repaired.getCell().asSchema(
       {
