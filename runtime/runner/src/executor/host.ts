@@ -772,7 +772,7 @@ export class ExecutorHost {
         // close() ran while this activation was in flight (it awaits us,
         // but park() on a not-yet-active server is a no-op — so the
         // just-activated server must park itself, or it serves and
-        // renews a lease after the host closed).
+        // holds a lease after the host closed).
         await server.park("host-closed");
       }
     } catch (error) {
