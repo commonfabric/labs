@@ -510,16 +510,21 @@ describe("worker reconciler access loss", () => {
 
   describe("a deleted space", () => {
     /**
-     * Mounts a root in a space the access provider reports refused, deleted
-     * while `deleted()` says so, and returns the ops rendered, what the retry
+     * Mounts a root, or a root showing a panel of a space of its own, where
+     * the access provider reports the space of `where` refused, and deleted
+     * while `deleted()` says so. Returns the ops rendered, what the retry
      * control asked for, and a function telling the reconciler the space's
      * access changed.
      */
-    const mountRefusedRoot = async (
-      name: string,
+    const mountRefused = async (
+      where: "root" | "panel",
       deleted: () => boolean,
     ) => {
-      const owner = await Identity.fromPassphrase(`render deleted ${name}`);
+      const owner = await Identity.fromPassphrase(`render deleted ${where}`);
+      const foreign = await Identity.fromPassphrase(
+        `render deleted ${where} foreign`,
+      );
+      const refused = where === "root" ? owner.did() : foreign.did();
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: StorageManager.emulate({ as: owner }),
@@ -532,8 +537,9 @@ describe("worker reconciler access loss", () => {
           for (const op of batch) ops.push(op);
         },
         spaceAccess: {
-          error: () => new Error("Access revoked"),
-          deleted,
+          error: (space) =>
+            space === refused ? new Error("Access revoked") : undefined,
+          deleted: (space) => space === refused && deleted(),
           subscribe: (_space, onChange) => {
             listeners.add(onChange);
             return () => listeners.delete(onChange);
@@ -544,13 +550,26 @@ describe("worker reconciler access loss", () => {
           },
         },
       });
+      const panel = runtime.getCell(foreign.did(), "deleted panel", undefined);
       const root = runtime.getCell(owner.did(), "deleted root", undefined);
       await runtime.editWithRetry((tx) =>
+        panel.withTx(tx).set({
+          $UI: { type: "vnode", name: "article", props: {}, children: ["p"] },
+        })
+      );
+      await runtime.editWithRetry((tx) =>
         root.withTx(tx).set({
-          $UI: { type: "vnode", name: "main", props: {}, children: ["x"] },
+          $UI: {
+            type: "vnode",
+            name: "main",
+            props: {},
+            children: where === "root" ? ["x"] : [panel],
+          },
         })
       );
       reconciler.mount(root.asSchema(rendererVDOMSchema));
+      await runtime.idle();
+      await runtime.storageManager.synced();
       await runtime.idle();
       reconciler.flush();
       return {
@@ -595,7 +614,7 @@ describe("worker reconciler access loss", () => {
     };
 
     it('shows a refused root of a deleted space as "Deleted", with no retry control', async () => {
-      const mounted = await mountRefusedRoot("root", () => true);
+      const mounted = await mountRefused("root", () => true);
       try {
         expect(deletedShown(mounted.ops)).toEqual({
           deleted: true,
@@ -611,26 +630,28 @@ describe("worker reconciler access loss", () => {
       }
     });
 
-    it('replaces a refused root\'s retry control with "Deleted" once the space turns out to be deleted', async () => {
-      let deleted = false;
-      const mounted = await mountRefusedRoot("later", () => deleted);
-      try {
-        expect(deletedShown(mounted.ops)).toEqual({
-          deleted: false,
-          retryControl: true,
-        });
+    for (const where of ["root", "panel"] as const) {
+      it(`replaces a refused ${where}'s retry control with "Deleted" once the space turns out to be deleted`, async () => {
+        let deleted = false;
+        const mounted = await mountRefused(where, () => deleted);
+        try {
+          expect(deletedShown(mounted.ops)).toEqual({
+            deleted: false,
+            retryControl: true,
+          });
 
-        deleted = true;
-        mounted.changed();
-        expect(deletedShown(mounted.ops)).toEqual({
-          deleted: true,
-          retryControl: false,
-        });
-        expect(mounted.retried).toEqual([]);
-      } finally {
-        await mounted.dispose();
-      }
-    });
+          deleted = true;
+          mounted.changed();
+          expect(deletedShown(mounted.ops)).toEqual({
+            deleted: true,
+            retryControl: false,
+          });
+          expect(mounted.retried).toEqual([]);
+        } finally {
+          await mounted.dispose();
+        }
+      });
+    }
   });
 
   it("offers no retry control when the access provider cannot retry", async () => {
