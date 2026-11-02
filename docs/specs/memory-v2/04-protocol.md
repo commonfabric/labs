@@ -35,12 +35,11 @@ rewrite. In particular:
 - an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
   4.5.1) is specified and not yet implemented: the server sends its current
   sequence
-- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is specified
-  and not yet implemented: no server advertises `instanceNameMark`, no client
-  declares `instanceNames`, and no space is marked. Only the client's handling
-  of the `session/revoked` reason `instance-names` is built: a client ends the
-  session with the refusal `clientUpdateRequired` marks, and keeps it the same
-  way, though no server sends that reason
+- instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
+  by the server, which advertises `instanceNameMark`, records the mark and
+  admits opens and commits by it, and a client keeps the `session/revoked`
+  reason `instance-names` as the refusal `clientUpdateRequired` marks; no
+  client declares `instanceNames` yet, so no space is marked
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -420,13 +419,14 @@ defaults to `false` when absent. A client connected to an older server neither
 declares a kind there, since that server would keep the field without holding
 it to the genesis rules, nor reads one, since that server reports none.
 
-`instanceNameMark` (specified, not yet built) advertises that the server
-records the instance-naming mark of a space and enforces INV-16: a marked
-space admits only sessions, and commits, that declare `instanceNames: true`;
-the first commit from such a session marks the space; and the server admits a
-declaring session to an unmarked space only while its own posture names
-instances. It is build-inherent, defaults to `false` when absent, and only the
-server advertises it. A client whose runtime names instances REQUIRES it: an
+`instanceNameMark` advertises that the server records the instance-naming mark
+of a space and enforces INV-16: a marked space admits only sessions, and
+commits, that declare `instanceNames: true`; the first commit from such a
+session marks the space; and the server admits a declaring session to an
+unmarked space only while its own posture names instances. It is
+build-inherent, defaults to `false` when absent, and only the server advertises
+it: a client's `hello` leaves it out, as it leaves out `sessionReportV1`. A
+client whose runtime names instances REQUIRES it: an
 older server would admit its commits and mark nothing, leaving positional
 runtimes free to bind the parents it wrote to other documents. Such a client
 fails the connection permanently against a server that does not advertise it,
@@ -435,8 +435,7 @@ advertise `stableExpressionResultIds`, with guidance to update the server. A
 client whose runtime names none declares nothing and is unaffected on any
 server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
-`clientUpdateRequired` marks, and keeps it the same way; a client already does
-so, before the capability is built.
+`clientUpdateRequired` marks, and keeps it the same way.
 
 ### 4.1.2 Logical Sessions and Resume
 
@@ -485,9 +484,8 @@ interface SessionOpenRequest {
     // signed into a signed open, covered by the connection's authentication
     // of an open that names its principal.
     invite?: { inviteId: string; code: string };
-    // Present when the session's runtime names instances (specified, not yet
-    // built; see the rules and INV-16). Absent means positional. Inside the
-    // signed descriptor.
+    // Present when the session's runtime names instances (see the rules and
+    // INV-16). Absent means positional. Inside the signed descriptor.
     instanceNames?: true;
   };
   invocation?: SessionOpenInvocation;
@@ -649,7 +647,8 @@ Rules:
   redeems and on none of the session's resumes: a server that does not know
   the field would open, or refuse, the session without redeeming anything
 - a session whose runtime names instances declares `instanceNames: true`, and
-  one that declares nothing is positional (specified, not yet built). A server
+  one that declares nothing is positional; a value other than `true` refuses
+  the message. No client declares it yet. A server
   that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
   carrying `clientUpdateRequired: true`, an open or resume of a marked space by
   a positional session, and an open of an unmarked space by a naming session
@@ -776,7 +775,7 @@ interface HelloMessage {
     servedRequests?: boolean;
     spaceInvites?: boolean;
     spaceKind?: boolean;
-    // Specified, not yet built (INV-16).
+    // INV-16.
     instanceNameMark?: boolean;
   };
 }
@@ -954,8 +953,8 @@ interface SessionRevoked {
   // `taken-over`: a newer connection resumed the session. `unauthorized`: an
   // access-list change left its principal without access. `deleted`: its
   // space was deleted (section 4.5.1), so no principal will be admitted again.
-  // `instance-names` (no server sends it yet): a naming commit marked the
-  // space and the session declares no naming (INV-16); a client treats it as
+  // `instance-names`: a naming commit marked the space and the session
+  // declares no naming (INV-16); a client treats it as
   // `clientUpdateRequired`.
   reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 }

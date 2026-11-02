@@ -355,7 +355,6 @@ const WORKER_REFUSED_OPTIONS = [
   "onEventDeferred",
   "onDrainInFlightSkip",
   "onEffectRetired",
-  "onLeaseReacquired",
 ] as const satisfies ReadonlyArray<keyof ServingMemoryServerOptions>;
 
 /**

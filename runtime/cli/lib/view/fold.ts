@@ -7,6 +7,7 @@
  * the session renders; the session owns the fold state and the key commands.
  */
 
+import { cpLen } from "./ansi.ts";
 import type { Line, Span, TokenClass } from "./model.ts";
 import { parseDiff } from "./diff.ts";
 import { languageForFile } from "./languages/language.ts";
@@ -124,7 +125,7 @@ function summaryLine(f: SummaryInput): Line {
   const spans: Span[] = [];
   let text = "";
   const add = (s: string, cls: TokenClass) => {
-    spans.push({ col: cpCount(text), text: s, cls });
+    spans.push({ col: cpLen(text), text: s, cls });
     text += s;
   };
 
@@ -152,12 +153,6 @@ function summaryLine(f: SummaryInput): Line {
     add(`−${f.dels}`, "diffDel");
   }
   return { text, spans };
-}
-
-function cpCount(s: string): number {
-  let n = 0;
-  for (const _ of s) n++;
-  return n;
 }
 
 //

@@ -608,9 +608,7 @@ export class Scheduler {
   /**
    * The serving posture's cooperative macrotask yield (`cooperative-yield.ts`):
    * constructed _only_ for a serving runtime, so the OFF arm and flag-ON
-   * clients keep their settle loops' exact microtask shape. Its observer is the
-   * runtime's `servingYieldObserver` seam — the `SpaceServer`'s mid-wave lease
-   * renew.
+   * clients keep their settle loops' exact microtask shape.
    */
   readonly #cooperativeYield: CooperativeYield | undefined;
 
@@ -623,11 +621,7 @@ export class Scheduler {
     consoleHandler?: ConsoleHandler,
     errorHandlers?: ErrorHandler[],
   ) {
-    if (runtime.servingPosture) {
-      const yielder = new CooperativeYield();
-      yielder.onYield = () => runtime.servingYieldObserver?.();
-      this.#cooperativeYield = yielder;
-    }
+    if (runtime.servingPosture) this.#cooperativeYield = new CooperativeYield();
     this.#initializeSchedulerState();
 
     this.#consoleHandler = consoleHandler ||

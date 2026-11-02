@@ -42,10 +42,9 @@ process. So, with 21 processes:
 - A cross-space read is woken only by commits its own process admitted. Commits
   that the owner makes to the space it reads leave its derivations stale.
 
-The `execution_lease` row in each space's SQLite file is the only thing that
-stops two processes from deriving one space. That is why it cannot simply move
-into memory ([the closing stage](#stage-l-the-lease-in-memory) does that, once
-the stages before it hold).
+With every crossing routed, the route is what stops two processes from deriving
+one space, which is what let the lease move into memory
+([the closing stage](#stage-l-the-lease-in-memory)).
 
 The change: a serving loop reaches every space other than its home through
 that space's owner. The toolshed never computes who the owner is; it reaches
@@ -384,7 +383,7 @@ the samples).
    - The two-process integration test, and the cross-space measurement.
    - `serving-loop-worker.md` and `serving-loop.md` §1 drop the in-process
      crossings from their description of the default.
-5. [ ] **L: the lease in memory.** The section below. It lands only after a
+5. [x] **L: the lease in memory.** The section below. It lands only after a
    release with owner routing on has been deployed to every process.
 
 ## Stage L: the lease in memory
@@ -441,12 +440,18 @@ them later than it does today, and no space is served by two processes in
 between because none can be. It is the only timer left in the lease:
 
 - The worker posts a heartbeat every 10 s from a timer of its own.
+- The count starts at the worker's first message: until its modules have loaded,
+  a worker has no timer to post from and no lease to release, so a worker that
+  hangs before then is not replaced.
 - The main thread checks every 10 s. When it has had no message of any kind
   from the worker for 60 s, it terminates the worker and releases the worker's
   leases. It then starts a successor under a fresh component, through the
   replacement path that a worker failure already takes (`ServingWorker`'s
   `#onWorkerFailed`).
-- A kill counts in `lease.lost`.
+- Nothing waits for the killed worker's teardown: `terminate()` lets a synchronous
+  stretch finish, and a stalled thread never releases its lifetime lock. A thread
+  spinning forever keeps its core until the process restarts.
+- A kill counts in `lease.lost`, one for each lease it releases.
 - The in-process arrangement has no watchdog: the thread that would watch is
   the thread that stopped.
 
@@ -455,7 +460,8 @@ port keeps its spaces, and systemd never runs two processes on one port. With
 owner routing on in the release before, an old process never activates a space
 it does not own, so an old process that still writes rows and a new one that
 keeps the lease in memory never serve the same space. The `execution_lease`
-table stays in the schema, unused, until a later release drops it.
+table stays in the schema, unused, until a later release drops it. That drop and
+the removal of `SERVER_EXECUTION_OWNER_ROUTING` are what remain of this plan.
 
 **What the spec loses.** These parts are rewritten or dropped:
 

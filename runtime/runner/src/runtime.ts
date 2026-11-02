@@ -2427,20 +2427,6 @@ export class Runtime {
   sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
-   * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the
-   * serving scheduler's mid-wave hook. A SERVING runtime's scheduler
-   * yields one macrotask between runs whenever its slice of continuous
-   * work is spent (scheduler/cooperative-yield.ts — that is what makes the
-   * wave's flush deadline honest and lets the lease-renew and push-flush
-   * timers fire mid-settle), and calls this observer synchronously at
-   * every such yield. The SpaceServer installs it at activation to renew
-   * the lease mid-wave once the wave has run longer than TTL/3 — a renew
-   * that never depends on the timer queue being serviced. Undefined
-   * everywhere else (the OFF arm and clients construct no yielder at all).
-   */
-  servingYieldObserver: (() => void) | undefined;
-
-  /**
    * Register an in-flight async builtin operation so `settled()` waits for it
    * instead of racing the post-commit flush. The scheduler registers an
    * effect-bearing commit's `postCommitEffectsSettled()` promise here,

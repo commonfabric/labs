@@ -37,15 +37,15 @@ whenever the connection's data version shows another connection's commit, so a
 second connection to the same WAL-mode file reads every committed revision and
 serves nothing stale. The worker opens one engine per space it serves,
 read-through included, at the file the main thread names once it has opened the
-space itself, so the server's own engine map holds every space the worker
-serves, which its synchronous lease scan reads. A store that is not a file
-cannot be shared this way, so the worker needs a file store. Three writes stay
-on the worker's connection, each small and serialized by SQLite's lock with the
-engine's 5 s busy timeout: the lease rows the loop writes
-(`execution-lease.ts`), which the main thread's admission reads from SQLite each
-time; the outbox's retirement of a delivered row; and the outbox's failure
-notice for an append the target refused, a derived commit of the loop's own that
-the server does not fan out whichever thread writes it. The busy timeout covers
+space itself. A store that is not a file cannot be shared this way, so the
+worker needs a file store. The lease is the memory server's map, which the
+worker acquires and releases through requests over the port
+(`execution-lease.ts`). The outbox's failure notice for an append the target
+refused crosses the same way: the server finds the source entry and patches it
+as one step, a derived commit admitted against that map, which it does not fan
+out. One write stays on the worker's connection, small and
+serialized by SQLite's lock with the engine's 5 s busy timeout: the outbox's
+retirement of a delivered row. The busy timeout covers
 a transaction that takes the write lock up front, so every transaction the
 engine opens is immediate, the schema's and the migrations' at open included: a
 deferred one that reads first and writes after fails at once, rather than
@@ -162,8 +162,9 @@ started with, as the process sets its own from the same address.
 holder a space's lease and derived commits name is the service identity plus
 a component the process mints once. With the loop in a worker, the main
 thread mints the component as it starts each worker and both realms adopt it
-(`adoptProcessInstanceId`): the server's synchronous lease scan then matches
-the rows the worker writes, and a worker started in place of one that died
+(`adoptProcessInstanceId`): the holder the server's synchronous lease read
+computes then matches the one the worker acquired under, and a worker started in
+place of one that died
 carries a fresh component, so its commits never meet its predecessor's under
 the engine's replay keying, which keys on the holder and the counter.
 
@@ -217,16 +218,21 @@ the loop only what the next drain and settle do not cover, which
 A worker that dies takes every serving runtime with it. The main thread's
 bridge treats its exit as a park of every space with the failure-park backoff
 the host already applies. A rejected worker initialization enters the same
-recovery path. Once the dead worker is gone, the main thread releases the lease rows
-its holder held in every space it opened: a host leaves a space parked on
-another holder's live lease rather than contending for it, so a successor
-that waited out the rows' TTL would also wait for the next session, event,
-or demand change to activate the space. Replacement waits for both the backoff
-and teardown/lease release, then starts under a fresh holder unless the host
-has closed. With the rows released, the successor acquires them as it activates,
-which is the recovery
-`serving-loop.md` §6 specifies for a lost tenure. A main thread that closes
-closes the port, and the worker's host closes as it does today.
+recovery path. Once the dead worker is gone, the main thread releases every lease
+its holder held: a host leaves a space parked on another holder's lease rather
+than contending for it. Replacement waits for both the backoff and teardown/lease
+release, then starts under a fresh holder unless the host has closed. With the
+leases released, the successor acquires them as it activates, which is the
+recovery `serving-loop.md` §6 specifies for a lost tenure. A main thread that
+closes closes the port, and the worker's host closes as it does today.
+
+A worker that stalls is replaced the same way, except that nothing waits for its
+teardown, since a stalled thread may never release its lifetime lock. It posts a
+heartbeat every 10 s, and the main thread kills it after six consecutive 10 s
+intervals with no message of any kind from it (`serving-loop.md` §2, "The
+watchdog"), counting the leases the kill releases in `lease.lost`. A commit it left
+in flight reaches admission naming a holder the map no longer holds, and is
+refused.
 
 ## What does not change
 

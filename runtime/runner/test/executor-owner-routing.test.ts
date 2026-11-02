@@ -335,11 +335,11 @@ describe("executor owner routing", () => {
   const newOutbox = async (plane: RoutedPlane) => {
     const engine = await servers.A.engineForSpace(homeSpace);
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space: homeSpace,
       holder,
     });
-    if (!lease.acquire()) throw new Error("test lease acquire failed");
+    if (!await lease.acquire()) throw new Error("test lease acquire failed");
     const stats = emptyServingLoopStats();
     const outbox = new SpaceOutbox({
       stats,
@@ -389,7 +389,7 @@ describe("executor owner routing", () => {
     expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
       .toBe(0);
     expect((await entriesOn("B", targetSpace, sidecar)).length).toBe(1);
-    lease.release();
+    await lease.release();
   });
 
   it("takes the LT4 arm on the owner's deterministic refusal: the row retires, the failure counts, and the source entry carries the notice", async () => {
@@ -441,7 +441,7 @@ describe("executor owner routing", () => {
     expect(sourceEntry.deliveryFailures?.map((f) => f.eventId)).toEqual([
       "evt-routed-refused",
     ]);
-    lease.release();
+    await lease.release();
   });
 
   it("keeps the row and stops the drain when the owner is unreachable", async () => {
@@ -473,7 +473,7 @@ describe("executor owner routing", () => {
     expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
       .toBe(1);
     expect(stats.outbox.failed).toBe(0);
-    lease.release();
+    await lease.release();
   });
 
   //
@@ -670,11 +670,11 @@ describe("executor owner routing", () => {
   it("retires an append too large to send as a deterministic refusal, with the notice on the source entry", async () => {
     const engine = await servers.A.engineForSpace(homeSpace);
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space: homeSpace,
       holder,
     });
-    if (!lease.acquire()) throw new Error("test lease acquire failed");
+    if (!await lease.acquire()) throw new Error("test lease acquire failed");
     const stats = emptyServingLoopStats();
     // The route the client refuses before sending: an append past the
     // request's byte limit, as `SpaceSession.runServed` answers it.
@@ -741,7 +741,7 @@ describe("executor owner routing", () => {
     expect(sourceEntry.deliveryFailures?.map((f) => f.eventId)).toEqual([
       "evt-routed-large",
     ]);
-    lease.release();
+    await lease.release();
   });
 
   //

@@ -1851,7 +1851,7 @@ function diffLogicalEnd(
   row: number,
 ): number {
   const line = lines[row] ?? "";
-  const length = [...line].length;
+  const length = cpLen(line);
   if (!line.endsWith("\r")) return length;
   const hunk = model ? hunkAt(model, row)?.hunk : undefined;
   const noTrailingNewline = lines[row + 1]?.replace(/\r$/, "") ===

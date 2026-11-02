@@ -386,7 +386,7 @@ flags it adopts from the deployment it runs against.
     builtins.md §5 — AND the serving loop actually SERVES: toolshed
     constructs an ExecutorHost over its memory server, spaces activate on
     session open / authored admission, one SpaceServer per active space
-    holds and renews the lease, runs demanded derivations through the
+    holds the lease, runs demanded derivations through the
     seal-into-wave machinery, commits ONE derived transaction per wave
     carrying the watermark (protocol.md §4; `waitForSettled` rides it),
     hosts the pattern-update watcher server-side (serving-loop.md §3e),
@@ -1134,12 +1134,15 @@ holds the measurements and the conditions for revisiting.
   update alike run the inserted sibling on the carried child's document and the
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones. The mechanism is
-  specified and not built: a one-way mark on each space, recorded at the first
-  commit from a naming runtime and only where the deployment's posture names
-  instances, after which the memory server admits no runtime with naming off
-  to the space (INV-16 in
+  set up shows fresh children in place of the named ones. The mechanism is a
+  one-way mark on each space, recorded at the first commit from a naming
+  runtime and only where the deployment's posture names instances, after which
+  the memory server admits no runtime with naming off to the space (INV-16 in
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  The memory server's half is built: it records the mark, enforces INV-16,
+  advertises `instanceNameMark`, and takes its posture from this flag's
+  deployment value, which toolshed gives it from `experimentalPosture()`. The
+  client's half is not: no runtime declares its mode yet.
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
@@ -1916,6 +1919,14 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`instanceNameMark`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server records a space's instance-naming
+>   mark and admits sessions and commits by it (INV-16 in
+>   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+>   with the server's posture taken from the
+>   [`instanceNames`](#instancenames) flag. Only the server's advertisement
+>   is read. Older servers omit it, which parses as `false`; such a server
+>   records no mark. It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -2093,9 +2104,9 @@ the per-epic implementation notes).
 - **Current default and planned end state.** On by default in the toolshed,
   off in the test harness's serving memory server. The read-through follows
   session delivery's rules in its own form: another principal's instance is
-  read only under a live tenure of the space's lease (a read that finds the row
-  lapsed runs the renew arm first, and is withheld when the lease is not
-  regained), and an address the store holds nothing at leaves no record. The
+  read only under a current tenure of the space's lease (a runtime that
+  outlived its tenure reads none), and an address the store holds nothing at
+  leaves no record. The
   end state is the session read path for the home space gone, with the knob.
 - **Status on 2026-10-31.** Implemented, on by default in the toolshed. The
   test harness's serving memory server keeps it off unless the variable is
@@ -2234,9 +2245,9 @@ the per-epic implementation notes).
   is the design and its stages.
 - **Current default and planned end state.** On by default in toolshed,
   which always has `MEMORY_URL`; the runner's harnesses route only where a
-  test hands their host a route. The end state is the route without a knob,
-  every crossing through the owner, and the lease kept in memory rather than
-  in the store.
+  test hands their host a route. The end state is the route without a knob
+  and every crossing through the owner. With the lease in memory, the route is
+  what stops two processes from serving one space (`serving-loop.md` §2).
 - **Status on 2026-11-01.** Implemented for event appends, the registration
   delivery, foreign wave batches, access-list changes, genesis and reads, and
   on by default in toolshed. The served request admits every kind, and the
@@ -2247,9 +2258,8 @@ the per-epic implementation notes).
   crossings a process sent through the route are counted by kind under
   `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
   deployment reads there whether routing carries its crossings.
-- **Path to removal.** Once a release with the route on has been deployed to
-  every process, the plan's stage L moves the lease into memory; then delete
-  the knob and the in-process crossings.
+- **Path to removal.** Delete the knob and the in-process crossings, once a
+  deployment's every process runs a release that keeps the lease in memory.
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 
