@@ -135,14 +135,24 @@ describe("pullFromServer()", () => {
   });
 
   it("returns `false` from a server that refuses the view's mode", async () => {
-    const refused = new Error("View replication requires valid interests");
-    refused.name = "ProtocolError";
+    const refused = new Error("Unable to parse memory message");
+    refused.name = "InvalidMessageError";
     const { state, runtime, cell } = fixture({
       set: () => Promise.reject(refused),
     });
 
     expect(await pullFromServer(runtime, cell)).toBe(false);
     expect(state.released).toBe(true);
+  });
+
+  it("rethrows a refusal of any other kind", async () => {
+    const refused = new Error("A changed view requires a newer revision");
+    refused.name = "ProtocolError";
+    const { runtime, cell } = fixture({ set: () => Promise.reject(refused) });
+
+    await expect(pullFromServer(runtime, cell)).rejects.toThrow(
+      "newer revision",
+    );
   });
 
   it("returns `false` when a reconnect finds the view protocol gone", async () => {

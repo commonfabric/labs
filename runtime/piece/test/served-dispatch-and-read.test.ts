@@ -9,6 +9,7 @@ import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
+import type { ViewInterest } from "@commonfabric/memory/v2";
 import {
   type Cell,
   pullFromServer,
@@ -302,6 +303,31 @@ describe("served dispatch and read", () => {
       );
       expect(passes.at(-1)).toBe("listed");
       expect(upper.get()).toBe("INITIAL");
+    });
+
+    it("leaves the session able to read after a server refuses a mode it does not know", async () => {
+      // What `pullFromServer()` meets on a server that predates `read` views,
+      // which it recognizes by this error and answers by releasing the view.
+
+      const { pieceId } = await instantiate();
+      const reader = await clientPieces();
+      const result = await openResult(reader, pieceId);
+      const { space: readerSpace } = result.getAsNormalizedFullLink();
+      const replica = reader.runtime.storageManager.open(readerSpace).replica;
+
+      const refusal = await replica.setViewInterests!([{
+        id: "unknown-mode",
+        revision: 0,
+        mode: "a mode from a later build" as ViewInterest["mode"],
+        componentContractVersion: "1",
+        query: { roots: [{ id: "of:any", selector: { path: [] } }] },
+      }]).then(() => undefined, (error: Error) => error);
+
+      expect(refusal?.name).toBe("InvalidMessageError");
+      await replica.setViewInterests!([]);
+      const name = result.key("name" as never);
+      await name.sync();
+      expect(name.get()).toBe("initial");
     });
 
     it("makes the server derive a value nothing has demanded", async () => {

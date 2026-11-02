@@ -399,9 +399,20 @@ export class PieceVerbReadError extends Error {
 }
 
 export class PieceResultProjectionError extends Error {
-  constructor(path: readonly (string | number)[], stepped: boolean) {
+  /**
+   * `stepped` says the read ran the piece here, and `served` that the serving
+   * runtime runs it, so that `--step` has nothing to add.
+   */
+  constructor(
+    path: readonly (string | number)[],
+    stepped: boolean,
+    served = false,
+  ) {
     const location = path.length === 0 ? "<root>" : path.join("/");
-    const stepHint = stepped
+    const stepHint = served
+      ? " The server was asked for it, but the required value still did not " +
+        "materialize."
+      : stepped
       ? " The piece was stepped, but the required value still did not " +
         "materialize."
       : " Use --step to start the piece and materialize session-scoped " +
@@ -5388,7 +5399,11 @@ export async function getCellValue(
       );
       if (verbRefusal) throw verbRefusal;
       if (options.run === false) return undefined;
-      throw new PieceResultProjectionError(path, shouldStep);
+      throw new PieceResultProjectionError(
+        path,
+        shouldStep,
+        servedPieces(pieces),
+      );
     };
     if (options.selection !== undefined) {
       const selection = options.selection;
@@ -5452,8 +5467,11 @@ export async function getCellValue(
         throw new CellSelectionError(
           "Cannot read selected value: the filter/schema expression did " +
             "not materialize a JSON-renderable value. This is not JSON " +
-            "null. Retry with --step for a computed result, or inspect the " +
-            "selected source data and schema.",
+            `null. ${
+              servedPieces(pieces)
+                ? "Inspect"
+                : "Retry with --step for a computed result, or inspect"
+            } the selected source data and schema.`,
         );
       }
       return selected;

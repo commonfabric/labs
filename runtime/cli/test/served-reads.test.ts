@@ -27,6 +27,7 @@ import {
   executePieceCallable,
   getCellValue,
   type PieceConfig,
+  PieceResultProjectionError,
   PieceVerbReadError,
   stepPiece,
 } from "../lib/piece.ts";
@@ -254,6 +255,15 @@ describe("served reads and calls", () => {
         await getCellValue(config, ["upper"], { step: true }, depsFor(pieces)),
       ).toBe("INITIAL");
       expect(start.calls).toHaveLength(0);
+    });
+  });
+
+  describe("PieceResultProjectionError", () => {
+    it("offers no `--step` for a piece the server runs", () => {
+      const error = new PieceResultProjectionError(["upper"], false, true);
+
+      expect(error.message).not.toContain("--step");
+      expect(error.message).toContain("The server was asked for it");
     });
   });
 

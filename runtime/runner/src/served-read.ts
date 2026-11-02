@@ -73,7 +73,10 @@ export async function pullFromServer(
     }]);
     return registered && await answered.promise;
   } catch (error) {
-    if (error instanceof Error && error.name === "ProtocolError") return false;
+    // A server that predates `read` views cannot parse the message naming one.
+    if (error instanceof Error && error.name === "InvalidMessageError") {
+      return false;
+    }
     throw error;
   } finally {
     cancelPlans();
