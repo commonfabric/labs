@@ -518,6 +518,22 @@ Deno.test("C7: a restarted process reacquires with nothing released before it, a
   assertEquals(w.spaces.A.commits.length, head);
 });
 
+Deno.test("C7: a restart drops the old process's in-memory wave, so the new holder commits none of it (serving-loop §2)", () => {
+  let w = makeWorld({
+    spaces: { A: { streams: { s: { writes: ["space"] } } } },
+    clients: [{ user: U1, session: S1, connected: ["A"] }],
+  });
+  w = apply(w, { kind: "fire", session: S1, space: "A", stream: "s" });
+  w = apply(w, { kind: "waveCompute", space: "A" });
+  w = apply(w, { kind: "restartProcess", space: "A" });
+  w = apply(w, { kind: "reacquire", space: "A" });
+  w = apply(w, { kind: "waveCommit", space: "A" });
+  assertEquals(
+    w.spaces.A.commits.filter((c) => c.class === "derived").length,
+    0,
+  );
+});
+
 Deno.test("C7a: DR1 verified — per-process holder + in-process discipline admits NO stale-tenure commit on any schedule", () => {
   const { all } = explore(c7World(true), C7_MENU, { maxSteps: 9 });
   for (const w of all) {

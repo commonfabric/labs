@@ -462,10 +462,12 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
-  commitDerivedNotice(
-    notice: Parameters<HostMemoryServer["commitDerivedNotice"]>[0],
+  commitDeliveryFailureNotice(
+    notice: Parameters<HostMemoryServer["commitDeliveryFailureNotice"]>[0],
   ): Promise<void> {
-    return this.#endpoint.request("server.commitDerivedNotice", { notice });
+    return this.#endpoint.request("server.commitDeliveryFailureNotice", {
+      notice,
+    });
   }
 
   /** @inheritDoc */

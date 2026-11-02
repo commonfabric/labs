@@ -312,8 +312,8 @@ export class ServingPortBridge {
       ({ space, holder }) => server.executionLeases.release(space, holder),
     );
     endpoint.onRequest(
-      "server.commitDerivedNotice",
-      ({ notice }) => server.commitDerivedNotice(notice),
+      "server.commitDeliveryFailureNotice",
+      ({ notice }) => server.commitDeliveryFailureNotice(notice),
     );
     endpoint.onRequest("server.idle", () => server.idle());
     endpoint.onRequest(

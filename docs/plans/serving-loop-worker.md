@@ -41,8 +41,9 @@ space itself. A store that is not a file cannot be shared this way, so the
 worker needs a file store. The lease is the memory server's map, which the
 worker acquires and releases through requests over the port
 (`execution-lease.ts`). The outbox's failure notice for an append the target
-refused crosses the same way, as a derived commit admitted against that map, which
-the server does not fan out. One write stays on the worker's connection, small and
+refused crosses the same way: the server finds the source entry and patches it
+as one step, a derived commit admitted against that map, which it does not fan
+out. One write stays on the worker's connection, small and
 serialized by SQLite's lock with the engine's 5 s busy timeout: the outbox's
 retirement of a delivered row. The busy timeout covers
 a transaction that takes the write lock up front, so every transaction the

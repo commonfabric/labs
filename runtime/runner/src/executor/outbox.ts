@@ -32,7 +32,6 @@
 // of a withdrawn contribution's appends (the wave folds survivors only).
 
 import type { Engine } from "@commonfabric/memory/v2/engine";
-import * as EngineModule from "@commonfabric/memory/v2/engine";
 import {
   deleteExecutionOutboxRow,
   selectPendingExecutionOutboxRows,
@@ -712,9 +711,9 @@ export class SpaceOutbox {
    * written by the source SpaceServer" — per events.md §5's
    * error-is-the-consequence shape. Deduped by the refused append's
    * eventId; a small derived-class commit of the loop's own, which the
-   * memory server admits against its lease map (the completion-commit
-   * precedent: post-wave, never through §3d's sealing). Returns whether the
-   * notice is durably present (already present counts).
+   * memory server makes against its current document and its lease map (the
+   * completion-commit precedent: post-wave, never through §3d's sealing).
+   * Returns whether the notice is durably present (already present counts).
    */
   async #writeDeliveryFailureNotice(
     row: PendingOutboxRow,
@@ -729,24 +728,6 @@ export class SpaceOutbox {
       return true;
     }
     try {
-      const doc = EngineModule.read(this.#engine, {
-        id: row.sourceEvent.sidecarId,
-      });
-      const entries =
-        ((doc?.value ?? {}) as { entries?: Array<StreamEventEntryShape> })
-          .entries ?? [];
-      const index = entries.findIndex((entry) =>
-        entry?.eventId === row.sourceEvent!.eventId
-      );
-      if (index < 0) {
-        // The source entry compacted away (events.md §4's allowance):
-        // the notice never outlives the entry it annotates.
-        return true;
-      }
-      const existing = entries[index]?.deliveryFailures ?? [];
-      if (existing.some((failure) => failure.eventId === row.eventId)) {
-        return true;
-      }
       if (this.#space === undefined) {
         logger.warn("append-notice-unspaced", () => [
           `failure notice for ${row.eventId} needs the home space for ` +
@@ -754,28 +735,15 @@ export class SpaceOutbox {
         ]);
         return true;
       }
-      await this.#server.commitDerivedNotice({
+      await this.#server.commitDeliveryFailureNotice({
         space: this.#space,
         holder: this.#sessionId,
-        commit: {
-          localSeq: ++this.#localSeqRef.value,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "patch",
-            id: row.sourceEvent.sidecarId as never,
-            patches: [{
-              op: "replace",
-              path: `/value/entries/${index}/deliveryFailures`,
-              value: [
-                ...existing,
-                {
-                  eventId: row.eventId,
-                  targetSpace: row.targetSpace,
-                  reason,
-                },
-              ] as never,
-            }],
-          }],
+        localSeq: ++this.#localSeqRef.value,
+        sourceEvent: row.sourceEvent,
+        failure: {
+          eventId: row.eventId,
+          targetSpace: row.targetSpace,
+          reason,
         },
       });
       return true;
@@ -788,12 +756,3 @@ export class SpaceOutbox {
     }
   }
 }
-
-type StreamEventEntryShape = {
-  eventId?: string;
-  deliveryFailures?: Array<{
-    eventId: string;
-    targetSpace: string;
-    reason: string;
-  }>;
-} | null;

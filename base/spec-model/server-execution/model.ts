@@ -1112,6 +1112,7 @@ export function apply(w0: World, step: Step): World {
       const srv = w.servers[step.space];
       srv.processGen += 1;
       srv.alive = true;
+      srv.pendingWave = null; // in-memory wave dies with the process
       w.spaces[step.space].leaseHolder = null;
       break;
     }

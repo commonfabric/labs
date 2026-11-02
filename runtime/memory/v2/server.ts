@@ -11777,26 +11777,67 @@ export class Server {
   }
 
   /**
-   * Applies a derived-class commit a serving loop makes outside its waves, the
-   * outbox's failure notice on a source event (serving-loop.md §5). It is
-   * admitted against `executionLeases` under `holder`, as the session it commits
-   * in, and is not fanned out to sessions.
+   * Writes the failure notice of a refused delegated append onto its source
+   * event's stream entry (serving-loop.md §5), as a derived-class commit of the
+   * serving loop's own: admitted against `executionLeases` under `holder`, as the
+   * session it commits in, and not fanned out to sessions. The lookup and the
+   * patch run with nothing between them, so the array index the patch names is
+   * the entry's. Writes nothing for an entry compacted away, since the notice
+   * never outlives the entry it annotates (events.md §4), or for one that already
+   * carries this notice.
    *
-   * @throws {ProtocolError} when `holder` does not hold the space's lease.
+   * @throws {ProtocolError} when a notice is due and `holder` does not hold the
+   * space's lease.
    */
-  async commitDerivedNotice(
-    { space, holder, commit }: {
+  async commitDeliveryFailureNotice(
+    { space, holder, localSeq, sourceEvent, failure }: {
       space: string;
       holder: string;
-      commit: ClientCommit;
+
+      /** The serving loop's own number for the commit. */
+      localSeq: number;
+
+      /** The source event, and the stream document that holds its entry. */
+      sourceEvent: { sidecarId: string; eventId: string };
+
+      /** What the notice says: the refused append, its target, and why. */
+      failure: { eventId: string; targetSpace: string; reason: string };
     },
   ): Promise<void> {
-    Engine.applyCommit(await this.#openEngine(space), {
+    const engine = await this.#openEngine(space);
+    const doc = Engine.read(engine, { id: sourceEvent.sidecarId });
+    const entries = ((doc?.value ?? {}) as {
+      entries?: Array<
+        {
+          eventId?: string;
+          deliveryFailures?: Array<{ eventId: string }>;
+        } | null
+      >;
+    }).entries ?? [];
+    const index = entries.findIndex((entry) =>
+      entry?.eventId === sourceEvent.eventId
+    );
+    if (index < 0) return;
+    const existing = entries[index]?.deliveryFailures ?? [];
+    if (existing.some(({ eventId }) => eventId === failure.eventId)) return;
+    Engine.applyCommit(engine, {
       sessionId: holder,
       space,
       commitClass: "derived",
       holder,
-      commit,
+      commit: {
+        localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: sourceEvent.sidecarId,
+          patches: [{
+            op: "replace",
+            path: `/value/entries/${index}/deliveryFailures`,
+            value: [...existing, failure],
+          }],
+        }],
+      },
     });
   }
 

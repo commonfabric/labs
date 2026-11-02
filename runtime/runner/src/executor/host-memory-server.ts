@@ -29,7 +29,7 @@ type ServerMembers = Pick<
   | "engineForSpace"
   | "foreignWriteAuthorityFor"
   | "foreignReadAuthorityFor"
-  | "commitDerivedNotice"
+  | "commitDeliveryFailureNotice"
   | "resolveSpaceOwner"
   | "setViewSelection"
 >;
