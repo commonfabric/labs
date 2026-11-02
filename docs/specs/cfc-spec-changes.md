@@ -1222,7 +1222,8 @@ unobservability invariant, the runtime-private condition on a guard's control
 state, and the comment it requires at every marking site. §18.6.2 derives two things from the
 attempt's journal minus runtime-internal reads: the consumed set, and the
 conservative flow-path confidentiality. This entry proposes a fifth kind of
-runtime-internal read, and the runner subtracts it from the second alone —
+runtime-internal read, and the runner subtracts it from the second and from
+the per-write input gate, not from the egress and sink consumed set —
 the boundary at the end of this entry says so, and a runtime that adopts the
 amended list owes either the wider application or that boundary stated.
 §18.6.2 enumerates four kinds today: verifier-internal reads,
@@ -1276,10 +1277,10 @@ was labeled at the wrong paths. Recording a channel a profile does not close
 is the discipline §18.6.4's conformance checklist asks for, and §4.6.3's
 existence channel (SC-4) is the neighbouring disclosure.
 
-The runner applies the exclusion to the flow join alone. The consumed set the
-egress and sink ceilings read, and the per-write read-prefix gate of SC-23,
-both still count these reads, which over-gates and never under-gates; §18.6.2
-governs both sets, so a runtime that claims the amended list owes either the
+The runner applies the exclusion to the flow join and to the per-write
+read-prefix gate of SC-23. The consumed set the egress and sink ceilings read
+still counts these reads, which over-gates and never under-gates; §18.6.2
+governs that set too, so a runtime that claims the amended list owes either the
 wider application or this boundary stated, as SC-23 stated its own. The design and the runner's
 implementation are in
 [`cfc-write-destination-reads.md`](./cfc-write-destination-reads.md); the

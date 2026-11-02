@@ -104,6 +104,46 @@ const SOURCE_SCHEMA = {
   required: ["v"],
 } as const satisfies JSONSchema;
 
+/**
+ * A store that admits only public values. Nothing about it is labeled, so
+ * whatever clause it holds is one a write stamped there.
+ */
+const PUBLIC_SCHEMA = {
+  type: "object",
+  properties: {
+    v: { type: "string", ifc: { maxConfidentiality: [] } },
+  },
+} as const satisfies JSONSchema;
+
+/** A list that admits only public values, and the same list ungated. */
+const PUBLIC_LIST_SCHEMA = {
+  type: "object",
+  properties: {
+    list: {
+      type: "array",
+      items: { ifc: { maxConfidentiality: [] } },
+      ifc: { maxConfidentiality: [] },
+    },
+  },
+} as const satisfies JSONSchema;
+
+const UNGATED_LIST_SCHEMA = {
+  type: "object",
+  properties: { list: { type: "array", items: { type: "string" } } },
+} as const satisfies JSONSchema;
+
+/** A public slot a length can be copied into. */
+const PUBLIC_COUNT_SCHEMA = {
+  type: "object",
+  properties: { n: { type: "number", ifc: { maxConfidentiality: [] } } },
+} as const satisfies JSONSchema;
+
+/** The same store, declaring no ceiling. */
+const UNGATED_SCHEMA = {
+  type: "object",
+  properties: { v: { type: "string" } },
+} as const satisfies JSONSchema;
+
 type Doc = { secret: string; note: string };
 
 /** The clauses the stored `value`-class derived entry at `path` carries. */
@@ -173,7 +213,8 @@ const wholeObjectWrite = async (
 
 describe("CFC write-destination reads", () => {
   // The write path reads the document it is about to write, to decide which
-  // sub-paths differ. Those reads leave the transaction's flow join, so a
+  // sub-paths differ. Those reads leave the transaction's flow join and the
+  // per-write input gate, so a
   // whole-object `set()` no longer carries one field's label onto the write
   // of a sibling that declares another. A read the calling program made is
   // not one of them and still joins.
@@ -685,6 +726,127 @@ describe("CFC write-destination reads", () => {
         const refusal = refusalOf(await tx.commit().settled);
         expect(refusal).toContain("writer-fit confidentiality misfit");
         expect(refusal).toContain(SECRET_ATOM);
+      });
+    });
+  });
+
+  describe("a store holding a clause its own ceiling does not admit", () => {
+    // A release an exchange rule opened at the write can leave such a stamp.
+    // The write path's read of the store is not a read the program made, so
+    // a later write is gated on what the program read, not on that stamp.
+    // Here a write that declared no ceiling leaves the stamp. The dials are
+    // the pair a deployment ships with, under which that write lands and
+    // stamps what it read.
+
+    const withShippedRuntime = async (
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-explicit",
+        cfcFlowLabels: "persist",
+      });
+      try {
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+      }
+    };
+
+    const withStampedStore = (
+      name: string,
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> =>
+      withShippedRuntime(async (runtime) => {
+        const seed = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, seed)
+          .set({ v: "x" });
+        runtime.getCell(space, name, UNGATED_SCHEMA, seed).set({ v: "seed" });
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tainted = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, tainted)
+          .key("v").get();
+        const store = runtime.getCell(space, name, UNGATED_SCHEMA, tainted);
+        store.set({ v: "released" });
+        tainted.prepareCfc();
+        expect(refusalOf(await tainted.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+        expect(
+          derivedValueClauses(runtime, store.getAsNormalizedFullLink().id, "v"),
+        ).toContain(SOURCE_ATOM);
+
+        await body(runtime);
+      });
+
+    it("commits a constant write into the stamped store", async () => {
+      await withStampedStore("ceiling-rewrite", async (runtime) => {
+        const tx = runtime.edit();
+        runtime.getCell(space, "ceiling-rewrite", PUBLIC_SCHEMA, tx)
+          .set({ v: "public" });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toBeUndefined();
+      });
+    });
+
+    it("commits a push onto a stamped list, whose length stays labeled", async () => {
+      await withShippedRuntime(async (runtime) => {
+        const seed = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, seed)
+          .set({ v: "x" });
+        runtime.getCell(space, "ceiling-list", UNGATED_LIST_SCHEMA, seed)
+          .set({ list: [] });
+        expect(refusalOf(await seed.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const tainted = runtime.edit();
+        runtime.getCell(space, "ceiling-source", SOURCE_SCHEMA, tainted)
+          .key("v").get();
+        runtime.getCell(space, "ceiling-list", UNGATED_LIST_SCHEMA, tainted)
+          .key("list").set(["a", "b"]);
+        tainted.prepareCfc();
+        expect(refusalOf(await tainted.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        const push = runtime.edit();
+        runtime.getCell(space, "ceiling-list", PUBLIC_LIST_SCHEMA, push)
+          .key("list").push("c");
+        push.prepareCfc();
+        expect(refusalOf(await push.commit().settled)).toBeUndefined();
+        await runtime.storageManager.synced();
+
+        // The push took the stored length to place "c", and the length a
+        // reader sees still carries the clause the stored one did.
+        const copy = runtime.edit();
+        const n = runtime.getCell(
+          space,
+          "ceiling-list",
+          UNGATED_LIST_SCHEMA,
+          copy,
+        ).key("list").key("length").get();
+        expect(n).toBe(3);
+        runtime.getCell(space, "ceiling-count", PUBLIC_COUNT_SCHEMA, copy)
+          .set({ n: typeof n === "number" ? n : -1 });
+        copy.prepareCfc();
+        expect(refusalOf(await copy.commit().settled)).toContain(
+          "maxConfidentiality failed at /n",
+        );
+      });
+    });
+
+    it("refuses a write after the program read the stamped store", async () => {
+      await withStampedStore("ceiling-read", async (runtime) => {
+        const tx = runtime.edit();
+        const store = runtime.getCell(space, "ceiling-read", PUBLIC_SCHEMA, tx);
+        store.key("v").get();
+        store.set({ v: "public" });
+        tx.prepareCfc();
+        expect(refusalOf(await tx.commit().settled)).toContain(
+          "maxConfidentiality failed at /v",
+        );
       });
     });
   });
