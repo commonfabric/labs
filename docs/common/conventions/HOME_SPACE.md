@@ -132,18 +132,25 @@ most-recently-used (MRU) ordering:
   ([Social-space collection](#social-space-collection)).
 - A profile whose space is
   [deleted](../../specs/random-space-identities.md#deleting-a-space) is
-  retired. A runtime holding Home that comes upon the deletion, with
-  `spaceDeleted()` returning `true` for the profile's space, sends
-  `retireProfile` for it, and `setProfileRetired` admits a deleted profile
-  where it would refuse a live one: the deletion has already taken the profile
-  away, so the refusals that keep `#profile` from moving without the person
-  choosing do not apply, and a deleted default or last live profile is retired
-  like any other, `#profile` moving to the next live profile, or to none.
-  The handler asks `spaceDeleted()` itself, as `markDeleted` does in the
-  catalog, so an event naming a profile that is not deleted is held to the
-  usual refusals. The picker lists a deleted profile apart with no Restore, and
-  `restoreProfile` refuses one. Deleting a space is not implemented yet, and
-  neither is this.
+  retired. Its space reads as absent, so its `name` cannot be followed and it is
+  never one of the user's own profiles: `#profile` already skips it, and when no
+  live profile is left, `#profile` reports that no profile exists yet and offers
+  to create one. What retiring adds is the record. The picker sends
+  `retireProfile` for a profile `profiles` lists whose `spaceDeleted(space)`
+  returns `true`, as a pattern that lists catalog entries sends `markDeleted`.
+  `setProfileRetired` admits such a profile in place of the ownership test it
+  can no longer pass: its link is in `profiles` and `spaceDeleted(space)`
+  returns `true` in the handler, asked by the handler itself, so an event naming
+  a profile that is not deleted is held to the usual refusals. The refusals
+  that keep `#profile` from moving without the person choosing do not apply,
+  since a deleted profile is none of the live ones they protect. Where the
+  memory server has not yet answered for the space, the handler runs again once
+  it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`. The picker lists a deleted profile apart, by its link
+  and marked deleted, with no name, which lived in the deleted space, and no
+  Restore, and `restoreProfile` refuses one. Deleting a space is not implemented
+  yet, and neither is this.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with

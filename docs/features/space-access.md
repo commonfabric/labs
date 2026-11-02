@@ -256,8 +256,8 @@ access-list document through the call's transaction as `spaceAccess(target)`
 does, so the memory server answers for it. The run waits for that answer, not
 with a retry or a poll of its own but through a notice of an open's answer,
 which the storage manager gives when the memory server admits or refuses a
-session's open. That notice is new: the storage manager's `spaceOpenObserver`
-says only that an open has started.
+session's open. The storage manager does not give that notice yet: its
+`spaceOpenObserver` says only that an open has started.
 
 - A reactive computation gets `undefined` at once, and is run again when the
   answer arrives. The runtime waits for the notice of the open's answer, and
@@ -266,8 +266,12 @@ says only that an open has started.
   document the computation read, so no document is what wakes it. A refusal
   that comes later, as when the space is deleted while its session is open,
   reaches it through the storage manager's access-change observer
-  (`subscribeSpaceAccessChange()`), as it does for `spaceAccess(target)`. An
-  open that ends with no answer runs nothing again.
+  (`subscribeSpaceAccessChange()`), as it does for `spaceAccess(target)`. A
+  first answer that is a refusal reaches the computation both ways, and the
+  second run that may cost changes nothing. An open that ends with no answer
+  runs nothing again, and leaves the computation `undefined` until the space's
+  session opens again, as when a lost connection comes back: that open is
+  answered, and its answer noticed, like the first.
 - A handler does not see `undefined` for a space it is waiting on. The call
   records the space as pending, as a run records an `inSpace()` name it cannot
   resolve yet, and the run's transaction is dropped. Once the run has ended,
@@ -282,11 +286,12 @@ says only that an open has started.
   as for an `inSpace()` name: it is dropped once the answer arrives. A served
   run is run again whatever its event's `retries`, as it is for an `inSpace()`
   name, since the serving runtime owns its result. A serving runtime reads a
-  foreign space through the serving plane's foreign grant rather than a
-  session of the principal's, and the grant's refusal of a deleted space
-  carries the `deleted` marker (INV-15), so the answer it waits for is that
-  grant's. A space whose reads the serving runtime's own store supplies has no
-  answer to wait for, as below.
+  foreign space through a cross-space session, which the serving plane's
+  foreign grant decides rather than the principal's own access, and the grant's
+  refusal of a deleted space carries the `deleted` marker (INV-15); that
+  session's open is answered, and its answer noticed, like a client's. A space
+  whose reads the serving runtime's own store supplies has no answer to wait
+  for, as below.
 
 A runtime with no memory server it can ask about the space returns `undefined`
 from both, and a handler is not run again: there is no answer to wait for. Such

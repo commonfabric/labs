@@ -731,16 +731,32 @@ remove every other entry, one ordinary ACL commit at a time. What it adds is
 that each other member's loss of access is a commit of its own, made before the
 space is deleted, rather than a side effect of deleting it. A service DID's
 implicit OWNER does not satisfy it: the stored list has to name the principal.
-The Home clause keeps anyone from deleting a Home, which nothing could replace.
-It turns on the space rather than on who commits, so it holds whether the
-deleting session acts as itself or through a chain. A Home's DID is its user's
-own, so its list grants its own DID OWNER, and it declares no kind; that is the
-test the server already applies when it resolves the `actingAs` binding, which
-takes a space that owns itself and declares no kind for a home. A self-owned
-space that declares a kind, such as a profile's space, which declares
-`profile`, is not a Home, and the chain clause below admits deleting it. The
-kind is read from the space's genesis receipt, which never changes once
-written ([`space-kinds.md`](../../features/space-kinds.md)).
+The Home clause refuses a deletion tombstone while the stored list has a Home's
+shape, since nothing could replace a Home. It turns on the space rather than on
+who commits, so it holds whether the deleting session acts as itself or through
+a chain. A Home's DID is its user's own, so its list grants its own DID OWNER,
+and it declares no kind; that is the test the server already applies when it
+resolves the `actingAs` binding, which takes a space that owns itself and
+declares no kind for a home. A self-owned space that declares a kind, such as a
+profile's space, which declares `profile`, is not a Home, and the chain clause
+below admits deleting it. A self-owned space that declares no kind is
+Home-shaped by this test, and so is never deleted; a self-owned space meant to
+be deletable declares a kind. The kind is read from the space's genesis
+receipt, which never changes once written
+([`space-kinds.md`](../../features/space-kinds.md)).
+
+What the clause guarantees is bounded by what it reads, which is the list. A
+deployment's service identity may rewrite any list, as it may repair one
+([`04-protocol.md`](04-protocol.md#451-current-pass) §4.5.1), and a Home whose
+list no longer grants its own DID OWNER is no longer Home-shaped, so the clause
+trusts a service identity not to reshape a Home's list first. A Home with no
+access-control document has no list to test, and the clause does not protect
+it; every Home has one before deletion is deployed
+([the order deletion lands in](../../plans/random-space-identities.md#deleting-a-space)).
+A test that a list rewrite cannot defeat would have to read something the
+rewrite does not touch, such as whether the DID is a user's identity, of which
+the server keeps no record. Whether to have one is an open design question for
+the Memory server's owners.
 
 The chain clause serves a self-owned space, whose list names the space's own DID
 at OWNER and whose owner acts through a delegation the space issued. A session
@@ -767,7 +783,7 @@ The clauses are checked after INV-12's shape clauses, in this order:
 | --- | --- |
 | the deletion tombstone holds `by` alone, naming the committing principal | `ProtocolError`: `A deletion tombstone must name the deleting principal and nothing else` |
 | the space is not a Home: its stored list does not grant its own DID OWNER, or it declares a kind | `AuthorizationError`: `A Home space cannot be deleted` |
-| the stored ACL's one entry is at OWNER, and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
+| the stored ACL is valid, and its one entry is at OWNER and is the committing principal or the principal its capability resolves to through a proof chain | `AuthorizationError`: `Only the sole member of <space> may delete it` |
 
 The first clause constrains the document's `value`, which is the deletion
 tombstone. The fields beside it, such as the persisted label map, are held to

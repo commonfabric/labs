@@ -173,10 +173,14 @@ leaves it in place.
 - Deletion is one access-list-only commit, which replaces the access list
   with a deletion tombstone naming the deleting principal. It writes the
   access-control document and never removes it.
-- A Home space is never deleted, whoever asks. Its DID is its user's identity
-  DID, so its access list grants its own DID OWNER, and it declares no kind,
-  which is how the Memory server tells it from a self-owned space of a declared
-  kind such as a profile's.
+- A Home space is not deleted, whoever asks, while its access list has a Home's
+  shape. Its DID is its user's identity DID, so its access list grants its own
+  DID OWNER, and it declares no kind, which is how the Memory server tells it
+  from a self-owned space of a declared kind such as a profile's. The test reads
+  the list, which a deployment's service identity can rewrite, so a service
+  identity is trusted not to reshape a Home's list, and a Home with no list has
+  to be given one before deletion is deployed
+  ([INV-15](memory-v2/09-invariants.md#inv-15--space-deletion)).
 - From that commit on, the Memory server refuses the space to every principal,
   a deployment's service identities included, in every access-control mode, and
   the space takes no further commit on any write path, the serving plane's
@@ -195,11 +199,15 @@ leaves it in place.
   as it may an ordinary refusal of access.
 
 Deleting a space reclaims no storage by itself. A deleted space's contents
-become unreadable at once, and its storage is the operator's to reclaim by
-reaping the space, below, which leaves the deletion tombstone in place. A store
-removed outright would leave a DID with no history, and that DID would then be a
-space its key could create again: no one holds the key of a space created under
-this specification, but a legacy space's key can be recomputed from its name.
+become unreadable from the Memory server at once. A runtime keeps what it had
+already fetched of the space in its replica, as it does for any refused space,
+and its renderer withholds that content
+([authorization failure surfacing](../features/authorization-failure-surfacing.md)).
+The space's storage is the operator's to reclaim by reaping the space, below,
+which leaves the deletion tombstone in place. A store removed outright would
+leave a DID with no history, and that DID would then be a space its key could
+create again: no one holds the key of a space created under this specification,
+but a legacy space's key can be recomputed from its name.
 
 References to a deleted space keep their DID: a Home list entry, a link stored
 in another space, an `inSpace` allocation record. They reach the refusal.
@@ -223,10 +231,18 @@ says which spaces this covers):
   no list, and a deployment's service identity holds OWNER there implicitly,
   which the sole-member clause does not count. A service identity first writes
   a list naming the deleting principal, `cf acl set <DID> OWNER`, which INV-13
-  admits from a service identity while the space has none.
-- **A list naming only service identities.** A service identity likewise first
-  adds the deleting principal at OWNER, and that principal then removes the
-  service identities' entries.
+  admits from a service identity while the space has none. Such a space is
+  open to every authenticated principal, so that one commit is where all of
+  their access ends, with no entry naming any of them, and nothing records who
+  they were. A Home with no list is never one of these: it gets its own list,
+  granting its own DID OWNER, before deletion is deployed.
+- **A list naming only service identities.** A service identity the list names
+  is a named principal, so it could remove the other entries and delete the
+  space itself, as its sole member. The recipe has it add the deleting person at
+  OWNER instead, who then removes the service identities' entries, so that the
+  deletion tombstone's `by` records the person who chose the deletion rather
+  than an operator's identity. That is a choice of record, not something INV-15
+  requires.
 
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and

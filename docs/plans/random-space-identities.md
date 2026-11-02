@@ -132,10 +132,9 @@ in this order, each step a change of its own:
    both first: this repository's Memory client, runtime, renderer and shell,
    and every client outside this repository, including one that runs against a
    pinned tag of it, whose tag then has to be one that handles them. That
-   includes reading an
-   invitation operation's `space-deleted` as final rather than retrying it,
-   and an `AuthorizationError` marked `deleted` as a refusal no later grant
-   heals.
+   includes reading an invitation operation's `space-deleted` as final rather
+   than retrying it, and an `AuthorizationError` marked `deleted` as a refusal
+   no later grant heals.
 2. **`aclRevision` names the access-control document's `seq`.** Every ACL
    refusal's `aclRevision` becomes the `seq` at which the space's
    access-control document is stored, rather than the server's current
@@ -152,9 +151,18 @@ in this order, each step a change of its own:
    [recipe for a space not yet down to one member](../specs/random-space-identities.md#deleting-a-space)
    covers each list as it stands, including a store with no access-control
    document.
-5. **The server refuses a deleted space**, which nothing can yet produce.
+5. **The server refuses a deleted space**, which nothing can yet produce. Every
+   Home space has an access-control document first, the first step of
+   "Operational" above: INV-15's Home clause reads the list, so a Home with
+   none is not protected by it, and the recipe's genesis for a space with no
+   list must never land on a Home.
 6. **The server admits the deletion commit.** Compaction's refusal of a
-   deletion tombstone names reaping in the same change.
+   deletion tombstone names reaping in the same change. Once a deletion has
+   been committed, rolling a server back to a release from before step 5 is not
+   available: such a release reads the deletion tombstone as a malformed list,
+   which a service identity may repair, and a repair would write an access list
+   over it and so undo the deletion. Nor does an operator repair an
+   access-control document whose value is a deletion tombstone.
 7. **`cf space delete` and `cf space reap`.**
 
 ### In other repositories

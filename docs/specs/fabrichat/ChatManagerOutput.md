@@ -190,7 +190,10 @@ session that has none is refused.
   their space is deleted, apart from the rooms this user can still use, as the
   catalog lists a deleted entry apart from saved and archived ones. A deleted
   room can't be read, written or forgotten, so a client shows each one as
-  deleted and offers no control for it. Recording the deletion is the
+  deleted and offers no control for it. Nothing through the entry's link can
+  be read, so what is left to show is what the manager holds itself: the
+  catalog's `title` hint for a standalone room, and for any room the entry's
+  own `kind`, `counterpart` and `since`. Recording the deletion is the
   catalog's `markDeleted`, sent by the runtime that holds the catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
   the manager writes nothing when a room is deleted.
@@ -317,7 +320,11 @@ outward act when it creates a room, or offers one it finds.
   and its notice stays, when `requestId` is longer than an offer's `id` may be.
   A `direct` entry whose room's space is deleted, `spaceDeleted(room)`
   returning `true`, is no such entry: the request goes on as if `direct` had
-  none for `counterpart`, and the room it creates replaces the entry.
+  none for `counterpart`, and the room it creates replaces the entry. Where the
+  memory server has not yet answered for the room's space, the request runs
+  again once it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`.
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct
