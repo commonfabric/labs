@@ -7262,7 +7262,8 @@ export type CfcPrefixProvenanceSummary = {
   /**
    * Non-internal read activities without an activity-clock position,
    * treated at -Infinity (joining every prefix). Deliberate -Infinity
-   * trigger reads are not counted. Same read set for every protected
+   * trigger reads and write-destination reads, which join no prefix, are
+   * not counted. Same read set for every protected
    * write, so this is per-prepare, not per-write.
    */
   clockLessReads: number;
@@ -7676,7 +7677,9 @@ export class InputReadView {
         internalByMeta.set(meta, internal);
       }
       if (internal) continue;
-      if (read.journalIndex === undefined) clockLessReads += 1;
+      if (
+        read.journalIndex === undefined && !isWriteDestinationRead(meta)
+      ) clockLessReads += 1;
       reads.push({ ...read, journalIndex: read.journalIndex ?? -Infinity });
     }
     for (const read of triggers) {
