@@ -1264,6 +1264,17 @@ report these through the same collector (deduplicated via §2.2's
   to the local schema use, since the unread node is a print with no source
   position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
   the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
+- **Error** `schema-type:symbol` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a schema would have to describe a symbol the
+  runtime could store: `symbol`, a `unique symbol` such as `typeof s`, or a
+  union holding one, such as `string | symbol`. The schema dialect has no
+  symbol type, so compilation refuses the schema. The message names the type
+  written nearest the symbol and, for a union holding it, suggests
+  `Exclude<…, symbol>`. It points to that type where it belongs to the current
+  file, otherwise to the local schema use. A well-known symbol such as
+  `Symbol.iterator` is left out instead, so `keyof string` compiles, and a
+  symbol-keyed member of an object is skipped. See §4.0.1 of the
+  schema-generator mapping spec and `test/symbol-type-diagnostic.test.ts`.
 - **Error** `cfc-schema:recursion-limit` (`schema-generator.ts`,
   `unread-type-diagnostics.ts`) — a CFC alias chain reaches its recursion limit
   and compilation refuses the schema: the unread remainder could

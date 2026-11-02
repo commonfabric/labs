@@ -2,6 +2,7 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type ErrorNotification,
@@ -17,7 +18,6 @@ import {
   RuntimeTransportEvents,
 } from "@/client/transport.ts";
 import type { MessagePortLike } from "@/shared/message-port-like.ts";
-import { describeFailure } from "@/shared/utils.ts";
 
 export interface MessagePortRuntimeTransportOptions {
   /** The duplex the worker is reached over. */

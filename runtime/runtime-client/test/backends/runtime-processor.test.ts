@@ -8203,9 +8203,14 @@ describe("runtime-processor", () => {
       ]]);
     });
 
-    it("surfaces attention index and sidecar synchronization failures", async () => {
-      const indexError = new Error("index failed");
-      const sidecarError = new Error("sidecar failed");
+    it("rejects with an `Error` carrying a failed synchronization's message", async () => {
+      // A storage result's error is a plain record rather than an `Error`.
+
+      const indexError = {
+        name: "AuthorizationError",
+        message: "index refused",
+      };
+      const sidecarError = { name: "ConnectionError", message: "sidecar lost" };
       const summary = {
         eventId: "evt-failed",
         seq: 43,
@@ -8223,15 +8228,22 @@ describe("runtime-processor", () => {
           type: RequestType.ListEventAttention,
           space,
         });
+      const failure = (provider: unknown) =>
+        invoke(provider).then(() => undefined, (error: unknown) => error);
 
-      await expect(invoke({
+      const indexFailure = await failure({
         sync: () => Promise.resolve({ error: indexError }),
-      })).rejects.toBe(indexError);
+      });
+      expect(indexFailure).toBeInstanceOf(Error);
+      expect(indexFailure).toMatchObject({
+        message: "index refused",
+        cause: indexError,
+      });
       await expect(invoke({
         sync: () => Promise.resolve({}),
       })).rejects.toThrow("does not expose an attention replica");
       let syncCount = 0;
-      await expect(invoke({
+      const sidecarFailure = await failure({
         sync: () =>
           Promise.resolve(
             ++syncCount === 1 ? {} : { error: sidecarError },
@@ -8248,7 +8260,12 @@ describe("runtime-processor", () => {
             },
           }),
         },
-      })).rejects.toBe(sidecarError);
+      });
+      expect(sidecarFailure).toBeInstanceOf(Error);
+      expect(sidecarFailure).toMatchObject({
+        message: "sidecar lost",
+        cause: sidecarError,
+      });
     });
 
     it("rejects resolution when the storage capability is absent", async () => {

@@ -6439,50 +6439,24 @@ Deno.test("invalid private endpoints and frame types have no authority; revocati
 
 Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {
   const f = await fixture("tls-listener");
-  const key = `${f.root}/key.pem`, cert = `${f.root}/cert.pem`;
-  const certificate = await new Deno.Command("openssl", {
-    args: [
-      "req",
-      "-new",
-      "-x509",
-      "-newkey",
-      "ed25519",
-      "-nodes",
-      "-keyout",
-      key,
-      "-out",
-      cert,
-      "-days",
-      "1",
-      "-subj",
-      "/CN=localhost",
-      "-addext",
-      "subjectAltName=IP:127.0.0.1",
-      "-addext",
-      "basicConstraints=critical,CA:FALSE",
-    ],
-    stdout: "null",
-    stderr: "piped",
-  }).output();
-  assert(certificate.success);
+  const tls = new URL("./fixtures/routed-tls/", import.meta.url);
+  const cert = Deno.readTextFileSync(new URL("localhost.crt", tls));
   const listener = await listenRoutedMemory({
     hostname: "127.0.0.1",
     port: 0,
-    certificate: Deno.readTextFileSync(cert),
-    key: Deno.readTextFileSync(key),
+    certificate: cert,
+    key: Deno.readTextFileSync(new URL("localhost.key", tls)),
     host: f.host,
   });
   const url = `https://127.0.0.1:${listener.port}`;
-  const client = Deno.createHttpClient({
-    caCerts: [Deno.readTextFileSync(cert)],
-  });
+  const client = Deno.createHttpClient({ caCerts: [cert] });
   const sockets: WebSocket[] = [];
   function socket(
     path: string,
     options: { origin?: string; perMessageDeflate?: boolean } = {},
   ) {
     const peer = new WebSocket(`${url.replace("https:", "wss:")}${path}`, {
-      ca: Deno.readTextFileSync(cert),
+      ca: cert,
       perMessageDeflate: false,
       ...options,
     });
