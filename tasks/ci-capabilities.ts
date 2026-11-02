@@ -809,6 +809,8 @@ async function startToolshed(
       // test server has neither.
       CFTS_AI_GATEWAY_URL: "",
       CFTS_AI_LLM_ANTHROPIC_API_KEY: "fake",
+      // Leak tests read the server's memory after a full collection.
+      EXPOSE_GC: "true",
       ...storeEnv,
       ...env,
       [BACKGROUND_LOG_ENV]: logFile,

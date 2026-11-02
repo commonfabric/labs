@@ -16,6 +16,7 @@ import {
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { LoopbackConnection } from "./host-memory-server.ts";
@@ -197,6 +198,11 @@ export class ServingPortBridge {
   /** What the worker's realm logged, as of now. */
   requestDiagnostics(): Promise<ServingLoopDiagnostics> {
     return this.#endpoint.request("host.diagnostics", null);
+  }
+
+  /** The memory the worker's isolate holds after a full collection. */
+  requestCollectedMemory(): Promise<CollectedMemory> {
+    return this.#endpoint.request("host.collectedMemory", null);
   }
 
   /**

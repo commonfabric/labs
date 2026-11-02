@@ -27,6 +27,7 @@ import {
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import type { ServedAclChangeData } from "./served-acl-change.ts";
@@ -270,6 +271,7 @@ export type BridgeRequests = {
 
   "host.stats": { params: null; result: ServingLoopStats };
   "host.diagnostics": { params: null; result: ServingLoopDiagnostics };
+  "host.collectedMemory": { params: null; result: CollectedMemory };
   "host.runLifecycleVerb": {
     params: { space: MemorySpace; verb: LifecycleVerbDescriptor };
     result: LifecycleVerbRun;
