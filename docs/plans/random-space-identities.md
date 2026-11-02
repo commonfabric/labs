@@ -154,7 +154,7 @@ in this order, each step a change of its own:
    document.
 5. **The server refuses a deleted space**, which nothing can yet produce.
 6. **The server admits the deletion commit.** Compaction's refusal of a
-   tombstone names reaping in the same change.
+   deletion tombstone names reaping in the same change.
 7. **`cf space delete` and `cf space reap`.**
 
 ### In other repositories

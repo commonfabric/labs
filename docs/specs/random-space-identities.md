@@ -171,7 +171,7 @@ leaves it in place.
   change of its own. Other holders of a delegation are not members of the list,
   and lose access with no change of their own first.
 - Deletion is one access-list-only commit, which replaces the access list
-  with a tombstone naming the deleting principal. It writes the
+  with a deletion tombstone naming the deleting principal. It writes the
   access-control document and never removes it.
 - A Home space is never deleted, whoever asks. Its DID is its user's identity
   DID, so its access list grants its own DID OWNER, and it declares no kind,
@@ -196,10 +196,10 @@ leaves it in place.
 
 Deleting a space reclaims no storage by itself. A deleted space's contents
 become unreadable at once, and its storage is the operator's to reclaim by
-reaping the space, below, which leaves the tombstone in place. A store removed
-outright would leave a DID with no history, and that DID would then be a space
-its key could create again: no one holds the key of a space created under this
-specification, but a legacy space's key can be recomputed from its name.
+reaping the space, below, which leaves the deletion tombstone in place. A store
+removed outright would leave a DID with no history, and that DID would then be a
+space its key could create again: no one holds the key of a space created under
+this specification, but a legacy space's key can be recomputed from its name.
 
 References to a deleted space keep their DID: a Home list entry, a link stored
 in another space, an `inSpace` allocation record. They reach the refusal.
@@ -231,9 +231,8 @@ says which spaces this covers):
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
 [the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
-Deleting a space is not implemented yet: the Memory server refuses a
-tombstone as it refuses any access-control document that is not an access
-list.
+Deleting a space is not implemented yet: the Memory server refuses a deletion
+tombstone as it refuses any access-control document that is not an access list.
 
 ### Reaping a deleted space
 
@@ -243,35 +242,36 @@ refuses a deleted space to every principal, service identities included.
 Compaction refuses a deleted space's store: its run writes an audit revision
 that restates the access-control document's value, which it does only over a
 value that is an access list, so it refuses a store whose access-control
-document is a `set` of anything else, a tombstone included. Its outcome for an
-access-control document that a document `delete` removed is a different case,
-one INV-12 forbids, and not a deleted space. When deletion is implemented,
-compaction's refusal of a tombstone names reaping, so that an operator who
-reaches for `cf space compact` on a deleted space is sent to `cf space reap`.
+document is a `set` of anything else, a deletion tombstone included. Its outcome
+for an access-control document that a document `delete` removed is a different
+case, one INV-12 forbids, and not a deleted space. When deletion is implemented,
+compaction's refusal of a deletion tombstone names reaping, so that an operator
+who reaches for `cf space compact` on a deleted space is sent to
+`cf space reap`.
 
-Reaping follows the compaction plan's safety rails rather than rules of its
-own. It runs offline against the space's store file and never against a file a
-server has open
+Reaping follows the compaction plan's safety rails rather than rules of its own.
+It runs offline against the space's store file and never against a file a server
+has open
 ([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
-and its authority is the operator's access to that file. It writes a copy of
-the backup, never the backup itself
+and its authority is the operator's access to that file. It writes a copy of the
+backup, never the backup itself
 ([backup first](../plans/compact-space.md#backup-first)), and its result is
 checked before it is installed, as a compaction's is
 ([verification obligations](../plans/compact-space.md#verification-obligations)):
-the deletion commit and the tombstone read back unchanged, the server sequence
-is the same, and nothing else of the space is left. The state inspector reads a
-reaped store as a deleted space, not as a corrupt one.
+the deletion commit and the deletion tombstone read back unchanged, the server
+sequence is the same, and nothing else of the space is left. The state inspector
+reads a reaped store as a deleted space, not as a corrupt one.
 `cf space reap <store.sqlite>` performs it.
 
-- A reap takes only a store whose access-control document holds a tombstone,
-  and refuses any other.
-- It keeps the deletion commit and what that commit needs to stand: the
-  commit's own row in the commit log, the invocation and authorization rows it
-  references, and the tombstone's revision and head rows. The server sequence
-  is the highest `seq` in the commit log, so keeping the deletion commit keeps
-  it at that commit's `seq`. The space therefore goes on refusing every
-  principal as deleted, its refusal names the same `aclRevision` as before,
-  and its DID never again has no history.
+- A reap takes only a store whose access-control document holds a deletion
+  tombstone, and refuses any other.
+- It keeps the deletion commit and what that commit needs to stand: the commit's
+  own row in the commit log, the invocation and authorization rows it
+  references, and the deletion tombstone's revision and head rows. The server
+  sequence is the highest `seq` in the commit log, so keeping the deletion
+  commit keeps it at that commit's `seq`. The space therefore goes on refusing
+  every principal as deleted, its refusal names the same `aclRevision` as
+  before, and its DID never again has no history.
 - It removes everything else the store holds for the space: every earlier
   commit, every other document and its history, the earlier revisions of the
   access-control document, the genesis receipt, the private tables such as an

@@ -289,11 +289,11 @@ means the action was applied, not that it remains the latest choice.
 Deleting a space
 ([random space identities](../specs/random-space-identities.md#deleting-a-space))
 ends it for everyone, and writes nothing in anyone's catalog: each entry naming
-the space keeps its state and revision until a consumer comes upon the
-deletion. The consumer then records it with `markDeleted`, which takes the
-space DID and the revision its caller observed, and moves the entry to the
-`deleted` state. That carries the space's tombstone into the person's own
-collection, so a list stops offering a space nobody can open.
+the space keeps its state and revision until a consumer comes upon the deletion.
+The consumer then records it with `markDeleted`, which takes the space DID and
+the revision its caller observed, and moves the entry to the `deleted` state.
+That carries the space's deletion tombstone into the person's own collection, so
+a list stops offering a space nobody can open.
 
 `markDeleted` changes the entry only when all of these hold, checked in this
 order, and otherwise returns `conflict` with the reason given:

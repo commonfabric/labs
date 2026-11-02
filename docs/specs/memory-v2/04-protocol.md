@@ -27,12 +27,12 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- deleting a space (section 4.5.1, INV-15) is specified and not yet
-  implemented: the server refuses the tombstone it writes under INV-12's
-  validity clause, as it refuses any ACL document that is not an access list.
-  The client's support for the `deleted` marker and `session/revoked` reason
-  lands before the server sends either, in every client in use, those built
-  outside this repository included
+- deleting a space (section 4.5.1, INV-15) is specified and not yet implemented:
+  the server refuses the deletion tombstone it writes under INV-12's validity
+  clause, as it refuses any ACL document that is not an access list. The
+  client's support for the `deleted` marker and `session/revoked` reason lands
+  before the server sends either, in every client in use, those built outside
+  this repository included
   ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
 - an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
   4.5.1) is specified and not yet implemented: the server sends its current
@@ -2146,7 +2146,7 @@ row for a deleted space applies whether or not the policy is active:
 | never-created ACL, server sequence 0 | Authenticated READ only, except that the space DID itself holds OWNER; the first write must be a valid ACL-only genesis by the space identity or a service DID |
 | never-created ACL, server sequence greater than 0 | Temporary pre-launch compatibility: authenticated READ and WRITE, never OWNER |
 | malformed, ownerless, or retracted ACL | No ordinary access (fail closed) |
-| a deleted space's tombstone | No access for any principal, service DIDs included, for good |
+| a deleted space's deletion tombstone | No access for any principal, service DIDs included, for good |
 
 Configured service DIDs hold implicit OWNER on every space, so they can
 initialize or repair ACL state, except a deleted space's. The exact space DID
@@ -2176,59 +2176,59 @@ revision of the document exists.
 A space's sole member deletes it, which ends it for everyone and for good.
 Deleting a space writes its ACL document and never removes it: the deletion
 commit is an ACL-only commit, shaped as any other, whose document is a
-tombstone rather than an access list:
+deletion tombstone rather than an access list:
 
 ```json
 { "deleted": { "by": "did:key:z6Mk..." } }
 ```
 
-`by` names the committing principal, and the tombstone holds nothing else. The
-server admits it only when the stored ACL is valid and its one entry is at
-OWNER, naming either the committing principal or the principal the session's
-capability resolves to through a verified proof chain, the chain's root issuer
-("Proof chains" below). For an ordinary space that entry is the deleting
-principal's own, so another member has to be removed, visibly and through the
-ordinary check, before the space can be deleted. That asks no authority an OWNER
-does not already hold. A self-owned space, whose list names the space's own DID
-and whose owner acts through a delegation from it, is deleted through the chain,
-as every other OWNER act on it is. A server whose access-list policy admits no
-delegations, and so advertises no `sessionOpenProofs`, refuses every chain, and
-there only an entry naming the committing principal admits a deletion. A
-delegation is not an entry in the list, so another holder of one loses access
-with no commit of its own first, as it does when an owner replaces the list; and
-since `by` still names the committing principal, the tombstone is the one place
-such a space records the identity that acted for it. A self-owned profile's
-space, whose list also grants `"*"` WRITE, has that entry removed by an ordinary
-list replacement through the chain before it is deleted. No one deletes a Home
-space, through a chain or without one: a space whose list grants its own DID
-OWNER and that declares no kind, which is how the server already tells a home
-when it resolves the `actingAs` binding. "Nothing else" binds the document's
-`value`, the tombstone itself; the fields beside it are held to what any ACL
-write holds them to.
+`by` names the committing principal, and the deletion tombstone holds nothing
+else. The server admits it only when the stored ACL is valid and its one entry
+is at OWNER, naming either the committing principal or the principal the
+session's capability resolves to through a verified proof chain, the chain's
+root issuer ("Proof chains" below). For an ordinary space that entry is the
+deleting principal's own, so another member has to be removed, visibly and
+through the ordinary check, before the space can be deleted. That asks no
+authority an OWNER does not already hold. A self-owned space, whose list names
+the space's own DID and whose owner acts through a delegation from it, is
+deleted through the chain, as every other OWNER act on it is. A server whose
+access-list policy admits no delegations, and so advertises no
+`sessionOpenProofs`, refuses every chain, and there only an entry naming the
+committing principal admits a deletion. A delegation is not an entry in the
+list, so another holder of one loses access with no commit of its own first, as
+it does when an owner replaces the list; and since `by` still names the
+committing principal, the deletion tombstone is the one place such a space
+records the identity that acted for it. A self-owned profile's space, whose list
+also grants `"*"` WRITE, has that entry removed by an ordinary list replacement
+through the chain before it is deleted. No one deletes a Home space, through a
+chain or without one: a space whose list grants its own DID OWNER and that
+declares no kind, which is how the server already tells a home when it resolves
+the `actingAs` binding. "Nothing else" binds the document's `value`, the
+deletion tombstone itself; the fields beside it are held to what any ACL write
+holds them to.
 
 From the deletion commit on, the server refuses every command any principal
 sends the space, a service DID's included, with a permanent `AuthorizationError`
-carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`.
-The server checks for deletion once it has routed the command and, for a
-command that names a session, found that session open, and before every other
-check, so a command to a deleted space reports the deletion and never a shape,
-capability or genesis failure. The server revokes the sessions open on the
-space with the `session/revoked` reason `deleted`. The session that committed
-the deletion receives its transact response first and its revocation after, as
-a member's session does when it removes its own entry. The server admits
-no further commit to the space on any write path, engine-direct writes from the
-serving plane included, so no principal can undo the deletion. These checks
-run before a commit's write transaction starts, so the engine repeats the
-tombstone check inside that transaction for every fresh commit, and checks a
+carrying `deleted: true` and, as `aclRevision`, the deletion commit's `seq`. The
+server checks for deletion once it has routed the command and, for a command
+that names a session, found that session open, and before every other check, so
+a command to a deleted space reports the deletion and never a shape, capability
+or genesis failure. The server revokes the sessions open on the space with the
+`session/revoked` reason `deleted`. The session that committed the deletion
+receives its transact response first and its revocation after, as a member's
+session does when it removes its own entry. The server admits no further commit
+to the space on any write path, engine-direct writes from the serving plane
+included, so no principal can undo the deletion. These checks run before a
+commit's write transaction starts, so the engine repeats the deletion tombstone
+check inside that transaction for every fresh commit, and checks a deletion
 tombstone commit's own clauses there too, against the ACL as stored: a deletion
 committed through another connection in between still refuses the commit, with
-the same refusal (INV-15). All of this
-holds in every ACL mode, `off` included, as do the admission rules above for a
-commit that writes a tombstone: a deleted space is refused whatever the policy,
-since a mode that admitted commits to one could undo it. A tombstone is not an
-access list, so a server rolled back to a release that does not know tombstones
-finds the ACL malformed, and refuses the space to every principal but a service
-DID.
+the same refusal (INV-15). All of this holds in every ACL mode, `off` included,
+as do the admission rules above for a commit that writes a deletion tombstone: a
+deleted space is refused whatever the policy, since a mode that admitted commits
+to one could undo it. A deletion tombstone is not an access list, so a server
+rolled back to a release that does not know deletion tombstones finds the ACL
+malformed, and refuses the space to every principal but a service DID.
 
 The server sends the `deleted` marker and the `deleted` reason to every client,
 whatever the client advertises. A client that predates the marker reads the
