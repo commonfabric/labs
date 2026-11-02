@@ -330,65 +330,37 @@ Deno.test("word wrap plan: a break after a tab follows all of its cells", () => 
   );
 });
 
-Deno.test("word wrap plan: a row ends before a tab its end would split", () => {
-  // The tab draws cells 5 to 7; a row of six source cells would end after
-  // cell 5, so it ends before the tab instead.
-  const doc = parseDocument("abcde\tfghij");
-  const plan = buildWrapPlan(
-    doc.lines,
-    "ansi",
-    7,
-    new Map(),
-    "word",
-  );
-
-  assertEquals(
-    Array.from(plan.wordRows?.[0]?.offsets ?? []),
-    [0, 5, 8],
-  );
-});
-
-Deno.test("word wrap plan: a row ends before a trailing tab its end would split", () => {
-  // No word follows these tabs, so only the tabs make word layout differ from
-  // hard layout.
-  const cases: [string, number[]][] = [
-    ["abcde\t", [0, 5]],
-    [".. \t\t", [0, 4]],
+Deno.test("word wrap plan: a tab wraps like the spaces it draws", () => {
+  // In ANSI mode each tab below draws the spaces that replace it, so the rows
+  // break at the same cells, including inside the blank cells.
+  const cases: [string, string, number][] = [
+    ["abcde\tfghij", "abcde   fghij", 7],
+    ["ab\tcdefgh", "ab  cdefgh", 6],
+    ["abcde\t", "abcde   ", 7],
+    [".. \t\t", ".. " + " ".repeat(5), 7],
+    ["\tfoo bar baz", "    foo bar baz", 9],
+    ["x\ty\tz w", "x   y   z w", 5],
   ];
-  for (const [text, offsets] of cases) {
+  const rows = (text: string, width: number) => {
     const plan = buildWrapPlan(
       parseDocument(text).lines,
       "ansi",
-      7,
+      width,
       new Map(),
       "word",
     );
-
+    return Array.from({ length: plan.rowCount }, (_, row) => {
+      const wrapped = wrappedRowAt(plan, row)!;
+      return [wrapped.offset, wrapped.sourceEnd, wrapped.indentWidth];
+    });
+  };
+  for (const [tabbed, spaced, width] of cases) {
     assertEquals(
-      Array.from(plan.wordRows?.[0]?.offsets ?? []),
-      offsets,
-      JSON.stringify(text),
+      rows(tabbed, width),
+      rows(spaced, width),
+      JSON.stringify(tabbed),
     );
   }
-});
-
-Deno.test("word wrap plan: a tab wider than its row still wraps forward", () => {
-  const doc = parseDocument("ab\tc");
-  const plan = buildWrapPlan(
-    doc.lines,
-    "ansi",
-    2,
-    new Map(),
-    "word",
-  );
-
-  assertEquals(
-    Array.from(
-      { length: plan.rowCount },
-      (_, row) => wrappedRowAt(plan, row)?.offset,
-    ),
-    [0, 1, 2, 3],
-  );
 });
 
 Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {

@@ -682,11 +682,11 @@ Press `C` to cycle how non-printable characters are shown. The first mode draws
 each control character as its control-picture glyph, such as `␉` for a tab, one
 column per character. The ANSI color mode applies color escape sequences to the
 text that follows them instead of showing them. It also advances each tab to the
-next column that is a multiple of 4, measured in the columns drawn. Other
-control characters still appear as control pictures. The hidden mode drops every
-complete escape sequence that starts with `ESC [`, and shows each run of other
-control characters, including the escape characters of other sequences, as one
-`…`. Editing always uses the first mode.
+next column that is a multiple of 4, counting the columns drawn from the start
+of the line. Other control characters still appear as control pictures. The
+hidden mode drops every complete escape sequence that starts with `ESC [`, and
+shows each run of other control characters, including the escape characters of
+other sequences, as one `…`. Editing always uses the first mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
