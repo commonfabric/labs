@@ -88,7 +88,10 @@ const shownConfidentiality = (
  * the path, and its target's labels are not (spec §8.12.8). The release
  * follows a write redirect there, as a write does, and lowers the document it
  * leads to; with `options.linkSlot` it follows none, and lowers the slot's
- * own labels. A link that is not a write redirect is never followed.
+ * own labels. A link that is not a write redirect is never followed. Whether
+ * following a write redirect by default conforms to route 2c, which takes the
+ * document from the request, is open pending a ruling, and
+ * `docs/specs/cfc-conformance-statement.md` records it as such.
  *
  * The acting principal is the runtime's authenticated user. The document must
  * sit in that principal's own space, and every released clause must stand for

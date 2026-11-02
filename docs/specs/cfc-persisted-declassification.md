@@ -285,11 +285,15 @@ decision is `planConfidentialityRelease()` in
 - **At a link.** A link stored at the path is a slot whose own labels, the
   link-carried component, are stored at the path; its target's labels are
   stored at the target, and are not that component (§8.12.8). A release
-  lowers a link's own labels and leaves its target's. It follows a write
-  redirect at the path, as a write does, and lowers the labels where the
+  lowers a link's own labels and leaves its target's. By default it follows a
+  write redirect at the path, as a write does, and lowers the labels where the
   redirect leads; asked to address the link slot itself
   (`cf cell set-label --link-slot`, `releaseCellConfidentiality()`'s
-  `linkSlot`), it lowers the redirect's own labels instead.
+  `linkSlot`), it lowers the redirect's own labels instead. Whether that
+  default conforms to §8.12.7 route 2c, whose request names its own document,
+  is an open question pending a ruling;
+  [`cfc-conformance-statement.md`](cfc-conformance-statement.md) §8 records
+  it.
 - **Who may.** The runtime refuses the release unless the transaction runs
   under the `cfc-confidentiality-release` builtin identity, its acting
   principal is authenticated, and the document is in the space whose DID is
