@@ -308,8 +308,10 @@ function read(
 /**
  * The Topic `reference` names among `topics`: a number, written `42` or `#42`,
  * or `top/42` alone or after `/` or `//<space>/`; an address, written `fid1:…`
- * or `of:fid1:…`, alone or after `/` or `//<space>/`; or the URL of the board
- * server's page for either.
+ * or `of:fid1:…`, alone or after `/` or `//<space>/`; the URL of the board
+ * server's page for either; or any other part of the address `/of:fid1:…`
+ * that is part of no other Topic's address and quotes enough of the id, such
+ * as the end of the id.
  *
  * @throws Error naming the Topic when the board has none by that name, or
  * saying why `reference` names no Topic on this board.
@@ -335,7 +337,16 @@ function lookUp(
   reference: string,
 ): Topic | undefined {
   try {
-    return read.topics.find(matcher(read, reference));
+    const topic = read.topics.find(matcher(read, reference));
+    if (topic !== undefined || !quotesAnId(reference)) return topic;
+    const holding = read.topics.filter(({ address, piece }) =>
+      [address, piece].some((id) => `/${id}`.includes(reference))
+    );
+    if (holding.length <= 1) return holding[0];
+    throw new Error(
+      "it is part of the address of each of " +
+        holding.map((topic) => `top/${topic.number}`).join(", ") + ".",
+    );
   } catch (error) {
     throw new Error(
       debugStr`$quote,long${reference} names no Topic on this board: ` +
@@ -343,6 +354,23 @@ function lookUp(
       { cause: error },
     );
   }
+}
+
+/**
+ * The fewest characters of an id a reference quotes to name a Topic by part
+ * of its address, so that a short or mistyped one is not read as some other
+ * Topic's.
+ */
+const QUOTED_ID_LENGTH = 8;
+
+/**
+ * Whether `reference` may name a Topic by part of its address: it is not a
+ * number, and it ends in at least {@link QUOTED_ID_LENGTH} characters after
+ * its last `:`.
+ */
+function quotesAnId(reference: string): boolean {
+  return numberName(reference) === undefined &&
+    reference.length - reference.lastIndexOf(":") - 1 >= QUOTED_ID_LENGTH;
 }
 
 /**
@@ -1104,7 +1132,10 @@ Writing:
 A body or a text omitted from the arguments is read from stdin; give one that
 begins with - there, or after --. A Topic is named by its number (42, #42,
 top/42, //<space>/top/42), by its address (fid1:..., of:fid1:..., /of:fid1:...,
-//<space>/of:fid1:...), or by the URL of its page on the board's server.
+//<space>/of:fid1:...), by the URL of its page on the board's server, or by
+any part of its address, other than a number, that holds at least
+${QUOTED_ID_LENGTH} characters of its id and is part of no other Topic's, such as the end
+of its id.
 
 Writes of authored content need --agent-name <name> (or CF_AGENT_NAME). Every
 write is a new one, and prints its invocation id before it is made. When a
