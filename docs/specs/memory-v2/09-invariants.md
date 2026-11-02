@@ -872,8 +872,14 @@ sessions with the `session/revoked` reason `instance-names`, as it revokes the
 sessions an ACL commit deauthorizes. The revocation tells their clients, which
 make the message `Space <space> now holds data written with instance names,
 which this runtime does not use` from it and keep it as they keep the open
-refusal; a late or lost revocation admits nothing, since every commit is
-checked against the mark as it arrives.
+refusal; a late or lost revocation admits nothing, since every commit a
+session makes is checked against the mark as it arrives.
+
+The commit clause and the marking cover the commits sessions make. The commits
+the server makes itself, on a principal's behalf or its own (blob writes,
+delegated appends, served access-list changes, invitations, and resolving an
+event's attention), run no pattern and bind no parent's children, so they
+neither check the mark nor set it.
 
 The mark is not access control, so it holds in every ACL mode, `off` included:
 a server that checks no access still keeps a positional runtime from a space a
