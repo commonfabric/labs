@@ -52,6 +52,7 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
+  type SessionViewHandle,
   STREAM_ENTRIES_DOC_PREFIX,
   type StreamEventEntry,
   type StreamEventsDocValue,
@@ -72,7 +73,7 @@ import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
-import { ViewPlanPublisher } from "./view-plan-publisher.ts";
+import { viewLifetimeKey, ViewPlanPublisher } from "./view-plan-publisher.ts";
 
 /** The deferral backstop cadence: with NO input arriving at all, a
  * deferred event retries once per tick and hardens into the DROP
@@ -1114,6 +1115,9 @@ export class SpaceServer implements TransactionSealDestination {
   #demandNoteGeneration = 0;
 
   #passDemandNoteGen = 0;
+
+  /** The `read` views the last demand pass's rows include. */
+  #demandedReadViews: ReadonlySet<string> = new Set();
 
   /** The demand wake's grace timer (see noteDemandChanged). */
   #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -5603,6 +5607,11 @@ export class SpaceServer implements TransactionSealDestination {
     // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
     this.#passDemandNoteGen = this.#demandNoteGeneration;
+    // Listed ahead of the rows: the server publishes a view and the demand it
+    // holds together, so the rows include every view this list holds.
+    const views = await this.#options.server.viewInterestsForSpace(
+      this.#options.space,
+    );
     const demand = await this.#options.server.demandForSpace(
       this.#options.space,
       // The serving session's own watches are its graph's reads, not
@@ -5612,6 +5621,11 @@ export class SpaceServer implements TransactionSealDestination {
     // A park while the request was out cleared the registry this pass
     // reconciles into and disposed the runtime whose writers it marks.
     if (!this.#active || this.#runtime !== runtime) return;
+    this.#demandedReadViews = new Set(
+      views.filter(({ view }) => view.mode === "read").map(({ handle }) =>
+        viewLifetimeKey(handle)
+      ),
+    );
     const changed = this.#demandMirror.update(demand);
     // WARM DEMAND KEYS (the explicit warm request's demand half — see
     // #warmDemandKeys): the staged instances enter the key set
@@ -8142,9 +8156,24 @@ export class SpaceServer implements TransactionSealDestination {
       runtime,
       this.#options.server,
       this.#options.space,
-      { quiescent, settled: quiescent && this.#nothingOwed() },
+      {
+        quiescent,
+        settled: (handle) => quiescent && this.#readViewSettled(handle),
+      },
     );
     timing.time(publishStart, "executor", "wave", "publish");
+  }
+
+  /**
+   * Whether the `read` view `handle` names has its answer: the last demand pass
+   * included it, and the loop owes nothing since. A view that pass did not list
+   * registered after it, so it asks for a pass that will.
+   */
+  #readViewSettled(handle: SessionViewHandle): boolean {
+    if (!this.#nothingOwed()) return false;
+    if (this.#demandedReadViews.has(viewLifetimeKey(handle))) return true;
+    this.noteDemandChanged("watch");
+    return false;
   }
 
   /**

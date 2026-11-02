@@ -323,7 +323,7 @@ describe("view plan publisher", () => {
       const reads = fixture.reads.calls.length;
 
       await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
-        settled: true,
+        settled: () => true,
       });
 
       expect(fixture.reads.calls.length - reads).toBe(0);
@@ -339,6 +339,26 @@ describe("view plan publisher", () => {
       });
     });
 
+    it("asks whether a view has settled with the list of views in hand", async () => {
+      asReadView();
+      const order: string[] = [];
+      fixture.interests.restore();
+      fixture.interests = stub(fixture.server, "viewInterestsForSpace", () => {
+        order.push("listed");
+        return [fixture.interest];
+      });
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: (handle) => {
+          order.push(`asked about ${handle.viewId}`);
+          return false;
+        },
+      });
+
+      expect(order).toEqual(["listed", "asked about screen"]);
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
     it("publishes once for a view however many settlements follow", async () => {
       asReadView();
 
@@ -347,7 +367,7 @@ describe("view plan publisher", () => {
           fixture.runtime,
           fixture.server,
           space,
-          { settled: true },
+          { settled: () => true },
         );
       }
 
@@ -359,7 +379,7 @@ describe("view plan publisher", () => {
       fixture.interest.view.componentContractVersion = "another-build";
 
       await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
-        settled: true,
+        settled: () => true,
       });
 
       expect(fixture.publications.calls).toHaveLength(1);

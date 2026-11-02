@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -252,6 +252,56 @@ describe("served dispatch and read", () => {
 
       expect(await pulling).toBe(true);
       expect(upper.get()).toBe("ALICE");
+    });
+
+    it("settles a read only after a demand pass that listed its view", async () => {
+      const { pieceId } = await instantiate();
+      const reader = await clientPieces();
+      const upper = (await openResult(reader, pieceId))
+        .key("upper" as never) as Cell<unknown>;
+      const server = serving.server;
+      const log: string[] = [];
+      // The first list holding the view is answered without it, as one read
+      // just ahead of the view's registration is.
+      let hidden = false;
+      const list = server.viewInterestsForSpace.bind(server);
+      const listing = stub(server, "viewInterestsForSpace", (...args) => {
+        const interests = list(...args);
+        const reads = interests.some(({ view }) => view.mode === "read");
+        if (reads && !hidden) {
+          hidden = true;
+          log.push("listed without");
+          return interests.filter(({ view }) => view.mode !== "read");
+        }
+        log.push(reads ? "listed" : "listed without");
+        return interests;
+      });
+      const demand = server.demandForSpace.bind(server);
+      const demanding = stub(server, "demandForSpace", (...args) => {
+        log.push("demanded");
+        return demand(...args);
+      });
+      const select = server.setViewSelection.bind(server);
+      const selecting = stub(server, "setViewSelection", (...args) => {
+        if (args[2].settled === true) log.push("settled");
+        return select(...args);
+      });
+
+      try {
+        expect(await pullFromServer(reader.runtime, upper)).toBe(true);
+      } finally {
+        selecting.restore();
+        demanding.restore();
+        listing.restore();
+      }
+
+      const settledAt = log.indexOf("settled");
+      expect(settledAt).toBeGreaterThan(0);
+      const passes = log.slice(0, settledAt).flatMap((entry, index, entries) =>
+        entries[index + 1] === "demanded" ? [entry] : []
+      );
+      expect(passes.at(-1)).toBe("listed");
+      expect(upper.get()).toBe("INITIAL");
     });
 
     it("makes the server derive a value nothing has demanded", async () => {
