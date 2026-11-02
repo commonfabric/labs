@@ -423,6 +423,14 @@ describe("the repository's gate suites", () => {
     expect(typecheck.unitsForChange!(new Set(["README.md"]))).toEqual([]);
   });
 
+  it("returns a pattern's source as what its compatibility unit runs", () => {
+    const compat = byId("pattern-compat");
+    expect(compat.sourcesOf?.("system/fabrichat/room.tsx")).toEqual([
+      "patterns/system/fabrichat/room.tsx",
+    ]);
+    expect(compat.sourcesOf?.("no/such-pattern.tsx")).toEqual([]);
+  });
+
   it("maps a changed path to the patterns whose contract it can change", () => {
     const compat = byId("pattern-compat");
     const reached = (at: string) => compat.unitsForChange!(new Set([at]));

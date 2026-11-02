@@ -726,6 +726,58 @@ describe("opening a capability on a machine that answers", () => {
     ).toBe(true);
   });
 
+  it("says what a machine lacks of what each runner-preparing capability provides, and nothing where it has it", async () => {
+    const missing = (
+      id: CapabilityId,
+      m: ReturnType<typeof machine>,
+      os: typeof Deno.build.os = "linux",
+    ) =>
+      CAPABILITIES.get(id)?.missing?.({ root: Deno.cwd(), exec: m.exec }, os);
+    expect(await missing("jq", machine())).toBeUndefined();
+    expect(await missing("jq", machine({ "command -v jq": "!absent" })))
+      .toBe("jq is not on the path");
+    expect(await missing("fuse", machine())).toBeUndefined();
+    expect(await missing("fuse", machine({ "libfuse3": "!absent" })))
+      .toBe("libfuse3 is not where the FUSE bindings look for it");
+    expect(await missing("fuse", machine({ "fusermount3": "!absent" })))
+      .toBe("fusermount3 is not on the path");
+    expect(await missing("fuse", machine({ "/dev/fuse": "!closed" })))
+      .toBe("/dev/fuse is not open to this user");
+    expect(await missing("fuse", machine(), "darwin")).toBeUndefined();
+    expect(
+      await missing("fuse", machine({ "libfuse": "!absent" }), "darwin"),
+    ).toBe("neither FUSE-T nor macFUSE is installed");
+    expect(await missing("browser", machine())).toBeUndefined();
+    expect(await missing("browser", machine({ "apparmor": "!restricted" })))
+      .toMatch(/AppArmor restricts/);
+    expect(
+      await missing("git-history", machine({ "is-shallow": "true\n" })),
+    ).toBe("the checkout is shallow");
+    expect(
+      await missing("git-history", machine({ "is-shallow": "false\n" })),
+    ).toBeUndefined();
+  });
+
+  it("changes nothing on the machine when asking what it lacks", async () => {
+    for (const answer of ["", "!absent"]) {
+      const m = machine({
+        "command -v": answer,
+        "test ": answer,
+        "for at": answer,
+        "is-shallow": answer === "" ? "true\n" : "false\n",
+      });
+      for (const capability of CAPABILITIES.values()) {
+        for (const os of ["linux", "darwin"] as const) {
+          await capability.missing?.({ root: Deno.cwd(), exec: m.exec }, os);
+        }
+      }
+      expect(
+        m.asked.filter((line) => /sudo|apt-get|tee|chmod|fetch/.test(line)),
+      ).toEqual([]);
+      expect(m.asked.length).toBeGreaterThan(0);
+    }
+  });
+
   it("unshallows a checkout only where it is shallow", async () => {
     const shallow = machine({ "is-shallow-repository": "true\n" });
     await open("git-history", shallow);
@@ -1050,6 +1102,70 @@ describe("opening a capability on a machine that answers", () => {
     // between forty seconds and seventeen on every lane that needs it.
     expect(await openOpposite(false)).toBe(true);
     expect(await openOpposite(true)).toBe(false);
+  });
+
+  it("builds in and runs from the tree it is told to build from, whatever the root's cache holds", async () => {
+    const binaryName = "toolshed-baked-opposite";
+    const m = machine({ [binaryName]: LISTENING });
+    const root = await Deno.makeTempDir({ prefix: "capability-" });
+    const tree = await Deno.makeTempDir({ prefix: "capability-tree-" });
+    try {
+      await Deno.mkdir(`${root}/${BINARY_CACHE_DIR}`, { recursive: true });
+      await Deno.writeTextFile(`${root}/${BINARY_CACHE_DIR}/${binaryName}`, "");
+      await Deno.mkdir(`${tree}/dist`, { recursive: true });
+      await Deno.writeTextFile(`${tree}/dist/toolshed`, "");
+      const opened = await openCapabilities([binaryName], {
+        root,
+        dryRun: false,
+        workDir: root,
+        buildFrom: tree,
+        exec: m.exec,
+        spawn: m.spawn,
+        fetch: serving("opposite"),
+      }, CAPABILITIES);
+      await opened.close();
+      expect(optionsOf(m, "build-binaries toolshed")?.cwd).toBe(tree);
+      expect(
+        m.asked.some((line) =>
+          line.startsWith(`${tree}/${BINARY_CACHE_DIR}/${binaryName} `)
+        ),
+      ).toBe(true);
+      expect(m.asked.some((line) => line.startsWith(root))).toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+      await Deno.remove(tree, { recursive: true });
+    }
+  });
+
+  it("keeps each server's spaces and caches in the lane's work directory, and tells the suites where", async () => {
+    const m = machine({ "index.ts": LISTENING });
+    const served = (await open("toolshed", m)).opened.envFor(["toolshed"]);
+    const env = envOf(m, "index.ts");
+    expect(env?.DB_PATH).toBe("");
+    expect(env?.MEMORY_DIR).toMatch(
+      /^file:\/\/.*capability-[^/]*\/toolshed-\d+\/memory\/$/,
+    );
+    expect(env?.CACHE_DIR).toMatch(/capability-[^/]*\/toolshed-\d+\/cache$/);
+    expect(served.MEMORY_DIR).toBe(env?.MEMORY_DIR);
+    expect(served.DB_PATH).toBe("");
+  });
+
+  it("gives the suites of a baked server a store beside the server's rather than its own", async () => {
+    const m = await openBaked(
+      "toolshed-baked-opposite",
+      "toolshed-baked-opposite",
+      "opposite",
+    );
+    expect(envOf(m, "toolshed-baked-opposite")?.MEMORY_DIR).toMatch(
+      /\/toolshed-\d+\/memory\/$/,
+    );
+    const suites = (await openCapabilities(["toolshed-baked-opposite"], {
+      root: Deno.cwd(),
+      dryRun: true,
+      workDir: "/work",
+    }, CAPABILITIES)).envFor(["toolshed-baked-opposite"]);
+    expect(suites.MEMORY_DIR).toBe("file:///work/toolshed-8000/suites-memory/");
+    expect(suites.DB_PATH).toBe("");
   });
 
   it("reports a cached binary it cannot look for rather than building one", async () => {
