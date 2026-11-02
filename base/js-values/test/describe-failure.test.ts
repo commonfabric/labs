@@ -20,6 +20,11 @@ describe("describe-failure", () => {
       })).toBe("session refused by the memory server");
     });
 
+    it("returns the message of a function that carries one", () => {
+      const thrown = Object.assign(() => {}, { message: "callable refusal" });
+      expect(describeFailure(thrown)).toBe("callable refusal");
+    });
+
     it("returns the text of a value that has no `message`", () => {
       expect(describeFailure("plain")).toBe("plain");
       expect(describeFailure(42)).toBe("42");
