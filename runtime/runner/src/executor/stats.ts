@@ -661,7 +661,7 @@ export type ServingLoopStats = {
   memo: { hits: number; misses: number; inflight: number };
 
   /** The crossings this process sent to another space's owner through the
-   * deployment's route (`serving-loop-owner-routing.md`), by kind, each
+   * deployment's route (`serving-loop.md` §2), by kind, each
    * counted once the owner answered: the outbox's event appends, the
    * wave's foreign batches, and its access-list changes into other
    * spaces. Zero with the route off, and zero on a process every

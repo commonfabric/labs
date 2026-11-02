@@ -3,7 +3,7 @@
  * each space's memory socket to the toolshed owning it the way the
  * deployment's proxy does: a served run on one process sends an event into
  * a space owned by the other, and the event is served on its owner alone
- * (docs/plans/serving-loop-owner-routing.md, stage R4). Each toolshed starts
+ * (serving-loop.md §2). Each toolshed starts
  * from source in a process of its own, with `MEMORY_URL` naming the proxy.
  */
 

@@ -1078,8 +1078,7 @@ Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission �
   }
 });
 
-// Owner routing R3 — the read row across processes (protocol.md §2;
-// docs/plans/serving-loop-owner-routing.md):
+// Owner routing R3 — the read row across processes (protocol.md §2):
 //
 // - A session is the space's SERVING session on this server when it is in
 //   process and its principal holds the space's lease: its named reads

@@ -60,7 +60,7 @@ places each crossing. A host with the loop on its main thread
 (`SERVER_EXECUTION_WORKER=false`) does the same work without the port.
 Either way, the loop's crossings into other spaces go to those spaces'
 owners over the deployment's route
-([owner routing](../../plans/serving-loop-owner-routing.md), on by
+([owner routing](#2-the-lease-single-deriver-operationally), on by
 default); a host given no route keeps them on its own memory server.)*
 
 A space is ACTIVE when it has ≥1 live client session or undelivered
@@ -370,10 +370,17 @@ construction against *clients* (no code path). Against *other serving loops*
 it holds through two things: each space's owner, and the lease.
 
 - **Precondition: one owner.** A deployment's route assigns each space to one
-  process, and every crossing into a space goes through that process
-  ([owner routing](../../plans/serving-loop-owner-routing.md)), so two processes
-  never contend for one
-  space. The route never moves a space between running processes: a change to
+  process, its owner: the process a socket to `MEMORY_URL` with `?space=<did>`
+  reaches. A toolshed never computes the owner; it dials the route, and in a
+  single-process deployment the route names the process itself. Under owner
+  routing (`SERVER_EXECUTION_OWNER_ROUTING`, on by default) a serving loop
+  reaches every space other than its home through that space's owner: event
+  appends (§5), foreign wave batches and access-list changes (protocol.md §2b),
+  the genesis of a space it creates, and reads (§3b). Production clients always
+  name the space, and a loop never activates a space it reached through the
+  route, so everything that activates a space reaches its owner, a space is
+  served only by its owner, and two processes never contend for one space. The
+  route never moves a space between running processes: a change to
   the set of processes behind it drains and restarts them all. With the lease
   in memory, nothing stored stops an old owner from serving a space a new owner
   starts to serve, so this is what the invariant rests on across processes.
@@ -385,8 +392,9 @@ it holds through two things: each space's owner, and the lease.
   the SpaceServer's service identity plus a process-instance
   component minted at process start, or at each serving-worker generation
   when the loop runs in a worker. Both realms adopt that component before
-  leases are acquired. A replacement worker waits for its predecessor's
-  teardown and lease release and adopts a fresh component. Within a serving
+  leases are acquired. A replacement worker adopts a fresh component, after
+  waiting for its predecessor's teardown and lease release unless the watchdog
+  below killed that predecessor. Within a serving
   generation it is stable across every reacquire (it stays a nameable,
   attestable identity, so protocol.md §1's "the envelope principal
   IS the lease holder" reads literally). The component keys commit replay, and
@@ -811,9 +819,8 @@ executing:
   mechanism) registers, by being logged, a
   server-internal wake on that doc for the home SpaceServer. Same one-run-late soundness.
   That session reaches the foreign space's owner from the home's
-  process over the deployment's route (owner routing,
-  `docs/plans/serving-loop-owner-routing.md`, on by default), and the
-  owner's commits wake the home loop over it; a host given no route
+  process over the deployment's route (owner routing, §2, on by default), and
+  the owner's commits wake the home loop over it; a host given no route
   opens the session on its own memory server, which v2 then assumes
   holds every space. *(Phase 5 pinned the wake end to end and added NO machinery
   for it — survival-tested: the foreign read's loopback session IS
@@ -1922,7 +1929,7 @@ the durable rows of §5 carry APPENDS, never effect state).
   the target's routed session (04-protocol.md §4.3.12) over the
   host's route to each space's owner
   (`SERVER_EXECUTION_OWNER_ROUTING`, on by default,
-  [owner routing](../../plans/serving-loop-owner-routing.md)),
+  [owner routing](#2-the-lease-single-deriver-operationally)),
   which the owner admits exactly as its own host's delegated
   append; the host keeps one such session per target space for as
   long as a tenure uses it. A host given no route delivers the row
@@ -2194,7 +2201,7 @@ committed (§1's third activation trigger, RULED 2026-08-21) — so a
 provisioning flow whose target never derives its staged setup is
 diagnosable from the issue count against the target's activity;
 `routed` counts the crossings sent to another space's owner through
-the deployment's route (serving-loop-owner-routing.md), by kind and
+the deployment's route (§2), by kind and
 once the owner answered — the outbox's event appends, the wave's
 foreign batches and its access-list changes into other spaces — so a
 deployment reads there whether routing carries its crossings: zero

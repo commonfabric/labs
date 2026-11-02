@@ -479,7 +479,7 @@ DR1 holder minted by the co-hosted process (service identity +
 process-instance component). **Owner routing R3 (RULED 2026-11-01)
 restates the row without the co-hosted lease:** with each space
 served from the process that owns it
-(`docs/plans/serving-loop-owner-routing.md`), a serving runtime's read
+(serving-loop.md §2), a serving runtime's read
 of a foreign space reaches that space's owner from another process,
 whose lease the owner never minted and cannot see. Who may name an
 instance is therefore the space's OWN serving session — the
@@ -612,7 +612,7 @@ target's SpaceServer processes it like any event. The append
 reaches the target's admission on the host's own memory server, or,
 with the host given a route to each space's owner
 (`SERVER_EXECUTION_OWNER_ROUTING`,
-[owner routing](../../plans/serving-loop-owner-routing.md)), as a
+[owner routing](serving-loop.md#2-the-lease-single-deriver-operationally)), as a
 `served` `append` on the host's routed session to that owner
 (memory-v2 04-protocol.md §4.3.12), admitted there from the
 delegating-class session under the same carried actor: "co-hosted"
@@ -659,7 +659,7 @@ relocated into the wave's commit step:
   each foreign commit is a write to the store on the host's own
   process: store sequencing, not a network await. With the host given
   a route to each space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
-  [owner routing](../../plans/serving-loop-owner-routing.md)), each
+  [owner routing](serving-loop.md#2-the-lease-single-deriver-operationally)), each
   foreign batch is a `served` `commit` awaited on the host's routed
   session to the target's owner (memory-v2 04-protocol.md §4.3.12),
   which commits it as the host's own sink would have, under this row's
