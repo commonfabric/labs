@@ -20,7 +20,8 @@
  * which point at two inboxes, is offered once to each, and lists her once;
  * one named by two of her profiles pointing at one inbox is offered there
  * once; and one naming profiles of Alice and Carol that point at the same
- * inbox is refused whole, whether or not it also names Bob's own. Each person writes their own profiles here, so their labels
+ * inbox is offered there once, and lists each of them, whether or not it also
+ * names Bob's own. Each person writes their own profiles here, so their labels
  * name them, as a Fabric profile's do.
  */
 import {
@@ -435,6 +436,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       requests.key("g-two").key("entry").key("room").resolveAsCell(),
     )
   );
+  const heldShared = Writable.of<{ room?: Cell<ChatRoomLink> }>({});
+  const action_hold_shared = action(() =>
+    heldShared.key("room").set(
+      requests.key("g-shared").key("entry").key("room").resolveAsCell(),
+    )
+  );
 
   return {
     [TESTS]: [
@@ -640,8 +647,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
-      // Profiles of Alice and Carol pointing at one inbox refuse the group
-      // whole.
+      // Profiles of Alice and Carol pointing at one inbox offer it there once,
+      // and list each of them.
       {
         action: manager.createGroup,
         event: {
@@ -652,8 +659,8 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
-      // Naming Bob's own profile too, which is left out, refuses it all the
-      // same.
+      // Naming Bob's own profile too, which is left out, offers it the same
+      // way.
       {
         action: manager.createGroup,
         event: {
@@ -664,15 +671,17 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
+      { action: action_hold_shared },
       {
         assertion: assert(() => {
-          const refused = requests.get()["g-shared"];
-          const refusedOwn = requests.get()["g-shared-own"];
-          return refused?.status === "refused" &&
-            refused.code === "shared-inbox" &&
-            refusedOwn?.status === "refused" &&
-            refusedOwn.code === "shared-inbox" &&
-            manager.rooms.length === 3;
+          const roster = heldShared.key("room").get()?.get()?.roster ?? [];
+          return requests.get()["g-shared"]?.status === "done" &&
+            requests.get()["g-shared-own"]?.status === "done" &&
+            manager.rooms.length === 5 &&
+            roster.length === 3 &&
+            roster.some((known) => equals(known, aliceProfile)) &&
+            roster.some((known) => equals(known, carolShared)) &&
+            roster.some((known) => equals(known, profile));
         }),
       },
       // Each inbox was sent each offer meant for it once, and nothing else.
@@ -682,10 +691,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           const expected = [
             "d-alice",
             "g-one",
+            "g-shared",
+            "g-shared-own",
             "g-two",
             addMemberOfferId(setup.roomSpace.get(), "add-alice"),
           ].sort();
-          return shared.length === 4 &&
+          return shared.length === 6 &&
             shared.every((id, index) => id === expected[index]) &&
             setup.second.received.length === 1 &&
             setup.second.received[0] === "g-two";
