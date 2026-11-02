@@ -1,5 +1,8 @@
 import { ValidationError } from "@cliffy/command";
-import { CompilerError, TransformerError } from "@commonfabric/js-compiler/errors";
+import {
+  CompilerError,
+  TransformerError,
+} from "@commonfabric/js-compiler/errors";
 import { SlugAssignedError } from "@commonfabric/piece";
 import { SlugResolutionError } from "@commonfabric/runner";
 

@@ -666,7 +666,7 @@ async function confirm(
   board: Board,
   reference: string,
   wrote: (topic: Topic) => boolean | Promise<boolean>,
-  done: string,
+  done: (topic: Topic) => string,
 ): Promise<void> {
   const topic = findTopic(await readTopics(deps, board), reference);
   if (!await wrote(topic)) {
@@ -674,7 +674,7 @@ async function confirm(
       `The write settled but does not read back on top/${topic.number}.`,
     );
   }
-  deps.write(`${done}\n${formatTopicLine(topic, nowFor(deps))}`);
+  deps.write(`${done(topic)}\n${formatTopicLine(topic, nowFor(deps))}`);
 }
 
 /**
@@ -706,7 +706,7 @@ async function writeTopic(
         board,
         target.number,
         (after) => wrote(target, after, repeated),
-        `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
+        () => `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
       );
     },
   );
@@ -904,8 +904,11 @@ export async function newAction(
       target: board.board,
       verb: "addTopic",
       payload: { title, body: text, agentName },
+      // Only the address: a selection of nothing but addresses is answered
+      // from the stored links, without the pattern graph any other selection
+      // runs. The Topic's number comes back with the copy refreshed below.
       resultSchema: JSON.stringify({
-        properties: { topic: { $link: true }, name: { type: "string" } },
+        properties: { topic: { $link: true } },
       }),
     },
     async (written) => {
@@ -913,8 +916,7 @@ export async function newAction(
       const topic = isObjectNotArray(result) && isObjectNotArray(result.topic)
         ? result.topic.$link
         : undefined;
-      const name = isObjectNotArray(result) ? result.name : undefined;
-      if (typeof topic !== "string" || typeof name !== "string") {
+      if (typeof topic !== "string") {
         throw new Error(
           "`addTopic` settled without naming the Topic it created.",
         );
@@ -923,9 +925,12 @@ export async function newAction(
       await confirm(
         deps,
         board,
-        name,
+        topic,
         (created) => created.title === title.trim(),
-        `Created top/${name} (${topic})${repeated ? REPEATED : ""}.`,
+        (created) =>
+          `Created top/${created.number} (${topic})${
+            repeated ? REPEATED : ""
+          }.`,
       );
     },
   );
@@ -1054,7 +1059,8 @@ export async function mentionAction(
         board,
         from.number,
         async (after) => await mentions(after) === (verb === "mention"),
-        `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
+        () =>
+          `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
           `mentions top/${to.number}${repeated ? REPEATED : ""}.`,
       );
     },

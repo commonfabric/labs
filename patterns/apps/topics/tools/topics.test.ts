@@ -124,7 +124,7 @@ describe("topics command", () => {
           },
         },
       });
-      return { topic: { $link: "/of:fid1:topic-piece-3" }, name: "3" };
+      return { topic: { $link: "/of:fid1:topic-piece-3" } };
     }
     expect(piece).toBe("of:fid1:topic-alias-1");
     if (verb === "addComment") {
@@ -808,9 +808,7 @@ describe("topics command", () => {
         "-",
         "--",
         "--schema",
-        JSON.stringify({
-          properties: { topic: { $link: true }, name: { type: "string" } },
-        }),
+        JSON.stringify({ properties: { topic: { $link: true } } }),
       ]);
     });
   });
