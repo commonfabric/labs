@@ -156,6 +156,14 @@ A computation that calls `spaceAccess(target)` reads the access list through its
 transaction, so a grant or revoke that reaches the replica runs it again like
 any other read.
 
+An admission to a space with no access list delivers no document either, but
+it leaves the answer where it was: `undefined` is the answer for a list that
+has not arrived and for a space with none alike, so there is nothing to run the
+computation again for. That is where `spaceAccess(target)` and
+`spaceDeleted(target)` differ, since the latter's answer goes from `undefined`
+to `false` on the same admission, and only the latter waits for the notice of
+an open's answer ([below](#a-deleted-space)).
+
 A refusal changes no document the computation has read, and neither does a
 readmission, so on a client the call also registers the running action with the
 storage manager's access-change observer (`subscribeSpaceAccessChange()`), which
@@ -245,19 +253,21 @@ any value in it, and a list of spaces holds their DIDs. Any other string throws.
 
 A call about a space the runtime has not opened opens it, by reading the space's
 access-list document through the call's transaction as `spaceAccess(target)`
-does, so the memory server answers for it. The run waits for that answer
-through machinery the runtime already has, not a retry or a poll of its own:
+does, so the memory server answers for it. The run waits for that answer, not
+with a retry or a poll of its own but through a notice of an open's answer,
+which the storage manager gives when the memory server admits or refuses a
+session's open. That notice is new: the storage manager's `spaceOpenObserver`
+says only that an open has started.
 
 - A reactive computation gets `undefined` at once, and is run again when the
-  answer arrives. The runtime waits for the memory server's answer for the
-  space, the response to the session's open, and runs the computation again
-  through `Scheduler.invalidateAction()`: an admission to a space with no
-  access list, as in `off` mode, delivers no document the computation read, so
-  no document is what wakes it. A refusal that comes later,
-  as when the space is deleted while its session is open, reaches it through
-  the storage manager's access-change observer (`subscribeSpaceAccessChange()`),
-  as it does for `spaceAccess(target)`. An open that ends with no answer runs
-  nothing again.
+  answer arrives. The runtime waits for the notice of the open's answer, and
+  runs the computation again through `Scheduler.invalidateAction()`: an
+  admission to a space with no access list, as in `off` mode, delivers no
+  document the computation read, so no document is what wakes it. A refusal
+  that comes later, as when the space is deleted while its session is open,
+  reaches it through the storage manager's access-change observer
+  (`subscribeSpaceAccessChange()`), as it does for `spaceAccess(target)`. An
+  open that ends with no answer runs nothing again.
 - A handler does not see `undefined` for a space it is waiting on. The call
   records the space as pending, as a run records an `inSpace()` name it cannot
   resolve yet, and the run's transaction is dropped. Once the run has ended,
@@ -269,7 +279,14 @@ through machinery the runtime already has, not a retry or a poll of its own:
   answer coming, the event fails as an event whose required load failed does
   (`finalize()` in `runtime/runner/src/scheduler/events.ts`), and is not run
   again. An unserved event sent with `retries: false` is not run again either,
-  as for an `inSpace()` name: it is dropped once the answer arrives.
+  as for an `inSpace()` name: it is dropped once the answer arrives. A served
+  run is run again whatever its event's `retries`, as it is for an `inSpace()`
+  name, since the serving runtime owns its result. A serving runtime reads a
+  foreign space through the serving plane's foreign grant rather than a
+  session of the principal's, and the grant's refusal of a deleted space
+  carries the `deleted` marker (INV-15), so the answer it waits for is that
+  grant's. A space whose reads the serving runtime's own store supplies has no
+  answer to wait for, as below.
 
 A runtime with no memory server it can ask about the space returns `undefined`
 from both, and a handler is not run again: there is no answer to wait for. Such
