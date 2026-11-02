@@ -5,8 +5,7 @@
  * runs the suites under the next Pacific day's seed. It does when the
  * CI workflow passed on the commit the run checks out, which is the head
  * of `main`, and no other run of that workflow has run the suites under
- * that seed yet. In the evening, a run fails when no run has run the seed
- * and CI failed on the head of `main`.
+ * that seed yet.
  *
  * Usage: test-order-tomorrow.ts SEED
  *
@@ -20,7 +19,6 @@ import {
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
-import { daySeed } from "@commonfabric/test-support/shuffle";
 
 /** What the jobs of a run under a seed are listed under, before `/`. */
 export const ORDER_JOB_NAME = "Tomorrow's order";
@@ -36,20 +34,12 @@ export const ORDER_WORKFLOW_FILE = "test-order-tomorrow.yml";
  */
 const LOOKBACK_MS = 48 * 60 * 60 * 1000;
 
-/** How long before the next Pacific day starts the evening does. */
-const EVENING_MS = 6 * 60 * 60 * 1000;
-
 export interface Job {
   name: string;
   conclusion: string | null;
 }
 
 export type Get = <T>(path: string) => Promise<T>;
-
-/** Whether `now` is in the evening, the last hours of its Pacific day. */
-export function isEvening(now: Date): boolean {
-  return daySeed(new Date(now.getTime() + EVENING_MS)) !== daySeed(now);
-}
 
 /** The name of the jobs of a run under `seed`, before `/`. */
 export function orderJobName(seed: number): string {
@@ -83,26 +73,18 @@ async function listed<T>(
   }
 }
 
-/**
- * Where the CI workflow's runs for a push of `commit` stand: one passed,
- * or one has yet to finish, which includes having none yet, or every one
- * finished without passing.
- */
-export async function ciState(
+/** Whether a run of the CI workflow for a push of `commit` passed. */
+export async function commitIsGreen(
   commit: string,
   get: Get = githubGet,
-): Promise<"passed" | "running" | "failed"> {
+): Promise<boolean> {
   const runs = await listed<WorkflowRun>(
     get,
     `/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs`,
     { event: "push", head_sha: commit },
     "workflow_runs",
   );
-  if (runs.some((run) => run.conclusion === "success")) return "passed";
-  if (runs.length === 0 || runs.some((run) => run.status !== "completed")) {
-    return "running";
-  }
-  return "failed";
+  return runs.some((run) => run.conclusion === "success");
 }
 
 /**
@@ -139,12 +121,9 @@ export async function seedHasRun(
 }
 
 /**
- * What the run `self` at `now` does about `seed`, and why, in a line: it
- * runs the suites at `commit`, or skips them, or fails because the seed
- * went untested. Only a head CI passed on runs the suites. While CI on
- * the head has yet to finish, the run its finishing starts decides. When
- * CI failed on the head, a run outside the evening leaves the seed to a
- * later green head, and a run in the evening fails.
+ * Whether the run `self` at `now` runs the suites at `commit` under
+ * `seed`, and why, in a line. A head CI has not passed on leaves the seed
+ * to a later green head.
  */
 export async function decide(
   seed: number,
@@ -152,37 +131,25 @@ export async function decide(
   self: number,
   now: Date,
   get: Get = githubGet,
-): Promise<{ verdict: "run" | "skip" | "untested"; reason: string }> {
-  const state = await ciState(commit, get);
-  const unproven = `CI has ${
-    state === "running" ? "not finished" : "failed"
-  } on the head of main, ${commit}`;
-  if (state === "running" || (state === "failed" && !isEvening(now))) {
+): Promise<{ run: boolean; reason: string }> {
+  if (!await commitIsGreen(commit, get)) {
     return {
-      verdict: "skip",
-      reason: `${unproven}; a later green head runs seed ${seed}.`,
+      run: false,
+      reason: `CI has not passed on the head of main, ${commit}; a later ` +
+        `green head runs seed ${seed}.`,
     };
   }
   if (
     await seedHasRun(seed, self, new Date(now.getTime() - LOOKBACK_MS), get)
   ) {
-    return { verdict: "skip", reason: `Another run has run seed ${seed}.` };
+    return { run: false, reason: `Another run has run seed ${seed}.` };
   }
-  if (state === "failed") {
-    return {
-      verdict: "untested",
-      reason: `No run has run seed ${seed}, and ${unproven}. Unless a ` +
-        `green head comes first, the next Pacific day's commits will run ` +
-        `in an order nothing has tested.`,
-    };
-  }
-  return { verdict: "run", reason: `Running seed ${seed} at ${commit}.` };
+  return { run: true, reason: `Running seed ${seed} at ${commit}.` };
 }
 
 /**
  * Runs the command line `args` with `env` at `now`, and returns the
- * status to exit with. It prints whether to run the suites, and fails
- * when a run in the evening finds the seed untested.
+ * status to exit with.
  */
 export async function main(
   args: readonly string[],
@@ -204,7 +171,7 @@ export async function main(
     );
     return 2;
   }
-  const { verdict, reason } = await decide(
+  const { run, reason } = await decide(
     Number(args[0]),
     commit,
     Number(self),
@@ -212,8 +179,7 @@ export async function main(
     get,
   );
   announce(reason);
-  if (verdict === "untested") return 1;
-  print(String(verdict === "run"));
+  print(String(run));
   return 0;
 }
 

@@ -30,13 +30,13 @@ describe("test-seed", () => {
     });
   });
 
-  it("gives the coming Pacific day's seed at 02:30 UTC, summer and winter", () => {
-    // The evening run starts at 02:30 UTC, which is the
-    // evening of the day before in the Pacific zone.
-    expect(requestedSeed(["--tomorrow"], new Date("2026-07-15T02:30:00Z")))
-      .toBe(20260715);
-    expect(requestedSeed(["--tomorrow"], new Date("2026-12-15T02:30:00Z")))
-      .toBe(20261215);
+  it("gives the next Pacific day's seed at 11:17 UTC, summer and winter", () => {
+    // The scheduled run of the next day's order starts at 11:17 UTC, which
+    // is early on a Pacific day.
+    expect(requestedSeed(["--tomorrow"], new Date("2026-07-15T11:17:00Z")))
+      .toBe(20260716);
+    expect(requestedSeed(["--tomorrow"], new Date("2026-12-15T11:17:00Z")))
+      .toBe(20261216);
   });
 
   it("throws for an argument it does not know", () => {

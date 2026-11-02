@@ -244,28 +244,20 @@ ahead, so that such a test can be found and fixed before the day it would
 break.
 
 The workflow runs the suites once for each seed, the first time it finds that
-the CI workflow passed on the head of `main`. A head that CI failed on would
-fail the run for reasons unrelated to the order. The workflow starts each time
-the CI workflow finishes on a push to `main`. It also starts at 02:30 UTC every
-day, for a day when nothing lands. That is 19:30 in the Pacific zone in summer
-and 18:30 in winter, so the next Pacific day starts four and a half or five and
-a half hours later. A scheduled run that GitHub starts up to four hours late
-therefore still asks for the same seed.
+the CI workflow passed on the head of `main`. A head that CI has not passed on
+would fail the run for reasons unrelated to the order. The workflow starts each
+time the CI workflow passes on a push to `main`. It also starts at 11:17 UTC
+every day, for a day when nothing lands. That is 04:17 in the Pacific zone in
+summer and 03:17 in winter, early on a Pacific day either way, so a scheduled
+run that GitHub starts hours late still asks for the same seed.
 
 Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
 Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the
 suites. It says yes when CI passed on the head of `main` and no other run has
-run that seed, whatever came of that run. While CI on the head has yet to
-finish, it says no, and the run that CI finishing starts decides instead. When
-CI failed on the head, it says no, and leaves the seed to a later green head.
-In the evening, the last six hours of a Pacific day, few heads may come before
-the seed's day starts, so the run fails instead, saying that no run has yet run
-the seed.
-
-A run checks out the head of `main` as it stood when the event that started the
-run fired, which is not always the commit whose CI run just finished. The runs
-that CI finishing on `main` and the schedule start wait for one another, so
-that each sees what the run before it did. A run dispatched by hand runs the
+run that seed, whatever came of that run. A run checks out the head of `main`
+as it stood when the event that started the run fired, which is not always the
+commit whose CI run just finished. The runs that decide wait for one another,
+so that each sees what the run before it did. A run dispatched by hand runs the
 suites without asking, which is how to run a seed again, and it counts as
 having run the seed.
 
