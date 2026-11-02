@@ -113,8 +113,8 @@ every test the pull request's default selection runs, and runs the rest,
 choosing them nearest the change first and passing over any that would take
 the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
 another budget, and `--base` the ref the change is measured against. A run that
-runs tests ends with the block
-[What a run ends with](#what-a-run-ends-with) describes.
+runs tests ends with the block described in
+[What a run ends with](#what-a-run-ends-with).
 After it come anything the run could not clean up, the failing tests that
 pull requests hold back as too flaky, which do not fail the run, and the test
 units left out, among them any this machine lacks something for.
