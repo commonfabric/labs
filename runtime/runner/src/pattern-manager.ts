@@ -738,6 +738,16 @@ export class PatternManager {
   readonly #compileCacheWrites = new Set<Promise<unknown>>();
 
   /**
+   * The watches on what the serving waves decide about committed write-backs
+   * (`#watchCacheWriteDurability()`). Kept apart from `#compileCacheWrites`:
+   * a watch resolves only when its wave commits or is abandoned, so a barrier
+   * awaited from inside that wave, `flushCompileCacheWrites()` or the
+   * scheduler's pending-commit barrier, would wait on the wave it is in.
+   * `compileCacheWriteOutcomesSettled()` is the wait for these.
+   */
+  readonly #compileCacheWriteOutcomes = new Set<Promise<unknown>>();
+
+  /**
    * Closure write-backs that replication must observe before reading its origin
    * space. Tracked separately because the replication promise also lives in
    * `#compileCacheWrites` and cannot await itself.
@@ -947,7 +957,7 @@ export class PatternManager {
    * nothing, read against the replica the withdrawn write had already
    * changed, so it holds nothing on its own; and when it did land, acting
    * costs one write back that changes nothing. Tracked in
-   * `#compileCacheWrites` until the waves have decided.
+   * `#compileCacheWriteOutcomes` until the waves have decided.
    */
   #watchCacheWriteDurability(
     space: MemorySpace,
@@ -983,8 +993,8 @@ export class PatternManager {
         withdrawal.message,
       ]);
     });
-    this.#compileCacheWrites.add(watch);
-    watch.finally(() => this.#compileCacheWrites.delete(watch));
+    this.#compileCacheWriteOutcomes.add(watch);
+    watch.finally(() => this.#compileCacheWriteOutcomes.delete(watch));
   }
 
   /**
@@ -1236,9 +1246,23 @@ export class PatternManager {
     };
   }
 
-  /** Resolve once all in-flight compiled-cache write-backs have settled. */
+  /**
+   * Resolve once all in-flight compiled-cache write-backs have settled: their
+   * transactions committed, which on a serving runtime is a wave's acceptance.
+   * What the waves then decide is `compileCacheWriteOutcomesSettled()`'s.
+   */
   async flushCompileCacheWrites(): Promise<void> {
     await Promise.allSettled([...this.#compileCacheWrites]);
+  }
+
+  /**
+   * Resolve once every serving wave holding a committed write-back has
+   * decided it, and a withdrawal has been acted on
+   * (`#watchCacheWriteDurability()`). Awaited only once the waves in question
+   * can commit: from inside one of them it waits on itself.
+   */
+  async compileCacheWriteOutcomesSettled(): Promise<void> {
+    await Promise.allSettled([...this.#compileCacheWriteOutcomes]);
   }
 
   /**
