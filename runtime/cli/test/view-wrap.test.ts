@@ -348,6 +348,30 @@ Deno.test("word wrap plan: a row ends before a tab its end would split", () => {
   );
 });
 
+Deno.test("word wrap plan: a row ends before a trailing tab its end would split", () => {
+  // No word follows these tabs, so only the tabs make word layout differ from
+  // hard layout.
+  const cases: [string, number[]][] = [
+    ["abcde\t", [0, 5]],
+    [".. \t\t", [0, 4]],
+  ];
+  for (const [text, offsets] of cases) {
+    const plan = buildWrapPlan(
+      parseDocument(text).lines,
+      "ansi",
+      7,
+      new Map(),
+      "word",
+    );
+
+    assertEquals(
+      Array.from(plan.wordRows?.[0]?.offsets ?? []),
+      offsets,
+      JSON.stringify(text),
+    );
+  }
+});
+
 Deno.test("word wrap plan: a tab wider than its row still wraps forward", () => {
   const doc = parseDocument("ab\tc");
   const plan = buildWrapPlan(

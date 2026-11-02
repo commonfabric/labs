@@ -587,6 +587,8 @@ function needsVariableWordLayout(text: string): boolean {
   let hasPrefix = false;
   let sawBreakWhitespace = false;
   for (const codePoint of text) {
+    // A tab can draw several cells, which word wrapping keeps on one row.
+    if (codePoint === "\t") return true;
     if (isBreakWhitespaceCharacter(codePoint)) {
       sawBreakWhitespace = true;
     } else if (sawBreakWhitespace) {
