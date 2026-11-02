@@ -1106,7 +1106,7 @@ describe("opening a capability on a machine that answers", () => {
 
   it("builds in and runs from the tree it is told to build from, whatever the root's cache holds", async () => {
     const binaryName = "toolshed-baked-opposite";
-    const m = machine({ [binaryName]: "listening (pid 999999). Logs: x\n" });
+    const m = machine({ [binaryName]: LISTENING });
     const root = await Deno.makeTempDir({ prefix: "capability-" });
     const tree = await Deno.makeTempDir({ prefix: "capability-tree-" });
     try {
@@ -1120,6 +1120,7 @@ describe("opening a capability on a machine that answers", () => {
         workDir: root,
         buildFrom: tree,
         exec: m.exec,
+        spawn: m.spawn,
         fetch: serving("opposite"),
       }, CAPABILITIES);
       await opened.close();
@@ -1137,7 +1138,7 @@ describe("opening a capability on a machine that answers", () => {
   });
 
   it("keeps each server's spaces and caches in the lane's work directory, and tells the suites where", async () => {
-    const m = machine({ "index.ts": "listening (pid 999999). Logs: x\n" });
+    const m = machine({ "index.ts": LISTENING });
     const served = (await open("toolshed", m)).opened.envFor(["toolshed"]);
     const env = envOf(m, "index.ts");
     expect(env?.DB_PATH).toBe("");

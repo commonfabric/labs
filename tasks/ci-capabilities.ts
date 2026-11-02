@@ -19,13 +19,14 @@
 import * as path from "@std/path";
 
 import {
-  awaitReadyMarker,
-  BACKGROUND_LOG_ENV,
-} from "../runtime/toolshed/background.ts";
-import {
   darwinLibfusePaths,
   LINUX_LIBFUSE_PATHS,
 } from "@commonfabric/fuse/library-paths";
+
+import {
+  awaitReadyMarker,
+  BACKGROUND_LOG_ENV,
+} from "../runtime/toolshed/background.ts";
 import { type BinaryName, BUILD_HOST_VARIABLES } from "./build-binaries.ts";
 import {
   SERVER_EXECUTION_POSTURE_VARIABLES,
