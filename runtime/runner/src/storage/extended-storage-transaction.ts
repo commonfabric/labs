@@ -5446,21 +5446,46 @@ export function createChildCellTransaction(
   return new TransactionWrapper(tx, { childCellTx });
 }
 
+const singleReadTxs = new WeakSet<IExtendedStorageTransaction>();
+
+/**
+ * Marks a read transaction as opened for one read whose caller supplied no open
+ * transaction. Nothing finishes such a transaction, and while it stays ready it
+ * returns each document as it first read it, so a cell the read hands out must
+ * not hold it: {@link getTransactionForChildCells} leaves that cell with no
+ * transaction, and each of its reads opens a new one and sees current state.
+ */
+export function markSingleReadTx(tx: IExtendedStorageTransaction): void {
+  singleReadTxs.add(tx);
+}
+
+/**
+ * Returns whether a read through `tx` is one a read opened for itself (see
+ * {@link markSingleReadTx}), directly or under a wrapper such as `Cell.sample()`
+ * puts around it.
+ */
+export function isSingleReadTx(tx: IExtendedStorageTransaction): boolean {
+  return getTransactionForChildCells(tx) === undefined;
+}
+
 /**
  * Helper function to get the transaction to use for creating child cells from a
  * potentially wrapped transaction. If the transaction is not wrapped, returns
  * it as-is.
  *
  * Used when creating child cells that should use a different transaction than
- * the parent read (e.g., in Cell.sample() or Cell.sink()).
+ * the parent read (e.g., in Cell.sample() or Cell.sink()). Returns `undefined`
+ * for a read that opened its transaction for itself, whose cells outlive it.
  */
 export function getTransactionForChildCells(
   tx: IExtendedStorageTransaction | undefined,
 ): IExtendedStorageTransaction | undefined {
-  if (tx instanceof TransactionWrapper) {
-    return tx.getTransactionForChildCells();
-  }
-  return tx;
+  const childTx = tx instanceof TransactionWrapper
+    ? tx.getTransactionForChildCells()
+    : tx;
+  return childTx !== undefined && singleReadTxs.has(childTx)
+    ? undefined
+    : childTx;
 }
 
 /**

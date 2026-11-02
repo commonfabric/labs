@@ -186,6 +186,7 @@ import {
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  singleReadTx,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
@@ -1981,7 +1982,7 @@ export class CellImpl<T extends FabricValue>
     // Wrap the transaction to make all reads non-reactive. Child cells created
     // during validateAndTransform will use the original transaction (via
     // getTransactionForChildCells).
-    const readTx = this.#runtime.readTx(this.#tx);
+    const readTx = singleReadTx(this.#runtime, this.#tx);
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
