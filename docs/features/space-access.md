@@ -249,10 +249,15 @@ does, so the memory server answers for it. The run waits for that answer
 through machinery the runtime already has, not a retry or a poll of its own:
 
 - A reactive computation gets `undefined` at once, and is run again when the
-  answer arrives: an admission delivers the access list it read, and a refusal
-  reaches it through the storage manager's access-change observer
-  (`subscribeSpaceAccessChange()`), which runs it again through
-  `Scheduler.invalidateAction()`, as it does for `spaceAccess(target)`.
+  answer arrives. The runtime waits for the memory server's answer for the
+  space, the response to the session's open, and runs the computation again
+  through `Scheduler.invalidateAction()`: an admission to a space with no
+  access list, as in `off` mode, delivers no document the computation read, so
+  no document is what wakes it. A refusal that comes later,
+  as when the space is deleted while its session is open, reaches it through
+  the storage manager's access-change observer (`subscribeSpaceAccessChange()`),
+  as it does for `spaceAccess(target)`. An open that ends with no answer runs
+  nothing again.
 - A handler does not see `undefined` for a space it is waiting on. The call
   records the space as pending, as a run records an `inSpace()` name it cannot
   resolve yet, and the run's transaction is dropped. Once the run has ended,
@@ -263,11 +268,13 @@ through machinery the runtime already has, not a retry or a poll of its own:
   against a space still unanswered. If the space's load fails instead, with no
   answer coming, the event fails as an event whose required load failed does
   (`finalize()` in `runtime/runner/src/scheduler/events.ts`), and is not run
-  again.
+  again. An unserved event sent with `retries: false` is not run again either,
+  as for an `inSpace()` name: it is dropped once the answer arrives.
 
-A runtime with no memory server it can ask about the space, such as one whose
-routing gives the space's host no route, returns `undefined` from both, and a
-handler is not run again: there is no answer to wait for.
+A runtime with no memory server it can ask about the space returns `undefined`
+from both, and a handler is not run again: there is no answer to wait for. Such
+a runtime is one whose storage manager has no sessions to report on, or one
+that reads the space from a local store rather than from a memory server.
 
 It can be called where `spaceAccess(target)` can: in a handler or a reactive
 computation, and a call in a pattern body throws. Deletion is the same for every
@@ -276,14 +283,20 @@ refuses it to a client, so the answer does not depend on who asks, and a call in
 a computation leaves its read scope as it is. Once `true` it stays `true`. A
 space deleted after the server refused the runtime for another reason reads
 `false` until a `retrySpaceAccess(space)` brings back the server's new answer.
-It tells a principal who names a space nothing the server's refusal of that
-space does not already tell them.
+That answer changes the space's verdict as a refusal or a readmission does: the
+computations that asked are run again, and a `spaceaccesslost` marked `deleted`
+goes out for the space, though one without the marker went out for its first
+refusal. It tells a principal who names a space nothing the server's refusal of
+that space does not already tell them.
 
 `spaceaccesslost`, the runtime's notice of a refused space across the worker
-boundary, carries `deleted: true` for a deleted space. The renderer's
-placeholder for content of a deleted space reads "Deleted" and has no Retry
-button, since no retry can admit anyone, and the shell asks again neither when
-the person navigates into a deleted space nor when the page regains focus.
+boundary, carries `deleted: true` for a deleted space. For a space it reported
+refused without the marker, it is sent again, with it, once the runtime learns
+the space is deleted. Only that change sends it again: a deleted space refused
+again sends nothing more. The renderer's placeholder for content of a deleted
+space reads "Deleted" and has no Retry button, since no retry can admit anyone,
+and the shell asks again neither when the person navigates into a deleted space
+nor when the page regains focus.
 
 A consumer that keeps a list of spaces, Home's shared-space catalog among
 them, uses `spaceDeleted(target)` to put away an entry whose space is gone
