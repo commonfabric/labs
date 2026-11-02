@@ -28,6 +28,8 @@
     // on-disk SQLite files, and the integration test that seeds one for an
     // injected (03.3) source reads what the server attaches.
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
+    "@node/v8": "node:v8",
+    "@node/vm": "node:vm",
     "@opentelemetry/api": "npm:@opentelemetry/api@^1.9.1",
     "@types/ws": "npm:@types/ws@^8.18.1",
     "ses": "npm:ses@^2.2.0",
@@ -50,6 +52,7 @@
     "./deployment-meta": "./src/deployment-meta.ts",
     "./space-host": "./src/space-host.ts",
     "./blob-record": "./src/blob-record.ts",
+    "./collected-memory": "./src/collected-memory.ts",
     "./pattern-release-time": "./src/pattern-release-time.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",

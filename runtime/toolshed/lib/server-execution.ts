@@ -32,6 +32,7 @@ import {
   ServingWorker,
 } from "@commonfabric/runner/executor/serving-worker-host";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import type { CollectedMemory } from "@commonfabric/runner/collected-memory";
 import type { Identity } from "@commonfabric/identity";
 import {
   servedLifecycleRunner,
@@ -48,7 +49,14 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
  * runs it: the lifecycle verbs the `pattern.lifecycle` handler sends, and the
  * loop's counters and close.
  */
-export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle;
+export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
+  /**
+   * Collects the loop's worker, and returns the memory its isolate still
+   * holds; `undefined` where the loop runs on this thread, which the caller
+   * collects itself.
+   */
+  collectedWorkerMemory(): Promise<CollectedMemory | undefined>;
+};
 
 let loop: ServingLoop | undefined;
 
@@ -449,6 +457,7 @@ export function startServerExecutionHost(options: {
       runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
       stats: () => worker.stats(),
       diagnostics: () => worker.diagnostics(),
+      collectedWorkerMemory: () => worker.collectedMemory(),
       host: undefined,
       close: () => worker.close(),
     };
@@ -497,6 +506,7 @@ export function startServerExecutionHost(options: {
           loggerCounts: getLoggerCountsBreakdown(),
           timingStats: getTimingStatsBreakdown(),
         }),
+      collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
       close: () => host.close(),
     };

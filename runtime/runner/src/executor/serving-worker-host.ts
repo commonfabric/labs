@@ -14,6 +14,7 @@ import {
 import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import {
@@ -193,6 +194,16 @@ export class ServingWorker {
   async diagnostics(): Promise<ServingLoopDiagnostics> {
     await this.ready;
     return await this.#bridge().requestDiagnostics();
+  }
+
+  /**
+   * Collects the worker's whole heap, once its host serves, and returns the
+   * memory its isolate still holds. Rejects unless `exposeGarbageCollector()`
+   * has run in this process.
+   */
+  async collectedMemory(): Promise<CollectedMemory> {
+    await this.ready;
+    return await this.#bridge().requestCollectedMemory();
   }
 
   /**

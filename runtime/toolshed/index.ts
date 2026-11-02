@@ -1,6 +1,7 @@
 import type { Runtime } from "@commonfabric/runner";
 import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
 import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
 import app from "@/app.ts";
 import {
@@ -143,6 +144,14 @@ function startServer(onListening?: () => void) {
   // A rehearsal clone keeps the source space's DID, so nothing else in this
   // log distinguishes it from production. Announce it before anything else.
   announceCloneIfServed({ memoryDir: env.MEMORY_DIR, dbPath: env.DB_PATH });
+  // Before any worker starts, so that the flag never changes while another
+  // thread runs.
+  if (env.EXPOSE_GC) {
+    exposeGarbageCollector();
+    console.log(
+      "EXPOSE_GC=true: /api/health/collected-memory collects garbage on request",
+    );
+  }
   // The signed routes check every first-party proof against this origin rather
   // than the host the client dialed, so a wrong API_URL refuses every
   // correctly signed client. Say it before anyone signs anything, normalized
