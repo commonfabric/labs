@@ -2180,7 +2180,9 @@ input holds confidentiality alone, naming only clauses the path already
 stores. Labels at other paths, an ancestor's included, are not changed. A write
 redirect at the path is followed, as a write follows it, and the labels where
 it leads are lowered; with --link-slot, the labels of the link stored at the
-path are lowered instead.`,
+path are lowered instead. Use --link-slot when a lowering refuses on the label
+of a write redirect the path follows: the clause is on the link itself, not on
+where it leads.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)
@@ -2232,7 +2234,9 @@ path are lowered instead.`,
       "With --dangerously-allow-lowering-confidentiality, lower the labels " +
         "of a link stored at the path itself, write redirect included, " +
         "rather than following a write redirect there to the labels where " +
-        "it leads. The labels of the link's target are left as they are.",
+        "it leads. The labels of the link's target are left as they are. " +
+        "Needed when a lowering refuses on the label of a write redirect the " +
+        "path follows.",
     )
     .option(
       "--json",

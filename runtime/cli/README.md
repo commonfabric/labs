@@ -1726,7 +1726,11 @@ are stored at the target. A lowering at a link that is not a write redirect
 lowers the link's own label and leaves its target's alone. A write redirect is
 followed, as a write follows it, and the lowering lands where it leads. Pass
 `--link-slot` to lower the redirect's own label instead, leaving its target's
-alone.
+alone. It is needed when the clause to remove is on the redirect itself, such as
+a stamp a write after a labeled read left on the link: without the flag, the
+lowering refuses, naming the clause as the label of a write redirect the path
+follows. `get-label` at the path shows the redirect's own label beside its
+target's, so the refusal is the signal to tell the two apart.
 
 ```bash
 echo '{"confidentiality":[]}' \

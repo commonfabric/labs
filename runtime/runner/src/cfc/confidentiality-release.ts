@@ -177,7 +177,8 @@ export async function releaseCellConfidentiality(
           "a release does not rewrite: an ancestor's label, a wildcard label " +
           "(lowered by a path with `*` in its place), the label of a write " +
           "redirect the path follows (lowered by a release of the link slot " +
-          "itself), a branch of the stored schema, or the piece's own schema.",
+          "itself, `--link-slot`), a branch of the stored schema, or the " +
+          "piece's own schema.",
       );
     }
     if (release.released.length === 0) {

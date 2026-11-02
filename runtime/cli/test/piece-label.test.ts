@@ -1207,7 +1207,10 @@ describe("cf piece CFC labels", () => {
           { confidentiality: [] },
           lower,
           deps as never,
-        )).rejects.toThrow("the label of a write redirect the path follows");
+        )).rejects.toThrow(
+          "the label of a write redirect the path follows (lowered by a " +
+            "release of the link slot itself, `--link-slot`)",
+        );
         expect(slot()).toEqual(before);
         expect(slotEntries(linked)).toEqual(target);
       });
