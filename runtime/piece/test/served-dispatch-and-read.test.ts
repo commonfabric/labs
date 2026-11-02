@@ -63,6 +63,9 @@ export default pattern<{ seed?: string }>(() => {
   }],
 };
 
+/** How many settlements a test has the flush deadline cut. */
+const CUT_SETTLEMENTS = 6;
+
 describe("served dispatch and read", () => {
   let serving: ServingMemoryServer;
   let host: ExecutorHost;
@@ -75,13 +78,14 @@ describe("served dispatch and read", () => {
   /** Resolves when a wave commit reaches the sink while one is held. */
   let waveHeld: PromiseWithResolvers<void>;
 
-  beforeEach(async () => {
-    held = undefined;
-    waveHeld = Promise.withResolvers();
+  /** Starts the serving server the test's clients and lifecycle verbs use. */
+  const startServing = async (
+    policy: Parameters<typeof startServingMemoryServer>[0]["policy"],
+  ): Promise<void> => {
     serving = await startServingMemoryServer({
       apiUrl: new URL(import.meta.url),
       serviceIdentity: serviceSigner,
-      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      policy,
       worker: false,
       decorateWaveCommitSink: (sink) =>
         new Proxy(sink, {
@@ -101,6 +105,12 @@ describe("served dispatch and read", () => {
         }),
     });
     host = serving.host.host!;
+  };
+
+  beforeEach(async () => {
+    held = undefined;
+    waveHeld = Promise.withResolvers();
+    await startServing({ flushDeadlineMs: 5_000, idleParkMs: 600_000 });
     session = createSession({
       identity: serviceSigner,
       spaceDid: space as DID,
@@ -302,6 +312,60 @@ describe("served dispatch and read", () => {
         entries[index + 1] === "demanded" ? [entry] : []
       );
       expect(passes.at(-1)).toBe("listed");
+      expect(upper.get()).toBe("INITIAL");
+    });
+
+    it("answers a read whose settlement the flush deadline cut", async () => {
+      // Every settlement is held past the deadline once a pass has listed the
+      // view, for more cycles than anything but the read asks for, so the only
+      // thing left to run them is the read itself. The idle window outlasts
+      // the test.
+      let holding = false;
+      let listed = false;
+      let cuts = 0;
+      const release = Promise.withResolvers<void>();
+      await host.close();
+      await serving.close();
+      await startServing({
+        flushDeadlineMs: 50,
+        flushDeadlineMaxMs: 400,
+        idleParkMs: 600_000,
+        storeReadThrough: false,
+        onSettleEnded: (exhausted) => {
+          if (!exhausted || !holding || !listed) return;
+          cuts += 1;
+          if (cuts === CUT_SETTLEMENTS) {
+            holding = false;
+            release.resolve();
+          }
+        },
+      });
+      const { pieceId } = await instantiate();
+      const reader = await clientPieces();
+      const upper = (await openResult(reader, pieceId))
+        .key("upper" as never) as Cell<unknown>;
+      const server = serving.server;
+      const list = server.viewInterestsForSpace.bind(server);
+      const listing = stub(server, "viewInterestsForSpace", (...args) => {
+        const interests = list(...args);
+        listed ||= interests.some(({ view }) => view.mode === "read");
+        return interests;
+      });
+      const idle = server.idle.bind(server);
+      const idling = stub(server, "idle", async () => {
+        if (holding) await release.promise;
+        await idle();
+      });
+      holding = true;
+
+      try {
+        expect(await pullFromServer(reader.runtime, upper)).toBe(true);
+      } finally {
+        idling.restore();
+        listing.restore();
+      }
+
+      expect(cuts).toBe(CUT_SETTLEMENTS);
       expect(upper.get()).toBe("INITIAL");
     });
 

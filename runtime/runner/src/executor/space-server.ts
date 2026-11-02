@@ -1119,6 +1119,9 @@ export class SpaceServer implements TransactionSealDestination {
   /** The `read` views the last demand pass's rows include. */
   #demandedReadViews: ReadonlySet<string> = new Set();
 
+  /** Whether the last publish left a `read` view without its answer. */
+  #readViewUnanswered = false;
+
   /** The demand wake's grace timer (see noteDemandChanged). */
   #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -3483,7 +3486,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#options.onWaveCycle?.();
         }
         if (!this.#active || this.#parkRequested) break;
-        if (!this.#hasWork()) {
+        if (!this.#hasWork() && !this.#readViewAnswerDue()) {
           // The next input starts a burst, whose first consequence the base
           // deadline bounds, however long the settles before the quiet grew.
           this.#grownFlushDeadlineMs = undefined;
@@ -8154,7 +8157,7 @@ export class SpaceServer implements TransactionSealDestination {
    * walks an invalidated UI again or plans over its last walk. */
   async #publishViewPlan(runtime: Runtime, quiescent: boolean): Promise<void> {
     const publishStart = performance.now();
-    await this.#viewPlanPublisher.publish(
+    this.#readViewUnanswered = await this.#viewPlanPublisher.publish(
       runtime,
       this.#options.server,
       this.#options.space,
@@ -8179,10 +8182,19 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
+   * Whether a cycle run now can answer a `read` view the last publish could
+   * not. Whatever is still owed wakes the loop when it arrives; once nothing
+   * is, only a settlement the flush deadline cut stood in the way, and no input
+   * follows one of those to wake the loop.
+   */
+  #readViewAnswerDue(): boolean {
+    return this.#readViewUnanswered && this.#nothingOwed();
+  }
+
+  /**
    * Whether the settlement that just ended leaves this loop owing nothing it
    * knows of: its demand pass saw every demand note, including the one a view
-   * registering sends, and no commit, load or input is outstanding. Whichever
-   * of those is owed runs a later cycle, which asks again.
+   * registering sends, and no commit, load or input is outstanding.
    */
   #nothingOwed(): boolean {
     return this.#demandNoteGeneration === this.#passDemandNoteGen &&
