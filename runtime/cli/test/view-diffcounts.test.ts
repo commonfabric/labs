@@ -1040,7 +1040,7 @@ describe("diffcounts", () => {
       ).toEqual([false, false, false, false]);
     });
 
-    it("returns false when a comment follows a line continuation", async () => {
+    it("returns false when a continuation or a shebang line changes", async () => {
       expect(
         await commentOnly(
           {
@@ -1059,12 +1059,27 @@ describe("diffcounts", () => {
             after: ["x = 1 + \\\r", "# note\r", "  2\r"],
           },
           {
+            path: "shebang.sh",
+            before: ["#!/bin/sh", "run"],
+            after: ["#!/bin/bash", "run"],
+          },
+          {
             path: "argument.sh",
             before: ["cmd --a=\\", "#b"],
             after: ["cmd --a=\\", "#c"],
           },
         ),
-      ).toEqual([false, false, false, false]);
+      ).toEqual([false, false, false, false, false]);
+    });
+
+    it("reads a backslash that ends a comment as part of the comment", async () => {
+      expect(
+        await commentOnly({
+          path: "note.ts",
+          before: ["go(); // note \\", "run(); // a"],
+          after: ["go(); // note \\", "run(); // b"],
+        }),
+      ).toEqual([true]);
     });
 
     it("returns false when comment markers change what unchanged lines are", async () => {

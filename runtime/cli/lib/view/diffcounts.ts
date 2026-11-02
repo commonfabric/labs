@@ -229,17 +229,18 @@ const COMMENT_CODE = "\0";
 /**
  * The code of one complete file side: its lines with each comment read as
  * {@link COMMENT_CODE}, leaving out lines that held only comments and
- * whitespace where the language says such lines are inert. A line that follows
- * one ending with a backslash continues it, so it is kept exactly as written.
- * Undefined when a line holds {@link COMMENT_CODE} itself, or when its
- * highlighting does not cover its text.
+ * whitespace where the language says such lines are inert. A first line that
+ * starts with `#!` names the program that runs the file, and a line after one
+ * whose code ends with a backslash continues that line, so both are kept
+ * exactly as written. Undefined when a line holds {@link COMMENT_CODE} itself,
+ * or when its highlighting does not cover its text.
  */
 function sideCode(
   lines: readonly Line[],
   language: Language,
 ): string | undefined {
   const code: string[] = [];
-  let continued = false;
+  let verbatim = lines[0]?.text.startsWith("#!") ?? false;
   for (const line of lines) {
     if (
       line.text.includes(COMMENT_CODE) ||
@@ -247,10 +248,9 @@ function sideCode(
     ) {
       return undefined;
     }
-    const wasContinued = continued;
-    continued = /\\\r?$/.test(line.text);
-    if (wasContinued) {
+    if (verbatim) {
       code.push(line.text);
+      verbatim = /\\\r?$/.test(line.text);
       continue;
     }
     const comments = new Set(
@@ -264,13 +264,13 @@ function sideCode(
     ) {
       continue;
     }
-    code.push(
-      line.spans.map((span) =>
-        comments.has(span)
-          ? COMMENT_CODE + span.text.slice(span.text.trimEnd().length)
-          : span.text
-      ).join(""),
-    );
+    const text = line.spans.map((span) =>
+      comments.has(span)
+        ? COMMENT_CODE + span.text.slice(span.text.trimEnd().length)
+        : span.text
+    ).join("");
+    code.push(text);
+    verbatim = /\\\r?$/.test(text);
   }
   return code.join("\n");
 }

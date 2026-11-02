@@ -638,13 +638,14 @@ and only when the versions the viewer rebuilds from the repository or the
 working tree are the ones named. Editing a comment's text, or adding or removing
 a line that holds only comments and whitespace, leaves the code as it was. Where
 such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
-adding or removing it changes the file too. A line that follows one ending with
-a backslash continues it, so it is read exactly as written. Adding or removing a
-comment on a line that holds anything else changes the code, and so does a
-change to blank lines or other whitespace. Each side is read on its own, so a
-comment marker that turns unchanged lines into a comment changes the code. `C`
-never selects a renamed or new file, a file whose mode changes, or a file whose
-byte order mark is added or removed.
+adding or removing it changes the file too. A line that follows code ending with
+a backslash continues that code, and a first line that starts with `#!` names
+the program that runs the file, so both are read exactly as written. Adding or
+removing a comment on a line that holds anything else changes the code, and so
+does a change to blank lines or other whitespace. Each side is read on its own,
+so a comment marker that turns unchanged lines into a comment changes the code.
+`C` never selects a renamed or new file, a file whose mode changes, or a file
+whose byte order mark is added or removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
@@ -688,9 +689,6 @@ Removed lines show nothing. The column fills in as `git blame` finishes for each
 file in view. When git cannot blame a file, the status line says why, and the
 viewer does not try that file again.
 
-Press `c` to cycle how non-printable characters are shown: as control-picture
-glyphs, in ANSI color, or hidden.
-
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
 continues. Word wrapping breaks at whitespace and indents each continuation row
@@ -698,7 +696,7 @@ by the width of the line's leading punctuation and whitespace. A row is drawn
 unindented when it could hold the rest of the line only without the indentation,
 or when it is too narrow for the indentation and any text.
 
-Press `C` to cycle how non-printable characters are shown. The first mode draws
+Press `c` to cycle how non-printable characters are shown. The first mode draws
 each control character as its control-picture glyph, such as `␉` for a tab, one
 column per character. The ANSI color mode applies color escape sequences to the
 text that follows them instead of showing them. It also advances each tab to the
