@@ -635,7 +635,9 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Get the default pattern cell from the space cell.
+   * Get the default pattern cell from the space cell. The cell carries no
+   * transaction, so a caller can keep it: every read through it, or through a
+   * cell made from it, returns what the replica holds at that read.
    * @returns The default pattern cell, or undefined if not set
    */
   async getDefaultPattern(
@@ -646,7 +648,9 @@ export class PiecesController<T = unknown> {
       "getDefaultPattern.spaceCell.sync",
       () => this.#spaceCell.key("defaultPattern").sync(),
     );
-    const defaultPattern = cell.get();
+    // `get()` makes the link's cell in a read transaction of its own, which
+    // stays open and answers each document with what it first read there.
+    const defaultPattern = cell.get()?.withTx();
     if (!defaultPattern) {
       return undefined;
     }
@@ -835,9 +839,7 @@ export class PiecesController<T = unknown> {
       ]);
     }
     if (passiveRoot) {
-      // Registry callers keep a live handle across edits. Canonical-address
-      // inspection must not pin it to the root lookup's read transaction.
-      const exported = this.#pieceRegistryExport(passiveRoot).withTx();
+      const exported = this.#pieceRegistryExport(passiveRoot);
       await this.syncPieces(exported);
       // `pieceListSchema` carries `default: []`, so a root that never
       // exported a registry and a root whose registry is empty read the same
@@ -2771,8 +2773,7 @@ export class PiecesController<T = unknown> {
         () => reconcilePieceSource(this.runtime, root),
       );
       // The swap committed through a transaction view. Resolve the root again
-      // so start() observes the committed patternIdentity rather than the
-      // pre-transaction snapshot held by the caller's cell.
+      // so start() observes the committed patternIdentity.
       rootToStart = await this.getDefaultPattern(false) ?? root;
       // Only when the origin CONFIRMED the pinned pattern, or offered an
       // earlier release than it, which the root keeps. Then a disagreeing
@@ -2886,10 +2887,6 @@ export class PiecesController<T = unknown> {
         ],
       );
       const repairPattern = pattern;
-      // Detach any transaction view the resolved root carries: getDefault-
-      // Pattern hands back a cell bound to a read-only tx, and runSynced
-      // would otherwise adopt it for the setup writes.
-      const writableRoot = rootToStart.withTx();
       // expectedPatternIdentity is the repair precondition, not a formality:
       // it atomically rejects a repair superseded by a concurrent source
       // update (the identity is re-asserted inside every setup retry), and it
@@ -2900,7 +2897,7 @@ export class PiecesController<T = unknown> {
         await timePiecePhase(
           "ensureDefaultPattern.coldStartSetupRepair",
           () =>
-            runtime.runSynced(writableRoot, repairPattern, undefined, {
+            runtime.runSynced(rootToStart, repairPattern, undefined, {
               expectedPatternIdentity: ref,
             }),
         );
