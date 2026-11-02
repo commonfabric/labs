@@ -4,6 +4,7 @@ import { join } from "@std/path/join";
 
 import { Command } from "@cliffy/command";
 import { getCompilerOptions } from "@commonfabric/js-compiler/typescript";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { Engine } from "@commonfabric/runner";
 import { StaticCache } from "@commonfabric/static";
 
@@ -142,13 +143,13 @@ async function initWorkspace(cwd: string) {
     } catch (dirError) {
       console.warn(
         "Warning: Could not read docs directory:",
-        dirError instanceof Error ? dirError.message : String(dirError),
+        describeFailure(dirError),
       );
     }
   } catch (error) {
     console.warn(
       "Warning: Could not copy pattern documentation:",
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
     );
   }
 }

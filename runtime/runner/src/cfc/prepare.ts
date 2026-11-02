@@ -47,6 +47,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
@@ -9475,7 +9476,7 @@ const linkedSourceEvidence = (
       // The schema the stored envelope names could not be read in this
       // transaction, so the evidence is undecided rather than short.
       return {
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeFailure(error),
         unavailable: true,
       };
     }
@@ -9486,7 +9487,7 @@ const linkedSourceEvidence = (
       );
     } catch (error) {
       return {
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeFailure(error),
       };
     }
     sourceMetadata = metadataResolver.linkSource(
@@ -12633,7 +12634,7 @@ export function* prepareBoundaryCommitSteps(
       mergedSchema = bindCreator(mergedSchema, key);
     } catch (error) {
       reasons.push(verdictReason(
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       ));
       continue;
     }

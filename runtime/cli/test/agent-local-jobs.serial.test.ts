@@ -164,10 +164,13 @@ describe("cf agent runner local jobs", () => {
 
   describe("the runner", () => {
     for (
-      const failure of [
-        new TypeError("path must be shorter than SUN_LEN"),
-        "invalid profiles file",
-      ]
+      const [failure, described] of [
+        [
+          new TypeError("path must be shorter than SUN_LEN"),
+          "path must be shorter than SUN_LEN",
+        ],
+        ["invalid profiles file", "invalid profiles file"],
+      ] as const
     ) {
       it(`starts and stops the Fabric lane when local startup fails with ${String(failure)}`, async () => {
         const { deps, events, local, fabric } = stubDeps({
@@ -186,9 +189,7 @@ describe("cf agent runner local jobs", () => {
         expect(local).toHaveLength(1);
         expect(fabric).toHaveLength(1);
         expect(events).toContain(
-          `report:agent runner: the local lane did not start, continuing with the Fabric lane: ${
-            failure instanceof Error ? failure.message : failure
-          }`,
+          `report:agent runner: the local lane did not start, continuing with the Fabric lane: ${described}`,
         );
         expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
           "fabric:start",

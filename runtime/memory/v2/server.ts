@@ -12,6 +12,7 @@ import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
 import { StagedMap } from "@commonfabric/collections/staged-map";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
 import {
@@ -839,7 +840,7 @@ function hashToken(s: string): string {
  *  schema prefix is stripped — a bare table literally named `a.b` is preserved,
  *  so the result matches a declared-table key exactly. */
 function missingTableName(error: unknown): string | undefined {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const match = /no such table:\s*(.+)$/i.exec(message);
   if (match === null) return undefined;
   const ref = match[1].trim();
@@ -2061,7 +2062,7 @@ class Connection {
           : parsed.type === "transact"
           ? "TransactionError"
           : "QueryError",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       ),
     });
     return true;
@@ -5681,7 +5682,7 @@ export class Server {
       next = request.change(stored?.value);
     } catch (error) {
       return {
-        refused: error instanceof Error ? error.message : String(error),
+        refused: describeFailure(error),
       };
     }
     if (stored !== null && valueEqual(stored.value as FabricValue, next)) {
@@ -5861,7 +5862,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Error ? error.name : "SqliteError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -5949,7 +5950,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Error ? error.name : "SqliteError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -6002,7 +6003,7 @@ export class Server {
     } catch (error) {
       const wireError = toError(
         "AuthorizationError",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       if ((error as { retriable?: unknown }).retriable === true) {
         wireError.retriable = true;
@@ -6435,7 +6436,7 @@ export class Server {
         : "ProtocolError";
       const wireError = toError(
         name,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       // Carry the retriable marker (an anti-replay race a fresh handshake heals)
       // so the client distinguishes it from a permanent denial without parsing
@@ -6509,7 +6510,7 @@ export class Server {
         message.requestId,
         toError(
           "SessionError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -6662,9 +6663,7 @@ export class Server {
       return patternLifecycleRefusal(
         requestId,
         "internal",
-        `${message.verb} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `${message.verb} failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -6740,9 +6739,7 @@ export class Server {
       return servedRequestRefusal(
         requestId,
         "internal",
-        `${message.kind} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `${message.kind} failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -7154,9 +7151,7 @@ export class Server {
           ok: { serverSeq: commit.seq, resolution },
         };
       } catch (error) {
-        const messageText = error instanceof Error
-          ? error.message
-          : String(error);
+        const messageText = describeFailure(error);
         return respondTypedError<EventAttentionResolveResult>(
           message.requestId,
           toError(
@@ -7522,9 +7517,7 @@ export class Server {
             const engine = await this.#openEngine(message.space);
             retryAfterSeq = Engine.serverSeq(engine);
           }
-          const messageText = error instanceof Error
-            ? error.message
-            : String(error);
+          const messageText = describeFailure(error);
           const preconditionError = toPreconditionFailedError(
             error,
             messageText,
@@ -7684,7 +7677,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7747,7 +7740,7 @@ export class Server {
         message.requestId,
         toError(
           error instanceof Engine.ProtocolError ? error.name : "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7842,7 +7835,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -7885,7 +7878,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -8509,7 +8502,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -8847,7 +8840,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }
@@ -9266,7 +9259,7 @@ export class Server {
         message.requestId,
         toError(
           "QueryError",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       );
     }

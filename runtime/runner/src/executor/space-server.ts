@@ -34,6 +34,7 @@
 // seal; the durable outbound-append rows deliver and retire through
 // the outbox; `memo.*`/`outbox.*` counters are live.
 import { debugStr } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -2084,7 +2085,7 @@ export class SpaceServer implements TransactionSealDestination {
         ]);
         wave.failForeignSpace(
           space,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }

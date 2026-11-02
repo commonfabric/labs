@@ -8,6 +8,7 @@
 import { basename, dirname, isAbsolute, join, relative } from "@std/path";
 
 import { spliceAll } from "@commonfabric/collections/splice";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   decodeLanguageInput,
@@ -1054,7 +1055,7 @@ exit "$status"
         } catch {
           // Temporary content cleanup is best effort.
         }
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = describeFailure(error);
         throw new Error(
           `Could not prepare Git hooks for the amend; no commit was amended: ${detail}`,
         );
@@ -1750,7 +1751,7 @@ exit "$status"
         const suffix = rollbackErrors.length > 0
           ? `; rollback failed: ${rollbackErrors.join("; ")}`
           : "";
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = describeFailure(error);
         throw new Error(`${detail}${suffix}`);
       } finally {
         if (preparedIndex !== null) {

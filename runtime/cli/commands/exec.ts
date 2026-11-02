@@ -1,4 +1,5 @@
 import { Command } from "@cliffy/command";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { executeMountedCallableFile } from "../lib/exec.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { canonicalAddress, type InvocationPhase } from "../lib/callable.ts";
@@ -162,7 +163,7 @@ export function exitExecFailure(
   }
   const printError = deps?.printError ?? console.error;
   const exit = deps?.exit ?? Deno.exit;
-  printError(error instanceof Error ? error.message : String(error));
+  printError(describeFailure(error));
   return exit(1);
 }
 

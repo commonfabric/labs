@@ -9,6 +9,7 @@
 
 import { dirname, join, toFileUrl } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import {
   type ApplyReport,
@@ -282,7 +283,7 @@ async function teardownProblem(
     await step();
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return describeFailure(error);
   }
 }
 

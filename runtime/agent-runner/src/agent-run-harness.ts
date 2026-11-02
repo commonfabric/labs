@@ -28,6 +28,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   INVALID_RESULT,
   PROVIDER_FAILURE,
@@ -101,7 +102,7 @@ export async function agentRunObservationCeiling(
     } catch (error) {
       options.report?.(
         `agent runner: could not verify space membership: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -250,7 +251,7 @@ export const createHarnessAgentRunExecutor = (
         : "";
       options.report?.(
         `agent runner: writing the result failed: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }${detail}`,
       );
       return {

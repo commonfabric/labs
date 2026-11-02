@@ -46,6 +46,7 @@ import {
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc/schema-refs";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isInstance,
   isObjectNotArray,
@@ -1153,9 +1154,7 @@ export async function parseSelectionProjection(
       contents = await (deps.readTextFile ?? Deno.readTextFile)(path);
     } catch (error) {
       throw new CellSelectionError(
-        `Could not read --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not read --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1164,9 +1163,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(contents);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON in --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON in --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1184,9 +1181,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(trimmed);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON passed to --schema: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON passed to --schema: ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1940,7 +1935,7 @@ export function schemaMayBeArray(
       unresolvedRef: (error) => {
         throw new CellSelectionError(
           `Could not resolve source schema reference for ${flag}: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
           { cause: error },
         );
@@ -3245,9 +3240,7 @@ function transformReadsFor(runtime: Runtime): TransformReads {
 /** `error`, reported as a failure to apply a get transform. */
 function transformError(error: unknown): CellSelectionError {
   return new CellSelectionError(
-    `Could not apply get transform: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
+    `Could not apply get transform: ${describeFailure(error)}`,
     { cause: error },
   );
 }

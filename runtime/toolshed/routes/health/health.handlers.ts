@@ -8,6 +8,7 @@ import type {
   ServingLoopRealmRoute,
   StatsRoute,
 } from "./health.routes.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getCommitRates,
   getDocumentCachesDiagnostics,
@@ -124,7 +125,7 @@ export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
     return c.json(
       {
         error: "The serving loop's worker is not serving: " +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
       },
       HttpStatusCodes.SERVICE_UNAVAILABLE,
     );
