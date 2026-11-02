@@ -309,9 +309,9 @@ function read(
  * The Topic `reference` names among `topics`: a number, written `42` or `#42`,
  * or `top/42` alone or after `/` or `//<space>/`; an address, written `fid1:…`
  * or `of:fid1:…`, alone or after `/` or `//<space>/`; the URL of the board
- * server's page for either; or any other part of the address `/of:fid1:…`
- * that is part of no other Topic's address and quotes enough of the id, such
- * as the end of the id.
+ * server's page for either; or any other part of the Topic's address or its
+ * piece's address, `/of:fid1:…`, that is part of no other Topic's and quotes
+ * enough of the id, such as the end of the id.
  *
  * @throws Error naming the Topic when the board has none by that name, or
  * saying why `reference` names no Topic on this board.
@@ -344,7 +344,7 @@ function lookUp(
     );
     if (holding.length <= 1) return holding[0];
     throw new Error(
-      "it is part of the address of each of " +
+      "it is part of the address or piece address of each of " +
         holding.map((topic) => `top/${topic.number}`).join(", ") + ".",
     );
   } catch (error) {
@@ -1134,8 +1134,8 @@ begins with - there, or after --. A Topic is named by its number (42, #42,
 top/42, //<space>/top/42), by its address (fid1:..., of:fid1:..., /of:fid1:...,
 //<space>/of:fid1:...), by the URL of its page on the board's server, or by
 any part of its address, other than a number, that holds at least
-${QUOTED_ID_LENGTH} characters of its id and is part of no other Topic's, such as the end
-of its id.
+${QUOTED_ID_LENGTH} characters of its id and is part of no other Topic's address or
+piece's address, such as the end of its id.
 
 Writes of authored content need --agent-name <name> (or CF_AGENT_NAME). Every
 write is a new one, and prints its invocation id before it is made. When a

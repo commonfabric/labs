@@ -83,12 +83,12 @@ it as an agent.
   without one, and the URL of its page on the board's server, as a person pastes
   it from a browser (`https://estuary.saga-castor.ts.net/<space>/fid1:…` for the
   team's board). They also take any part of the address, other than a number,
-  that holds at least eight characters of its id and that no other Topic's
-  address holds, such as a fragment of the id that a note cites; the Topic shown
-  names its number. A fragment beginning with `-` goes after `--`. A reference
-  naming another space or server, a part of a Topic such as its `title`, or a
-  fragment that is short or that several addresses hold, is refused with a
-  message saying so.
+  that holds at least eight characters of its id and is part of no other Topic's
+  address or Topic piece's address, such as a fragment of the id that a note
+  cites; the Topic shown names its number. A fragment beginning with `-` goes
+  after `--`. A reference naming another space or server, a part of a Topic such
+  as its `title`, or a fragment that is short or that several addresses hold, is
+  refused with a message saying so.
 - An authored-content write carries `--agent-name` (or `CF_AGENT_NAME`): one
   stable agent name, and no second signature in titles, bodies, labels, or
   comments. Fabric retains the human principal behind the key; Topics stores the

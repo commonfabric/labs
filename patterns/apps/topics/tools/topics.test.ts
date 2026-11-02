@@ -365,11 +365,11 @@ describe("topics command", () => {
 
       it("throws for a part of more than one Topic's address, naming each", () => {
         expect(() => findTopic(quoting, "AEVJwT4HnfruI0")).toThrow(
-          "it is part of the address of each of top/6, top/7.",
+          "it is part of the address or piece address of each of top/6, top/7.",
         );
         expect(() => findTopic(quoting, "3MmaxyNMtCzB8R")).toThrow(
           '`"3MmaxyNMtCzB8R"` names no Topic on this board: it is part of ' +
-            "the address of each of top/5, top/6.",
+            "the address or piece address of each of top/5, top/6.",
         );
       });
 
