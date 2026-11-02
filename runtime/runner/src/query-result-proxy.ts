@@ -292,8 +292,8 @@ export function createQueryResultProxy<T>(
 }
 
 /**
- * The transaction a cell minted from a view binds to: the one the view reads
- * through, unless a read opened that one for itself, as `Cell.get()` does for a
+ * The transaction a cell minted from a view binds to: the one the view was made
+ * against, unless a read opened that one for itself, as `Cell.get()` does for a
  * caller with no open transaction. Such a cell outlives the read and binds to
  * none (see `markSingleReadTx()`).
  */

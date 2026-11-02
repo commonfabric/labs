@@ -1098,10 +1098,11 @@ export class PiecesController<T = unknown> {
         () => reconcilePieceSource(this.runtime, piece),
       );
       if (outcome === "updated") {
-        // The transition committed through a transaction view. Resync, or a
-        // start below loads the identity the origin just replaced — and reads
-        // through the returned cell describe it.
-        piece = await piece.sync();
+        // The transition committed through a transaction view, and the caller
+        // may have handed us a cell bound to a read transaction older than it.
+        // Detach and resync, or a start below loads the identity the origin
+        // just replaced — and reads through the returned cell describe it.
+        piece = await piece.withTx().sync();
       }
       await timePiecePhase(
         "get.patternPointerFollowed",
@@ -1922,9 +1923,11 @@ export class PiecesController<T = unknown> {
       "openPiece.reconcileSource",
       () => reconcilePieceSource(this.runtime, piece),
     );
-    // The transition committed through a transaction view. Resync, or the start
-    // below loads the identity the origin just replaced.
-    const opened = outcome === "updated" ? await piece.sync() : piece;
+    // The transition committed through a transaction view, and the caller may
+    // have handed us a cell bound to a read transaction older than it. Detach
+    // and resync, or the start below loads the identity the origin just
+    // replaced.
+    const opened = outcome === "updated" ? await piece.withTx().sync() : piece;
     await timePiecePhase(
       "openPiece.patternPointerFollowed",
       () => this.#patternPointerFollowed(opened, outcome === "updated"),

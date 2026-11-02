@@ -168,6 +168,30 @@ describe("cell child read transaction", () => {
       expect(back.get().count).toBe(2);
     });
 
+    it("hands out a cell that reads current state from `getAsQueryResult()`", async () => {
+      const tx = runtime.edit();
+      const cell = runtime.getCell<{ nested: Child }>(
+        space,
+        "query-result-to-cell",
+        undefined,
+        tx,
+      );
+      cell.set({ nested: { count: 1 } });
+      await tx.commit().settled;
+
+      const nested = cell.withTx().getAsQueryResult().nested as unknown as {
+        [toCell]: () => Cell<Child>;
+      };
+      const back = nested[toCell]();
+      expect(back.get().count).toBe(1);
+
+      const update = runtime.edit();
+      cell.withTx(update).set({ nested: { count: 2 } });
+      await update.commit().settled;
+
+      expect(back.get().count).toBe(2);
+    });
+
     it("hands out a child that reads current state from a parent's default", async () => {
       const schema = {
         type: "object",
