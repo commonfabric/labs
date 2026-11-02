@@ -23,7 +23,10 @@ import { FakeTime } from "@std/testing/time";
 
 import type { Ctx, TileView } from "../types.ts";
 import { BENCH_TREND_BUCKET_MS, REPO } from "../config.ts";
-import { BenchmarkHistoryStore } from "../benchmark-history-cache.ts";
+import {
+  BenchmarkHistoryStore,
+  type CachedBenchmarkRun,
+} from "../benchmark-history-cache.ts";
 import {
   availableGeneratedCpuColor,
   benchmark,
@@ -4422,5 +4425,80 @@ describe("keyBenchmarks", () => {
       expect(offline.extra).not.toContain("benchmarks</div>");
       expect(offline.extra).toContain("<svg");
     });
+  });
+});
+
+describe("benchmarkSnapshotVersion", () => {
+  const timing = (value: number) => ({
+    min: value,
+    avg: value,
+    max: value,
+    p75: value,
+    p99: value,
+    p995: value,
+    p999: value,
+  });
+  const run = (
+    runId: number,
+    runAttempt: number,
+    keys = ["runtime/a/version.bench.ts > version"],
+  ): CachedBenchmarkRun => ({
+    runId,
+    runAttempt,
+    at: BASE - DAY + runId % 100 * HOUR,
+    cpu: TEST_CPU,
+    metrics: new Map(keys.map((key) => [key, timing(runId)])),
+  });
+  const shown = run(140_000, 1);
+  const later = run(140_001, 1);
+  const calibrationOnly = run(140_002, 1, [`${CALIBRATION_FILE} > spin`]);
+
+  // The version a newly started drill-down reports for a cache whose last
+  // refresh read `runs`. Each update check rebuilds the snapshot from the
+  // cache, so the two checks also show whether rebuilding moves the version.
+  async function versionFor(runs: CachedBenchmarkRun[]): Promise<string> {
+    const directory = await Deno.makeTempDir({ prefix: "benchmark-version-" });
+    const previousCacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
+    Deno.env.set("DASHBOARD_CACHE_DIR", directory);
+    try {
+      const store = new BenchmarkHistoryStore();
+      await store.load();
+      store.markRefreshed(Date.now(), runs.map((cached) => store.set(cached)));
+      await store.save();
+      const isolated = await import(
+        `./benchmark.ts?version=${crypto.randomUUID()}`
+      );
+      const check = async () =>
+        (await (await isolated.benchmarkHistoryCheckResponse(ctx())).json())
+          .version;
+      const version = await check();
+      expect(await check()).toBe(version);
+      expect(isolated.benchmarkSnapshotVersion()).toBe(version);
+      return version;
+    } finally {
+      if (previousCacheDirectory === undefined) {
+        Deno.env.delete("DASHBOARD_CACHE_DIR");
+      } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
+      await Deno.remove(directory, { recursive: true });
+    }
+  }
+
+  it("stays the same while the measurements shown stay the same", async () => {
+    const version = await versionFor([shown]);
+    expect(await versionFor([shown])).toBe(version);
+    // Calibration measurements divide out the machine; the drill-down does
+    // not chart them, so a run carrying nothing else shows nothing.
+    expect(await versionFor([shown, calibrationOnly])).toBe(version);
+  });
+
+  it("changes when the measurements shown change", async () => {
+    const versions = [
+      await versionFor([]),
+      await versionFor([shown]),
+      await versionFor([shown, later]),
+      await versionFor([later]),
+      await versionFor([run(140_000, 2)]),
+    ];
+    expect(new Set(versions).size).toBe(versions.length);
   });
 });
