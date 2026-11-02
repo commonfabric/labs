@@ -867,8 +867,8 @@ that would have succeeded on a loaded machine, the ceiling
 starting the server. The command spawns a second copy of itself as the server,
 waits until that copy reports it has bound its port, and only then returns. A
 caller that runs it starts the toolshed and moves straight on to work that
-needs it, with no readiness poll of its own. The CI integration jobs start the
-toolshed this way and go straight to their tests.
+needs it, with no readiness poll of its own. The browser benchmark job starts
+the toolshed this way and goes straight to its benchmark.
 
 Readiness travels over the child's stdout. The child writes a single marker
 line the moment `Deno.serve`'s `onListen` fires — the point the port is
