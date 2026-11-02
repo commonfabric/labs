@@ -26,6 +26,7 @@
  * and nothing else.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
@@ -60,16 +61,13 @@ import {
   writeBaseline,
 } from "./pattern-compat-lib.ts";
 
-const formatError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 async function main() {
   let update: boolean;
   let only: string[];
   try {
     ({ update, only } = parseArgs(Deno.args));
   } catch (error) {
-    console.error(formatError(error));
+    console.error(describeFailure(error));
     Deno.exit(2);
   }
 
@@ -182,7 +180,7 @@ async function main() {
         resultSchema: pattern.resultSchema,
       });
     } catch (error) {
-      const reason = formatError(error);
+      const reason = describeFailure(error);
       unavailable.set(key, reason);
       evaluationErrors.push({ pattern: key, error: reason });
     } finally {

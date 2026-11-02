@@ -13,7 +13,7 @@
  * file removed on the way out of a failure is the one outcome that loses it.
  */
 
-import { messageOf } from "./place.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 /** The environment variable naming the editor to run. */
 const EDITOR = "EDITOR";
@@ -113,7 +113,7 @@ export async function openEditor(
   } catch (thrown) {
     return refuse(
       `\`${program}\` did not run, and the value is in \`${file}\`: ` +
-        `${messageOf(thrown)}`,
+        `${describeFailure(thrown)}`,
     );
   }
   if (ended.code !== 0) {
@@ -128,7 +128,7 @@ export async function openEditor(
   } catch (thrown) {
     return refuse(
       `The edited value could not be read back, and it is in \`${file}\`: ` +
-        `${messageOf(thrown)}`,
+        `${describeFailure(thrown)}`,
     );
   }
   return {

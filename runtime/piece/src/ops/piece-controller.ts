@@ -5,6 +5,7 @@ import {
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import {
   applyPieceSourceTransition,
@@ -4567,7 +4568,7 @@ export class PieceController<T = unknown> {
         if (committed) {
           return {
             status: "applied",
-            executionWarning: pieceSourceErrorMessage(error),
+            executionWarning: describeFailure(error),
           };
         }
         throw pinnedSourceMoved(error, proved);
@@ -4745,7 +4746,7 @@ export class PieceController<T = unknown> {
           if (action.kind === "adopt") {
             await this.#recordReconciliation(expected, origin, {
               outcome: "unreachable",
-              detail: pieceSourceErrorMessage(error),
+              detail: describeFailure(error),
             });
           }
           throw error;
@@ -4946,13 +4947,13 @@ export class PieceController<T = unknown> {
           : error;
         return {
           status: "applied",
-          executionWarning: pieceSourceErrorMessage(cause),
+          executionWarning: describeFailure(cause),
         };
       }
       const waivedSchema = reviewed?.waivedSchema;
       if (
         reviewed !== undefined && waivedSchema !== undefined &&
-        pieceSourceErrorMessage(error).includes(PIECE_RELEASE_OVERTAKEN)
+        describeFailure(error).includes(PIECE_RELEASE_OVERTAKEN)
       ) {
         // The candidate stopped being the later release while it was set
         // up, so the comparison its review left out applies after all.
@@ -5257,7 +5258,7 @@ export class PieceController<T = unknown> {
         const cause = error instanceof PatternSetupPostCommitError
           ? error.cause
           : error;
-        const warning = pieceSourceErrorMessage(cause);
+        const warning = describeFailure(cause);
         console.warn(
           "Piece source was saved, but refreshing the running piece failed:",
           cause,
@@ -5547,7 +5548,7 @@ function pieceSourceArgumentEvidence(
         })) ?? null,
       };
     } catch (error) {
-      return { path: suppliedLink.path, error: pieceSourceErrorMessage(error) };
+      return { path: suppliedLink.path, error: describeFailure(error) };
     }
   });
   return taggedHashStringOf({ raw, links });
@@ -5686,7 +5687,7 @@ async function pieceSourceCompatibilityReview(
       candidate,
     );
   } catch (error) {
-    issues.argument = pieceSourceErrorMessage(error);
+    issues.argument = describeFailure(error);
   }
 
   try {
@@ -5892,10 +5893,6 @@ function isOverridableArgumentCompatibilityError(error: unknown): boolean {
   return error.message.includes(
     "updated arguments do not match the candidate schema:",
   ) || error.message.includes(RETAINED_INPUT_COMPATIBILITY_PREFIX);
-}
-
-function pieceSourceErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

@@ -39,7 +39,7 @@ import {
   sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
 import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";
@@ -209,17 +209,6 @@ export type ServedSetSourceReceipt = {
   detachedOrigin: string | null;
 };
 
-function messageOf(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (
-    isObjectOrArray(error) && "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-  return String(error);
-}
-
 /**
  * Compile `program` into the space and persist its closure, so a later
  * verb — here or on another runtime — can take the pattern by identity.
@@ -239,7 +228,7 @@ export async function servedUploadPattern(
         : { previousEntryIdentity: options.previousEntryIdentity }),
     });
   } catch (error) {
-    throw new ServedLifecycleRefusal("compile-failed", messageOf(error), {
+    throw new ServedLifecycleRefusal("compile-failed", describeFailure(error), {
       cause: error,
     });
   }
@@ -272,9 +261,13 @@ async function resolveServedPattern(
   } catch (error) {
     // A closure the space holds but cannot load is, to the caller, one it
     // does not hold: the same refusal, with the loader's reason attached.
-    throw new ServedLifecycleRefusal("pattern-not-found", messageOf(error), {
-      cause: error,
-    });
+    throw new ServedLifecycleRefusal(
+      "pattern-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
   }
   if (!pattern) {
     throw new ServedLifecycleRefusal(
@@ -388,7 +381,7 @@ export async function servedInstantiatePiece(
         ? outcome.error.reason
         : outcome.error;
     if (cause instanceof ServedLifecycleRefusal) throw cause;
-    throw new ServedLifecycleRefusal("setup-failed", messageOf(cause), {
+    throw new ServedLifecycleRefusal("setup-failed", describeFailure(cause), {
       cause,
     });
   }
@@ -568,7 +561,7 @@ export async function prepareServedRegistration(
       },
     };
   } catch (error) {
-    return { receipt, error: messageOf(error) };
+    return { receipt, error: describeFailure(error) };
   }
 }
 
@@ -620,7 +613,7 @@ export async function finishServedRegistration(
       ...receipt,
       registration: {
         status: "failed",
-        error: messageOf(error),
+        error: describeFailure(error),
         attempt,
         ...(terminal ? { terminal: true as const } : {}),
       },
@@ -810,7 +803,7 @@ export async function completeServedRegistration(
       }
     }
     result = {
-      error: messageOf(error),
+      error: describeFailure(error),
       ...(terminal ? { terminal: true as const } : {}),
     };
   }
@@ -844,9 +837,13 @@ export async function servedSetPieceSource(
   try {
     piece = await pieces.get(request.pieceId, false);
   } catch (error) {
-    throw new ServedLifecycleRefusal("piece-not-found", messageOf(error), {
-      cause: error,
-    });
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
   }
   if (getPatternIdentityRef(piece.getCell()) === undefined) {
     throw new ServedLifecycleRefusal(
@@ -888,7 +885,7 @@ export async function servedSetPieceSource(
  * reason of its own.
  */
 function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
-  const message = messageOf(error);
+  const message = describeFailure(error);
   if (
     error instanceof PieceSourceChangedError ||
     message.includes(PIECE_SOURCE_MOVED)

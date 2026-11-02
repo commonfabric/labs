@@ -137,6 +137,7 @@ import {
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLogger,
   getLoggerCountsBreakdown,
@@ -325,7 +326,7 @@ import {
   normalizeSpaceHostMap,
   securityContextDifferences,
 } from "@/shared/security-context.ts";
-import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
+import { cellRefToKey } from "@/shared/utils.ts";
 
 /** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
@@ -3063,7 +3064,9 @@ export class RuntimeProcessor {
       undefined,
       "space",
     );
-    if (indexSync.error !== undefined) throw indexSync.error;
+    if (indexSync.error !== undefined) {
+      throw new Error(indexSync.error.message, { cause: indexSync.error });
+    }
     if (provider.replica === undefined) {
       throw new Error("storage provider does not expose an attention replica");
     }
@@ -3086,7 +3089,11 @@ export class RuntimeProcessor {
         undefined,
         "space",
       );
-      if (sidecarSync.error !== undefined) throw sidecarSync.error;
+      if (sidecarSync.error !== undefined) {
+        throw new Error(sidecarSync.error.message, {
+          cause: sidecarSync.error,
+        });
+      }
       const sidecar = provider.replica.getDocument(
         sidecarId as never,
         "space",
