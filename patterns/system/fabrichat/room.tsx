@@ -1149,8 +1149,9 @@ export interface ChatRoomView {
   viewer: PerSession<ChatRoomViewer>;
 
   /**
-   * What this reader may do to each of the room's messages, oldest first.
-   * Nothing at all while `canSend` doesn't hold.
+   * What this reader may do to each of the room's messages, oldest first: one
+   * entry per message, all `false` while `canSend` doesn't hold. Absent until
+   * this session has derived it.
    */
   messageRights: PerSession<ChatMessageRights[]>;
 
@@ -1608,8 +1609,10 @@ export const FabriChatRoomCore = pattern<
   });
   // Display rights use the selected profile's owner. Handlers check
   // the authenticated actor, whose identity is available only in a handler.
+  // It has no default: an empty list is the answer for a room with no
+  // messages, so until this session has derived it, a reader reads it absent.
   const messageRightsForSession = computed(
-    (): PerSession<ChatMessageRights[] | Default<[]>> => {
+    (): PerSession<ChatMessageRights[]> => {
       const profile = viewerProfileOf(myProfile);
       const reader = profile === undefined
         ? undefined
@@ -1640,7 +1643,8 @@ export const FabriChatRoomCore = pattern<
       const editing = composer.get()?.editing;
       const editingKey = editing === undefined ? undefined : viewKeyOf(editing);
       const byKey: Record<string, RowFacts> = {};
-      for (const rights of messageRightsForSession) {
+      // Until the session's rights are derived, no row offers a control.
+      for (const rights of messageRightsForSession ?? []) {
         const key = viewKeyOf(rights.message);
         if (key === undefined) continue;
         byKey[key] = {

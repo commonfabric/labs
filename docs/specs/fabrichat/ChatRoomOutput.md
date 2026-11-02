@@ -285,7 +285,10 @@ space.
   attestation. The streams check the authenticated event actor instead, so
   selecting another person's profile can offer a control the handler refuses.
   Every entry is all `false` while `canSend` doesn't hold or the selected
-  profile has no verified owner.
+  profile has no verified owner. It is absent until the session has derived
+  it, so an empty list says the room has no messages. A client reads an absent
+  `messageRights` as no rights to any message, and offers none of the controls
+  that act on one.
 - **`canAdd`** says whether the reader can add someone to the room's space: the
   room is a group room in a space of its own, and their access is OWNER. It is
   false in a direct room, whose space keeps its two members, and in a space's
