@@ -2460,10 +2460,14 @@ export class StorageManager implements IStorageManager {
    * `space`'s ACL document, so a session this manager holds on that space
    * — revoked when an EARLIER ACL landed — may now re-open under a
    * different verdict. The executor host calls this for every registered
-   * space server on every ACL-doc-touching admission; `space` is usually
-   * NOT the caller's own, because the session that starves is typically a
-   * CROSS-SPACE replica (a served dispatch's argument link into the
-   * viewer's home space).
+   * space server on every ACL-doc-touching admission on its own memory
+   * server; `space` is usually NOT the caller's own, because the session
+   * that starves is typically a CROSS-SPACE replica (a served dispatch's
+   * argument link into the viewer's home space). A gated replica's grant
+   * verdicts on the space's actors do not wait for this call: the replica
+   * watches the list itself (SpaceReplica.#watchAccessList), so a change
+   * committed on the space's owner in another process reaches it over the
+   * session its reads go through.
    *
    * ALREADY-OPEN providers only. Opening one here would mount a session
    * for a space this manager has never read, turning an unrelated ACL
@@ -5562,8 +5566,9 @@ export class SpaceReplica
   /** The grant verdicts this provider has asked for, by actor: a settled
    * one answers `foreignScopedReadStanding` and every later read of that
    * actor's instances until word of an access-list change
-   * (`noteAclChanged`) asks for each again, the last verdict standing
-   * until the new one lands. */
+   * (`noteAclChanged`, which the replica's own watch on the list gives it
+   * whichever process the list changed in) asks for each again, the last
+   * verdict standing until the new one lands. */
   readonly #foreignScopedReadVerdicts = new Map<
     string,
     ForeignScopedReadVerdictEntry
@@ -5576,6 +5581,11 @@ export class SpaceReplica
     string,
     Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
   >();
+
+  /** The watch a gated replica holds on this space's access-list document
+   * from its first grant ask on (`#watchAccessList`), with the list's
+   * confirmed seq as the watch last saw it. */
+  #accessListWatch: { cancel: Cancel; seq: number | undefined } | undefined;
 
   #closed = false;
   readonly #closeSignal = Promise.withResolvers<void>();
@@ -6308,10 +6318,17 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
-    // The list that decided every actor's grant has changed: each actor this
-    // replica has asked about is asked about again now, rather than on its
-    // next load, since an instance already loaded is read from the replica
-    // and loads no more. Its last verdict stands until the new one lands.
+    this.#reaskForeignScopedReadGrants();
+  }
+
+  /**
+   * Asks again for the grant of each actor this replica has asked about,
+   * now rather than on its next load, since an instance already loaded is
+   * read from the replica and loads no more: the list that decided every
+   * verdict has changed, or may have. Each last verdict stands until the
+   * new one lands.
+   */
+  #reaskForeignScopedReadGrants(): void {
     for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
       this.#askForeignScopedReadGrant(actor);
     }
@@ -6361,6 +6378,7 @@ export class SpaceReplica
           "actor's grant with",
       });
     }
+    this.#watchAccessList();
     let entry = this.#foreignScopedReadVerdicts.get(actor);
     if (entry === undefined) {
       entry = { promise: Promise.resolve({ granted: true }) };
@@ -6393,6 +6411,37 @@ export class SpaceReplica
       });
     current.promise = asked;
     return asked;
+  }
+
+  /**
+   * Holds a watch on this space's access-list document through this
+   * replica's own session, so that a change to the list reaches a gated
+   * replica over the session its reads go through: the host's
+   * `noteSpaceAclChanged` fan-out hears the commits its own memory server
+   * admits, and the list of a space another process owns changes there.
+   * Each version of the list that lands after the first the watch saw is
+   * word of a change (`noteAclChanged`). The first landing re-asks every
+   * actor's grant without arming the remount latch: a verdict asked before
+   * the list reached the replica may have been decided on an older one.
+   */
+  #watchAccessList(): void {
+    if (this.#accessListWatch !== undefined || this.#closed) return;
+    const id = aclDocId(this.#space) as URI;
+    const seqOf = (): number | undefined =>
+      this.#visibleVersion(id, "space")?.record.confirmed.seq;
+    const watch = { cancel: () => {}, seq: seqOf() };
+    this.#accessListWatch = watch;
+    watch.cancel = this.sinkDocument(id, () => {
+      const seq = seqOf();
+      if (seq === watch.seq) return;
+      const before = watch.seq;
+      watch.seq = seq;
+      if (before !== undefined) {
+        this.noteAclChanged();
+      } else {
+        this.#reaskForeignScopedReadGrants();
+      }
+    });
   }
 
   /**
@@ -7365,6 +7414,8 @@ export class SpaceReplica
     this.#watchView?.close();
     this.#watchView = null;
     this.#operationSinks.clear();
+    this.#accessListWatch?.cancel();
+    this.#accessListWatch = undefined;
     // Also close the view the update consumer is bound to, in case it diverged
     // from #watchView; otherwise its pending next() never settles and the
     // `Promise.allSettled([...#updatePromises])` below hangs forever.

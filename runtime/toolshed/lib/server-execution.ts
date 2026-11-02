@@ -18,6 +18,10 @@ import { toolshedClientBuild } from "./build-info.ts";
 import { publishServingExperimentalOverrides } from "./experimental-posture.ts";
 import { serverExecutionEnabledFromEnv } from "./server-execution-flag.ts";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
+import {
+  RoutedPlane,
+  webSocketRoute,
+} from "@commonfabric/runner/executor/routed-plane";
 import { DEFAULT_FLUSH_DEADLINE_MS } from "@commonfabric/runner/executor/space-server";
 import {
   SERVING_RUNTIME_EXPERIMENTAL,
@@ -41,12 +45,21 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
 
 /**
  * The serving loop as the rest of this process reaches it, whichever thread
- * runs it: the lifecycle verbs the route sends, and the loop's counters and
- * close.
+ * runs it: the lifecycle verbs the `pattern.lifecycle` handler sends, and the
+ * loop's counters and close.
  */
 export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle;
 
 let loop: ServingLoop | undefined;
+
+/**
+ * The routed plane this thread's lifecycle delivery sends through while the
+ * loop runs with owner routing on. The loop's host keeps one of its own on
+ * whichever thread it runs, so on the main-thread arm two planes dial the
+ * same route; each numbers the appends on its own sessions, so the two never
+ * meet at the owner.
+ */
+let route: RoutedPlane | undefined;
 
 /** The production default for the per-space outstanding-network-effect
  * cap (serving-loop.md §5; README §3.8's multi-tenancy contract needs a
@@ -270,6 +283,30 @@ export function serverExecutionWorkerFromEnv(
 }
 
 /**
+ * Whether the serving loop reaches every space but the ones it serves through
+ * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
+ * docs/plans/serving-loop-owner-routing.md): on unless the variable is the
+ * literal `false`, which leaves every crossing on this process's own memory
+ * server. `true`, unset and empty select the default; anything else warns
+ * and selects it too.
+ */
+export function ownerRoutingFromEnv(
+  envGet: EnvReader,
+  warn: (message: string) => void = (message) => console.warn(message),
+): boolean {
+  const raw = envGet("SERVER_EXECUTION_OWNER_ROUTING");
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "" && raw !== "true") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_OWNER_ROUTING=" +
+        `${JSON.stringify(raw)} (expected "true" or "false"); crossings ` +
+        "reach each space's owner, the default",
+    );
+  }
+  return true;
+}
+
+/**
  * Start the serving loop when the flag is on: in a Worker of this process
  * when {@link serverExecutionWorkerFromEnv} says so, which by default it does
  * over a file store, and on this thread otherwise. Called once from toolshed
@@ -296,6 +333,14 @@ export function startServerExecutionHost(options: {
    * Worker by default only over a file store; unset counts as none.
    */
   store?: URL;
+
+  /**
+   * The deployment's memory endpoint as this process reaches it
+   * (`MEMORY_URL`), the one its proxy routes by space: the route to each
+   * space's owner while {@link ownerRoutingFromEnv} says so. Unset, the
+   * route stays off whatever the knob says.
+   */
+  memoryUrl?: URL;
 
   envGet?: EnvReader;
 }): ServingLoop | undefined {
@@ -352,6 +397,33 @@ export function startServerExecutionHost(options: {
         "while the next cycle drains and settles; default is OFF)",
     );
   }
+  const ownerRouting = ownerRoutingFromEnv(envGet);
+  if (!ownerRouting) {
+    console.log(
+      "Server-execution v2: owner routing OFF by " +
+        "SERVER_EXECUTION_OWNER_ROUTING=false (crossings stay on this " +
+        "process's memory server; default is ON)",
+    );
+  } else if (options.memoryUrl === undefined) {
+    console.warn(
+      "Server-execution v2: owner routing is on with no memory endpoint to " +
+        "route through; crossings stay on this process's memory server",
+    );
+  }
+  const memoryUrl = ownerRouting ? options.memoryUrl : undefined;
+  if (memoryUrl !== undefined) {
+    console.log(
+      "Server-execution v2: owner routing ON " +
+        (envGet("SERVER_EXECUTION_OWNER_ROUTING") === "true"
+          ? "by SERVER_EXECUTION_OWNER_ROUTING=true"
+          : "(the default; SERVER_EXECUTION_OWNER_ROUTING=false keeps " +
+            "every crossing on this process's memory server)") +
+        ` (crossings reach each space's owner through ${memoryUrl.href})`,
+    );
+    route = new RoutedPlane(
+      webSocketRoute(memoryUrl, options.identity, toolshedClientBuild()),
+    );
+  }
   const fileStore = options.store?.protocol === "file:";
   if (serverExecutionWorkerFromEnv(envGet, fileStore)) {
     console.log(
@@ -371,6 +443,7 @@ export function startServerExecutionHost(options: {
       policy,
       ensureSpaceRoots,
       experimental,
+      ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
     });
     loop = {
       runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
@@ -391,6 +464,13 @@ export function startServerExecutionHost(options: {
       ensureSpaceRoots,
       server: options.server,
       serviceIdentity: options.identity.did(),
+      ...(memoryUrl === undefined ? {} : {
+        route: webSocketRoute(
+          memoryUrl,
+          options.identity,
+          toolshedClientBuild(),
+        ),
+      }),
       // The serving runtimes' own flags: the environment's, with the ones
       // every serving runtime forces on top. `/api/meta` publishes those same
       // forced flags below.
@@ -429,16 +509,27 @@ export function startServerExecutionHost(options: {
 }
 
 /**
- * The serving loop while it runs, for the routes that hand it work — the
- * pattern-lifecycle verbs among them; `undefined` off the flag.
+ * The serving loop while it runs, for what hands it work — the
+ * `pattern.lifecycle` handler among them; `undefined` off the flag.
  */
 export function serverExecutionHost(): ServingLoop | undefined {
   return loop;
 }
 
+/**
+ * The routed plane to other spaces' owners while the loop runs with owner
+ * routing on, for a delivery this thread makes into a space it does not
+ * serve; `undefined` otherwise.
+ */
+export function serverExecutionRoute(): RoutedPlane | undefined {
+  return route;
+}
+
 export async function stopServerExecutionHost(): Promise<void> {
   await loop?.close();
   loop = undefined;
+  await route?.close();
+  route = undefined;
   // Nothing serves any more, so `/api/meta` reports the base posture again.
   publishServingExperimentalOverrides(null);
 }

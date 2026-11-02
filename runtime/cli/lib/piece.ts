@@ -1732,26 +1732,23 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
 }
 
 /**
- * The client a served verb is sent with: signed as the configured identity,
- * and sent on `pieces`' memory session for its space where the storage
- * manager has one, so the verb reaches the process serving that space.
+ * The client a served verb is sent with: it sends the verb on `pieces`'
+ * memory session for its space, so the verb reaches the process serving that
+ * space and runs as the identity the connection was opened as.
  */
-async function lifecycleClient(
-  config: SpaceConfig,
-  pieces: PiecesController,
-  deps: PieceOperationDependencies,
-): Promise<LifecycleClientConfig> {
+function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
   const storageManager = (pieces.runtime as Runtime | undefined)
     ?.storageManager;
-  const runOnSession = storageManager?.runPatternLifecycle?.bind(
-    storageManager,
-  );
   return {
-    apiUrl: new URL(config.apiUrl),
-    identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
-    ...(runOnSession === undefined ? {} : {
-      session: (space, verb, body) => runOnSession(space, verb, body),
-    }),
+    session: (space, verb, body) => {
+      if (storageManager?.runPatternLifecycle === undefined) {
+        throw new Error(
+          "This connection's storage manager has no memory sessions to send " +
+            `the \`${verb}\` verb on`,
+        );
+      }
+      return storageManager.runPatternLifecycle(space, verb, body);
+    },
   };
 }
 
@@ -1785,7 +1782,6 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, pieces, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1801,7 +1797,7 @@ async function createWithReceipt(
           "newPiece.create.instantiate",
           () =>
             (deps.instantiatePieceOnServer ?? instantiatePieceOnServer)(
-              client,
+              lifecycleClient(pieces),
               {
                 ...request,
                 space: pieces.getSpace(),
@@ -1816,20 +1812,21 @@ async function createWithReceipt(
         }
         return served;
       }
+      const actingUser =
+        (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did();
       const created = await timeCliPhase(
         "newPiece.create.instantiate",
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
             source: { program },
-            actingUser: client.identity.did(),
+            actingUser,
           }),
         trace,
       );
       return await timeCliPhase(
         "newPiece.create.register",
-        () =>
-          completeServedRegistration(pieces, created, client.identity.did()),
+        () => completeServedRegistration(pieces, created, actingUser),
         trace,
       );
     } catch (error) {
@@ -2178,7 +2175,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, pieces, deps), {
+    setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,

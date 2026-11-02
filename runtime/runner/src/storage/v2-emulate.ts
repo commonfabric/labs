@@ -31,12 +31,20 @@ export const newLoopbackServer = (options?: {
    * window out. Absent, the server's default registry and resume window
    * apply. */
   sessions?: MemoryV2Server.SessionRegistry;
+
+  /** The server's delegating class (tests): the service identity a serving
+   * runtime's sessions carry, as a toolshed running server execution lists
+   * its own process identity. Access lists stay off. */
+  delegatingDids?: readonly string[];
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: {
       audience: options?.audience ?? emulatedMemoryAudience,
     },
+    ...(options?.delegatingDids !== undefined
+      ? { acl: { mode: "off", delegatingDids: options.delegatingDids } }
+      : {}),
     ...(options?.subscriptionRefreshDelayMs !== undefined
       ? { subscriptionRefreshDelayMs: options.subscriptionRefreshDelayMs }
       : {}),

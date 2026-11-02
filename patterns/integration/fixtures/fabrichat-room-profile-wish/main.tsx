@@ -17,8 +17,10 @@ import {
   Writable,
 } from "commonfabric";
 import FabriChatRoom, {
+  type ChatMessageRights,
   type ChatRoomViewer,
 } from "../../../system/fabrichat/room.tsx";
+import type { RoomStreamEvent } from "../../../system/fabrichat/room-records.tsx";
 import type { ChatProfile } from "../../../system/fabrichat/schemas.tsx";
 
 /** What holding a profile asks: the profile, as the link a session holds. */
@@ -45,6 +47,12 @@ export interface MainOutput {
   /** Who the room says is reading it: each session's own. */
   viewer: PerSession<ChatRoomViewer>;
 
+  /** What the reader may do to each message: each session's own. */
+  messageRights: PerSession<ChatMessageRights[]>;
+
+  /** Sends a message to the room. */
+  sendMessage: Stream<RoomStreamEvent>;
+
   /** The profile held for the person's home to list. */
   profile: Cell<ChatProfile> | undefined;
 
@@ -61,6 +69,8 @@ export default pattern<Record<string, never>, MainOutput>(() => {
     [UI]: room[UI],
     canSend: room.canSend,
     viewer: room.viewer,
+    messageRights: room.messageRights,
+    sendMessage: room.sendMessage,
     profile,
     holdProfile: holdProfile({ profile }),
   };

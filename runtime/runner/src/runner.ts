@@ -12,7 +12,7 @@ import {
   refuseFabricInstance,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
-import { type ACL, aclDocId } from "@commonfabric/memory/acl";
+import { type ACL, aclDocId, aclOwner, isACL } from "@commonfabric/memory/acl";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
@@ -118,6 +118,8 @@ import {
   recordReferencedArgumentFields,
   recordReplayedArgumentSlots,
 } from "./cfc/reference-initialization.ts";
+import { legacyPieceCreatorEvidence } from "./cfc/piece-creator-evidence.ts";
+import { servedRunActsForNoOne } from "./cfc/prepare.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -275,6 +277,7 @@ import {
   CFC_STRUCTURAL_PROVENANCE_PIECE_SETUP_STORE,
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+  type CfcDocumentAddress,
   type ImplementationIdentity,
   runtimeWritePolicyAuthorization,
   type TrustSnapshot,
@@ -1673,15 +1676,18 @@ const pieceOwnedStores = (
 /**
  * Stamps `start`, the transaction a deferred piece start runs in, with the run
  * context `info` gives it (`Runtime.stampServerRun()`), and hands it the trust
- * snapshot of `from`, the transaction it was deferred from, when it
- * initializes on that transaction's behalf. The start runs in a transaction of
- * its own, and on a serving runtime the stamp leaves it the runtime's ambient
- * snapshot, which names the service. A run the serving loop attached a
- * principal's snapshot to, such as the owner the space-root ensure resolves,
- * would otherwise hand the start's initializations to the service rather than
- * to that principal. Every deferred start is stamped here, before its first
- * read, so none is stamped without that trust. A start no serving loop stamps
- * takes its trust from the runtime it runs in, as its parent did.
+ * snapshot of `from`, the transaction it was deferred from: the start runs on
+ * behalf of whoever asked for the run, and what it may read and whom a claim
+ * it mints names follow from that snapshot, while whether it attributes an
+ * initialization follows from the marks `carryAttributionMarks` hands it. The
+ * start runs in a transaction of its own, and on a serving runtime the stamp
+ * leaves it the runtime's ambient snapshot, which names the service. A run
+ * the serving loop attached a principal's snapshot to, such as the owner the
+ * space-root ensure resolves, would otherwise hand the start's
+ * initializations to the service rather than to that principal. Every
+ * deferred start is stamped here, before its first read, so none is stamped
+ * without that trust. A start no serving loop stamps takes its trust from the
+ * runtime it runs in, as its parent did.
  */
 const stampDeferredStart = (
   runtime: Runtime,
@@ -1691,12 +1697,35 @@ const stampDeferredStart = (
 ): void => {
   runtime.stampServerRun(start, info);
   const trustSnapshot = from.getCfcState().trustSnapshot;
-  if (
-    start.getCfcState().attributedInitialization &&
-    waveRunContextOf(start) !== undefined && trustSnapshot !== undefined
-  ) {
+  if (waveRunContextOf(start) !== undefined && trustSnapshot !== undefined) {
     setCfcTrustSnapshot(start, trustSnapshot);
   }
+};
+
+/**
+ * Hands `to`, the transaction a start deferred from `from` runs in, the
+ * attribution marks `from` carries, so the start initializes on `from`'s
+ * behalf to the extent `from` did: for every piece after a handler run, and
+ * for the pieces `from` brought into being after a creation.
+ */
+const carryAttributionMarks = (
+  from: IExtendedStorageTransaction,
+  to: IExtendedStorageTransaction,
+): void => {
+  const state = from.getCfcState();
+  if (state.attributedInitialization) {
+    to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+    return;
+  }
+  for (const piece of state.attributedPieces) {
+    to.markCfcAttributedInitialization(runtimeWritePolicyAuthorization, piece);
+  }
+};
+
+/** The document a piece's attribution mark names: its result document. */
+const pieceAttributionScope = (resultCell: Cell<any>): CfcDocumentAddress => {
+  const { space, id, scope } = resultCell.getAsNormalizedFullLink();
+  return { space, id, ...(scope !== undefined && { scope }) };
 };
 
 /**
@@ -1927,6 +1956,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.attributeInitialization`. */
   attributeInitialization?: boolean;
 
+  /** See `RunnerRunOptions.parentPieceRootId`. */
+  parentPieceRootId?: string;
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -1998,10 +2030,16 @@ export interface PieceSourceSnapshot {
   revisionId: string | null;
 }
 
-/** What the last attempt to follow a piece's active origin did. */
+/**
+ * What the last attempt to follow a piece's active origin did. `unreachable`
+ * never had a candidate to weigh; `unapplied` had one the piece could take,
+ * and the write adopting it did not land, so the next attempt proposes it
+ * again; `refused` had one the piece did not take, for the reason recorded.
+ */
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**
@@ -4873,6 +4911,91 @@ export class Runner {
     }
   }
 
+  /**
+   * The principal a piece set up in `tx` records as its creator, or none.
+   *
+   * A child a piece instantiates names its parent's creator, read from the
+   * parent's record: the actor whose run instantiated it is not the creator
+   * of what the parent's code made, and a parent without a record leaves the
+   * child without one. A piece a builtin instantiates from a continuation of
+   * its action, which declines attribution and names no parent, records
+   * nothing. Any other piece names the acting principal of the transaction's
+   * trust snapshot, which is the principal every attributed claim in the same
+   * transaction names, unless the run acts for no one
+   * (`servedRunActsForNoOne`): a served run with no actor, or one under the
+   * serving runtime's own snapshot.
+   */
+  #pieceCreatorFor(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<unknown>,
+    options: SetupValidationOptions,
+  ): string | undefined {
+    if (options.parentPieceRootId !== undefined) {
+      const { space } = resultCell.getAsNormalizedFullLink();
+      const recorded = this.#runtime.getCellFromLink(
+        { id: options.parentPieceRootId as URI, space, path: [] },
+        undefined,
+        tx,
+      ).getMetaRaw("creator", { meta: ignoreReadForScheduling });
+      return typeof recorded === "string" ? recorded : undefined;
+    }
+    if (options.attributeInitialization === false) return undefined;
+    const snapshot = tx.getCfcState().trustSnapshot;
+    if (
+      snapshot === undefined || !snapshot.actingPrincipal ||
+      servedRunActsForNoOne(tx, snapshot)
+    ) {
+      return undefined;
+    }
+    return snapshot.actingPrincipal;
+  }
+
+  /**
+   * The creator a piece created before the runtime recorded one gives
+   * evidence of; the caller has found no record on the piece. A space
+   * root belongs to the space's owner, whom its access list names
+   * (`aclOwner`); a list this replica does not hold names no one. Any other
+   * piece names the one principal the stored labels of its owner-protected
+   * fields represent (`legacyPieceCreatorEvidence`), read from its argument
+   * document and the internal documents its manifest names, and none where
+   * they name no single principal.
+   */
+  #legacyPieceCreator(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<unknown>,
+  ): string | undefined {
+    const result = resultCell.withTx(tx);
+    const link = result.getAsNormalizedFullLink();
+    const root = this.#runtime.getSpaceCell(link.space, undefined, tx)
+      .key("defaultPattern").get();
+    if (root !== undefined && root.getAsNormalizedFullLink().id === link.id) {
+      const acl = this.#runtime.getCellFromLink<ACL>(
+        {
+          space: link.space,
+          id: aclDocId(link.space) as URI,
+          path: [],
+        },
+        undefined,
+        tx,
+      ).get();
+      return isACL(acl) ? aclOwner(acl, link.space) : undefined;
+    }
+    const documents: NormalizedFullLink[] = [];
+    const argument = getMetaLink(result, "argument");
+    if (argument !== undefined) documents.push({ ...argument, path: [] });
+    const manifest = result.getMetaRaw("internal", {
+      meta: ignoreReadForScheduling,
+    });
+    if (Array.isArray(manifest)) {
+      for (const entry of manifest) {
+        if (!isObjectNotArray(entry)) continue;
+        const link = parseLink(entry.link, result);
+        if (link !== undefined) documents.push({ ...link, path: [] });
+      }
+    }
+    return legacyPieceCreatorEvidence(tx, documents);
+  }
+
   /** Internal setup that returns whether scheduling is required. */
   #setupInternal<T, R = any>(
     providedTx: IExtendedStorageTransaction | undefined,
@@ -4910,17 +5033,21 @@ export class Runner {
     const { pattern, entryRef, resolvedPatternOrModule } = resolvedPattern;
     // A piece brought into being outside any scheduled action — a deploy, a
     // host creating one on the principal's behalf — is the acting principal's
-    // act, as a handler run is: what its setup initializes is attributed to
-    // them (`CfcTxState.attributedInitialization`). One a builtin instantiates
-    // is nobody's act: in an action, whose transaction names it, or from a
-    // continuation of one, which declines the mark. Nor is a run of a piece
-    // that is already there.
+    // act, as a handler run is: what its setup initializes in the piece's own
+    // documents is attributed to them (`CfcTxState.attributedPieces`), and
+    // what the transaction re-stages for another piece is not. One a builtin
+    // instantiates is nobody's act: in an action, whose transaction names it,
+    // or from a continuation of one, which declines the mark. Nor is a run of
+    // a piece that is already there.
     if (
       previousIdentityRef === undefined && patternOrModule !== undefined &&
       validationOptions.attributeInitialization !== false &&
       tx.tx.sourceAction === undefined
     ) {
-      tx.markCfcAttributedInitialization(runtimeWritePolicyAuthorization);
+      tx.markCfcAttributedInitialization(
+        runtimeWritePolicyAuthorization,
+        pieceAttributionScope(resultCell),
+      );
     }
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
@@ -5079,6 +5206,41 @@ export class Runner {
     // `#applySetupState` below, which stages the matching projection in the same
     // transaction, so the schema and the projection cannot disagree.
     this.#updateResultSchemaMeta(tx, resultCell, pattern.resultSchema);
+
+    // A piece this setup brings into being records the principal it was
+    // created for, in the one transaction that may: commit preparation admits
+    // the record where `#applySetupState` installs the piece's first durable
+    // pattern pointer and the runtime vouches for it, and refuses every later
+    // write to it. A keyless pattern gets no durable pointer, so no record.
+    // A source transition of a piece created before the runtime recorded
+    // creators records the one its owner-protected fields give evidence of,
+    // so the field the transition installs can bind them. A piece that
+    // records a creator keeps it, a pointer installed again over the record
+    // included.
+    if (
+      !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
+      this.#runtime.experimental.pieceCreatorRecord === true &&
+      (previousIdentityRef === undefined || !samePattern) &&
+      resultCell.withTx(tx).getMetaRaw("creator", {
+          meta: ignoreReadForScheduling,
+        }) === undefined
+    ) {
+      const creator = previousIdentityRef === undefined
+        ? this.#pieceCreatorFor(tx, resultCell, validationOptions)
+        : this.#legacyPieceCreator(tx, resultCell);
+      if (creator !== undefined) {
+        resultCell.withTx(tx).setMetaRaw(
+          "creator",
+          creator,
+          rawMetaWriteAuthorization,
+        );
+        tx.markCfcPieceCreator(
+          runtimeWritePolicyAuthorization,
+          pieceAttributionScope(resultCell),
+          creator,
+        );
+      }
+    }
 
     this.#applySetupState(
       tx,
@@ -7821,11 +7983,7 @@ export class Runner {
 
       const startTx = this.#runtime.edit();
       // A start deferred from a handler run initializes on that run's behalf.
-      if (tx.getCfcState().attributedInitialization) {
-        startTx.markCfcAttributedInitialization(
-          runtimeWritePolicyAuthorization,
-        );
-      }
+      carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — by definition outside any scheduler
       // run; the deferred start's node wiring is piece machinery, stamped
       // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
@@ -8581,13 +8739,6 @@ export class Runner {
     const navigateContext = navigateEventContextFromRunInfo(
       waveRunContextOf(tx) ?? speculationContext,
     );
-    // Whether the setup is the principal's act was decided by the transaction
-    // the run was asked in — a handler run's, or one outside any scheduled
-    // action that did not decline it — and the transaction it runs in once
-    // the family has landed carries that decision, not one of its own.
-    const attributed = tx.getCfcState().attributedInitialization ||
-      (tx.tx.sourceAction === undefined &&
-        options.attributeInitialization !== false);
     const work = (async () => {
       let toName = named;
       let retriesLeft = PIECE_RUN_START_MAX_RETRIES;
@@ -8615,11 +8766,15 @@ export class Runner {
         // bookkeeping seed here would escape the parent's destination, and a
         // later authored start still needs its own durable preparation.
         if (speculative) this.#callerOwnedSetupTransactions.add(startTx);
-        if (attributed) {
-          startTx.markCfcAttributedInitialization(
-            runtimeWritePolicyAuthorization,
-          );
-        }
+        // Whether an initialization is the principal's act was decided by the
+        // transaction the run was asked in: a handler run's, or one that
+        // brought the piece into being outside any scheduled action, whose
+        // setup marked it for this piece. The transaction the start runs in
+        // carries that decision and makes none of its own: a start of a piece
+        // found set up, however it was reached, attributes nothing
+        // (cfc-protected-initialization.md, "Attribution of an initialized
+        // value").
+        carryAttributionMarks(tx, startTx);
         if (durableReads) markDurableReadTx(startTx);
         if (identity !== undefined) startTx.tx.scopeKeyIdentity = identity;
         // A speculative child's continuation keeps its origin across the
@@ -9125,11 +9280,7 @@ export class Runner {
       const startTx = this.#runtime.edit();
       // A result pattern deferred from a handler run initializes on that
       // run's behalf, as the deferred start above does.
-      if (tx.getCfcState().attributedInitialization) {
-        startTx.markCfcAttributedInitialization(
-          runtimeWritePolicyAuthorization,
-        );
-      }
+      carryAttributionMarks(tx, startTx);
       // Minted inside a commit callback — outside any scheduler run;
       // bookkeeping per serving-loop.md §3d, like the deferred start above (and
       // with the same §3d speculative-consequence stamp: a flag-ON client's
@@ -9423,6 +9574,7 @@ export class Runner {
         capturedArgumentFields: options.capturedArgumentFields,
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
+        parentPieceRootId: options.parentPieceRootId,
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -16795,7 +16947,7 @@ function isPieceReconciliationOutcome(
   value: unknown,
 ): value is PieceReconciliationOutcome {
   return value === "followed" || value === "unreachable" ||
-    value === "refused";
+    value === "unapplied" || value === "refused";
 }
 
 function isPieceReconciliationReason(

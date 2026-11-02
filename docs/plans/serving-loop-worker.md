@@ -71,7 +71,12 @@ keys the session's commits stays with the worker, because the outbox's own
 writes draw from the same counter under the same session: each commit crosses
 with the number the worker minted for it, and the main thread's sink is handed
 that number. The served-ACL-change commit crosses the same way, as the list of
-changes it applies; the main thread rebuilds the function from the list.
+changes it applies; the main thread rebuilds the function from the list. A
+foreign batch and a change to another space's list leave the worker for that
+space's owner over the worker's own routed session
+([owner routing](serving-loop-owner-routing.md), on by default), and only the
+home batch and the home's changes cross the port; a host given no route sends
+them across the port with the home's.
 
 **The serving runtime's storage plane crosses as frames.** The serving runtime's
 `StorageManager` connects to the memory server through `LoopbackStorageManager`,
@@ -102,7 +107,7 @@ mirror from it and serves the three lookups the loop makes without waiting,
 registry would. The worker asks the main thread for `demandForSessions`,
 `viewInterestsForSpace`, `setViewSelection`, `foreignWriteAuthorityFor`,
 `checkServedAclChange`, `commitDelegatedAppend`, `idle` and `flushSessions`, and
-tells it of `noteExecutorCommit` and `noteLeaseReacquired` without waiting. The
+tells it of `noteExecutorCommit` without waiting. The
 demand set crosses as shares per session, read once and kept on the worker
 (`DemandShareCache`) until the server's `demandChanged` names that session
 again, so a demand pass hands the space server's mirror the objects it compared
@@ -116,8 +121,9 @@ interest's generation itself.
 A publish over unchanged interests then asks the server nothing, where the
 request alone waited for the server's thread's turn, however empty the list.
 
-**Lifecycle verbs run in the worker, from a descriptor.** The route sends a
-verb as its name and its request, on either arm, and whichever thread runs the
+**Lifecycle verbs run in the worker, from a descriptor.** The toolshed's
+`pattern.lifecycle` handler sends a verb as its name and its request, on
+either arm, and whichever thread runs the
 loop builds the verb's closures over a `PiecesController` from the same
 functions in `@commonfabric/piece`'s served lifecycle. The receipt comes back
 as data, a structured clone on the port, so a verb hands back plain values: a
@@ -127,7 +133,14 @@ which the port cannot clone.
 **Stats cross on every cycle.** The worker posts the host's `ServingLoopStats`
 at the end of each wave cycle, at each activation and park, and on request;
 the main thread registers a stats provider that returns the latest copy, so
-`/api/health/stats` keeps its shape and waits on nothing. The loop's own
+`/api/health/stats` keeps its shape and waits on nothing. Just ahead of each
+wave commit the worker also posts the `events` block alone, which the main
+thread merges into that copy: the whole counters, settle series included,
+cost about as much to post as a commit. The events post travels on the port
+the commit does, whose messages the main thread handles in order, so a client
+that has seen a wave's commit reads event counters that include what that
+wave's drain counted, and a later full post, never older than an events post
+before it, replaces the merged block with everything else. The loop's own
 logger counts and timing statistics are the worker realm's, so they cross on
 request (`ServingLoopHandle.diagnostics()`), and a request waits for the
 worker's turn: `/api/health/serving-loop-realm` is the route that asks, kept
@@ -247,8 +260,8 @@ between the two.
    (`runtime/toolshed/lib/server-execution.ts`) starts a `ServingWorker`
    over the toolshed's own entry (`lib/serving-worker.ts`) when the variable
    is `true`, or is unset or empty over a file memory store, and the
-   in-process host otherwise. It hands the routes a `ServingLoop` either
-   way; the pattern-lifecycle verbs cross as the
+   in-process host otherwise. It hands the rest of the process a
+   `ServingLoop` either way; the pattern-lifecycle verbs cross as the
    descriptors `@commonfabric/piece`'s `served-lifecycle-verbs.ts` names on
    both paths; the health route reads the relayed stats through the
    provider the bridge registers. The flag is registered in

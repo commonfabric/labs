@@ -918,7 +918,14 @@ function chainOnCommit(
  * enclosing it derives. A client under server execution runs the handler only
  * as its speculative echo, which the served run replaces, so it starts the
  * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server.
+ * read, to the server. A serving runtime also has the piece's origin followed
+ * before its first start of it (`EnsurePieceOptions.originFollowed`, which
+ * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
+ * opens a piece it serves, so the start is where the piece's source is
+ * brought up to date; the pieces its inputs come from are followed the same
+ * way before they start. A start a follow is still owed, the piece's own or
+ * an input source's, is declined, and the served event it was for is
+ * deferred to a later wave as any start that could not happen yet defers it.
  */
 function startEventPiece(
   runtime: Runtime,
@@ -927,6 +934,7 @@ function startEventPiece(
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
+    originFollowed: runtime.pieceOriginFollowed,
   });
 }
 
@@ -1173,7 +1181,12 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           // stays pending and a later wave re-drains it, under the serving
           // loop's bounded deferral budget — a condition that outlasts the
           // budget hardens into §5's drop notice rather than wedging the
-          // stream. A client event waits as described above.
+          // stream. The exception is a pattern the runtime could not load,
+          // which the deferral names: when the space lacks the pattern's
+          // program closure, the loop waits for the closure to arrive, and
+          // past a grace counts the absence against the failed-state budget,
+          // which ends in a needs-attention notice rather than a drop. A
+          // client event waits as described above.
           // A verdict that did not start the piece and names no reason is
           // one whose start threw, which the start walk logs and collapses.
           const pieceStartReason = verdict.started
@@ -1185,7 +1198,31 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           const reason = `Event dropped: no handler registered for ` +
             `${args.eventLink.id} and its piece ${pieceState}`;
           if (queuedEvent.served !== undefined) {
-            dropQueuedEvent(state, queuedEvent, reason, "deferred");
+            dropQueuedEvent(
+              state,
+              queuedEvent,
+              reason,
+              "deferred",
+              pieceStartReason === "origin-pending"
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "origin-pending",
+                    message: reason,
+                  },
+                }
+                : pieceStartReason === "pattern-unloadable" &&
+                    verdict.patternIdentity !== undefined
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "pattern-unloadable",
+                    patternIdentity: verdict.patternIdentity,
+                    message: reason,
+                  },
+                }
+                : {},
+            );
             // A deferral carries the drain's arrival-order barrier
             // (events.md §2; review-6459 F1's sibling arm), exactly as
             // the handler-not-run withdrawal and the facade's load-park

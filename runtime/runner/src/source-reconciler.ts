@@ -144,10 +144,18 @@ const logger = getLogger("runner.source-reconcile", {
  *   candidate or the piece's source state changes, the envelopes a stored
  *   envelope's refusal was reached over change, or the space's memory session
  *   is replaced.
- * - `unavailable`: the origin's current source could not be adopted this
- *   time — it could not be reached, the write that adopts it did not commit,
- *   or the piece changed underneath the attempt and the write it was going to
- *   make no longer describes it.
+ * - `invalid`: the origin's source compiled to no pattern identity, so there
+ *   is nothing to adopt until the origin serves other source.
+ * - `mismatched`: the origin's source compiled to an identity other than the
+ *   one the origin advertised, so what it serves is not the source it names.
+ * - `unapplied`: the origin resolved, and the write this reconciliation makes
+ *   — adopting the source the origin offered, or recording the origin itself
+ *   in its canonical spelling or on a piece that had none — did not land this
+ *   time: it did not commit, or the piece changed underneath the attempt and
+ *   the write it was going to make no longer describes it. The next
+ *   reconciliation makes it again.
+ * - `unavailable`: the origin could not be reached, or the attempt ended
+ *   before it had a candidate to weigh.
  */
 export type ReconcileOutcome =
   | "detached"
@@ -158,6 +166,9 @@ export type ReconcileOutcome =
   | "ahead"
   | "incompatible"
   | "rejected"
+  | "invalid"
+  | "mismatched"
+  | "unapplied"
   | "unavailable";
 
 /**
@@ -180,11 +191,14 @@ const RECORDED_OUTCOME: Record<
   updated: { outcome: "followed" },
   ahead: { outcome: "followed" },
   unavailable: { outcome: "unreachable" },
+  unapplied: { outcome: "unapplied" },
   // The reason travels with the result rather than being inferred from the
   // outcome, so a second kind of refusal has to say which one it is instead
   // of inheriting this one.
   incompatible: { outcome: "refused", reason: "incompatible-schema" },
   rejected: { outcome: "refused", reason: "apply-failed" },
+  invalid: { outcome: "refused", reason: "source-invalid" },
+  mismatched: { outcome: "refused", reason: "identity-mismatch" },
   detached: undefined,
   unusable: undefined,
 };
@@ -1482,7 +1496,8 @@ export class SourceReconciler {
         state.space,
         state.storedSource,
       ]);
-      return "unavailable";
+      state.detail = "the source produced no pattern identity";
+      return "invalid";
     }
     if (
       advertised !== undefined &&
@@ -1496,7 +1511,7 @@ export class SourceReconciler {
       ]);
       state.detail =
         "the source did not match the version its origin advertised";
-      return "unavailable";
+      return "mismatched";
     }
     state.offered = candidateRef;
     if (
@@ -1572,6 +1587,14 @@ export class SourceReconciler {
     const ordered = origin.kind === "system";
     const loadable = ordered &&
       await this.#loadPattern(state.running, state.space) !== undefined;
+    // The transition reads the candidate's closure, which the compile above
+    // wrote back. A serving runtime sealed that write into a wave, and the
+    // direct commit a source update takes may read only state the store
+    // holds (serving-loop.md §3d), so it waits for that wave to commit.
+    if (sourceUpdate !== undefined) {
+      await runtime.sealsCommitted?.();
+      if (signal.aborted) return "unavailable";
+    }
     let overtaken = false;
     const failure = await this.#commit(resultCell, state, signal, (tx) => {
       overtaken = false;
@@ -1643,7 +1666,7 @@ export class SourceReconciler {
       return "updated";
     }
     state.detail = failure.detail;
-    if (failure.lasting === undefined) return "unavailable";
+    if (failure.lasting === undefined) return "unapplied";
     if (replacements !== this.#replacementsOf(state.space)) return "rejected";
     // The refused commit wrote nothing, so the envelopes stored now are the
     // ones the refusing merge read.
@@ -1807,7 +1830,7 @@ export class SourceReconciler {
     );
     if (failure === undefined) return "migrated";
     state.detail = failure.detail;
-    return "unavailable";
+    return "unapplied";
   }
 
   /**

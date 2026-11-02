@@ -15,9 +15,8 @@ import {
 } from "@commonfabric/memory/v2";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import { releaseExecutionLease } from "@commonfabric/memory/v2/execution-lease";
-import type { ServedAclChange, Server } from "@commonfabric/memory/v2/server";
+import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
-import { applyAccessListChanges, validateStoredAcl } from "../acl-manager.ts";
 import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { LoopbackConnection } from "./host-memory-server.ts";
@@ -31,10 +30,10 @@ import {
   type PlaneRequests,
   PortEndpoint,
   type PortLike,
-  type ServedAclChangeData,
   type ServingLoopDiagnostics,
   type ServingWorkerInit,
 } from "./serving-port-protocol.ts";
+import { servedAclChangeOf } from "./served-acl-change.ts";
 import {
   emptyServingLoopStats,
   registerServingLoopStatsProvider,
@@ -45,17 +44,6 @@ import type { WaveSpaceCommit } from "./wave.ts";
 const logger = getLogger("serving-port-bridge", {
   enabled: true,
   level: "warn",
-});
-
-/** The served access-list change `data` stands for, its function rebuilt. */
-const servedAclChangeOf = (data: ServedAclChangeData): ServedAclChange => ({
-  ...data,
-  change: (stored) =>
-    applyAccessListChanges(
-      data.space as MemorySpace,
-      validateStoredAcl(stored),
-      data.changes,
-    ),
 });
 
 /** The sink the bridge keeps for one worker-side session. */
@@ -410,12 +398,18 @@ export class ServingPortBridge {
     );
     endpoint.onRequest("loopback.open", ({ transport }) => {
       if (this.#closed) throw new Error("the serving port bridge is closed");
-      const connection = server.connect((message) => {
-        endpoint.notify("loopback.frame", {
-          transport,
-          frame: encodeMemoryBoundary(message as unknown as FabricValue),
-        });
-      });
+      // The worker's sessions are this process's own: the serving loop's
+      // home sessions reach the server over the port.
+      const connection = server.connect(
+        (message) => {
+          endpoint.notify("loopback.frame", {
+            transport,
+            frame: encodeMemoryBoundary(message as unknown as FabricValue),
+          });
+        },
+        undefined,
+        { inProcess: true },
+      );
       this.#connections.set(transport, connection);
     });
     endpoint.onRequest("loopback.send", ({ transport, payload }) => {
@@ -433,14 +427,17 @@ export class ServingPortBridge {
     endpoint.onNotice("server.noteExecutorCommit", ({ notice }) => {
       server.noteExecutorCommit(notice);
     });
-    endpoint.onNotice("server.noteLeaseReacquired", ({ notice }) => {
-      server.noteLeaseReacquired(notice);
-    });
     endpoint.onNotice("worker.ready", () => {
       this.#workerReady.resolve();
     });
     endpoint.onNotice("host.stats", ({ stats }) => {
       this.#stats = stats;
+    });
+    // The port delivers in order, so a full post is never older than an
+    // events post that arrived before it: the merged events stand until
+    // the next full post replaces them with everything else.
+    endpoint.onNotice("host.eventStats", ({ events }) => {
+      this.#stats = { ...(this.#stats ?? emptyServingLoopStats()), events };
     });
     endpoint.onNotice("host.activationSettled", ({ space, outcome }) => {
       this.#options.onActivationSettled?.(space, outcome);

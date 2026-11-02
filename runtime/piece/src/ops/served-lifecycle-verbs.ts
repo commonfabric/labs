@@ -3,9 +3,9 @@
  * name and request to whichever thread hosts the serving loop, and
  * {@link buildServedLifecycleVerb} turns it back into the `LifecycleVerb` an
  * `ExecutorHost` runs, over a piece controller the service identity opens on
- * the serving runtime. The pattern-lifecycle route sends descriptors, so the
- * verbs it offers are the same whether the loop runs in its process or in a
- * worker of it.
+ * the serving runtime. The toolshed's `pattern.lifecycle` handler sends
+ * descriptors, so the verbs it offers are the same whether the loop runs in
+ * its process or in a worker of it.
  */
 
 import {

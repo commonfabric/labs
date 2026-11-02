@@ -2870,12 +2870,21 @@ export class RuntimeProcessor {
    * still being created does not, is left alone, and the response holds no
    * cell. Either way, bringing Home up starts the worker's housekeeping over
    * it, as `#startHomeHousekeeping()` says.
+   *
+   * @throws The error Home's memory session ended with, as when its first
+   *   handshake failed on every attempt the client may make.
    */
   async handleEnsureHomePatternRunning(
     request: EnsureHomePatternRunningRequest,
   ): Promise<HomePatternResponse> {
     const homeSpaceCell = this.#runtime.getHomeSpaceCell();
     await homeSpaceCell.sync();
+    // A Home whose session failed reads as absent, which would be taken for
+    // no Home, or for one to create.
+    const sessionFailure = this.#runtime.storageManager.spaceSessionError?.(
+      this.#runtime.userIdentityDID,
+    );
+    if (sessionFailure !== undefined) throw sessionFailure;
     if (request.existingOnly && !(await this.#homeExists())) return {};
 
     // Always the PiecesController path: ensureDefaultPattern() follows the

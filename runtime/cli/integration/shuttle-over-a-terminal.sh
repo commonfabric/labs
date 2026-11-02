@@ -64,17 +64,13 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 API_URL="${API_URL:-http://localhost:8000}"
 FIXTURE="$SCRIPT_DIR/pattern/shuttle-place.tsx"
 DRIVER="$SCRIPT_DIR/shuttle-terminal.py"
 
-# Prefer a built binary when the harness supplies one; fall back to source.
-if [ -n "${CF_BINARY:-}" ]; then
-  CF="$CF_BINARY"
-else
-  CF="deno task --quiet --cwd $REPO_ROOT cf"
-fi
+# Step 32 reads back the directory `cf` runs in, and the launcher names it as
+# the one this script starts in.
+source "$SCRIPT_DIR/cf-launcher.sh"
 
 PASS=0
 FAIL=0
@@ -100,12 +96,12 @@ lacks() {
 
 if [ -z "${CF_IDENTITY:-}" ]; then
   CF_IDENTITY=$(mktemp)
-  $CF id new >"$CF_IDENTITY" 2>/dev/null
+  "${CF[@]}" id new >"$CF_IDENTITY" 2>/dev/null
 fi
 if [ -z "${SPACE:-}" ]; then
   # Opening a space never creates it, so the run makes its own; `cf space
   # create` prints the new space's DID.
-  SPACE=$($CF space create --quiet --api-url="$API_URL" --identity="$CF_IDENTITY")
+  SPACE=$("${CF[@]}" space create --quiet --api-url="$API_URL" --identity="$CF_IDENTITY")
   case "$SPACE" in
     did:key:*) ;;
     *) echo "cf space create printed no DID: $SPACE" >&2; exit 1 ;;
@@ -161,9 +157,9 @@ step "1. Deploy the fixture under two slugs"
 # --quiet makes the piece id stdout's only line; stderr is dropped and the
 # grep anchored so a compile warning carrying a fid1: token cannot be taken
 # for the deploy's id.
-FIRST=$($CF piece new --quiet --slug first "$FIXTURE" $ARGS 2>/dev/null |
+FIRST=$("${CF[@]}" piece new --quiet --slug first "$FIXTURE" $ARGS 2>/dev/null |
   grep -oE '^fid1:[A-Za-z0-9_-]+' | head -1)
-SECOND=$($CF piece new --quiet --slug second "$FIXTURE" $ARGS 2>/dev/null |
+SECOND=$("${CF[@]}" piece new --quiet --slug second "$FIXTURE" $ARGS 2>/dev/null |
   grep -oE '^fid1:[A-Za-z0-9_-]+' | head -1)
 if [ -n "$FIRST" ] && [ -n "$SECOND" ]; then
   ok "deployed $FIRST and $SECOND"
@@ -177,7 +173,7 @@ step "2. Write one item from outside, before any shell exists"
 # without running the pattern. Doing it here rather than from inside a session
 # is what makes the reads below say something: the shell connects afterwards,
 # so what it serves is what it found, with no push to have raced.
-if echo '["bread"]' | $CF cell set --quiet --input --cell first items $ARGS \
+if echo '["bread"]' | "${CF[@]}" cell set --quiet --input --cell first items $ARGS \
   >/dev/null 2>&1; then
   ok "wrote items to the arguments cell of first"
 else
@@ -187,7 +183,7 @@ fi
 # only place it can be read: reaching in warms, and a warm run commits what it
 # computed, so once a session has stood on this piece nothing can read what
 # storage held before it. Step 11 compares this with what the shell serves.
-STORED=$($CF cell get --quiet --cell first summary $ARGS 2>/dev/null)
+STORED=$("${CF[@]}" cell get --quiet --cell first summary $ARGS 2>/dev/null)
 
 step "3. Drive a session over a pseudo-terminal"
 # `edit` opens `$EDITOR` on the value and writes back what was saved, so the
@@ -332,7 +328,7 @@ LINES
 # claim about this directory and not about whatever the shell reported.
 STARTED_IN=$(pwd)
 EDITOR="$EDITOR_SCRIPT" python3 "$DRIVER" "$SCRIPT" "$TRANSCRIPT" -- \
-  $CF sh $ARGS >/dev/null
+  "${CF[@]}" sh $ARGS >/dev/null
 DRIVE_STATUS=$?
 check "0" "$DRIVE_STATUS" "the session ran and ended on ctrl-d with a zero status"
 if [ "$DRIVE_STATUS" -ne 0 ]; then
@@ -523,7 +519,7 @@ lacks "names no facet" "$GET_HELP" "--help is not read as a path"
 # a question per cell: step 29 names that write beside each of its checks, and
 # the writes it cannot speak for rest on the shell's own read on the line after
 # each.
-AFTER() { $CF cell get --quiet --cell "$1" "$2" $ARGS 2>/dev/null; }
+AFTER() { "${CF[@]}" cell get --quiet --cell "$1" "$2" $ARGS 2>/dev/null; }
 
 step "17. A set lands, and the fabric holds it after the session has gone"
 check "Wrote \`label\` on \`$FIRST\`." "$(said 22 "set label '\"a written place\"'")" \

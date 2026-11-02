@@ -43,6 +43,8 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  SERVED_REQUEST_MAX_BYTES,
+  type ServedRequestKind,
   type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
@@ -147,6 +149,16 @@ const connectionLostWhileRestoring = (): Error =>
 const lifecycleRefusal = (code: string, message: string): Error => {
   const error = new Error(message);
   error.name = "PatternLifecycleRefusal";
+  return Object.assign(error, { code });
+};
+
+/**
+ * A `ServedRequestRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const servedRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "ServedRequestRefusal";
   return Object.assign(error, { code });
 };
 
@@ -2187,15 +2199,17 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle` and `spaceInvites` are the server's capabilities
-    // alone: the client reads them from `hello.ok` and never offers them.
-    // Other flags an endpoint does not know are ignored there, since the
-    // routed flag allowlists were removed (infra DEVIATIONS row 41).
+    // `patternLifecycle`, `servedRequests` and `spaceInvites` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
       watchSetPartsV1: _stagedSetsServerOnly,
       patternLifecycle: _lifecycleServerOnly,
+      servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
@@ -3350,6 +3364,57 @@ export class SpaceSession {
         "payload-too-large",
         `A \`pattern.lifecycle\` request takes at most ${limit} bytes on ` +
           `this connection, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
+   * Sends one crossing into this session's space to the process that owns
+   * it, and returns what the owner's handler returns for it (04-protocol.md
+   * §4.3.12). The session is a serving process's, opened as the delegating
+   * class; the owner refuses any other.
+   *
+   * @throws `ServedRequestRefusal`, with the server's code as `.code`, when
+   *   the owner refuses the crossing (`refused`, deterministic, or
+   *   `unavailable`, `internal`), when the session's principal is outside the
+   *   delegating class (`forbidden`), or, before sending, when the server
+   *   does not advertise `servedRequests` (`served-unsupported`) or the
+   *   request takes more than `SERVED_REQUEST_MAX_BYTES` or than the
+   *   connection takes in one request (`payload-too-large`). A connection
+   *   lost before the answer throws a `ConnectionError`, and the crossing's
+   *   outcome is then unknown.
+   */
+  async runServed(
+    kind: ServedRequestKind,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.servedRequests !== true) {
+      throw servedRefusal(
+        "served-unsupported",
+        "The memory server does not advertise `servedRequests`",
+      );
+    }
+    const message = {
+      type: "served",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      kind,
+      body,
+    };
+    const limit = Math.min(
+      SERVED_REQUEST_MAX_BYTES,
+      this.#client.requestBytesLimit ?? SERVED_REQUEST_MAX_BYTES,
+    );
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > limit) {
+      throw servedRefusal(
+        "payload-too-large",
+        `A \`served\` request takes at most ${limit} bytes on this ` +
+          `connection, and this one takes ${bytes}`,
       );
     }
     return await this.#client.request<FabricPlainObject>(message);
@@ -5380,19 +5445,27 @@ export type QueuedFrameTransport = Transport & {
 /**
  * A transport to an in-process server, delivering its frames as
  * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
- * disconnect the server initiates is invisible over loopback.
+ * disconnect the server initiates is invisible over loopback. The server
+ * takes the connection as one from this process unless `inProcess` is
+ * `false`, which a test passes where its loopback transport stands for the
+ * deployment's network.
  */
 export const loopback = (
   server: {
     connect(
       send: (message: ServerMessage, payload?: string) => void,
       syncParts?: PartLimits,
+      options?: { inProcess?: boolean },
     ): {
       receive(payload: string): Promise<void>;
       close(): void;
     };
   },
-  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
+  options: {
+    syncParts?: PartLimits;
+    messageLimits?: PartLimits;
+    inProcess?: boolean;
+  } = {},
 ): Transport => {
   // The transport exists before the connection, so a frame the server
   // sends as it connects is queued rather than lost.
@@ -5401,9 +5474,13 @@ export const loopback = (
     receive: (payload) => built.connection!.receive(payload),
     close: () => built.connection?.close(),
   });
-  built.connection = server.connect((message, payload) => {
-    transport.deliver(payload ?? encodeMemoryBoundary(message));
-  }, options.syncParts);
+  built.connection = server.connect(
+    (message, payload) => {
+      transport.deliver(payload ?? encodeMemoryBoundary(message));
+    },
+    options.syncParts,
+    { inProcess: options.inProcess ?? true },
+  );
   return options.messageLimits === undefined
     ? transport
     : { ...transport, messageLimits: options.messageLimits };

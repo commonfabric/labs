@@ -317,6 +317,29 @@ export type ServedEventFailureOutcome =
     message: string;
   }
   | {
+    /** The piece the event addresses records an origin the serving loop
+     * has not yet followed this tenure (`EnsurePieceOptions.originFollowed`),
+     * so the start that would register its handler was declined. The loop
+     * itself owes the follow, so this deferral spends none of the drain's
+     * deferral budget, and the follow's completion re-scans the entry. */
+    kind: "deferred";
+
+    cause: "origin-pending";
+    message: string;
+  }
+  | {
+    /** The piece the event addresses names a pattern this runtime could not
+     * load (`pattern-unloadable`). The serving loop asks its space's store
+     * whether the pattern's program closure is there (events.md §5): a
+     * closure still on its way into a space is waited for rather than
+     * charged to the deferral budget. */
+    kind: "deferred";
+
+    cause: "pattern-unloadable";
+    patternIdentity: string;
+    message: string;
+  }
+  | {
     kind: "deferred";
     cause: "delivery-failure";
     role: "failed-head";

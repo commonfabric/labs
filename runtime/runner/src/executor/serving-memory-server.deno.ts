@@ -259,10 +259,15 @@ export async function startServingMemoryServer(
   const serviceIdentity = options.serviceIdentity ?? await Identity.generate();
   const worker = runsInWorker(options);
   const store = worker ? await temporaryStore() : undefined;
+  // The service identity is the server's one delegating principal, as a
+  // toolshed running server execution lists its own process identity, which
+  // is what admits the serving loop's named reads of a space it does not
+  // serve (protocol.md §2's read row).
   const server = newLoopbackServer({
     store: store?.url ??
       new URL(`memory://serving-memory-server-${crypto.randomUUID()}`),
     subscriptionRefreshDelayMs,
+    delegatingDids: [serviceIdentity.did()],
   });
   return await attachServingLoop({
     server,
@@ -301,11 +306,12 @@ export async function listenServingMemoryServer(
     ) => Response | undefined | Promise<Response | undefined>;
 
     /**
-     * The memory server's access-list mode. When given, the service identity
-     * is the server's one delegating principal, as a toolshed running server
-     * execution lists its own process identity, and no principal is a
-     * service principal. Absent, the server has no access-list
-     * configuration at all: `off`, with no delegating principal.
+     * The memory server's access-list mode, `off` when absent. In every mode
+     * the service identity is the server's one delegating principal, as a
+     * toolshed running server execution lists its own process identity,
+     * which is what admits the serving loop's named reads of a space it does
+     * not serve (protocol.md §2's read row); no principal is a service
+     * principal.
      */
     aclMode?: MemoryV2Server.MemoryAclMode;
   } = {},
@@ -315,9 +321,7 @@ export async function listenServingMemoryServer(
   const worker = runsInWorker(options);
   const store = worker ? await temporaryStore() : undefined;
   const standalone = StandaloneMemoryServer.start({
-    ...(aclMode !== undefined
-      ? { acl: { mode: aclMode, delegatingDids: [serviceIdentity.did()] } }
-      : {}),
+    acl: { mode: aclMode ?? "off", delegatingDids: [serviceIdentity.did()] },
     ...(answer !== undefined ? { serve: answer } : {}),
     ...(store === undefined ? {} : { store: store.url }),
   });
@@ -351,6 +355,7 @@ const WORKER_REFUSED_OPTIONS = [
   "onEventDeferred",
   "onDrainInFlightSkip",
   "onEffectRetired",
+  "onLeaseReacquired",
 ] as const satisfies ReadonlyArray<keyof ServingMemoryServerOptions>;
 
 /**

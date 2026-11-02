@@ -346,6 +346,55 @@ describe("pattern.lifecycle", () => {
       expect(response.error?.code).toBe("payload-too-large");
       expect(calls).toEqual([]);
     });
+
+    it("refuses with a session error a verb naming a session the space never opened", async () => {
+      const server = serverWith();
+      const { calls, handler } = recording();
+      server.setPatternLifecycleHandler(handler);
+
+      const response = await server.runPatternLifecycle({
+        type: "pattern.lifecycle",
+        requestId: "absent-session",
+        space: SPACE,
+        sessionId: "never-opened",
+        verb: "upload",
+        body: { program: { main: "/main.tsx" } },
+      });
+
+      expect(response.error?.name).toBe("SessionError");
+      expect(calls).toEqual([]);
+    });
+
+    it("refuses an anonymous session's verb, without calling the handler", async () => {
+      const server = serverWith();
+      const { calls, handler } = recording();
+      server.setPatternLifecycleHandler(handler);
+      const { wire, hello } = await greet(server);
+      const openId = crypto.randomUUID();
+      await wire.receive({
+        type: "session.open",
+        requestId: openId,
+        space: SPACE,
+        session: {},
+        invocation: {
+          aud: hello.sessionOpen!.audience,
+          challenge: hello.sessionOpen!.challenge.value,
+        },
+      });
+      const opened = await wire.response(openId) as ResponseMessage<
+        { sessionId: string }
+      >;
+      expect(opened.error).toBeUndefined();
+
+      const response = await wire.response(
+        await request(wire, opened.ok!.sessionId),
+      );
+
+      expect(response.error?.name).toBe("PatternLifecycleRefusal");
+      expect(response.error?.code).toBe("forbidden");
+      expect(response.error?.message).toContain("anonymous session");
+      expect(calls).toEqual([]);
+    });
   });
 
   describe("authority", () => {
@@ -460,6 +509,26 @@ describe("pattern.lifecycle", () => {
 
       expect(response.error?.name).toBe("PatternLifecycleRefusal");
       expect(response.error?.code).toBe("internal");
+    });
+
+    it("drops the answer to a verb whose connection closed while it ran", async () => {
+      const server = serverWith();
+      const release = Promise.withResolvers<void>();
+      const ran = Promise.withResolvers<void>();
+      server.setPatternLifecycleHandler(async () => {
+        ran.resolve();
+        await release.promise;
+        return { ok: { pattern: "late" } };
+      });
+      const { wire, sessionId } = await openSession(server, ALICE);
+      await request(wire, sessionId);
+      await ran.promise;
+
+      wire.close();
+      release.resolve();
+      await server.close();
+
+      expect(wire.next()).toBeUndefined();
     });
   });
 

@@ -1,46 +1,26 @@
-// Client for the toolshed's pattern-lifecycle verbs
-// (docs/features/server-pattern-lifecycle.md). Under server execution the
-// serving runtime compiles, materializes or replaces, and commits a
-// pattern; what `cf` keeps is resolving the program from disk and sending
-// it. A verb goes as a `pattern.lifecycle` request on the space's memory
-// session, which reaches the process serving the space, and over HTTP to a
-// server that does not take one there. An HTTP call carries a CF1
-// first-party request proof signed with the user's own identity key; either
-// way the server admits a caller the space's ACL names as a writer.
+/**
+ * Client for the pattern-lifecycle verbs
+ * (docs/features/server-pattern-lifecycle.md). Under server execution the
+ * serving runtime compiles, materializes or replaces, and commits a pattern;
+ * what `cf` keeps is resolving the program from disk and sending it. A verb
+ * goes as a `pattern.lifecycle` request on the space's memory session, which
+ * reaches the process serving the space, and runs as the session's principal,
+ * whom the server admits only as a writer of the space.
+ */
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { isFabricPlainObject } from "@commonfabric/data-model";
-import type { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
-const BASE = "/api/pattern-lifecycle";
-
-/**
- * Join a verb's path onto the configured API base, keeping the base's own
- * path, so a deployment served under a prefix is addressed at its endpoint.
- */
-export const lifecycleUrl = (apiUrl: URL, verb: string): URL => {
-  const url = new URL(apiUrl);
-  url.pathname = `${url.pathname.replace(/\/+$/, "")}${BASE}/${verb}`;
-  return url;
-};
-
+/** How a verb reaches the serving side. */
 export interface LifecycleClientConfig {
-  apiUrl: URL;
-
-  /** Signs each request; the server authorizes its DID against the space. */
-  identity: Identity;
-
   /**
    * Sends a verb, with its arguments but without `space`, on the memory
-   * session of `space`, as `IStorageManager.runPatternLifecycle()` does. Tried
-   * first where present; a server that does not advertise the request is
-   * called over HTTP instead.
+   * session of `space`, as `IStorageManager.runPatternLifecycle()` does.
    */
-  session?: (
+  session: (
     space: MemorySpace,
     verb: PatternLifecycleVerb,
     body: FabricPlainObject,
@@ -74,6 +54,7 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   "incompatible",
   "invalid-request",
   "invalid-source",
+  "lifecycle-unsupported",
   "payload-too-large",
   "pattern-not-found",
   "piece-not-found",
@@ -84,41 +65,30 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A refusal the serving side answered with. `code` is the server's stable
- * name for it, and `status` the HTTP status it came on, absent for one that
- * came on a memory session.
+ * A refusal the serving side answered with, or the memory client raised
+ * before sending. `code` is the stable name for it.
  */
 export class ServedLifecycleError extends Error {
   readonly #code: string;
-  readonly #status: number | undefined;
 
-  /** Constructs an instance for the refusal `code`, sent with `status`. */
-  constructor(code: string, status: number | undefined, message: string) {
+  /** Constructs an instance for the refusal `code`. */
+  constructor(code: string, message: string) {
     super(message);
     this.name = "ServedLifecycleError";
     this.#code = code;
-    this.#status = status;
   }
 
-  /** The server's stable name for the refusal. */
+  /** The stable name for the refusal. */
   get code(): string {
     return this.#code;
   }
 
-  /** The HTTP status the refusal came on; absent over a memory session. */
-  get status(): number | undefined {
-    return this.#status;
-  }
-
   /**
-   * Whether the server decided the verb, so that it did nothing and a retry
-   * gets the same answer: a 4xx other than 408 over HTTP, and a code the
-   * server only sends for such a decision over a memory session.
+   * Whether the verb was decided without running, so that it did nothing and
+   * a retry gets the same answer.
    */
   get refused(): boolean {
-    return this.#status === undefined
-      ? REFUSED_CODES.has(this.#code)
-      : this.#status >= 400 && this.#status < 500 && this.#status !== 408;
+    return REFUSED_CODES.has(this.#code);
   }
 }
 
@@ -149,105 +119,36 @@ export function wireProgram(program: RuntimeProgram): {
   };
 }
 
+/**
+ * Sends `verb` on the memory session of the payload's space, with the rest of
+ * the payload as its arguments, and returns its receipt.
+ *
+ * @throws ServedLifecycleError when the server refuses the verb, or the memory
+ *   client refuses to send it.
+ */
 async function call<T>(
   config: LifecycleClientConfig,
   verb: PatternLifecycleVerb,
-  payload: Record<string, unknown> & { space: MemorySpace },
-): Promise<T> {
-  if (config.session !== undefined) {
-    const sent = await callOnSession(config.session, verb, payload);
-    if (sent.status === "answered") return sent.receipt as T;
-  }
-  return await callOverHttp(config, verb, payload);
-}
-
-/**
- * Helper for `call()`, which sends the verb on the space's memory session
- * and returns its receipt, or `unsupported` where the server does not take
- * the request there.
- *
- * @throws ServedLifecycleError when the server refuses the verb.
- */
-async function callOnSession(
-  session: NonNullable<LifecycleClientConfig["session"]>,
-  verb: PatternLifecycleVerb,
   { space, ...payload }: Record<string, unknown> & { space: MemorySpace },
-): Promise<
-  { status: "answered"; receipt: unknown } | { status: "unsupported" }
-> {
-  // Through JSON, so the session carries exactly the body HTTP would; what
-  // JSON decodes to is a fabric value.
+): Promise<T> {
+  // Through JSON, so the arguments are plain data: what JSON decodes to is a
+  // fabric value.
   const body: FabricValue = JSON.parse(JSON.stringify(payload));
   if (!isFabricPlainObject(body)) {
     throw new Error(`The \`${verb}\` arguments are not a JSON object`);
   }
   try {
-    return { status: "answered", receipt: await session(space, verb, body) };
+    return await config.session(space, verb, body) as T;
   } catch (error) {
     const code = error instanceof Error &&
         error.name === "PatternLifecycleRefusal"
       ? (error as Error & { code?: unknown }).code
       : undefined;
-    if (code === "lifecycle-unsupported") return { status: "unsupported" };
     if (typeof code === "string") {
-      throw new ServedLifecycleError(
-        code,
-        undefined,
-        (error as Error).message,
-      );
+      throw new ServedLifecycleError(code, (error as Error).message);
     }
     throw error;
   }
-}
-
-/**
- * Helper for `call()`, which posts the verb to the toolshed's route and
- * returns its receipt.
- *
- * @throws ServedLifecycleError when the server refuses the verb or answers
- *   with something other than JSON.
- */
-async function callOverHttp<T>(
-  config: LifecycleClientConfig,
-  verb: PatternLifecycleVerb,
-  payload: Record<string, unknown>,
-): Promise<T> {
-  const url = lifecycleUrl(config.apiUrl, verb);
-  // The proof commits to the body hash, so the bytes signed and the bytes
-  // sent must be identical — serialize once.
-  const body = JSON.stringify(payload);
-  const headers = await signFirstPartyHttpRequest({
-    url,
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    signer: config.identity,
-  });
-  const response = await fetch(url, { method: "POST", headers, body });
-  const text = await response.text();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new ServedLifecycleError(
-      `http-${response.status}`,
-      response.status,
-      `${verb} failed (${response.status}): ${text.slice(0, 200)}`,
-    );
-  }
-  if (!response.ok) {
-    const refusal = parsed as { error?: unknown; code?: unknown };
-    throw new ServedLifecycleError(
-      typeof refusal.code === "string"
-        ? refusal.code
-        : `http-${response.status}`,
-      response.status,
-      typeof refusal.error === "string"
-        ? refusal.error
-        : `${verb} failed (${response.status})`,
-    );
-  }
-  return parsed as T;
 }
 
 /**

@@ -44,8 +44,12 @@ import {
   POST_COMMIT_RELEASE_REJECTED,
   type PostCommitSideEffect,
 } from "../cfc/types.ts";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
+import { isServedRefusal, type RoutedScope } from "./routed-plane.ts";
 import type { WaveRunContext } from "./wave.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { RUNNER_ACCEPTANCE_EFFECT_KIND } from "./runner-acceptance.ts";
@@ -115,6 +119,13 @@ export class SpaceOutbox {
   readonly #sessionId: string;
   readonly #space?: string;
   readonly #localSeqRef: { value: number };
+
+  /**
+   * The route to each target space's owner, which delivers the appends in
+   * place of this process's server; absent, every append is delivered to
+   * this process's server. Disposed with the outbox.
+   */
+  readonly #route: RoutedScope | undefined;
 
   /** In-flight effect entries per effect key — §4's in-flight dedupe,
    * scoped per (memo key, result target): a second admit of a live key
@@ -200,6 +211,13 @@ export class SpaceOutbox {
     /** Per-space egress budgets (Phase 6); absent = unbounded. */
     budget?: OutboxBudgetPolicy;
 
+    /**
+     * The tenure's scope on the host's routed plane
+     * (`serving-loop-owner-routing.md`): present, each append is sent to
+     * the target's owner as a `served` request.
+     */
+    route?: RoutedScope;
+
     /** DIAGNOSTIC (tests): called as each in-flight effect is retired,
      * once the counts that drop with it have moved. Retirement happens
      * inside the outbox's own continuations, which nothing else
@@ -212,6 +230,7 @@ export class SpaceOutbox {
     this.#space = options.space;
     this.#sessionId = options.sessionId;
     this.#localSeqRef = options.localSeqRef;
+    this.#route = options.route;
     this.#budget = options.budget;
     this.#onEffectRetired = options.onEffectRetired;
     this.#now = options.budget?.now ?? Date.now;
@@ -320,6 +339,7 @@ export class SpaceOutbox {
     while (this.#dispatchWaiters.length > 0) {
       this.#dispatchWaiters.shift()?.();
     }
+    this.#route?.dispose();
   }
 
   /** The runtime's async-work observer hook (installed by the
@@ -569,8 +589,7 @@ export class SpaceOutbox {
     });
     for (const [index, row] of rows.entries()) {
       try {
-        await this.#server.commitDelegatedAppend({
-          targetSpace: row.targetSpace,
+        const entry = {
           targetStream: row.targetStream,
           ...(row.targetStreamLink === undefined
             ? {}
@@ -590,14 +609,35 @@ export class SpaceOutbox {
             ? { sessionlessSpaceScope: true }
             : {}),
           capabilityRef: row.capabilityRef,
-          sessionId: this.#sessionId,
-          localSeq: ++this.#localSeqRef.value,
-        });
+        };
+        // Through the route, the target's owner admits the append on the
+        // routed session, numbered by the plane; otherwise this process's
+        // server admits it under the delivering service session, numbered
+        // from the host's counter.
+        if (this.#route !== undefined) {
+          await this.#route.append(row.targetSpace as MemorySpace, entry);
+          this.#stats.routed.appends += 1;
+        } else {
+          await this.#server.commitDelegatedAppend({
+            ...entry,
+            targetSpace: row.targetSpace,
+            sessionId: this.#sessionId,
+            localSeq: ++this.#localSeqRef.value,
+          });
+        }
         // Delivery-ack: the target processed the entry (admitted or
         // horizon-deduped) — retire the row (FP1's queue that empties).
         deleteExecutionOutboxRow(this.#engine, row.rowId);
       } catch (error) {
-        if (error instanceof ProtocolError) {
+        // The owner's `refused` is the engine's `ProtocolError`, answered
+        // over the route, and an append too large to send is refused before
+        // it is sent and never fits later; every other refusal of the
+        // owner's is transient.
+        if (
+          error instanceof ProtocolError ||
+          isServedRefusal(error, "refused") ||
+          isServedRefusal(error, "payload-too-large")
+        ) {
           // LT4: a deterministic admission rejection does not retry. The
           // source-side failure notice writes BEFORE the row retires
           // (OW14's write-then-delete order): a crash between the two
