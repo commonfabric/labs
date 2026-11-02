@@ -710,8 +710,8 @@ way before adding a wait here.
 
 The "wait on an event, not a poll" principle of
 [waiting-in-tests.md](waiting-in-tests.md) applies to production code too. The
-three studies below are where the shape is worth knowing: a deliberate
-exception where no event exists to await, and two readiness handshakes that
+four studies below are where the shape is worth knowing: two deliberate
+exceptions where no event exists to await, and two readiness handshakes that
 stay event-driven across process boundaries that look like they rule an event
 out.
 
@@ -751,6 +751,28 @@ Cancelling an in-progress backoff stays event-driven: the pause between
 attempts is a single timer that `close()` cancels directly, so a client closed
 mid-backoff settles at once and nothing wakes on an interval. The backoff
 delay between attempts stays; its cancellation carries no poll.
+
+### The serving worker's watchdog
+
+The other deliberate exception is the timer `ServingWorker` keeps on a serving
+worker in `runtime/runner/src/executor/serving-worker-host.ts`, the one wait left
+in the execution lease ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md)
+§2). A worker whose thread has stopped holds its spaces' leases, and a thread
+that has stopped cannot report that it has stopped, so no event exists to await.
+Once a worker has sent its first message, it posts a heartbeat every 10 seconds
+from a timer of its own, and the main thread kills it after six consecutive
+10-second intervals with no message of any kind from it. A worker that hangs
+before its first message holds no lease and is not replaced.
+
+The bound passes the test of [whether firing early is
+safe](waiting-in-tests.md#wall-clock-time-is-not-a-measure-of-progress). A kill of
+a worker that was only slow costs its spaces a rebuild and its in-flight waves a
+withdrawal, and reaches a correct outcome: the successor recomputes them, and a
+commit the killed worker left in flight is refused if it reaches admission after
+the release. Nor does the wait count
+wall-clock time. It counts its own firings, so a main thread that itself stalled,
+or a process that was suspended, fires it once on waking, and a clock jump moves
+nothing.
 
 ### The FUSE mount handshake
 

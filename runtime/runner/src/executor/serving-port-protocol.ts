@@ -108,6 +108,9 @@ export type ServingWorkerInit = {
   /** The lease holder's process component this worker start adopts. */
   readonly processInstanceId: string;
 
+  /** How often the worker posts `worker.heartbeat`. */
+  readonly heartbeatIntervalMs: number;
+
   /** The serving runtimes' patterns and compile base. */
   readonly apiUrl: string;
 
@@ -136,6 +139,18 @@ export type PlaneRequests = {
    */
   "space.open": { params: { space: string }; result: { url: string } };
 
+  "server.acquireExecutionLease": {
+    params: { space: string; holder: string };
+    result: boolean;
+  };
+  "server.releaseExecutionLease": {
+    params: { space: string; holder: string };
+    result: void;
+  };
+  "server.commitDeliveryFailureNotice": {
+    params: { notice: Parameters<Server["commitDeliveryFailureNotice"]>[0] };
+    result: void;
+  };
   "server.idle": { params: null; result: void };
   "server.flushSessions": {
     params: { spaces: string[] | undefined };
@@ -192,15 +207,11 @@ export type PlaneRequests = {
   /**
    * Commits one wave batch (a `WaveSpaceCommit` in the memory boundary's
    * encoding) under the worker's counter value, through the sink the server's
-   * thread keeps for `sessionId`. `homeRefused` reports that applying a home
-   * batch threw, which the worker's sink turns into its own refusal hook.
+   * thread keeps for `sessionId`.
    */
   "sink.commitWave": {
     params: { sessionId: string; localSeq: number; batch: string };
-    result: {
-      result: Result<{ seq: number }, WaveCommitRejection>;
-      homeRefused: boolean;
-    };
+    result: Result<{ seq: number }, WaveCommitRejection>;
   };
   "sink.commitSpaceAccessChange": {
     params: {
@@ -224,6 +235,13 @@ export type PlaneNotices = {
    * before that is dropped, so the server's thread sends nothing earlier.
    */
   "worker.ready": null;
+
+  /**
+   * The worker's thread still runs. It says nothing else: the watchdog on the
+   * server's thread reads any message from the worker the same way
+   * (serving-loop.md §2).
+   */
+  "worker.heartbeat": null;
 
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
   "loopback.close": { transport: number };
@@ -378,6 +396,7 @@ export class PortEndpoint<
   readonly #listener: (event: MessageEvent) => void;
   #nextId = 1;
   #closed: Error | undefined;
+  #messagesReceived = 0;
 
   constructor(port: PortLike, onFault: (error: Error) => void) {
     this.#port = port;
@@ -390,6 +409,11 @@ export class PortEndpoint<
   /** Whether `close()` has run. */
   get closed(): boolean {
     return this.#closed !== undefined;
+  }
+
+  /** How many messages of any kind have arrived from the other side. */
+  get messagesReceived(): number {
+    return this.#messagesReceived;
   }
 
   /**
@@ -482,6 +506,7 @@ export class PortEndpoint<
   }
 
   #receive(envelope: Envelope): void {
+    this.#messagesReceived += 1;
     switch (envelope.t) {
       case "req":
         this.#answer(envelope);

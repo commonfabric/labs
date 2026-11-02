@@ -54,6 +54,7 @@ import type {
   SharedSpaceMembershipChange,
   SharedSpaceRegistration,
   SharedSpaceRemoval,
+  SharedSpaceRetitle,
 } from "../system/shared-space/shared-space-catalog.ts";
 import type {
   SharedSpaceCollectionView,
@@ -77,6 +78,7 @@ interface HomeSurface {
   registerSharedSpace: SharedSpaceRegistration;
   changeSharedSpaceMembership: SharedSpaceMembershipChange;
   removeSharedSpace: SharedSpaceRemoval;
+  retitleSharedSpace: SharedSpaceRetitle;
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
   createProfile: { name?: string };
@@ -457,6 +459,88 @@ async function sessionProfileStampsIn(runtime: Runtime) {
   }
   return stamps;
 }
+
+describe("Home catalog retitles", () => {
+  it("answers a retitle's outcome and keeps the entry's revision", async () => {
+    await withHome(true, async (_runtime, home, fresh) => {
+      const client = await fresh(false);
+      const catalog = client.home.key("sharedSpaceCatalog");
+      const retitle = client.home.key("retitleSharedSpace");
+      await invoke(
+        client.runtime,
+        client.home.key("registerSharedSpace"),
+        registration,
+        "register-for-retitle",
+      );
+      const before = (await catalog.pull()).entries[registration.space];
+
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle"),
+      ).toEqual({ status: "retitled", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle-again"),
+      ).toEqual({ status: "unchanged", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: "did:key:catalog-retitle-unlisted",
+          title: "Nowhere",
+        }, "retitle-unlisted"),
+      ).toEqual({ status: "conflict", reason: "missing" });
+
+      // A host reaches the same stream through its command projection.
+      const commands = client.home.key("sharedSpaces").key("commands")
+        .asSchema(sharedSpaceCommandsSchema);
+      expect((await commands.pull()).retitle).toBeDefined();
+      expect(
+        await invoke(
+          client.runtime,
+          commands.key("retitle"),
+          { space: registration.space, title: "Renamed by the host" },
+          "retitle-projected",
+        ),
+      ).toEqual({ status: "retitled", space: registration.space });
+
+      const after = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+      expect(after).toEqual({ ...before, title: "Renamed by the host" });
+      expect(
+        Object.keys((await home.key("sharedSpaceCatalog").pull()).entries),
+      ).toEqual([registration.space]);
+    });
+  });
+
+  it("refuses a malformed retitle and leaves the title", async () => {
+    await withHome(false, async (runtime, home) => {
+      await invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "register-for-malformed-retitle",
+      );
+      const before = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+
+      await expect(
+        invoke(runtime, home.key("retitleSharedSpace"), {
+          space: registration.space,
+          title: "x".repeat(201),
+        }, "retitle-too-long"),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("Invalid shared-space retitle"),
+      });
+      expect(
+        (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space],
+      ).toEqual(before);
+    });
+  });
+});
 
 describe("Home catalog revisions across execution modes", () => {
   it("keeps an old revision stale when an invocation ID is admitted again", async () => {

@@ -240,7 +240,7 @@ export class ServingWaves {
     this.#runtime.clearSealDestination();
     for (const wave of this.#waves) wave.abandon("test cleanup");
     await Promise.all(this.#waves.map((wave) => wave.settled()));
-    this.#lease.release();
+    await this.#lease.release();
     await this.#storageManager.synced();
     await this.#runtime.dispose();
     await this.#peer?.dispose();
@@ -281,11 +281,11 @@ export class ServingWaves {
     });
     const engine = await server.engineForSpace(space);
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    if (!lease.acquire()) throw new Error("Could not acquire the lease");
+    if (!await lease.acquire()) throw new Error("Could not acquire the lease");
     return new ServingWaves(
       signer,
       server,

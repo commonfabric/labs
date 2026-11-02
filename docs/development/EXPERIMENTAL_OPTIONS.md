@@ -64,7 +64,7 @@ was last checked against the code.
 | [`cfcRenderCeiling`](#cfcrenderceiling)                                     | `commonfabric.cfcRenderCeiling()` in the browser (localStorage)                                                                                 | on                                                                                   | Bernhard Seefeld (#4550)                              | graduate to an unconditional ceiling                                                                                                                                                                                           | implemented, on by default; per-profile opt-out                                 |
 | [`SERVER_EXECUTION_STORE_READ_THROUGH`](#server_execution_store_read_through) | `SERVER_EXECUTION_STORE_READ_THROUGH` env on toolshed, or `SpaceServerPolicy.storeReadThrough` | on in toolshed; off in the test harness's serving memory server | Bernhard Seefeld (store read-through) | soak with the default on, then delete the knob and the home-space session read path | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
-| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | soak with the default on, move the lease into memory, then delete the knob and the in-process crossings | implemented for every crossing, on by default in toolshed |
+| [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | delete the knob and the in-process crossings once every process keeps the lease in memory | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
@@ -386,7 +386,7 @@ flags it adopts from the deployment it runs against.
     builtins.md §5 — AND the serving loop actually SERVES: toolshed
     constructs an ExecutorHost over its memory server, spaces activate on
     session open / authored admission, one SpaceServer per active space
-    holds and renews the lease, runs demanded derivations through the
+    holds the lease, runs demanded derivations through the
     seal-into-wave machinery, commits ONE derived transaction per wave
     carrying the watermark (protocol.md §4; `waitForSettled` rides it),
     hosts the pattern-update watcher server-side (serving-loop.md §3e),
@@ -1134,12 +1134,15 @@ holds the measurements and the conditions for revisiting.
   update alike run the inserted sibling on the carried child's document and the
   named instance on a fresh one, and show the carried child's state under the
   sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones. The mechanism is
-  specified and not built: a one-way mark on each space, recorded at the first
-  commit from a naming runtime and only where the deployment's posture names
-  instances, after which the memory server admits no runtime with naming off
-  to the space (INV-16 in
+  set up shows fresh children in place of the named ones. The mechanism is a
+  one-way mark on each space, recorded at the first commit from a naming
+  runtime and only where the deployment's posture names instances, after which
+  the memory server admits no runtime with naming off to the space (INV-16 in
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
+  The memory server's half is built: it records the mark, enforces INV-16,
+  advertises `instanceNameMark`, and takes its posture from this flag's
+  deployment value, which toolshed gives it from `experimentalPosture()`. The
+  client's half is not: no runtime declares its mode yet.
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
@@ -1916,6 +1919,14 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`instanceNameMark`** is a build-inherent capability, hardwired to
+>   `true`. It advertises that the server records a space's instance-naming
+>   mark and admits sessions and commits by it (INV-16 in
+>   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+>   with the server's posture taken from the
+>   [`instanceNames`](#instancenames) flag. Only the server's advertisement
+>   is read. Older servers omit it, which parses as `false`; such a server
+>   records no mark. It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 
@@ -2093,9 +2104,9 @@ the per-epic implementation notes).
 - **Current default and planned end state.** On by default in the toolshed,
   off in the test harness's serving memory server. The read-through follows
   session delivery's rules in its own form: another principal's instance is
-  read only under a live tenure of the space's lease (a read that finds the row
-  lapsed runs the renew arm first, and is withheld when the lease is not
-  regained), and an address the store holds nothing at leaves no record. The
+  read only under a current tenure of the space's lease (a runtime that
+  outlived its tenure reads none), and an address the store holds nothing at
+  leaves no record. The
   end state is the session read path for the home space gone, with the knob.
 - **Status on 2026-10-31.** Implemented, on by default in the toolshed. The
   test harness's serving memory server keeps it off unless the variable is
@@ -2230,13 +2241,13 @@ the per-epic implementation notes).
   key is opened with the space's owner, and its first commit, the access
   list, lands there. The loop's read sessions in other spaces are opened with
   the owner too, so the owner's commits wake it.
-  [`docs/plans/serving-loop-owner-routing.md`](../plans/serving-loop-owner-routing.md)
-  is the design and its stages.
+  [`docs/history/plans/serving-loop-owner-routing.md`](../history/plans/serving-loop-owner-routing.md)
+  records the design and its stages.
 - **Current default and planned end state.** On by default in toolshed,
   which always has `MEMORY_URL`; the runner's harnesses route only where a
-  test hands their host a route. The end state is the route without a knob,
-  every crossing through the owner, and the lease kept in memory rather than
-  in the store.
+  test hands their host a route. The end state is the route without a knob
+  and every crossing through the owner. With the lease in memory, the route is
+  what stops two processes from serving one space (`serving-loop.md` §2).
 - **Status on 2026-11-01.** Implemented for event appends, the registration
   delivery, foreign wave batches, access-list changes, genesis and reads, and
   on by default in toolshed. The served request admits every kind, and the
@@ -2247,9 +2258,11 @@ the per-epic implementation notes).
   crossings a process sent through the route are counted by kind under
   `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
   deployment reads there whether routing carries its crossings.
-- **Path to removal.** Once a release with the route on has been deployed to
-  every process, the plan's stage L moves the lease into memory; then delete
-  the knob and the in-process crossings.
+- **Path to removal.** Delete the knob and the in-process crossings, once a
+  deployment's every process runs a release that keeps the lease in memory.
+  The unused `execution_lease` table goes at the same point, since no process
+  writes its rows by then (the `TODO` beside its definition in
+  `runtime/memory/v2/engine.ts`).
 
 ### `SERVER_EXECUTION_OVERLAP_COMMIT`
 

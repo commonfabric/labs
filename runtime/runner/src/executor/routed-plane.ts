@@ -1,5 +1,5 @@
 /**
- * The routed plane (docs/plans/serving-loop-owner-routing.md): how a serving
+ * The routed plane (serving-loop.md §2): how a serving
  * host reaches a space other than the ones it serves, through that space's
  * owner. The host keeps one routed session per target space, open as the
  * service identity with the delegated READ binding, on a transport the route

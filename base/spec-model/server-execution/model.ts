@@ -952,7 +952,7 @@ export type Step =
   | { kind: "enact"; session: SessionId; space: SpaceId }
   | { kind: "ack"; session: SessionId; space: SpaceId }
   | { kind: "reload"; session: SessionId }
-  | { kind: "expireLease"; space: SpaceId }
+  | { kind: "releaseLease"; space: SpaceId }
   | { kind: "reacquire"; space: SpaceId }
   | { kind: "restartProcess"; space: SpaceId }
   | { kind: "sealProbe"; space: SpaceId }
@@ -1084,8 +1084,8 @@ export function apply(w0: World, step: Step): World {
       w.clients[step.session].enactedNonces = [];
       break;
     }
-    case "expireLease": {
-      // the memory server's clock expires the row: matches NOBODY
+    case "releaseLease": {
+      // the lease ends (a park, or a replaced worker): matches NOBODY
       // (protocol §2; serving-loop §2)
       w.spaces[step.space].leaseHolder = null;
       break;
@@ -1105,11 +1105,15 @@ export function apply(w0: World, step: Step): World {
     case "restartProcess": {
       // a genuinely-new process: the holder's process component is
       // fresh (DR1), so the equality check fences the old reign's
-      // in-flight commits. The old process's sent commits stay in
-      // flight (they are the fence's test subjects).
+      // in-flight commits, and its memory server's lease map starts empty
+      // (serving-loop §2), so nothing has to be released first. The old
+      // process's sent commits stay in flight (they are the fence's test
+      // subjects).
       const srv = w.servers[step.space];
       srv.processGen += 1;
       srv.alive = true;
+      srv.pendingWave = null; // in-memory wave dies with the process
+      w.spaces[step.space].leaseHolder = null;
       break;
     }
     case "sealProbe": {

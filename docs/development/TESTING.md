@@ -31,15 +31,15 @@ covers trees no package's own check reaches.
 
 ### What a run ends with
 
-The root `deno task test`, `deno task integration`, and every
-continuous-integration lane end with a block headed `test summary`, built by
-`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
-run's block gives, for each of its first twenty failing tests, its name, its
-file, a command that runs it again where its kind of test has one, and the first
-lines of its error, and counts the rest. For a command that failed
-without a failing test to explain it, the block quotes the end of that
-command's output. The block ends with where the full logs are, so reading the
-end of the output is enough to know what failed and what to run next.
+The root `deno task test`, `deno task integration`, a `deno task test-gap` that
+runs tests, and every continuous-integration lane end with a block headed `test summary`, built
+by `tasks/test-summary.ts`. A passing run's block is one line of counts. A
+failing run's block gives, for each of its first twenty failing tests, its name,
+its file, a command that runs it again where its kind of test has one, and the
+first lines of its error, and counts the rest. For a command that failed without
+a failing test to explain it, the block quotes the end of that command's output.
+The block ends with where the full logs are, so reading the end of the output is
+enough to know what failed and what to run next.
 
 The root `deno task test` writes each package's output to a log file rather
 than to the console. A failing run keeps the directory of logs and names it in
@@ -93,6 +93,33 @@ source says.
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
+
+### Running what a pull request leaves out
+
+A pull request's continuous-integration run does not run every test. It runs
+the test files the change edits and a fixed budget of others chosen by their
+history (`DISCRETIONARY_SECONDS`), as [test selection](test-selection.md)
+describes. A test that imports a changed module can therefore go unrun until
+the default branch runs everything. Before opening a pull request, run those
+tests rather than tests the pull request will run anyway:
+
+```bash
+deno task test-gap --dry-run   # what would run, and what it is projected to cost
+deno task test-gap             # run it
+```
+
+It finds the test files the change reaches through their imports, takes away
+every test the pull request's default selection runs, and runs the rest,
+choosing them nearest the change first and passing over any that would take
+the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
+another budget, and `--base` the ref the change is measured against. A run that
+runs tests ends with the block described in
+[What a run ends with](#what-a-run-ends-with).
+After it come anything the run could not clean up, the failing tests that
+pull requests hold back as too flaky, which do not fail the run, and the test
+units left out, among them any this machine lacks something for.
+[Running locally what a pull request leaves out](test-selection.md#running-locally-what-a-pull-request-leaves-out)
+has the detail.
 
 ### Every test has to pass on its own
 
@@ -392,6 +419,8 @@ The following repository commands and test paths launch a browser:
   package name associated with browser tests does not by itself establish that
   a filtered test launches one.
 - The `deno task demo` command.
+- The `deno task test-gap` command, whenever what it chose to run includes
+  browser tests; its dry run lists the units it would run, with their suites.
 - Tests that run `deno-web-test`, call `Browser.launch()`, or bind a
   `ShellIntegration` lifecycle.
 

@@ -43,6 +43,20 @@ describe("the command-line suites", () => {
     expect(invocation!.env?.CF_CLI_INTEGRATION_SECTION).toBeUndefined();
   });
 
+  it("returns every file beside the scripts, and the command line, as what a step runs", () => {
+    for (const unit of ["integration.sh verbs-walkthrough", "acl.sh"]) {
+      const sources = byId("cli-core").sourcesOf?.(unit) ?? [];
+      expect(sources).toContain("runtime/cli/integration/integration.sh");
+      expect(sources).toContain("runtime/cli/integration/test-records.sh");
+      expect(sources).toContain("runtime/cli/integration/pattern/main.tsx");
+      expect(sources).toContain("runtime/cli/mod.ts");
+    }
+    expect(byId("cli-fuse").sourcesOf?.("fuse-exec.sh exec")).toContain(
+      "runtime/cli/integration/fuse-memory-proxy.ts",
+    );
+    expect(byId("cli-core").sourcesOf?.("no-such.sh")).toEqual([]);
+  });
+
   it("holds the script's whole-invocation record to the suite", () => {
     // It measures the invocation rather than any one step, and the same
     // identity appears whichever arm dispatched it, so summing it with
@@ -140,6 +154,7 @@ describe("the command-line suites", () => {
     expect(sources).not.toContain("runtime/cli/integration/fuse-exec.sh");
     expect(byId("cli-fuse").sources).toEqual([
       "runtime/cli/integration/fuse-exec.sh",
+      "runtime/cli/integration/fuse-memory-proxy.ts",
     ]);
   });
 

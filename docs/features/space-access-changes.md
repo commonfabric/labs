@@ -178,7 +178,7 @@ change goes through the memory server instead:
    loop's session as its envelope (`commitServedAclChange()`), and checked again
    there: on the host's own memory server, or, where the host has a route to
    each space's owner and the space is not the home, on that owner
-   ([owner routing](../plans/serving-loop-owner-routing.md)).
+   ([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally)).
 
 So a member a served handler adds is in the list before anything the handler
 sent on reaches its target, which is what a target checking the sender's

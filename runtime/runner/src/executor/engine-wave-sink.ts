@@ -8,7 +8,7 @@
 // itself. Stage F's SpaceServer wires this sink under the serving loop.
 // The foreign arm is `commitForeignWaveBatch` below, which the owner's
 // served-request handler runs too for a batch that reached it over the
-// route (docs/plans/serving-loop-owner-routing.md), so a foreign batch is
+// route (protocol.md §2b), so a foreign batch is
 // admitted the same way whichever process commits it.
 //
 // Stage D's three documented bounds are all discharged:
@@ -336,7 +336,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void })
     | undefined;
-  readonly #onHomeRefused: (() => void) | undefined;
   readonly #reportCommit: ((notice: AdmittedCommitNotice) => void) | undefined;
   readonly #commitServedAclChange:
     | ((
@@ -399,11 +398,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       scopeKeyByOpIndex: ReadonlyMap<number, string>,
     ) => { attachments: Map<string, string>; detach: () => void };
 
-    /** Called when applying a home batch throws, before `commitWave`
-     * returns the refusal, so that whatever the refusal changes is in
-     * place by the time the caller reads it. */
-    onHomeRefused?: () => void;
-
     /**
      * Called with each committed batch's admitted-commit notice, the one
      * `Server.noteExecutorCommit()` takes, as soon as the commit is in the
@@ -430,7 +424,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
     this.#principal = options.principal;
     this.#localSeq = options.localSeqRef ?? { value: 0 };
     this.#sqliteAttachmentsFor = options.sqliteAttachmentsFor;
-    this.#onHomeRefused = options.onHomeRefused;
     this.#reportCommit = options.reportCommit;
     this.#commitServedAclChange = options.commitServedAclChange;
   }
@@ -661,7 +654,6 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       this.#report(engine, batch, applied.seq);
       return Promise.resolve({ ok: { seq: applied.seq } });
     } catch (error) {
-      if (batch.home) this.#onHomeRefused?.();
       return Promise.resolve(waveCommitFailureResult(error));
     }
   }

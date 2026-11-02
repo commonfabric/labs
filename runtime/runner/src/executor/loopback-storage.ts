@@ -4,7 +4,7 @@
  * server, in process or over transports that reach it on the thread that
  * holds it, as the only commit path the loop's runtime uses, with the same
  * signed `session.open` production clients present. With a route
- * (`serving-loop-owner-routing.md`), every other space's session dials that
+ * (`serving-loop.md` §2), every other space's session dials that
  * space's owner the same way, so a foreign read is a session with the owner,
  * which wakes it on every commit there. No parallel auth scheme: the
  * session's principal is the service identity, verified by whatever
@@ -46,7 +46,7 @@ export type LoopbackPlane =
 /**
  * The options of a loopback storage manager: a storage manager's, and the
  * deployment's route to each space's owner
- * (`serving-loop-owner-routing.md`), over which every session but the home
+ * (`serving-loop.md` §2), over which every session but the home
  * space's (`servingHomeSpace`) reaches its space's owner instead of the
  * plane: the sessions of the spaces the runtime reads across, and a session
  * signed by a key other than the manager's own, the genesis of a space the

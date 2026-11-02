@@ -290,12 +290,14 @@ outward act when it creates a room, or offers one it finds.
   say. A room `counterpart` created and offered this user is in `direct` once
   this user's host has accepted it for them (see [offers](#offers)). A found
   room that was offered `counterpart` nothing, since a notice for them of it is
-  still in `outgoingNotices`, is offered them through `profile`'s inbox when
-  there is one, and `profile` is added to the room's participants, as for a new
-  room, and the notice is removed. A room whose roster already lists a profile
-  attesting `counterpart` is one they have joined, and is offered nothing; so is
-  one whose notice has been delivered. Nor is a room offered, and its notice
-  stays, when `requestId` is longer than an offer's `id` may be.
+  still in `outgoingNotices`, is offered them through `profile`'s inbox, and
+  `profile` is added to the room's participants, as for a new room. The notice
+  stays, so that it still tells them of the room should the offer not be sent,
+  as when `profile` points at no inbox; once the offer puts them on the room's
+  roster, `outgoingNotices` leaves it out. A room whose roster already lists a
+  profile attesting `counterpart` is one they have joined, and is offered
+  nothing; so is one whose notice has been delivered. Nor is a room offered,
+  and its notice stays, when `requestId` is longer than an offer's `id` may be.
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct
@@ -326,8 +328,9 @@ conversation from splitting.
   inbox the profile points at (see [offers](#offers)). A
   person named by more than one profile is offered the room through each
   distinct inbox those profiles point at, once per inbox, and added to the
-  room's participants once. Profiles of two different people must not point at
-  the same inbox. This user's own profiles are ignored.
+  room's participants once. An inbox that profiles of more than one person
+  point at is sent the offer once, and each of them is offered the room
+  through it. This user's own profiles are ignored.
 - `title: string` — The room's title, which every member sees. Must not be
   empty.
 - `joinableByLink?: boolean` — Whether the room admits anyone who has its
@@ -346,12 +349,14 @@ Creates a group room. This is an outward act: it grants other people access.
   room's participants, produces a notice for each other member, and records the
   entry in `rooms`; adding this user to the new room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
-  `members` is absent, a member is not a principal's DID, a profile in
-  `profiles` attests no principal, or profiles of two different people point
-  at the same inbox, with the `code` `shared-inbox`. No setup points one
-  person's profile at another's inbox, so the request is refused whole, before
-  anything is created, granted, or offered, rather than handing each person an
-  offer meant for the other.
+  `members` is absent, a member is not a principal's DID, or a profile in
+  `profiles` attests no principal. The creating transaction reads no inbox
+  pointer, since a pointer can carry a label, such as its owner's
+  `PersonalSpace`, that neither the room's space nor this user's records
+  admit, so where the profiles point decides nothing about the outcome. Every
+  member is sent the same offer, so an inbox that profiles of two people point
+  at holds nothing meant for one of them alone. A stored outcome may still
+  carry the `code` `shared-inbox`, which no act records.
 
 ### `offerRoom(requestId: string, room: Cell<ChatRoomOutput>, member?: string, profile?: Cell<ChatProfile>)`
 
@@ -380,15 +385,22 @@ outcome back as the add's `delivery`.
   inbox, as this user reads `people`. The first profile the room is offered
   through is added to the room's participants. A person offered nothing, since
   no profile known for them points at an inbox, gets a notice instead. It
-  grants nobody anything.
-- **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry;
+  grants nobody anything. The offer is sent by an event of its own that
+  follows, which reads where the profiles point apart from the request's
+  outcome: a profile's inbox pointer can carry a label, such as its owner's
+  `PersonalSpace`, that this user's records don't admit.
+- **Outcome:** `done` with `delivery`, `offered` or `noticed`, and no entry:
+  `noticed` at once for a person with no profile known for them, and otherwise
+  `offered`, which the event sending the offer turns to `noticed` when none of
+  the profiles points at an inbox;
   or `refused` if this user's catalog doesn't list the room, the room space's
   access list grants this user a level other than OWNER, the link isn't to a
   group room, as its creator's record would say, `requestId` is longer than an
   offer's `id` may be, `profile` attests no principal or names someone other
   than `member`, `member` is not a principal's DID, or it is this user. An
   access list the run doesn't hold yet, as a served run may not for a room
-  created moments before, refuses nothing. `offered` means sent, not received.
+  created moments before, refuses nothing. `offered` means sent, or about to
+  be, not received.
 
 ### `accept(requestId: string, room: Cell<ChatRoomOutput>, counterpart?: string, keepArchived?: boolean)`
 
@@ -597,7 +609,8 @@ already in the catalog, archived or not, gets no acceptance. A notice is
 produced for each other member offered nothing: one known only by their DID,
 who has no profile to reach an inbox through, or one whose profile points at no
 inbox. A member sent an offer gets no notice, and nothing tells the
-sender whether the offer arrived: `offerRoom`'s `offered` means sent.
+sender whether the offer arrived: `offerRoom`'s `offered` means sent, or about
+to be.
 
 ## Crossing creations
 

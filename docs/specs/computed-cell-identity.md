@@ -386,7 +386,7 @@ What this leaves open:
   marking a space at the first commit from a naming runtime and admitting no
   runtime with naming off to it afterward (INV-16 in
   [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission),
-  not yet built);
+  which the server enforces and no client declares a mode for yet);
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   that and the flip.
 

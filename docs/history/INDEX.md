@@ -264,6 +264,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 - [Lazy cell materialization](plans/lazy-cell-materialization.md) — Completed schema-observing lazy view and transaction-mode implementation; current semantics are maintained in the feature contract.
 - [Lazy materialization fast-follow](plans/lazy-materialization-fast-follow.md) — Completed default-on measurement and guidance plan, retaining the explicit handler deferral and independent rollout-switch decision.
 - [plans/fabrichat-messages-as-pushed-elements.md](plans/fabrichat-messages-as-pushed-elements.md) — executed plan (2026-10-15): a FabriChat room's messages and reactions as objects pushed onto lists, identified by their cells, with the request memory, used times, activity log, keyed records, and paging windows retired; its spike findings and the gate route it took; landed in commonfabric/labs#8931
+- [Serving each space from the process that owns it](plans/serving-loop-owner-routing.md) — 2026-11-01 plan, executed 2026-11-02: every crossing a serving loop makes into another space (event appends, foreign wave batches, access-list changes, space creation, and reads) goes through the deployment's route to that space's owner, in stages R1 to R4, and stage L moves the execution lease into the memory server's memory with a worker heartbeat as its only timer. Deleting `SERVER_EXECUTION_OWNER_ROUTING` and dropping the `execution_lease` table were left for later releases.
 
 ## Shipped or superseded designs and decision records
 
