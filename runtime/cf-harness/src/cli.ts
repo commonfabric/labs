@@ -4108,7 +4108,9 @@ export const runCfHarnessCli = async (
               engine: continuedEngine,
               config: parsed,
               onGrantsUnavailable: (error) =>
-                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+                io.stderr(
+                  `fabric grants: unavailable (${describeFailure(error)})\n`,
+                ),
             });
             return { messages, runState: continuedEngine.getRunState() };
           },
