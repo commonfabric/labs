@@ -2658,7 +2658,11 @@ export type V2Error = {
   /** Positive evidence that the server made a durable, no-commit verdict. */
   permanentEvidence?: true;
 
-  /** Engine revision whose ACL state produced an authorization denial. */
+  /**
+   * On a refusal the space's ACL state decided, the `seq` at which the ACL
+   * document is stored, or 0 when the space has none: the document's revision,
+   * not the server's current sequence (`04-protocol.md` §4.5.1).
+   */
   aclRevision?: number;
 
   /**

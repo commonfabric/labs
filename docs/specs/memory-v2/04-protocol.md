@@ -35,9 +35,6 @@ rewrite. In particular:
   client in use handles both before the server sends either, those built
   outside this repository included
   ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
-- an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
-  4.5.1) is specified and not yet implemented: the server sends its current
-  sequence
 - instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
   by the server, which advertises `instanceNameMark`, records the mark and
   admits opens and commits by it, and a client keeps the `session/revoked`
