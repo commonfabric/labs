@@ -658,6 +658,88 @@ describe("confidentiality release", () => {
         });
       });
 
+      describe("at a link slot", () => {
+        // A document whose `profile` slot holds a link to `secret`, with the
+        // slot's own label, as a write after a labeled read stamps one,
+        // holding a clause `secret` does not.
+        const slotEntry: LabelMapEntry = {
+          path: ["profile"],
+          label: { confidentiality: [cfcAtom.user(actor)] },
+          origin: "link",
+          observes: "followRef",
+        };
+
+        /** Stores the document with `link` in its slot, and returns its cell. */
+        const seedSlot = async (cause: string, link: unknown) => {
+          const cell = runtime.getCell<unknown>(actor, cause);
+          const tx = runtime.edit();
+          writeSeedEnvelopeDoc(tx, actor);
+          seedStoredEnvelope(tx, {
+            ...cell.getAsNormalizedFullLink(),
+            path: [],
+          }, {
+            value: { profile: link },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: { version: 1, entries: [slotEntry] },
+            },
+          } as never);
+          expect((await tx.commit().settled).error).toBeUndefined();
+          return cell;
+        };
+
+        it("lowers the slot's own label and leaves its target's", async () => {
+          const cell = await seedSlot(
+            "runner-cfc-release-slot-link",
+            secret.getAsLink(),
+          );
+          const target = storedEntries(secret);
+
+          const release = await releaseCellConfidentiality(
+            cell.key("profile"),
+            [],
+          );
+
+          expect(release.released).toEqual([cfcAtom.user(actor)]);
+          expect(release.paths).toEqual([["profile"]]);
+          expect(storedEntries(cell)).toEqual([]);
+          expect(storedEntries(secret)).toEqual(target);
+        });
+
+        it("lowers a write redirect's own label and leaves its target's, as a link slot", async () => {
+          const cell = await seedSlot(
+            "runner-cfc-release-slot-redirect",
+            secret.getAsWriteRedirectLink(),
+          );
+          const target = storedEntries(secret);
+
+          const release = await releaseCellConfidentiality(
+            cell.key("profile"),
+            [],
+            { linkSlot: true },
+          );
+
+          expect(release.released).toEqual([cfcAtom.user(actor)]);
+          expect(release.paths).toEqual([["profile"]]);
+          expect(storedEntries(cell)).toEqual([]);
+          expect(storedEntries(secret)).toEqual(target);
+        });
+
+        it("refuses a write redirect's own label when following it, and writes nothing", async () => {
+          const cell = await seedSlot(
+            "runner-cfc-release-slot-followed",
+            secret.getAsWriteRedirectLink(),
+          );
+          const target = storedEntries(secret);
+
+          await expect(releaseCellConfidentiality(cell.key("profile"), []))
+            .rejects.toThrow("the label of a write redirect the path follows");
+          expect(storedEntries(cell)).toEqual([slotEntry]);
+          expect(storedEntries(secret)).toEqual(target);
+        });
+      });
+
       it("keeps a version-2 envelope at version 2", async () => {
         const v2Storage = StorageManager.emulate({ as: signer });
         const v2 = new Runtime({

@@ -13,7 +13,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { type Cell, cellRuntime } from "../cell.ts";
-import { resolveLink } from "../link-resolution.ts";
+import { type LastNode, resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { setCfcImplementationIdentity } from "../storage/extended-storage-transaction.ts";
@@ -33,17 +33,35 @@ export interface CellConfidentialityRelease extends CfcConfidentialityRelease {
   readonly receipt?: NormalizedFullLink;
 }
 
+/** Options for {@link releaseCellConfidentiality}. */
+export interface CellConfidentialityReleaseOptions {
+  /**
+   * Whether the release lowers the labels of a link stored at the path itself,
+   * a write redirect included, rather than following a write redirect there to
+   * the document it leads to.
+   */
+  readonly linkSlot?: boolean;
+}
+
 /**
  * Helper for {@link releaseCellConfidentiality}, which returns the
- * confidentiality clauses `cell`'s effective label view holds at its own path:
- * what `cf cell get-label` shows there, the cell's own schema included. Read
- * through `cell`'s transaction, so a release in that transaction is seen, and
- * so the commit conflicts with a change to any label the view read.
+ * confidentiality clauses `cell`'s effective label view holds at its own path,
+ * the path resolved as `lastNode` says: what `cf cell get-label` shows there,
+ * the cell's own schema included, less the labels of the target of a link the
+ * resolution stops at, which are that target's own and stored at its path
+ * (spec §8.12.8). Read through `cell`'s transaction, so a release in that
+ * transaction is seen, and so the commit conflicts with a change to any label
+ * the view read.
  *
  * @throws If the labels cannot be read.
  */
-const shownConfidentiality = (cell: Cell<unknown>): CfcConfClause[] => {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+const shownConfidentiality = (
+  cell: Cell<unknown>,
+  lastNode: LastNode,
+): CfcConfClause[] => {
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell, {
+    lastNode,
+  });
   if (readFailed) {
     throw new Error(
       "Cannot lower confidentiality: the labels at the path could not be read.",
@@ -66,18 +84,26 @@ const shownConfidentiality = (cell: Cell<unknown>): CfcConfClause[] => {
  * they were removed at, and digests of the envelope before and after.
  * Releases and records nothing when every stored clause is kept.
  *
+ * A link stored at the path is a link slot, whose own labels are stored at
+ * the path, and its target's labels are not (spec §8.12.8). The release
+ * follows a write redirect there, as a write does, and lowers the document it
+ * leads to; with `options.linkSlot` it follows none, and lowers the slot's
+ * own labels. A link that is not a write redirect is never followed.
+ *
  * The acting principal is the runtime's authenticated user. The document must
  * sit in that principal's own space, and every released clause must stand for
  * that principal alone (`clauseReleasableBy()`). A link the path crosses that
  * is retargeted before the release commits refuses it.
  *
  * Once released, the path's effective label view is read again in the
- * releasing transaction. A clause it still shows that `keep` does not name —
- * held at a position the release does not rewrite, such as an ancestor's
- * entry, a wildcard entry covering a segment the path names concretely, a
- * branch of the stored schema, or the cell's own schema — refuses the release
- * rather than leave the clause in place unreported, and a change to any label
- * the view read before the commit lands fails the commit.
+ * releasing transaction, resolved as the release resolves it, so it leaves
+ * out the labels of the target of a link slot the release lowers. A clause it
+ * still shows that `keep` does not name — held at a position the release does
+ * not rewrite, such as an ancestor's entry, a wildcard entry covering a
+ * segment the path names concretely, the slot of a write redirect the release
+ * follows, a branch of the stored schema, or the cell's own schema — refuses
+ * the release rather than leave the clause in place unreported, and a change
+ * to any label the view read before the commit lands fails the commit.
  * `keep` may name only clauses stored at the path (§8.12.7), so a path such a
  * position also labels is released only once that position is.
  *
@@ -89,8 +115,12 @@ const shownConfidentiality = (cell: Cell<unknown>): CfcConfClause[] => {
 export async function releaseCellConfidentiality(
   cell: Cell<unknown>,
   keep: readonly CfcConfClause[],
+  options: CellConfidentialityReleaseOptions = {},
 ): Promise<CellConfidentialityRelease> {
   const runtime = cellRuntime(cell);
+  const lastNode: LastNode = options.linkSlot === true
+    ? "top"
+    : "writeRedirect";
   // The path is resolved in a transaction of its own, so that the links it
   // crosses do not join the label of the receipt the release writes.
   const resolving = runtime.edit();
@@ -100,7 +130,7 @@ export async function releaseCellConfidentiality(
       runtime,
       resolving,
       cell.getAsNormalizedFullLink(),
-      "writeRedirect",
+      lastNode,
     );
   } finally {
     resolving.abort();
@@ -127,7 +157,7 @@ export async function releaseCellConfidentiality(
           runtime,
           tx,
           cell.getAsNormalizedFullLink(),
-          "writeRedirect",
+          lastNode,
         ),
         target,
       )
@@ -137,16 +167,17 @@ export async function releaseCellConfidentiality(
           "crosses changed while the release was prepared.",
       );
     }
-    const unreachable = shownConfidentiality(cell.withTx(tx)).find((clause) =>
-      !keep.some((kept) => sameClause(kept, clause))
-    );
+    const unreachable = shownConfidentiality(cell.withTx(tx), lastNode).find((
+      clause,
+    ) => !keep.some((kept) => sameClause(kept, clause)));
     if (unreachable !== undefined) {
       throw new Error(
         debugStr`Cannot lower confidentiality at ${location}: ` +
           debugStr`$quote,long${unreachable} labels the path from a position ` +
           "a release does not rewrite: an ancestor's label, a wildcard label " +
-          "(lowered by a path with `*` in its place), a branch of the stored " +
-          "schema, or the piece's own schema.",
+          "(lowered by a path with `*` in its place), the label of a write " +
+          "redirect the path follows (lowered by a release of the link slot " +
+          "itself), a branch of the stored schema, or the piece's own schema.",
       );
     }
     if (release.released.length === 0) {

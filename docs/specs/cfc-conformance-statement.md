@@ -493,7 +493,11 @@ stated, its recommended refusal of a request the path would still show an
 unkept clause after included; the request is an authenticated host command
 and the record a create-only receipt
 ([`cfc-persisted-declassification.md`](cfc-persisted-declassification.md)
-§3.3).
+§3.3). At a path holding a link it lowers the link-carried component there,
+and its refusal reads the path without the link's target, whose content labels
+§8.12.8 excludes from that component; a write redirect at the path is followed
+to where it leads, as a write follows it, unless the request names the link
+slot itself.
 
 A release path holding a `*` segment reaches every stored position the segment
 matches at its depth, the wildcard entry there and each concrete position's

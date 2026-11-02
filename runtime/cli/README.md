@@ -1721,6 +1721,18 @@ echo '{"confidentiality":[]}' \
   | cf cell set-label --cell ID queue --dangerously-allow-lowering-confidentiality
 ```
 
+A link stored at the path carries a label of its own, and its target's labels
+are stored at the target. A lowering at a link that is not a write redirect
+lowers the link's own label and leaves its target's alone. A write redirect is
+followed, as a write follows it, and the lowering lands where it leads. Pass
+`--link-slot` to lower the redirect's own label instead, leaving its target's
+alone.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID profile --dangerously-allow-lowering-confidentiality --link-slot
+```
+
 A `*` segment in the path stands for any segment, as it does in the label
 `get-label` shows. Such a path lowers the wildcard label stored there, which
 covers every element or field at that depth, and the label stored at each
@@ -1742,11 +1754,12 @@ place of the DID. A clause with any other alternative refuses the whole
 lowering, and every clause stays in place. So does a clause the path still shows
 afterwards that the input does not name, from a position the lowering does not
 rewrite: an ancestor's label, a wildcard label covering a segment the path names
-concretely, a branch of the stored schema, or the piece's own schema, which a
-change to the pattern lowers. Each lowering commits with a create-only receipt
-in that space, readable by the identity alone, recording the clauses removed,
-the paths they were removed at, and digests of the stored metadata before and
-after. Reads served before the lowering keep the label they were served under.
+concretely, the label of a write redirect the path follows, a branch of the
+stored schema, or the piece's own schema, which a change to the pattern lowers.
+Each lowering commits with a create-only receipt in that space, readable by the
+identity alone, recording the clauses removed, the paths they were removed at,
+and digests of the stored metadata before and after. Reads served before the
+lowering keep the label they were served under.
 
 ## Invocation sessions
 

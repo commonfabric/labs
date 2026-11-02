@@ -9,6 +9,7 @@ import type { NormalizedFullLink } from "../link-utils.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
+  type LastNode,
   resolveLink,
   resolveLinkTracingDereferences,
 } from "../link-resolution.ts";
@@ -168,10 +169,12 @@ const storedMetadataForCell = (
  * A resolution that stops at a document this replica has not received
  * contributes no label for it, as a read of the value there yields no value.
  * A resolution that throws, as one around a cycle of links does, is a failed
- * read.
+ * read. `lastNode` says which link stored at the path itself the resolution
+ * follows, as {@link ResolvedLabelReadOptions} describes it.
  */
 const followedLabelViewsForCell = (
   { runtime, tx, link }: LabelReadScope,
+  lastNode: LastNode,
 ): FollowedLabelViews => {
   try {
     // A document in another space is left for the value read this label
@@ -183,7 +186,7 @@ const followedLabelViewsForCell = (
       runtime,
       tx,
       link,
-      "value",
+      lastNode,
       { kickCrossSpaceTargets: false },
     );
     if (traces.length === 0) {
@@ -235,10 +238,14 @@ export const cfcLabelViewForCellWithStatus = (
   return { view, readFailed };
 };
 
-/** {@link cfcLabelViewSourceForCell}, read through `scope`. */
+/**
+ * {@link cfcLabelViewSourceForCell}, read through `scope`, its resolution
+ * stopping at the path as `lastNode` says.
+ */
 const labelViewSourceForCell = (
   cell: unknown,
   { scope, readFailed }: LabelReadScopeResult,
+  lastNode: LastNode,
 ): CfcLabelViewSource => {
   if (scope === undefined) {
     const view = getCarriedCfcLabelView(cell);
@@ -253,7 +260,7 @@ const labelViewSourceForCell = (
     cfcLabelViewFromMetadata(stored.metadata, scope.link.path),
     [scope.link.space],
   );
-  const followed = followedLabelViewsForCell(scope);
+  const followed = followedLabelViewsForCell(scope, lastNode);
   const view = mergeCfcLabelViews([
     metadataView,
     ...followed.views,
@@ -274,7 +281,8 @@ const labelViewSourceForCell = (
  */
 export const cfcLabelViewSourceForCell = (
   cell: unknown,
-): CfcLabelViewSource => labelViewSourceForCell(cell, labelReadScope(cell));
+): CfcLabelViewSource =>
+  labelViewSourceForCell(cell, labelReadScope(cell), "value");
 
 export const cfcLabelViewForCell = (
   cell: unknown,
@@ -288,6 +296,16 @@ export type ResolvedLabelReadOptions = {
    * read has already resolved, and so already kicked, turns it off.
    */
   kickCrossSpaceTargets?: boolean;
+
+  /**
+   * Which link stored at the path itself the read follows, as `resolveLink()`
+   * takes it: `"value"`, the default, follows any such link to the value it
+   * leads to; `"writeRedirect"` follows only a write redirect, as a write
+   * does; and `"top"` follows none, so that a path holding a link reads the
+   * slot's own labels without its target's. Links the path crosses part way
+   * through are followed whatever this says.
+   */
+  lastNode?: LastNode;
 };
 
 type ResolvedMetadataResult = StoredMetadataResult & {
@@ -320,12 +338,18 @@ const resolvedMetadataForCell = (
     // with it. It is here for a caller that hands in a cell with a LIVE
     // transaction, where an ifc-bearing link crossed to reach a label counts
     // against that transaction's accounting like any other crossing.
-    const resolved = resolveLink(runtime, tx, link, "value", {
-      markIfcCrossings: true,
-      ...(options.kickCrossSpaceTargets === false
-        ? { kickCrossSpaceTargets: false }
-        : {}),
-    });
+    const resolved = resolveLink(
+      runtime,
+      tx,
+      link,
+      options.lastNode ?? "value",
+      {
+        markIfcCrossings: true,
+        ...(options.kickCrossSpaceTargets === false
+          ? { kickCrossSpaceTargets: false }
+          : {}),
+      },
+    );
     return {
       metadata: readStoredCfcLabelsForReader(tx, {
         space: resolved.space,
@@ -414,7 +438,11 @@ export const cfcLabelViewForResolvedCellWithStatus = (
   options: ResolvedLabelReadOptions = {},
 ): CfcLabelViewStatus => {
   const scope = labelReadScope(cell);
-  const { view, readFailed } = labelViewSourceForCell(cell, scope);
+  const { view, readFailed } = labelViewSourceForCell(
+    cell,
+    scope,
+    options.lastNode ?? "value",
+  );
   const target = resolvedTargetLabelView(scope, options);
   if (target === undefined) return { view, readFailed };
   return {
