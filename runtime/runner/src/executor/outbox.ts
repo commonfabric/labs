@@ -212,7 +212,7 @@ export class SpaceOutbox {
 
     /**
      * The tenure's scope on the host's routed plane
-     * (`serving-loop-owner-routing.md`): present, each append is sent to
+     * (`serving-loop.md` §5): present, each append is sent to
      * the target's owner as a `served` request.
      */
     route?: RoutedScope;

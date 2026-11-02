@@ -1878,7 +1878,7 @@ Semantics:
 `served` carries one crossing from the serving host of one space into the
 session's space, for the process that owns that space to admit: the host's
 side of
-[owner routing](../../plans/serving-loop-owner-routing.md), where a crossing
+[owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
 session to the owner, open as the deployment's service identity.

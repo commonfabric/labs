@@ -74,7 +74,7 @@ that number. The served-ACL-change commit crosses the same way, as the list of
 changes it applies; the main thread rebuilds the function from the list. A
 foreign batch and a change to another space's list leave the worker for that
 space's owner over the worker's own routed session
-([owner routing](serving-loop-owner-routing.md), on by default), and only the
+([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), on by default), and only the
 home batch and the home's changes cross the port; a host given no route sends
 them across the port with the home's.
 

@@ -1428,7 +1428,7 @@ Stages, one PR each except C, which is a three-PR train (below):
       dark: nothing drives the renew cadence until stage F's
       SpaceServer. *(The lease has since moved into the memory server's
       memory, with no renewal or expiry:
-      [`serving-loop-owner-routing.md`](serving-loop-owner-routing.md).)*
+      [`serving-loop.md` §2](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally).)*
 - [x] **C — main reduction** (a THREE-PR TRAIN, not one PR — the
       surface is ~25 source files across five packages plus ~110
       goldens, and the seams below are where it cuts cleanly):

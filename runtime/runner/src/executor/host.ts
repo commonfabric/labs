@@ -154,7 +154,7 @@ export type ExecutorHostOptions = {
 
   /**
    * The deployment's route to each space's owner
-   * (`serving-loop-owner-routing.md`). Present, the host sends every
+   * (`serving-loop.md` §2). Present, the host sends every
    * crossing into a space other than the one a tenure serves through that
    * space's owner, over a routed plane it keeps for its life; absent, every
    * crossing goes through this process's server.

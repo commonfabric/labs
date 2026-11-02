@@ -8,7 +8,7 @@
 // itself. Stage F's SpaceServer wires this sink under the serving loop.
 // The foreign arm is `commitForeignWaveBatch` below, which the owner's
 // served-request handler runs too for a batch that reached it over the
-// route (docs/plans/serving-loop-owner-routing.md), so a foreign batch is
+// route (protocol.md §2b), so a foreign batch is
 // admitted the same way whichever process commits it.
 //
 // Stage D's three documented bounds are all discharged:
