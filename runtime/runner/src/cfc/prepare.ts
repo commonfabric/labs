@@ -5121,15 +5121,11 @@ const deriveFlowJoinImpl = (
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
-      let probedSlotHoldsReference: boolean | undefined;
-      const holdsReference = (slot: readonly string[]): boolean => {
-        if (probedSlotHoldsReference === undefined) {
-          const read = valueAsRead({ space, id, scope }, slot);
-          probedSlotHoldsReference = read !== undefined &&
-            isPrimitiveCellLink(read.value);
-        }
-        return probedSlotHoldsReference;
-      };
+      let holdsReferenceMemo: boolean | undefined;
+      const holdsReference = (slot: readonly string[]): boolean =>
+        holdsReferenceMemo ??= isPrimitiveCellLink(
+          valueAsRead({ space, id, scope }, slot)?.value,
+        );
       const excludesTemplates = observation.coveredByTrace ||
         observation.machinery ||
         ownedContainers !== undefined || probedSlot !== undefined;
