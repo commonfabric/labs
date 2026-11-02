@@ -394,12 +394,13 @@ describe("link-resolution probes and `*` templates", () => {
   });
 
   describe("a reference whose envelope holds a link entry beneath it", () => {
-    beforeEach(() => makeRuntime(true));
-
     // A link entry beneath a slot that holds a reference labels a position
     // of the reference's target: the document holding the reference has no
     // position there. A link write persists none, but a stored envelope can
     // hold them, as copies of the target's labels (CFC §18.7 legacy data).
+
+    beforeEach(() => makeRuntime(true));
+
     const BENEATH_CLAUSE = cfcAtom.personalSpace(space);
     const SLOT_CLAUSE = cfcAtom.user(space);
 
@@ -508,6 +509,27 @@ describe("link-resolution probes and `*` templates", () => {
       });
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
+    });
+
+    it("carries a child's link entry into a probe of the container holding it", async () => {
+      // The container holds no reference, so what sits beneath it is its
+      // own: the link entry at its `piece` slot labels the reference there.
+
+      const holder = await storedHolder("container", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+      const link = holder.getAsNormalizedFullLink();
+
+      const join = joinOf((tx) => {
+        tx.read({
+          space,
+          scope: link.scope,
+          id: link.id,
+          type: "application/json",
+          path: ["value"],
+        }, { meta: linkResolutionProbe });
+      });
+      expect(join).toEqual(expect.arrayContaining([SLOT_CLAUSE]));
     });
 
     it("carries the target's own label into reading through the reference", async () => {
