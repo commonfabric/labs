@@ -106,6 +106,7 @@ of work as the test-selection manifest prices it (default ${GAP_SECONDS}).
   --dry-run      print what would run, and run nothing
   --base <ref>   what the change is measured against (default upstream/main
                  where that exists, and origin/main otherwise)
+  --seconds <n>  the budget, in seconds of work as the manifest prices it
 `;
 
 /** What the command line asked for. */
@@ -396,11 +397,21 @@ export function gapOf(input: {
   /** What this machine lacks, by capability, as `machineLacks()` says. */
   lacking?: ReadonlyMap<CapabilityId, string>;
 }): Gap {
-  const running = new Set(
-    input.ci.lanes.flatMap((lane) =>
-      lane.selections.map((selection) => testIdentityKey(selection.entry.test))
-    ),
+  // A unit its suite runs whole runs every test it holds once the plan
+  // selects any of them.
+  const whole = new Map(
+    input.suites.map((suite) => [suite.id, new Set(suite.whole)]),
   );
+  const running = new Set<string>();
+  const runWhole = new Set<string>();
+  for (const lane of input.ci.lanes) {
+    for (const { entry } of lane.selections) {
+      running.add(testIdentityKey(entry.test));
+      if (whole.get(entry.suite)?.has(entry.unit)) {
+        runWhole.add(`${entry.suite}\t${entry.unit}`);
+      }
+    }
+  }
   const inUnit = new Map<
     string,
     { suite: string; unit: string; hops: number; entries: ManifestEntry[] }
@@ -422,10 +433,10 @@ export function gapOf(input: {
   }
   let covered = 0;
   const units: { unit: GapUnit; entries: ManifestEntry[]; best: number }[] = [];
-  for (const { suite, unit, hops, entries } of inUnit.values()) {
-    const left = entries.filter((entry) =>
-      !running.has(testIdentityKey(entry.test))
-    );
+  for (const [key, { suite, unit, hops, entries }] of inUnit) {
+    const left = runWhole.has(key)
+      ? []
+      : entries.filter((entry) => !running.has(testIdentityKey(entry.test)));
     if (left.length === 0) {
       covered += 1;
       continue;

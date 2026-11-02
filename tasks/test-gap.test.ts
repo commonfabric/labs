@@ -472,6 +472,23 @@ describe("test-gap", () => {
       );
     });
 
+    it("counts a unit its suite runs whole as covered where the pull request runs any of its tests", () => {
+      const result = gapOf({
+        manifest,
+        suites: [{ ...bakery({}), whole: ["shared.test.ts"] }],
+        ci: running([sharedRun]),
+        reached,
+        budgetSeconds: 600,
+      });
+      expect(result.covered).toBe(1);
+      expect(result.chosen.map((unit) => unit.unit)).not.toContain(
+        "shared.test.ts",
+      );
+      expect(gap(600).chosen.map((unit) => unit.unit)).toContain(
+        "shared.test.ts",
+      );
+    });
+
     it("leaves out a unit that would take the run past its budget, and runs a cheaper one after it", () => {
       const costly = entry("costly > runs", "costly.test.ts", {
         cost: 50,

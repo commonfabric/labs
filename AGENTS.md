@@ -194,11 +194,11 @@ harness reports whether your session is sandboxed: if it is, request unsandboxed
 execution rather than trying the command there first. The browser-launching
 commands are the root `deno task test`; the unfiltered root
 `deno task integration`; unfiltered integration runs for `shell`, `patterns`, or
-`patterns-reload`; `deno task demo`; `deno task test-gap`; `deno-web-test`; and
-focused or filtered tests whose setup launches Chrome through Astral or
-`ShellIntegration`. Deno's `-A` flag does not escape the outer sandbox, and a
-browser startup failure caused by that sandbox is not test evidence. The
-complete rule is in
+`patterns-reload`; `deno task demo`; `deno task test-gap` when what it chose
+includes browser tests; `deno-web-test`; and focused or filtered tests whose
+setup launches Chrome through Astral or `ShellIntegration`. Deno's `-A` flag
+does not escape the outer sandbox, and a browser startup failure caused by that
+sandbox is not test evidence. The complete rule is in
 [`docs/development/TESTING.md`](docs/development/TESTING.md#browser-tests-in-agent-sandboxes).
 
 #### Starting Chrome without the launcher

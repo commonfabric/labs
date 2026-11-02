@@ -481,7 +481,8 @@ It works in three steps.
    `tasks/ci-lane.ts`, against the manifest the checked-out commit
    resolves. Every test that plan runs is taken away. A unit whose every
    test is in the plan is counted as covered, and one whose plan runs some
-   of its tests keeps only the rest.
+   of its tests keeps only the rest, except that a unit its suite runs whole
+   is covered once the plan runs any of its tests, since that runs them all.
 3. **What runs.** The units left are chosen nearest the change first,
    counted in steps, and among units equally near, the one holding the test
    with the highest score first. Each is charged what a lane is charged for
@@ -525,8 +526,8 @@ request's lane judges it, with the tests a flake rate excuses on the default
 branch excused here too. Such a test is one the manifest holds back from pull
 requests as too flaky to judge a change by, so the run lists its failure apart
 and does not fail for it, unless the same pass has no record of tests it was
-asked to run. The run ends with the block `tasks/test-summary.ts` builds, as a
-lane's does. After it come anything the run could not clean up, the failures a
+asked to run. A run that runs tests ends with the block `tasks/test-summary.ts` builds,
+as a lane's does. After it come anything the run could not clean up, the failures a
 flake rate excused, and the units left out, each with why. The run's
 directory, holding the servers' logs and stores and the runners' reports, is
 kept wherever the run did not pass, an error included, and the run says where

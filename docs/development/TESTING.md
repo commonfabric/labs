@@ -31,8 +31,8 @@ covers trees no package's own check reaches.
 
 ### What a run ends with
 
-The root `deno task test`, `deno task integration`, `deno task test-gap`, and
-every continuous-integration lane end with a block headed `test summary`, built
+The root `deno task test`, `deno task integration`, a `deno task test-gap` that
+runs tests, and every continuous-integration lane end with a block headed `test summary`, built
 by `tasks/test-summary.ts`. A passing run's block is one line of counts. A
 failing run's block gives, for each of its first twenty failing tests, its name,
 its file, a command that runs it again where its kind of test has one, and the
@@ -112,8 +112,9 @@ It finds the test files the change reaches through their imports, takes away
 every test the pull request's default selection runs, and runs the rest,
 choosing them nearest the change first and passing over any that would take
 the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
-another budget, and `--base` the ref the change is measured against. The run
-ends with the block [What a run ends with](#what-a-run-ends-with) describes.
+another budget, and `--base` the ref the change is measured against. A run that
+runs tests ends with the block
+[What a run ends with](#what-a-run-ends-with) describes.
 After it come anything the run could not clean up, the failing tests that
 pull requests hold back as too flaky, which do not fail the run, and the test
 units left out, among them any this machine lacks something for.
@@ -419,7 +420,7 @@ The following repository commands and test paths launch a browser:
   a filtered test launches one.
 - The `deno task demo` command.
 - The `deno task test-gap` command, whenever what it chose to run includes
-  browser tests; its dry run lists the test files first.
+  browser tests; its dry run lists the units it would run, with their suites.
 - Tests that run `deno-web-test`, call `Browser.launch()`, or bind a
   `ShellIntegration` lifecycle.
 

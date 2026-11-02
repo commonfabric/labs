@@ -373,7 +373,11 @@ async function cliFiles(root: string): Promise<string[]> {
 /**
  * Like `suite`, except that each of its units runs `files` and the module
  * `cf` runs. A step can reach any file beside the scripts, by sourcing,
- * calling, or deploying it, and every step runs the command line.
+ * calling, or deploying it, and every step runs the command line. Reading
+ * the scripts for the files each names would narrow this, but they name
+ * them in more than one way, and a name the reading missed would leave a
+ * test unrun without saying so, where a file claimed too widely costs only
+ * the time of the units it adds.
  */
 function runningFiles(suite: Suite, files: readonly string[]): Suite {
   const known = new Set(suite.units);
