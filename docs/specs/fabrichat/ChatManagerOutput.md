@@ -13,6 +13,9 @@ interface ChatManagerOutput {
   /** Every room this user belongs to and hasn't forgotten, newest first. */
   rooms: PerUser<ChatIndexEntry[]>;
 
+  /** The rooms `rooms` would list but for their space's deletion. */
+  deletedRooms: PerUser<ChatIndexEntry[]>;
+
   /** The direct room this user shares with each counterpart, by principal. */
   direct: Record<string, ChatIndexEntry>;
 
@@ -178,7 +181,19 @@ session that has none is refused.
   catalog, Home's: standalone `fabrichat-room` roots and explicit `chatRoom`
   declarations on other saved spaces' roots, combined with the manager's
   individual `roomMembership` choices. Resolved room identity deduplicates
-  discovery paths; an archived individual entry suppresses every path.
+  discovery paths; an archived individual entry suppresses every path. A room
+  whose space is
+  [deleted](../random-space-identities.md#deleting-a-space) is left out: its
+  catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
+  `true`.
+- **`deletedRooms`** lists, newest first, the rooms `rooms` leaves out because
+  their space is deleted, apart from the rooms this user can still use, as the
+  catalog lists a deleted entry apart from saved and archived ones. A deleted
+  room can't be read, written or forgotten, so a client shows each one as
+  deleted and offers no control for it. Recording the deletion is the
+  catalog's `markDeleted`, sent by the runtime that holds the catalog
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
+  the manager writes nothing when a room is deleted.
 - **`roomMembership`** keeps explicit choices about individual conversations:
   resolved room links, `saved` or `archived` state, `since`, and opaque
   `revision`. An optional `catalogRevision` records that standalone catalog
@@ -196,7 +211,9 @@ session that has none is refused.
 - **`direct`** holds, for each counterpart principal, the entry of the direct
   room this user shares with them. It has at most one entry per counterpart. It
   keeps a direct room's entry even after the room is forgotten, so the
-  conversation with that person is always the same room.
+  conversation with that person is always the same room, until the room's space
+  is deleted: then the next `openDirect` with that person replaces the entry
+  with a new room.
 - **`requests`** records each request's outcome under the `requestId` its caller
   chose: `pending`, then `done` or `refused`. `done` carries the entry, except
   for `forget`, whose entry is no longer in `rooms`. `refused` carries a reason,
@@ -296,6 +313,9 @@ outward act when it creates a room, or offers one it finds.
   attesting `counterpart` is one they have joined, and is offered nothing; so is
   one whose notice has been delivered. Nor is a room offered, and its notice
   stays, when `requestId` is longer than an offer's `id` may be.
+  A `direct` entry whose room's space is deleted, `spaceDeleted(room)`
+  returning `true`, is no such entry: the request goes on as if `direct` had
+  none for `counterpart`, and the room it creates replaces the entry.
   Otherwise, if a creation for the same `counterpart` is still pending under
   another `requestId`, the manager MUST resume that creation rather than start
   another, and records its outcome under both ids. Otherwise, creates a direct
@@ -308,7 +328,9 @@ outward act when it creates a room, or offers one it finds.
   user, or `profile`'s label doesn't name `counterpart`.
 
 It is the only way a direct room is created, which is what keeps one person's
-conversation from splitting.
+conversation from splitting. A deleted direct room is the one exception, and
+not a split: its conversation is gone for both people, and the new room is the
+only one either can use.
 
 ### `createGroup(requestId: string, members: string[], profiles?: Cell<ChatProfile>[], title: string, joinableByLink?: boolean)`
 

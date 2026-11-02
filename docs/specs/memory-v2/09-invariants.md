@@ -775,6 +775,17 @@ than they are on any other ACL write, so a client that writes the whole
 document by carrying the stored one forward, as `writeAcl()` does, deletes the
 space without dropping them.
 
+"Nothing else" excludes a successor: a tombstone does not name a space that
+replaces the deleted one, and no reader follows a deleted space anywhere. A
+redirect would need more than a field. Every command to a deleted space is
+refused, so a successor named in the tombstone would reach a reader only as a
+new marker on the refusal, which each client would have to read and decide
+whether to follow, and the space it names would be trusted on the word of
+whoever deleted the old one. A redirect is a later change to this
+specification, and a server that admits one then refuses nothing a client
+before it reads, since a client ignores a marker it does not know. A space
+deleted before that change has no successor, and keeps none.
+
 A command sent to a deleted space is refused with an `AuthorizationError`,
 `Space <space> is deleted`, carrying `deleted: true`, `permanentEvidence`, and
 `aclRevision`, which on this refusal as on every ACL refusal is the `seq` at

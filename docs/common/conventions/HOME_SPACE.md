@@ -130,6 +130,20 @@ most-recently-used (MRU) ordering:
   the person's profiles share. A space whose recorded profile is retired
   keeps that record, and `sharedSpaces.profiles` reads it as `retired`
   ([Social-space collection](#social-space-collection)).
+- A profile whose space is
+  [deleted](../../specs/random-space-identities.md#deleting-a-space) is
+  retired. A runtime holding Home that comes upon the deletion, with
+  `spaceDeleted()` returning `true` for the profile's space, sends
+  `retireProfile` for it, and `setProfileRetired` admits a deleted profile
+  where it would refuse a live one: the deletion has already taken the profile
+  away, so the refusals that keep `#profile` from moving without the person
+  choosing do not apply, and a deleted default or last live profile is retired
+  like any other, `#profile` moving to the next live profile, or to none.
+  The handler asks `spaceDeleted()` itself, as `markDeleted` does in the
+  catalog, so an event naming a profile that is not deleted is held to the
+  usual refusals. The picker lists a deleted profile apart with no Restore, and
+  `restoreProfile` refuses one. Deleting a space is not implemented yet, and
+  neither is this.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with

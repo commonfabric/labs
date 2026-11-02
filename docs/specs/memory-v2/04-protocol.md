@@ -31,7 +31,9 @@ rewrite. In particular:
   implemented: the server refuses the tombstone it writes under INV-12's
   validity clause, as it refuses any ACL document that is not an access list.
   The client's support for the `deleted` marker and `session/revoked` reason
-  lands before the server sends either
+  lands before the server sends either, in every client in use, those built
+  outside this repository included
+  ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
 - an ACL refusal's `aclRevision` naming the ACL document's own `seq` (section
   4.5.1) is specified and not yet implemented: the server sends its current
   sequence

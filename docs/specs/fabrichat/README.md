@@ -322,6 +322,9 @@ design, as below.
 - **No container creates placements.** A client does. A placement reads its
   viewer's access to the room's space, so `"none"` shows as `"not-member"`,
   and a level not known yet as `"unavailable"`.
+- **Deleted rooms are not handled yet.** Deleting a space is not implemented,
+  so the manager's `deletedRooms`, the placement's `"deleted"` state, and
+  `openDirect`'s replacement of a deleted direct room are not built either.
 
 ### Writers and labels
 

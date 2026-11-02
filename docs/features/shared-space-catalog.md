@@ -318,9 +318,12 @@ lists a deleted entry under `deleted`, apart from saved and archived ones, with
 no membership control.
 
 Consumers call `markDeleted` when they come upon a deleted space, and nothing
-sweeps the catalog for them. The shell sends it when a `spaceaccesslost` it
-receives is marked `deleted` and the catalog holds the space as saved or
-archived, at the revision its view shows. A pattern that lists catalog entries
+sweeps the catalog for them. Every runtime that holds a person's catalog and
+hears of a refusal marked `deleted` sends it, when the catalog holds the space
+as saved or archived, at the revision its view shows: the shell on a
+`spaceaccesslost` marked `deleted`, and CFS, the Weaver app's backend, on the
+same refusal. A catalog only the shell kept up would never record a deletion
+for a person who uses another client. A pattern that lists catalog entries
 sends it for an entry whose `spaceDeleted(space)` reads `true`. As with the
 other commands, the whole of what the handler does is
 `markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler

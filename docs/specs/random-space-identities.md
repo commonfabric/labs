@@ -189,6 +189,10 @@ leaves it in place.
   ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
   so an invitation to a deleted space reads differently from one that has
   expired or been revoked.
+- A client takes both refusals as final. It does not retry an invitation
+  operation answered `space-deleted`, and it does not treat an
+  `AuthorizationError` marked `deleted` as a refusal a later grant could heal,
+  as it may an ordinary refusal of access.
 
 Deleting a space reclaims no storage by itself. A deleted space's contents
 become unreadable at once, and its storage is the operator's to reclaim by
@@ -207,6 +211,23 @@ The refusal reaches a client as an `AuthorizationError` marked `deleted`, and
 pattern code as `spaceDeleted(target)`
 ([`space-access.md`](../features/space-access.md#a-deleted-space)).
 
+A space that is not yet down to one member takes ordinary access-list commits
+first, each made with the CLI's ACL commands
+([`random-space-identities` plan](../plans/random-space-identities.md#deleting-a-space)
+says which spaces this covers):
+
+- **Other members.** An OWNER removes every other entry, each with its own
+  `cf acl remove <DID>`, the `*` entry included as `cf acl remove ANYONE`,
+  until the list's one entry names the principal that will delete the space.
+- **No access-control document.** A populated space that predates genesis has
+  no list, and a deployment's service identity holds OWNER there implicitly,
+  which the sole-member clause does not count. A service identity first writes
+  a list naming the deleting principal, `cf acl set <DID> OWNER`, which INV-13
+  admits from a service identity while the space has none.
+- **A list naming only service identities.** A service identity likewise first
+  adds the deleting principal at OWNER, and that principal then removes the
+  service identities' entries.
+
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
 [the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
@@ -217,13 +238,29 @@ list.
 ### Reaping a deleted space
 
 Reaping reclaims a deleted space's storage. It is an operation of its own rather
-than a compaction, which refuses a store whose access-control document is not an
-access list, and it is not a Memory protocol command, since the protocol refuses
-a deleted space to every principal, service identities included. Like
-compaction, it runs offline against the space's store file and never against a
-file a server has open
+than a compaction, and it is not a Memory protocol command, since the protocol
+refuses a deleted space to every principal, service identities included.
+Compaction refuses a deleted space's store: its run writes an audit revision
+that restates the access-control document's value, which it does only over a
+value that is an access list, so it refuses a store whose access-control
+document is a `set` of anything else, a tombstone included. Its outcome for an
+access-control document that a document `delete` removed is a different case,
+one INV-12 forbids, and not a deleted space. When deletion is implemented,
+compaction's refusal of a tombstone names reaping, so that an operator who
+reaches for `cf space compact` on a deleted space is sent to `cf space reap`.
+
+Reaping follows the compaction plan's safety rails rather than rules of its
+own. It runs offline against the space's store file and never against a file a
+server has open
 ([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
-and its authority is the operator's access to that file.
+and its authority is the operator's access to that file. It writes a copy of
+the backup, never the backup itself
+([backup first](../plans/compact-space.md#backup-first)), and its result is
+checked before it is installed, as a compaction's is
+([verification obligations](../plans/compact-space.md#verification-obligations)):
+the deletion commit and the tombstone read back unchanged, the server sequence
+is the same, and nothing else of the space is left. The state inspector reads a
+reaped store as a deleted space, not as a corrupt one.
 `cf space reap <store.sqlite>` performs it.
 
 - A reap takes only a store whose access-control document holds a tombstone,
