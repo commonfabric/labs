@@ -6,8 +6,8 @@
  *
  * With `--tomorrow`, it prints the seed of the Pacific day after the
  * current one instead, which is the order the next day's commits will run
- * in. The scheduled workflow in `.github/workflows/test-order-tomorrow.yml`
- * runs the suites in that order.
+ * in. The workflow in `.github/workflows/test-order-tomorrow.yml` runs the
+ * suites in that order.
  *
  * The seed goes to standard output alone, which is what a command
  * substitution reads. The line naming it goes to standard error, so that

@@ -326,6 +326,11 @@ describe("schema", () => {
       }
     });
 
+    it("returns true for a run of main another workflow's run started", () => {
+      expect(isMainRun({ ...pushed, ci: { ...ci, event: "workflow_run" } }))
+        .toBe(true);
+    });
+
     it("returns false for any other run", () => {
       expect(isMainRun({ ...pushed, ci: { ...ci, fork: true } })).toBe(false);
       expect(
