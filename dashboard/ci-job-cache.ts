@@ -280,7 +280,7 @@ interface CiJobHistoryContents {
 }
 
 export class CiJobHistoryStore {
-  #file: CacheFile | undefined;
+  #file: CacheFile<CiJobHistoryContents> | undefined;
   #loadRequest: Promise<void> | null = null;
   #runs = new Map<string, CachedCiRun>();
   #refreshes = new Map<string, CachedCiHistoryRefresh>();
@@ -299,20 +299,33 @@ export class CiJobHistoryStore {
     return this.#cacheFile.path;
   }
 
-  get #cacheFile(): CacheFile {
+  get #cacheFile(): CacheFile<CiJobHistoryContents> {
     return this.#file ??= new CacheFile(defaultFile());
   }
 
+  /**
+   * Reads the file. A strict read throws on anything it cannot use, and is
+   * the only read whose version the store remembers, so a file this version
+   * cannot read in full is never taken as one it wrote.
+   */
   async #read(strict = false): Promise<CiJobHistoryContents> {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(await Deno.readTextFile(this.file));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound || !strict) {
-        return { refreshes: [], invalidations: [], futureKeys: [], runs: [] };
-      }
-      throw error;
+    if (strict) {
+      return await this.#cacheFile.read((text) =>
+        this.#contents(JSON.parse(text), true)
+      ) ?? { refreshes: [], invalidations: [], futureKeys: [], runs: [] };
     }
+    try {
+      return this.#contents(
+        JSON.parse(await Deno.readTextFile(this.file)),
+        false,
+      );
+    } catch {
+      return { refreshes: [], invalidations: [], futureKeys: [], runs: [] };
+    }
+  }
+
+  /** Helper for `#read()`, which returns what the parsed file holds. */
+  #contents(parsed: unknown, strict: boolean): CiJobHistoryContents {
     if (!isObjectOrArray(parsed)) {
       if (strict) throw new Error("Invalid CI job history cache.");
       return { refreshes: [], invalidations: [], futureKeys: [], runs: [] };
@@ -526,7 +539,13 @@ export class CiJobHistoryStore {
     if (!this.#loadRequest) {
       this.#loadRequest = (async () => {
         await this.#removeSupersededFiles();
-        this.#merge(await this.#read());
+        let contents: CiJobHistoryContents;
+        try {
+          contents = await this.#read(true);
+        } catch {
+          contents = await this.#read();
+        }
+        this.#merge(contents);
       })();
     }
     return this.#loadRequest;
@@ -849,8 +868,8 @@ export class CiJobHistoryStore {
       if (!this.dirty) return;
       const file = this.#cacheFile;
       await file.locked(async () => {
-        // The version this process last wrote holds only what it wrote, so
-        // the file is merged only once another process has replaced it.
+        // The file is merged only once another process has replaced the
+        // version this process last read or wrote.
         if (!await file.isUnchanged()) this.#merge(await this.#read(true));
         this.#prune(now);
 

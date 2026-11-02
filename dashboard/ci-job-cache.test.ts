@@ -695,6 +695,9 @@ Deno.test("CI job cache preserves a write error when temporary cleanup fails", a
   }
 });
 
+/** A store version later than any this version of the dashboard writes. */
+const STORE_VERSION_LATER = 2;
+
 describe("ci-job-cache", () => {
   describe("CiJobHistoryStore", () => {
     describe("instance members", () => {
@@ -733,6 +736,41 @@ describe("ci-job-cache", () => {
           await store.save(NOW);
 
           expect(await savedIds()).toEqual([1, 2]);
+        });
+
+        it("writes without reading the file again while it is at the version loaded", async () => {
+          const writer = new CiJobHistoryStore(file);
+          await writer.load();
+          writer.set(cachedRun(1));
+          await writer.save(NOW);
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          // As above, a read of the file would now fail.
+          const { size, mtime } = await Deno.stat(file);
+          await Deno.writeTextFile(file, " ".repeat(size));
+          await Deno.utime(file, mtime!, mtime!);
+
+          store.set(cachedRun(2));
+          await store.save(NOW);
+
+          expect(await savedIds()).toEqual([1, 2]);
+        });
+
+        it("reads a file it loaded but could not use in full again before writing over it", async () => {
+          await Deno.writeTextFile(
+            file,
+            JSON.stringify({ version: STORE_VERSION_LATER, runs: [] }),
+          );
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          store.set(cachedRun(1));
+
+          await expect(store.save(NOW)).rejects.toThrow(
+            "Unsupported CI job history cache format",
+          );
+          expect(JSON.parse(await Deno.readTextFile(file)).version).toBe(
+            STORE_VERSION_LATER,
+          );
         });
 
         it("keeps the runs another store saved since it last wrote", async () => {
