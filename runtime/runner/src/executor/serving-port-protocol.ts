@@ -147,6 +147,10 @@ export type PlaneRequests = {
     params: { space: string; holder: string };
     result: void;
   };
+  "server.commitDerivedNotice": {
+    params: { notice: Parameters<Server["commitDerivedNotice"]>[0] };
+    result: void;
+  };
   "server.idle": { params: null; result: void };
   "server.flushSessions": {
     params: { spaces: string[] | undefined };

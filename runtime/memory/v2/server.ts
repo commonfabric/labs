@@ -11777,6 +11777,30 @@ export class Server {
   }
 
   /**
+   * Applies a derived-class commit a serving loop makes outside its waves, the
+   * outbox's failure notice on a source event (serving-loop.md §5). It is
+   * admitted against `executionLeases` under `holder`, as the session it commits
+   * in, and is not fanned out to sessions.
+   *
+   * @throws {ProtocolError} when `holder` does not hold the space's lease.
+   */
+  async commitDerivedNotice(
+    { space, holder, commit }: {
+      space: string;
+      holder: string;
+      commit: ClientCommit;
+    },
+  ): Promise<void> {
+    Engine.applyCommit(await this.#openEngine(space), {
+      sessionId: holder,
+      space,
+      commitClass: "derived",
+      holder,
+      commit,
+    });
+  }
+
+  /**
    * The structural write grant for a FOREIGN provisioning write
    * (server-execution v2 Phase 5; protocol.md §2b; serving-loop.md
    * §3d's accept gate): whether `principal` — the CARRIED acting

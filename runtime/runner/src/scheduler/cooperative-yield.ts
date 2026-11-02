@@ -17,9 +17,9 @@
 // resumes; measured on Deno: a MessageChannel turn or `setImmediate`
 // let 0–2 of 8 due timers fire across a 360-ms loop, `setTimeout(0)`
 // all 8 within a few ms of their deadlines). Between yields nothing
-// changes: the OFF arm and client runtimes never construct one of these
-// (the scheduler creates it only under `runtime.servingPosture`), so their
-// settle loops keep the exact microtask shape they had.
+// changes: the scheduler creates one only under `runtime.servingPosture`, so
+// the settle loops of the OFF arm and client runtimes keep the exact microtask
+// shape they had.
 //
 // Bound, stated honestly: the deadline becomes honest to within ONE
 // action plus a slice — an action's per-demander instance runs (a

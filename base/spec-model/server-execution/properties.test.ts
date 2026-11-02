@@ -507,6 +507,17 @@ function c7World(leaseDiscipline: boolean) {
   });
 }
 
+Deno.test("C7: a restarted process reacquires with nothing released before it, and the old reign's in-flight probe is still fenced (serving-loop §2)", () => {
+  let w = c7World(true);
+  w = apply(w, { kind: "sealProbe", space: "A" });
+  w = apply(w, { kind: "restartProcess", space: "A" });
+  w = apply(w, { kind: "reacquire", space: "A" });
+  assertEquals(w.spaces.A.leaseHolder, holderId("A", 1));
+  const head = w.spaces.A.commits.length;
+  w = apply(w, { kind: "deliverProbe", space: "A" });
+  assertEquals(w.spaces.A.commits.length, head);
+});
+
 Deno.test("C7a: DR1 verified — per-process holder + in-process discipline admits NO stale-tenure commit on any schedule", () => {
   const { all } = explore(c7World(true), C7_MENU, { maxSteps: 9 });
   for (const w of all) {

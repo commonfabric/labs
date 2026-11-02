@@ -649,7 +649,7 @@ export class SpaceOutbox {
           // out of order by REMOVING a row — later rows were always
           // going to follow it), so the drain continues.
           this.#stats.outbox.failed += 1;
-          const noticed = this.#writeDeliveryFailureNotice(
+          const noticed = await this.#writeDeliveryFailureNotice(
             row,
             error instanceof Error ? error.message : String(error),
           );
@@ -711,15 +711,15 @@ export class SpaceOutbox {
    * entry — "a failure notice on the source event's stream entry,
    * written by the source SpaceServer" — per events.md §5's
    * error-is-the-consequence shape. Deduped by the refused append's
-   * eventId; a small derived-class engine commit of the loop's own
-   * (the completion-commit precedent: post-wave, never through §3d's
-   * sealing). Returns whether the notice is durably present (already
-   * present counts).
+   * eventId; a small derived-class commit of the loop's own, which the
+   * memory server admits against its lease map (the completion-commit
+   * precedent: post-wave, never through §3d's sealing). Returns whether the
+   * notice is durably present (already present counts).
    */
-  #writeDeliveryFailureNotice(
+  async #writeDeliveryFailureNotice(
     row: PendingOutboxRow,
     reason: string,
-  ): boolean {
+  ): Promise<boolean> {
     if (row.sourceEvent === undefined) {
       logger.warn("append-rejected-unsourced", () => [
         `rejected append ${row.eventId} carries no source event; the ` +
@@ -754,10 +754,8 @@ export class SpaceOutbox {
         ]);
         return true;
       }
-      EngineModule.applyCommit(this.#engine, {
-        sessionId: this.#sessionId,
+      await this.#server.commitDerivedNotice({
         space: this.#space,
-        commitClass: "derived",
         holder: this.#sessionId,
         commit: {
           localSeq: ++this.#localSeqRef.value,

@@ -574,7 +574,7 @@ flags it adopts from the deployment it runs against.
 - **Status on 2026-08-05.** Phase 1 stages A–F landed (E re-keyed the
   vocabulary per instance; F landed the serving loop itself): the
   ExecutorHost + SpaceServer host one committing runtime per active space
-  — the lease, waves through stage D's machinery,
+  — lease renewed on stage B's cadence, waves through stage D's machinery,
   the watermark doc + `derivedThrough` + `waitForSettled`, M1 per-run
   identity seams, M4 instance-keyed push, the read-row and
   derived-envelope and delegated admission checks, the eager via-user
@@ -2146,8 +2146,8 @@ the per-epic implementation notes).
   forced on, the runner's executor suites pass except two steps whose
   expectations are session-specific: a precondition probe that reads the
   serving replica to check what it holds (under the posture the probe itself
-  loads the instance), and the lease-end pin's withheld-then-re-delivered
-  shape. The
+  loads the instance), and the lease-lapse pin's withheld-then-re-delivered
+  shape (under the posture the read reacquires and is served at once). The
   fan-out RAGGED case is pinned under the posture in
   `runtime/runner/test/executor-fan-out.test.ts`: the run that discovers
   session depth serves the session instance at the moved ratchet, and a later

@@ -448,8 +448,9 @@ reports `lease-unavailable` and returns `false` only when the space's execution
 lease is already held, and the host arm that unregisters the refused space runs
 only behind that. Nothing in the suite asks for a rival holder, so both were
 reached when one case's park happened to chain a re-activation while the rival
-row it had installed for a different purpose still stood. The way out is the
-same one: a lease is a row, so a test writes the row and calls `activate()`. The
+holder it had installed for a different purpose still stood. The way out is the
+same one: a lease is an entry in the memory server's map, so a test acquires it
+under another holder and calls `activate()`. The
 cases are in `runtime/runner/test/executor-space-server.test.ts` and
 `runtime/runner/test/executor-serving-loop.test.ts`, and
 [their investigation record](../history/development/coverage-flake-executor-contention-paths-2026-08-26.md)

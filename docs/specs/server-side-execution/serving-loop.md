@@ -50,9 +50,9 @@ sessions cross as frames, the server's observer crosses as events, and the
 three session questions the loop asks synchronously are answered from a
 mirror the server's session lifecycle keeps current. Lease acquire and
 release (plane (c)) cross the port as requests, since the map is the memory
-server's. The outbox's own bookkeeping, its retirement of a delivered row
-and its notice of a refused append, stays the worker's own writes. The
-lease holder's process component is minted by the main thread per worker
+server's, and so does the outbox's notice of a refused append, a derived commit
+admitted against that map. The outbox's retirement of a delivered row stays the
+worker's own write. The lease holder's process component is minted by the main thread per worker
 start, so a worker started in place of one that died never shares its
 predecessor's holder.
 [`docs/plans/serving-loop-worker.md`](../../plans/serving-loop-worker.md)
@@ -276,8 +276,8 @@ commit the host produces)            carries no commit, ever)
 SpaceServer runtime ◄──────────┐     ExecutorHost
   │ (a)                    (d) │       │ (c)
   ▼                            │       ▼
-IStorageManager                │     execution_lease table
-  │ (a)                        │     (same engine-v3 store)
+IStorageManager                │     the memory server's lease map,
+  │ (a)                        │     engine-v3 store (outbox rows)
   ▼                            │
 memory server ─────────────────┘
   │ (b)
@@ -459,15 +459,13 @@ the lease:
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when
-  its thread next reaches its event loop, which a stalled thread may never do. A
-  thread that does wake has lost its port to the memory server, and the
-  successor's holder is not its own.
+  its thread next reaches its event loop, which a stalled thread may never do, and
+  such a thread keeps whatever core it was spinning on until the process restarts.
+  A thread that does wake has lost its port to the memory server, so no commit of
+  its own reaches the store.
 - Each lease a kill releases counts in `lease.lost` (§7), summed across the
   worker's successors. A commit the killed worker left in flight reaches
-  admission naming a holder the map no longer holds, and is refused. The outbox's
-  failure notice (§5) is committed on the worker's own connection, whose admission
-  checks a copy of the leases that worker holds, so that notice alone is not fenced
-  in the synchronous stretch a killed thread may still finish.
+  admission naming a holder the map no longer holds, and is refused.
 - A stalled worker's spaces wait up to the watchdog's limit for a successor, and
   no two workers serve one space in between.
 - The in-process arrangement has no watchdog: the thread that would watch is the

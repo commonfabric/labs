@@ -29,6 +29,7 @@ type ServerMembers = Pick<
   | "engineForSpace"
   | "foreignWriteAuthorityFor"
   | "foreignReadAuthorityFor"
+  | "commitDerivedNotice"
   | "resolveSpaceOwner"
   | "setViewSelection"
 >;
@@ -36,11 +37,11 @@ type ServerMembers = Pick<
 /**
  * The memory server, as a serving host reaches it: the in-process server
  * itself, or an implementation that carries each member to one across a
- * worker boundary. Two members the server returns from synchronously may
- * return a promise here, because what they return is built from state only
- * the server's thread holds; their callers await them. The members that
- * return synchronously everywhere are the ones an implementation elsewhere
- * reads from a mirror the server keeps current.
+ * worker boundary. Two members the server returns from synchronously, and the
+ * calls of `executionLeases`, may return a promise here, because what they
+ * return is built from state only the server's thread holds; their callers await
+ * them. The members that return synchronously everywhere are the ones an
+ * implementation elsewhere reads from a mirror the server keeps current.
  */
 export type HostMemoryServer = ServerMembers & {
   /** @see Server.executionLeases */

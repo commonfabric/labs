@@ -307,10 +307,10 @@ export type SpaceServerPolicy = {
 
   /** OW45 arm-B stage 1 (review F2): the bound on the tenure's
    * awaited space-root ensure. The ensure's resolve path fetches with
-   * no timeout of its own and can point at a remote host, and the
-   * renew timer is independent of the wave loop — so an UNBOUNDED
-   * await here would let one wedged fetch hold the first cycle open
-   * forever while the tenure keeps the lease (no failover, events
+   * no timeout of its own and can point at a remote host, and only a
+   * park ends a tenure — so an UNBOUNDED await here would let one wedged
+   * fetch hold the first cycle open forever while the tenure keeps the
+   * lease (no failover, events
    * queueing, no loop-failed park). On the deadline the ensure lands
    * in its counted-failure arm and the tenure proceeds serving; the
    * detached work's eventual writes stay safe — the CREATION arm

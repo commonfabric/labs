@@ -311,6 +311,10 @@ export class ServingPortBridge {
       "server.releaseExecutionLease",
       ({ space, holder }) => server.executionLeases.release(space, holder),
     );
+    endpoint.onRequest(
+      "server.commitDerivedNotice",
+      ({ notice }) => server.commitDerivedNotice(notice),
+    );
     endpoint.onRequest("server.idle", () => server.idle());
     endpoint.onRequest(
       "server.flushSessions",
