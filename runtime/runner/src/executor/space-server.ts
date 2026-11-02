@@ -1,6 +1,5 @@
 // The SpaceServer (server-execution v2 stage F, serving-loop.md §1, §3):
-// one committing runtime per ACTIVE space. It owns the lease (renewed on
-// a timer — stage B's cycle finally gets its cadence), the serving
+// one committing runtime per ACTIVE space. It owns the lease, the serving
 // Runtime (flag ON, builtins registered, the pattern-update posture
 // flipped server-side — §3e), the accepted-commit subscription (the
 // host's in-process feed — plane (d)), and the wave loop: wake on
@@ -133,11 +132,8 @@ import {
 } from "../cell.ts";
 import { addressKey, type NormalizedFullLink } from "../link-types.ts";
 import {
-  EXECUTION_LEASE_RENEW_INTERVAL_MS,
-  EXECUTION_LEASE_TTL_MS,
   ExecutionLeaseCycle,
   executionLeaseHolder,
-  liveExecutionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import {
   selectForeignBasisRows,
@@ -341,8 +337,6 @@ export type SpaceServerPolicy = {
    */
   maxParkedRuntimes?: number;
 
-  renewIntervalMs?: number;
-
   /** OW54's owner-ratified cumulative confirmed failed-state budget. */
   deliveryFailureBudgetMs?: number;
 
@@ -353,13 +347,6 @@ export type SpaceServerPolicy = {
    * arrive in the space before the absence is a delivery failure
    * (PROGRAM_CLOSURE_GRACE_MS; events.md §5). */
   programClosureGraceMs?: number;
-
-  /** The execution lease's TTL (serving-loop.md §2; production takes the
-   * wire default EXECUTION_LEASE_TTL_MS). A knob so tests can pin the
-   * mid-wave renew (stage C tuning T3) with a short tenure instead of
-   * waiting out the 15-s default; the mid-wave renew fires once a wave
-   * has run longer than TTL/3 without a renewal. */
-  leaseTtlMs?: number;
 
   /** Deadline on the park's runtime dispose (park LIVENESS): a serving
    * runtime killed mid-wave can hang `runtime.dispose()` forever, and a
@@ -448,8 +435,6 @@ export type WaveCommitSinkDeps = {
   /** The tenure's holder, the session its derived commits are keyed under. */
   sessionId: string;
   localSeqRef: { value: number };
-  /** Called when the store refuses a home batch (serving-loop.md §2). */
-  onHomeRefused: () => void;
 };
 
 /** What a SpaceServer hands its runtime factory (see
@@ -521,16 +506,12 @@ export type SpaceServerOptions = {
   policy?: SpaceServerPolicy;
   onParked?: (reason: string) => void;
 
-  /** DIAGNOSTIC (tests): the renew arm's same-process reacquire after a
-   * renewal blip the tenure survived, and a lapse its renewal extended. */
-  onLeaseReacquired?: () => void;
-
   /**
    * Offered the tenure's runtime when the tenure parks idle, in place of
    * disposing it (serving-loop.md §1, "Parking"). Returns the fenced
    * instance holding it when the caller keeps it, and `undefined` to have
    * the tenure dispose it as usual. A park for any other reason disposes
-   * its runtime without asking: a lost lease, a failed loop or a host
+   * its runtime without asking: a failed loop or a host
    * closing leaves nothing a successor should build on.
    */
   retainParkedRuntime?: (
@@ -864,7 +845,6 @@ export class SpaceServer implements TransactionSealDestination {
    * quiescence or the loop found no work.
    */
   #grownFlushDeadlineMs: number | undefined;
-  #initializing = false;
   #runtime: Runtime | undefined;
   #viewPlanPublisher = new ViewPlanPublisher();
   #disposeRuntime: (() => Promise<void>) | undefined;
@@ -879,13 +859,6 @@ export class SpaceServer implements TransactionSealDestination {
   #refusedWriteAfterPark = false;
 
   #sink: WaveCommitSink | undefined;
-  #renewTimer: ReturnType<typeof setInterval> | undefined;
-
-  /** Wall-clock of the last successful acquire/renew (stage C tuning T3):
-   * the mid-wave renew fires from the scheduler's cooperative yield once
-   * `now − lastRenewAt ≥ TTL/3`, i.e. exactly when the interval timer
-   * would have fired had the wave's settle let it. */
-  #lastRenewAt = 0;
 
   /** The drain's IN-FLIGHT copies (stage C tuning, T3's companion guard
    * — see `events.drainInFlightSkips`): eventId → phase. A re-drain must
@@ -1633,9 +1606,8 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /** Resolves when this SpaceServer has fully parked: its runtime
-   * disposed, and its lease released or the release's failure logged
-   * (the row expires by TTL either way). The host chains its
-   * re-evaluation of the space's ACTIVE criteria on it. */
+   * disposed, and its lease released or the release's failure logged. The
+   * host chains its re-evaluation of the space's ACTIVE criteria on it. */
   get whenParked(): Promise<void> {
     return this.#parked.promise;
   }
@@ -1668,44 +1640,35 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async activate(): Promise<boolean> {
     if (this.#active) return true;
-    const { engine, space } = this.#options;
+    const { space } = this.#options;
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: this.#options.server.executionLeases,
       space,
       holder: this.#holder,
-      ...(this.#options.policy?.leaseTtlMs !== undefined
-        ? { ttlMs: this.#options.policy.leaseTtlMs }
-        : {}),
     });
-    if (!lease.acquire()) {
+    if (!await lease.acquire()) {
       this.#options.onParked?.("lease-unavailable");
       return false;
     }
     this.#lease = lease;
-    this.#lastRenewAt = Date.now();
     this.#options.stats.lease.held += 1;
 
-    // Initialization includes asynchronous factory and recovery work. The
-    // lease protects those reads before a serving loop can become active.
-    this.#initializing = true;
-    const renewMs = this.#options.policy?.renewIntervalMs ??
-      EXECUTION_LEASE_RENEW_INTERVAL_MS;
-    this.#renewTimer = setInterval(() => this.#renew(), renewMs);
     let activated = false;
     try {
-      activated = await this.#initializeRuntime(lease);
-      return activated;
+      await this.#initializeRuntime();
+      activated = true;
+      return true;
     } finally {
-      this.#initializing = false;
-      if (!activated) {
-        await this.#parkResources(
-          lease.held ? "activation-failed" : "activation-lease-lost",
-        );
-      }
+      if (!activated) await this.#parkResources("activation-failed");
     }
   }
 
-  async #initializeRuntime(lease: ExecutionLeaseCycle): Promise<boolean> {
+  /**
+   * Helper for `activate()`, which builds the tenure's runtime and starts its
+   * loop. Initialization includes asynchronous factory and recovery work, which
+   * the lease protects before a serving loop can become active.
+   */
+  async #initializeRuntime(): Promise<void> {
     const { engine, space } = this.#options;
     // The tenure's store read-through, handed to the factory so a factory
     // that reads the home space before returning installs it first, and
@@ -1736,8 +1699,6 @@ export class SpaceServer implements TransactionSealDestination {
     });
     this.#runtime = runtime;
     this.#disposeRuntime = dispose;
-    this.#renew();
-    if (!lease.held) return false;
     if (runtime.experimental.serverExecution !== true) {
       throw new Error(
         "SpaceServer runtime must run with serverExecution enabled " +
@@ -1773,13 +1734,6 @@ export class SpaceServer implements TransactionSealDestination {
       foreignEngineFor: (s) => this.#foreignEngineFor(s),
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
-      // A lapse the renewal drivers have not reached yet shows first as the
-      // memory server refusing a derived commit (serving-loop.md §2). The
-      // refused wave's work is withdrawn, so the lapse is not recovered: the
-      // tenure ends, and the loop parks on the abort.
-      onHomeRefused: () => {
-        this.#confirmLease(engine, { recoverLapse: false });
-      },
     };
     const sink = this.#options.createWaveCommitSink?.(sinkDeps) ??
       new EngineWaveCommitSink({
@@ -1804,7 +1758,6 @@ export class SpaceServer implements TransactionSealDestination {
               scopeKeyByOpIndex,
             ),
         }),
-        onHomeRefused: sinkDeps.onHomeRefused,
         // A served run's access-list change is admitted and committed by the
         // memory server itself, through the check its sessions' commits pass.
         commitServedAclChange: (change, envelope) =>
@@ -1983,8 +1936,6 @@ export class SpaceServer implements TransactionSealDestination {
         ]);
       }
     }
-    this.#renew();
-    if (!lease.held) return false;
     logger.info?.("activate", () => [
       `space ${space} activated: W=${this.#watermark} scanHead=${scanHead} ` +
       `staleInstances=${stale.length}`,
@@ -2064,23 +2015,10 @@ export class SpaceServer implements TransactionSealDestination {
     // scheduler consults it at the reactive-action choke point and runs
     // a demanded action once per instance, stamped from the demand
     // registry through the seam above.
-    this.#renew();
-    if (!lease.held) return false;
     runtime.installSealDestination(this, {
       runStamper: (tx, info) => this.#stampRun(tx, info),
       runDemanderResolver: (pieceRootIds) => this.#demandersFor(pieceRootIds),
     });
-
-    // The MID-WAVE renew (stage C tuning T3, serving-loop.md §2): the
-    // renew timer above rides the macrotask queue a long settle used to
-    // starve (the attribution's t2: renew gaps to 10 s against the 15-s
-    // TTL, then `lease-lost` on every active space at once). The serving
-    // scheduler now yields a macrotask between runs (cooperative-yield.ts)
-    // — which already lets the timer fire — and reports every such yield
-    // here, where a renew is issued directly once the wave has run TTL/3
-    // without one: a belt that does not depend on the timer queue being
-    // serviced, only on the scheduler reaching a run boundary.
-    runtime.servingYieldObserver = () => this.#renewIfDue();
 
     this.#active = true;
     this.#options.stats.activeSpaces += 1;
@@ -2090,7 +2028,6 @@ export class SpaceServer implements TransactionSealDestination {
       this.#scheduleDeliveryFailureWake(eventId, checkpoint);
     }
     void this.#loop();
-    return true;
   }
 
   /** Resolved co-hosted engines for FOREIGN spaces this loop's waves
@@ -3486,10 +3423,9 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Holds store read-through to protocol.md §3's lease-holder delivery rule.
-   * Another principal's instance requires a live lease. An active loop can
-   * renew and reacquire a lapsed tenure; initialization loss instead refuses
-   * the read and invalidates activation. Space-scoped documents and the
-   * service's own instances need no lease. A closed engine supplies nothing.
+   * Another principal's instance requires a current tenure, so a runtime that
+   * outlived its tenure reads none. Space-scoped documents and the service's
+   * own instances need no lease. A closed engine supplies nothing.
    */
   #leaseHolderReadThrough(
     engine: Engine.Engine,
@@ -3502,125 +3438,10 @@ export class SpaceServer implements TransactionSealDestination {
       if (!engine.database.open) return undefined;
       if (
         !scopeKeyApplicableTo(address.scopeKey, own) &&
-        !this.#confirmLease(engine)
+        this.#lease?.held !== true
       ) return undefined;
       return read(address);
     };
-  }
-
-  /**
-   * Whether the space's lease row names this holder live. A row that does
-   * not runs the renew arm, which recovers a lapse nobody claimed, or ends
-   * the tenure and then reacquires or parks, and the row is read again
-   * after it. `recoverLapse: false` has a lapse end the tenure, for a
-   * caller whose commit the store refused inside it. A closed engine
-   * confirms nothing.
-   */
-  #confirmLease(
-    engine: Engine.Engine,
-    options: { recoverLapse?: boolean } = {},
-  ): boolean {
-    if (!engine.database.open) return false;
-    const holds = () =>
-      liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
-    if (holds()) return true;
-    this.#renew(options);
-    return holds();
-  }
-
-  /** The mid-wave renew (stage C tuning T3): called from the serving
-   * scheduler's cooperative yield; renews once the tenure has gone TTL/3
-   * without a renewal (the interval timer's own cadence), otherwise a
-   * no-op — so a wave shorter than TTL/3 costs nothing here and a wave
-   * longer than TTL/3 renews at the same cadence the timer would have. */
-  #renewIfDue(): void {
-    const lease = this.#lease;
-    if (lease === undefined || !this.#active) return;
-    const ttlMs = this.#options.policy?.leaseTtlMs ?? EXECUTION_LEASE_TTL_MS;
-    if (Date.now() - this.#lastRenewAt < ttlMs / 3) return;
-    this.#renew();
-  }
-
-  #renew(options: { recoverLapse?: boolean } = {}): void {
-    const lease = this.#lease;
-    if (
-      lease === undefined || (!this.#active && !this.#initializing) ||
-      (this.#initializing && !lease.held)
-    ) return;
-    // Stamped before the outcome is known: a FAILED renew ends the tenure
-    // (park or reacquire below), and a reacquire is itself a fresh
-    // tenure start.
-    this.#lastRenewAt = Date.now();
-    let renewed: boolean;
-    // A renewal that found the row expired recovered a lapse: synchronous
-    // work (a compile) held both renewal drivers past the TTL. The store
-    // refused every derived commit meanwhile and admitted no one else's,
-    // so the tenure continues.
-    let lapsed = false;
-    try {
-      const renewal = lease.renew(options);
-      renewed = renewal !== "lost";
-      lapsed = renewal === "recovered";
-    } catch (error) {
-      if (!this.#initializing || this.#active) throw error;
-      // A failed lease-store operation leaves initialization without an
-      // authority proof. Release ends the in-process tenure even if the
-      // unavailable store also rejects removal of the row.
-      try {
-        lease.release();
-      } catch (releaseError) {
-        logger.warn("activation-lease-release-failed", () => [
-          `space ${this.#options.space}: lease release failed during initialization`,
-          releaseError,
-        ]);
-      }
-      logger.warn("activation-lease-renew-failed", () => [
-        `space ${this.#options.space}: lease renewal threw during initialization`,
-        error,
-      ]);
-      renewed = false;
-    }
-    if (renewed && lapsed && this.#active) {
-      // The row is live again under the same tenure. The serving session's
-      // admission holds for the session's life, so nothing re-arms; the
-      // recovery is reported as the reacquire below is.
-      this.#options.stats.lease.lapsesRecovered += 1;
-      logger.warn("lease-lapse-recovered", () => [
-        `space ${this.#options.space}: the lease lapsed with no successor ` +
-        "and its renewal extended it; the tenure continues (serving-loop.md §2)",
-      ]);
-      this.#options.onLeaseReacquired?.();
-    }
-    if (!renewed) {
-      // Stop committing immediately (serving-loop.md §2's MUST): the
-      // tenure ended inside renew(), so an in-flight wave aborts at its
-      // commit step. Then re-acquire or park. The reacquire keeps this
-      // loop serving ONLY when no wave sealed under the lapsed tenure:
-      // a wave that does abort at commit had its sealed derivations
-      // WITHDRAWN, and nothing re-arms their producers in place (no
-      // revert consumer; inputs unchanged), so #waveCycle parks the
-      // space on that abort rather than letting a continued loop mint a
-      // watermark-only advance over work that never re-ran.
-      this.#options.stats.lease.lost += 1;
-      logger.warn("lease-lost", () => [
-        `space ${this.#options.space}: lease renewal failed; ` +
-        "in-flight wave aborts (serving-loop.md §2)",
-      ]);
-      if (this.#initializing && !this.#active) {
-        // A factory or recovery read may belong to the expired tenure.
-        // Finish its outstanding await, then dispose without launching it.
-        clearInterval(this.#renewTimer);
-        this.#renewTimer = undefined;
-        this.#outbox?.close();
-        return;
-      }
-      if (!lease.acquire()) {
-        void this.park("lease-lost");
-        return;
-      }
-      // Survived the blip in-process.
-      this.#options.onLeaseReacquired?.();
-    }
   }
 
   //
@@ -3691,7 +3512,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
     } catch (error) {
       logger.error("loop-failed", "serving loop failed", error);
-      // Zombie guard: an ACTIVE space whose loop died would renew its
+      // Zombie guard: an ACTIVE space whose loop died would hold its
       // lease forever while serving nothing — no successor can acquire,
       // and no cycle ever runs. Park instead: the lease releases, and
       // the host re-activates a space that still has demand with a
@@ -8179,11 +8000,9 @@ export class SpaceServer implements TransactionSealDestination {
       // wave's sealed derivations, nothing re-arms their producers in
       // place (no revert consumer; the inputs did not change), and
       // #coverageHead has already claimed the input batch — a continued
-      // loop (the renew-blip reacquire path, where lease.acquire()
-      // succeeded and this runtime kept running) would mint a
-      // watermark-only advance next cycle over demanded derivations
-      // that never re-ran, making waitForSettled lie until the next
-      // input change. Re-activation's fresh-runtime recompute-on-demand
+      // loop would mint a watermark-only advance next cycle over demanded
+      // derivations that never re-ran, making waitForSettled lie until the
+      // next input change. Re-activation's fresh-runtime recompute-on-demand
       // is the ONLY post-abort recovery arm (serving-loop.md §6 step 2:
       // a demanded pull recomputes regardless).
       logger.warn("wave-aborted", () => [
@@ -8393,11 +8212,10 @@ export class SpaceServer implements TransactionSealDestination {
    * completes, the host re-activates a space that still meets the ACTIVE
    * criteria, unless a rival's lease caused the park. */
   async park(reason: string): Promise<void> {
-    // A park already in flight — the renew arm's lease-lost park runs
-    // unawaited — is what a second caller waits for: the host's close
-    // must not return while a tenure is still disposing, since the
-    // tenure releases its lease through the engine the host then closes.
-    // Before any park, a not-yet-active server has nothing to wait for.
+    // A park already in flight — the loop's idle park runs unawaited — is
+    // what a second caller waits for: the host's close must not return while
+    // a tenure is still disposing. Before any park, a not-yet-active server
+    // has nothing to wait for.
     if (!this.#active) {
       return this.#parkRequested ? this.#parked.promise : undefined;
     }
@@ -8424,10 +8242,6 @@ export class SpaceServer implements TransactionSealDestination {
         0,
         this.#options.stats.activeSpaces - 1,
       );
-    }
-    if (this.#renewTimer !== undefined) {
-      clearInterval(this.#renewTimer);
-      this.#renewTimer = undefined;
     }
     if (this.#deferredRescanTimer !== undefined) {
       clearTimeout(this.#deferredRescanTimer);
@@ -8563,7 +8377,6 @@ export class SpaceServer implements TransactionSealDestination {
         this.#runtime.pieceStartCommitFailureObserver = undefined;
         this.#runtime.pieceOriginFollowed = undefined;
         this.#runtime.sealsCommitted = undefined;
-        this.#runtime.servingYieldObserver = undefined;
         this.#runtime.storageManager.loadRecoveryObserver = undefined;
         // The shadow-flip wake dies with the tenure (a late flip on a
         // disposing replica must not poke a parked loop's stale wait).
@@ -8599,10 +8412,11 @@ export class SpaceServer implements TransactionSealDestination {
     this.#runtime = undefined;
     this.#disposeRuntime = undefined;
     try {
-      this.#lease?.release();
+      await this.#lease?.release();
     } catch (error) {
-      // The row expires by TTL either way; what the park owes the host
-      // is its completion below, which a throw here must not skip.
+      // A release fails only where the port to the server's thread closed, on
+      // which that thread releases the lease itself; what the park owes the
+      // host is its completion below, which a throw here must not skip.
       logger.warn("park-release-failed", () => [
         `space ${this.#options.space}: releasing the lease during park ` +
         `(${reason}) failed`,

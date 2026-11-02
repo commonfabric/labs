@@ -19,6 +19,10 @@ import type {
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
+  type ExecutionLeaseAccess,
+  ExecutionLeases,
+} from "@commonfabric/memory/v2/execution-lease";
+import {
   resolveSpaceOwnerOf,
   type ServedAclChange,
   type ServerExecutionObserver,
@@ -297,18 +301,12 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     // about as much to post as the commit itself.
     this.#reportEventStats();
     try {
-      const { result, homeRefused } = await this.#endpoint.request(
-        "sink.commitWave",
-        {
-          sessionId: this.#deps.sessionId,
-          localSeq,
-          batch: encodeMemoryBoundary(batch as unknown as FabricValue),
-        },
-      );
-      if (homeRefused) this.#deps.onHomeRefused();
-      return result;
+      return await this.#endpoint.request("sink.commitWave", {
+        sessionId: this.#deps.sessionId,
+        localSeq,
+        batch: encodeMemoryBoundary(batch as unknown as FabricValue),
+      });
     } catch (error) {
-      if (batch.home) this.#deps.onHomeRefused();
       return waveCommitFailureResult(error);
     }
   }
@@ -451,6 +449,11 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  get executionLeases(): ExecutionLeaseAccess {
+    return this.#plane.executionLeases;
+  }
+
+  /** @inheritDoc */
   foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,
@@ -567,6 +570,15 @@ export class ServingPlane {
   >();
   readonly #server: HostMemoryServer;
   readonly #loopback: LoopbackPlane;
+
+  /**
+   * The leases this worker's loop holds, which the worker's own connections
+   * check at derived-class admission. The outbox's failure notice commits on
+   * such a connection instead of crossing the port. The memory server's map
+   * decides who holds a lease, and this copy follows what it returns.
+   */
+  readonly #heldLeases = new ExecutionLeases();
+
   #observer: ServerExecutionObserver | undefined;
   #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
@@ -623,6 +635,27 @@ export class ServingPlane {
   /** The loopback plane, for the serving runtime factory. */
   get loopback(): LoopbackPlane {
     return this.#loopback;
+  }
+
+  /** The memory server's lease map, reached across the port. */
+  get executionLeases(): ExecutionLeaseAccess {
+    return {
+      acquire: async (space, holder) => {
+        const acquired = await this.#endpoint.request(
+          "server.acquireExecutionLease",
+          { space, holder },
+        );
+        if (acquired) this.#heldLeases.acquire(space, holder);
+        return acquired;
+      },
+      release: (space, holder) => {
+        this.#heldLeases.release(space, holder);
+        return this.#endpoint.request("server.releaseExecutionLease", {
+          space,
+          holder,
+        });
+      },
+    };
   }
 
   /**
@@ -691,7 +724,10 @@ export class ServingPlane {
     if (opening === undefined) {
       opening = (async () => {
         const { url } = await this.#endpoint.request("space.open", { space });
-        return await Engine.open({ url: new URL(url) });
+        return await Engine.open({
+          url: new URL(url),
+          executionLeases: this.#heldLeases,
+        });
       })();
       this.#engines.set(space, opening);
       opening.catch(() => {

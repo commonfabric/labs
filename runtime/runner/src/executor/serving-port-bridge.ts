@@ -14,7 +14,6 @@ import {
   encodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import type { Engine } from "@commonfabric/memory/v2/engine";
-import { releaseExecutionLease } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
 import type { MemorySpace } from "../storage/interface.ts";
@@ -51,8 +50,6 @@ type BridgeSink = {
   sink: EngineWaveCommitSink;
   localSeq: { value: number };
   engines: Map<string, Engine>;
-  /** Set by the sink's refusal hook during a home batch's commit. */
-  state: { homeRefused: boolean };
 };
 
 /**
@@ -77,6 +74,12 @@ export type ServingPortBridgeOptions = {
 
   /** Called each time a wave commit the worker sent lands in the store. */
   onWaveCommitted?: () => void;
+
+  /**
+   * How many leases the watchdog has taken from this bridge's predecessors,
+   * which the counters a worker posts cannot include.
+   */
+  leasesLostEarlier?: () => number;
 };
 
 /**
@@ -98,9 +101,6 @@ export class ServingPortBridge {
   >;
   readonly #connections = new Map<number, LoopbackConnection>();
   readonly #sinks = new Map<string, BridgeSink>();
-  /** Every space the worker opened an engine for. */
-  readonly #openedSpaces = new Set<string>();
-
   readonly #workerReady = Promise.withResolvers<void>();
   readonly #releaseServerExecution: () => void;
   #stats: ServingLoopStats | undefined;
@@ -115,8 +115,13 @@ export class ServingPortBridge {
     this.#installHandlers();
     this.#releaseServerExecution = acquireServerExecutionEnabler();
     registerServingLoopStatsProvider(() =>
-      this.#stats ?? emptyServingLoopStats()
+      this.#withEarlierLosses(this.#stats ?? emptyServingLoopStats())
     );
+  }
+
+  /** How many messages of any kind have arrived from the worker. */
+  get messagesReceived(): number {
+    return this.#endpoint.messagesReceived;
   }
 
   /**
@@ -177,14 +182,16 @@ export class ServingPortBridge {
 
   /** The counters the worker last posted, or none before its first. */
   stats(): ServingLoopStats | undefined {
-    return this.#stats;
+    return this.#stats === undefined
+      ? undefined
+      : this.#withEarlierLosses(this.#stats);
   }
 
   /** The worker's counters as of now. */
   async requestStats(): Promise<ServingLoopStats> {
     const stats = await this.#endpoint.request("host.stats", null);
     this.#stats = stats;
-    return stats;
+    return this.#withEarlierLosses(stats);
   }
 
   /** What the worker's realm logged, as of now. */
@@ -228,28 +235,23 @@ export class ServingPortBridge {
   }
 
   /**
-   * Releases the lease rows `holder` holds in every space the worker opened:
-   * what the worker's successor needs when the worker died holding them,
-   * since the host leaves a space parked on another holder's live lease
-   * rather than contending for it. A row held by anyone else is left alone,
-   * and a space whose rows cannot be released is reported and leaves the
-   * others to be released.
+   * Releases every lease `holder` holds, and returns how many there were: what
+   * the worker's successor needs when the worker died holding them, since the
+   * host leaves a space parked on another holder's lease rather than contending
+   * for it. A commit the worker left in flight is refused from here on, since
+   * it names a holder the memory server no longer knows.
    */
-  async releaseLeasesOf(holder: string): Promise<void> {
-    const { server } = this.#options;
-    for (const space of this.#openedSpaces) {
-      try {
-        releaseExecutionLease(await server.engineForSpace(space), {
-          space,
-          holder,
-        });
-      } catch (error) {
-        logger.warn("lease-release-failed", () => [
-          `releasing ${holder}'s lease rows in ${space} failed`,
-          error,
-        ]);
-      }
-    }
+  releaseLeasesOf(holder: string): number {
+    return this.#options.server.executionLeases.releaseAllOf(holder);
+  }
+
+  /** Helper for reading the counters, which adds the earlier workers' losses. */
+  #withEarlierLosses(stats: ServingLoopStats): ServingLoopStats {
+    const earlier = this.#options.leasesLostEarlier?.() ?? 0;
+    return earlier === 0 ? stats : {
+      ...stats,
+      lease: { ...stats.lease, lost: stats.lease.lost + earlier },
+    };
   }
 
   /** The sink for `sessionId`, built on first use. */
@@ -266,7 +268,6 @@ export class ServingPortBridge {
       return engine;
     };
     const localSeq = { value: 0 };
-    const state = { homeRefused: false };
     const sink = new EngineWaveCommitSink({
       engineFor,
       sessionId,
@@ -278,16 +279,13 @@ export class ServingPortBridge {
           operations,
           scopeKeyByOpIndex,
         ),
-      onHomeRefused: () => {
-        state.homeRefused = true;
-      },
       // Reported here, with the apply: the fan-out of the rows is under way
       // before the loop, on its own thread, acts on the commit.
       reportCommit: (notice) => server.noteExecutorCommit(notice),
       commitServedAclChange: (change, envelope) =>
         server.commitServedAclChange({ ...change, ...envelope }),
     });
-    entry = { sink, localSeq, engines, state };
+    entry = { sink, localSeq, engines };
     this.#sinks.set(sessionId, entry);
     return entry;
   }
@@ -303,9 +301,16 @@ export class ServingPortBridge {
             "thread cannot open; a serving worker needs a file store",
         );
       }
-      this.#openedSpaces.add(space);
       return { url: engine.url.href };
     });
+    endpoint.onRequest(
+      "server.acquireExecutionLease",
+      ({ space, holder }) => server.executionLeases.acquire(space, holder),
+    );
+    endpoint.onRequest(
+      "server.releaseExecutionLease",
+      ({ space, holder }) => server.executionLeases.release(space, holder),
+    );
     endpoint.onRequest("server.idle", () => server.idle());
     endpoint.onRequest(
       "server.flushSessions",
@@ -375,17 +380,13 @@ export class ServingPortBridge {
           batch.space,
           await server.engineForSpace(batch.space),
         );
-        // The sink mints its number and reports a refused home batch before
-        // its call returns, so both are set and read around the call with no
-        // await between: another space's commit under the same session may
-        // be in flight.
+        // The sink mints its number before its call returns, so the counter
+        // is set around the call with no await between: another space's commit
+        // under the same session may be in flight.
         entry.localSeq.value = localSeq - 1;
-        entry.state.homeRefused = false;
-        const pending = entry.sink.commitWave(batch);
-        const homeRefused = entry.state.homeRefused;
-        const result = await pending;
+        const result = await entry.sink.commitWave(batch);
         if (result.error === undefined) this.#options.onWaveCommitted?.();
-        return { result, homeRefused };
+        return result;
       },
     );
     endpoint.onRequest(
@@ -430,6 +431,8 @@ export class ServingPortBridge {
     endpoint.onNotice("worker.ready", () => {
       this.#workerReady.resolve();
     });
+    // The endpoint has already counted it, which is all a heartbeat is for.
+    endpoint.onNotice("worker.heartbeat", () => {});
     endpoint.onNotice("host.stats", ({ stats }) => {
       this.#stats = stats;
     });

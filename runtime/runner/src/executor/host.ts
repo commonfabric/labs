@@ -12,8 +12,8 @@
 //   provisioning path when its wave staged setup into the space, which
 //   activates a sessionless target where an ordinary authored write
 //   deliberately does not (T11.Q7's write-alone parking);
-// - plane (c): lease acquire/renew by direct table write (the
-//   SpaceServer's cycle);
+// - plane (c): lease acquire and release on the memory server's lease map
+//   (the SpaceServer's cycle);
 // - plane (d): admitted-commit records route to the space's SpaceServer
 //   feed (self-echo skipped there by class + holder).
 //
@@ -64,14 +64,14 @@ export type {
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
- * serve the space the verb names: the host is closed, or another process
- * holds the space's execution lease.
+ * serve the space the verb names: the host is closed, or another holder on
+ * this memory server has the space's execution lease.
  */
 export class SpaceNotServedError extends Error {
   constructor(space: MemorySpace) {
     super(
       `space ${space} is not served by this process (host closed, or ` +
-        "its execution lease is held elsewhere)",
+        "another holder has its execution lease)",
     );
     this.name = "SpaceNotServedError";
   }
@@ -182,10 +182,6 @@ export type ExecutorHostOptions = {
   /** DIAGNOSTIC (tests): each tenure's park, with the space and the
    * reason. The host's own `onParked` handling is unaffected. */
   onSpaceParked?: (space: MemorySpace, reason: string) => void;
-
-  /** DIAGNOSTIC (tests): a tenure's same-process reacquire after a renewal
-   * blip it survived, with the space. */
-  onLeaseReacquired?: (space: MemorySpace) => void;
 
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds — see `SpaceServerOptions`. */
@@ -387,7 +383,7 @@ export class ExecutorHost {
    * is queued once more on the successor tenure.
    *
    * Throws {@link SpaceNotServedError} when this process cannot serve the
-   * space — the host is closed, or another process holds the space's lease.
+   * space — the host is closed, or another holder has the space's lease.
    */
   runLifecycleVerb<T>(
     space: MemorySpace,
@@ -692,9 +688,6 @@ export class ExecutorHost {
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
         ...(this.#route === undefined ? {} : { route: this.#route }),
-        ...(this.#options.onLeaseReacquired === undefined ? {} : {
-          onLeaseReacquired: () => this.#options.onLeaseReacquired?.(space),
-        }),
         onParked: (reason) => {
           parked = true;
           try {
@@ -714,8 +707,7 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
-          const rivalHoldsLease = reason === "lease-unavailable" ||
-            reason === "lease-lost";
+          const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
           } else if (!rivalHoldsLease) {
@@ -982,7 +974,7 @@ export class ExecutorHost {
     for (const wake of [...this.#backoffWakers]) wake();
     // Await in-flight activations FIRST: an activation past its #closed
     // check would otherwise register and start serving after close
-    // returned (a leaked runtime renewing a lease nobody can take), and
+    // returned (a leaked runtime holding a lease nobody can take), and
     // park() on a not-yet-active server is a no-op — so the park sweep
     // below cannot stop it. #activateInner's own post-activate check
     // parks the freshly-activated server once #closed is set; awaiting
@@ -993,7 +985,7 @@ export class ExecutorHost {
         this.#activating.values(),
       );
     }
-    // A server already parking on its own — a lost lease, a failed loop
+    // A server already parking on its own — an idle park, a failed loop
     // — has park() return at once, so its completion is awaited through
     // whenParked: close() must not return while a tenure's runtime is
     // still being disposed against a memory server the caller closes

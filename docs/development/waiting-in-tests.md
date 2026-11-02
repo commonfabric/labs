@@ -1234,7 +1234,7 @@ boundary the test can await without adding one to production code.
   rather than a poll this section endorses, and the helper stays for as long as
   they do and no longer. Its deadline is a
   stuck-condition backstop of the same kind, for the same reason — the serving
-  loop holds the event loop open through its lease-renew interval, so the
+  loop holds the event loop open through its timers, so the
   fail-fast described above never fires. What the poll interval under it costs
   is a latency floor on every one of those waits, and that is what converting a
   file removes. The failure names elapsed milliseconds and the poll count, which

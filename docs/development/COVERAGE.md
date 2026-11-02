@@ -442,8 +442,8 @@ moved — a sibling branch in the same file is the next one to flap.
 follows that line from a group-level `+2` down to the two integration hits that
 covered it in one run and not the next.
 
-What the second party holds need not be a write. A lease row another process
-owns puts a branch in the same position: the server executor's `activate()`
+What the second party holds need not be a write. A lease another holder has
+puts a branch in the same position: the server executor's `activate()`
 reports `lease-unavailable` and returns `false` only when the space's execution
 lease is already held, and the host arm that unregisters the refused space runs
 only behind that. Nothing in the suite asks for a rival holder, so both were

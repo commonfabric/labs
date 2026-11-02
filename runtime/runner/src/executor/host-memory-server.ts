@@ -7,6 +7,7 @@
  */
 
 import type { ServerMessage } from "@commonfabric/memory/v2";
+import type { ExecutionLeaseAccess } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
 
 /**
@@ -42,6 +43,9 @@ type ServerMembers = Pick<
  * reads from a mirror the server keeps current.
  */
 export type HostMemoryServer = ServerMembers & {
+  /** @see Server.executionLeases */
+  readonly executionLeases: ExecutionLeaseAccess;
+
   /** @see Server.demandForSpace */
   demandForSpace(
     ...args: Parameters<Server["demandForSpace"]>

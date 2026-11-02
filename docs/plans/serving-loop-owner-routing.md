@@ -42,10 +42,9 @@ process. So, with 21 processes:
 - A cross-space read is woken only by commits its own process admitted. Commits
   that the owner makes to the space it reads leave its derivations stale.
 
-The `execution_lease` row in each space's SQLite file is the only thing that
-stops two processes from deriving one space. That is why it cannot simply move
-into memory ([the closing stage](#stage-l-the-lease-in-memory) does that, once
-the stages before it hold).
+With every crossing routed, the route is what stops two processes from deriving
+one space, which is what let the lease move into memory
+([the closing stage](#stage-l-the-lease-in-memory)).
 
 The change: a serving loop reaches every space other than its home through
 that space's owner. The toolshed never computes who the owner is; it reaches
@@ -384,7 +383,7 @@ the samples).
    - The two-process integration test, and the cross-space measurement.
    - `serving-loop-worker.md` and `serving-loop.md` §1 drop the in-process
      crossings from their description of the default.
-5. [ ] **L: the lease in memory.** The section below. It lands only after a
+5. [x] **L: the lease in memory.** The section below. It lands only after a
    release with owner routing on has been deployed to every process.
 
 ## Stage L: the lease in memory

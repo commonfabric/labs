@@ -24,11 +24,7 @@ import {
   toValuePath,
   type WatchSetResult,
 } from "../v2.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-  releaseExecutionLease,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 
 const TEST_AUDIENCE = "did:key:z6Mk-explicit-read-audience";
 const SPACE = "did:key:z6Mk-explicit-read-space";
@@ -135,12 +131,12 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
     const aliceKey = resolveScopeKey("user", { principal: ALICE });
 
     // The SpaceServer's loopback session: in process, as the service
-    // identity the lease holder was minted from, holding the live lease.
+    // identity the lease holder was minted from, holding the lease.
     const service = await connect(server, { inProcess: true });
     const { sessionId: serviceSession } = await openSession(service, SERVICE);
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
-    assertEquals(acquireExecutionLease(engine, { space: SPACE, holder }), true);
+    assertEquals(engine.executionLeases.acquire(SPACE, holder), true);
     const readAlice = (sessionId: string, label: string) =>
       server.graphQuery({
         type: "graph.query",
@@ -237,21 +233,11 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
     });
     assertEquals(refusedWatchAdd.error?.name, "ProtocolError");
 
-    // The lease expires (liveness is judged by the server's own clock —
-    // serving-loop.md §2). The session is no longer the space's serving
-    // session on this server, so its named read is a foreign one: admitted
-    // under alice's own READ grant on the space, which a space with no
-    // list gives nobody. The lease itself no longer gates it.
-    releaseExecutionLease(engine, { space: SPACE, holder });
-    assertEquals(
-      acquireExecutionLease(engine, {
-        space: SPACE,
-        holder,
-        now: Date.now() - 60_000,
-        ttlMs: 1,
-      }),
-      true,
-    );
+    // The lease ends. The session is no longer the space's serving session
+    // on this server, so its named read is a foreign one: admitted under
+    // alice's own READ grant on the space, which a space with no list gives
+    // nobody. The lease itself no longer gates it.
+    engine.executionLeases.release(SPACE, holder);
     const unlisted = await readAlice(serviceSession, "expired-unlisted");
     assertEquals(unlisted.error?.name, "ProtocolError");
     assertEquals(
@@ -265,7 +251,7 @@ Deno.test("explicit entity_scope_key reads: the space's serving session and a se
     assertEquals(granted.ok.entities[0].document?.value, { name: "alice" });
 
     // Off the flag the field is unclaimable, serving session or not.
-    assertEquals(acquireExecutionLease(engine, { space: SPACE, holder }), true);
+    assertEquals(engine.executionLeases.acquire(SPACE, holder), true);
     resetServerExecutionConfig();
     const offFlag = await readAlice(serviceSession, "off-flag");
     assertEquals(offFlag.error?.name, "ProtocolError");
@@ -364,24 +350,6 @@ const drainDelivery = async (
   }
 };
 
-const expireLease = (
-  engine: Awaited<ReturnType<Server["engineForSpace"]>>,
-  holder: string,
-): void => {
-  releaseExecutionLease(engine, { space: SPACE, holder });
-  // Leave an EXPIRED row: liveness is judged by expiry, and an expired
-  // row must match nobody (serving-loop.md §2).
-  assertEquals(
-    acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: Date.now() - 60_000,
-      ttlMs: 1,
-    }),
-    true,
-  );
-};
-
 const watchAliceInstance = (
   sessionId: string,
   aliceKey: string,
@@ -444,9 +412,7 @@ Deno.test("delivery of a named foreign instance outlives the lease: a serving se
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      // Long TTL: a test lease is never renewed, and assertions about a
-      // LIVE holder must not race the wall clock.
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     const watch = await server.watchSet(
@@ -458,24 +424,24 @@ Deno.test("delivery of a named foreign instance outlives the lease: a serving se
       ["of:profile"],
     );
 
-    // The lease lapses. The admission stands: alice's next write reaches
+    // The lease ends. The admission stands: alice's next write reaches
     // the session, keyed.
-    expireLease(engine, holder);
-    const lapsedFrom = service.messages.length;
+    engine.executionLeases.release(SPACE, holder);
+    const releasedFrom = service.messages.length;
     await writeAliceProfile(server, aliceSession, 2, { name: "alice-2" });
     await drainDelivery(
       server,
       () =>
-        effectUpserts(service.messages, lapsedFrom).some((upsert) =>
+        effectUpserts(service.messages, releasedFrom).some((upsert) =>
           upsert.id === "of:profile"
         ),
     );
-    const lapsed = effectUpserts(service.messages, lapsedFrom).filter(
+    const delivered = effectUpserts(service.messages, releasedFrom).filter(
       (upsert) => upsert.id === "of:profile",
     );
-    assertEquals(lapsed.length, 1, "delivered while the lease is lapsed");
-    assertEquals(lapsed[0].scopeKey, aliceKey, "keyed");
-    assertEquals(lapsed[0].doc?.value, { name: "alice-2" });
+    assertEquals(delivered.length, 1, "delivered with the lease released");
+    assertEquals(delivered[0].scopeKey, aliceKey, "keyed");
+    assertEquals(delivered[0].doc?.value, { name: "alice-2" });
 
     // The connection dies and foreign state moves; the session resumed on
     // another connection takes the update in its catch-up, keyed, holding
@@ -557,11 +523,7 @@ Deno.test("an admitted session's keyed-delivered foreign instance is retracted B
     const serviceKey = resolveScopeKey("user", { principal: SERVICE });
     const engine = await server.engineForSpace(SPACE);
     assertEquals(
-      acquireExecutionLease(engine, {
-        space: SPACE,
-        holder: executionLeaseHolder(SERVICE),
-        ttlMs: 600_000,
-      }),
+      engine.executionLeases.acquire(SPACE, executionLeaseHolder(SERVICE)),
       true,
     );
 
@@ -637,7 +599,7 @@ Deno.test("an admitted session's keyed-delivered foreign instance is retracted B
 //
 
 Deno.test("stage A: a lease holder names two instances of one (branch, id, scope) and receives BOTH, keyed — watch.set, watch.add, graph.query, and the push frame; the collapse guard still refuses a non-holder (OW17's wire leg)", async () => {
-  // OW17's wire leg (server-execution v2 stage A, 2026-08-16): a LIVE lease
+  // OW17's wire leg (server-execution v2 stage A, 2026-08-16): a lease
   // holder may name two instances of one (branch, id, scope) — its frames and
   // query results carry the instance key (`scopeKey`) per entry, so the two
   // stay apart on its wire and in its replica (the serving replica holding BOTH
@@ -677,7 +639,7 @@ Deno.test("stage A: a lease holder names two instances of one (branch, id, scope
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     const aliceKey = resolveScopeKey("user", { principal: ALICE });
@@ -915,9 +877,7 @@ Deno.test("watch.add with a changed entityScopeKey on an existing watch id is a 
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      // Long TTL: a test lease is never renewed, and assertions about a
-      // LIVE holder must not race the wall clock.
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     const aliceKey = resolveScopeKey("user", { principal: ALICE });
@@ -1011,9 +971,7 @@ Deno.test("a failed delivery of an explicit foreign-instance frame is redelivere
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      // Long TTL: a test lease is never renewed, and assertions about a
-      // LIVE holder must not race the wall clock.
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     const watch = await server.watchSet(
@@ -1078,7 +1036,7 @@ Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission �
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     // Even the LIVE HOLDER cannot name a merely prefix-shaped key: the
@@ -1124,7 +1082,7 @@ Deno.test("a non-canonical entity_scope_key (raw '/') is refused at admission �
 // docs/plans/serving-loop-owner-routing.md):
 //
 // - A session is the space's SERVING session on this server when it is in
-//   process and its principal holds the space's live lease: its named reads
+//   process and its principal holds the space's lease: its named reads
 //   are admitted outright, and its unnamed scoped reads resolve its own
 //   instance (the OW17 residual).
 // - Every other session authenticated as the service identity, the
@@ -1271,11 +1229,11 @@ Deno.test("a lease held on this server admits only the in-process session that h
     await writeAliceProfile(server, aliceSession, 1, { name: "alice" });
     const bobKey = resolveScopeKey("user", { principal: BOB });
 
-    // This process serves SPACE: its holder is on the lease row.
+    // This process serves SPACE: its holder has the lease.
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      acquireExecutionLease(engine, { space: SPACE, holder, ttlMs: 600_000 }),
+      engine.executionLeases.acquire(SPACE, holder),
       true,
     );
     const readBob = (sessionId: string, label: string) =>
@@ -1308,7 +1266,7 @@ Deno.test("a lease held on this server admits only the in-process session that h
       refused.error?.name,
       "ProtocolError",
       "a session from another process must not pass on this process's " +
-        `lease row: ${JSON.stringify(refused.ok)}`,
+        `lease: ${JSON.stringify(refused.ok)}`,
     );
     assertEquals(
       refused.error?.message.includes(
@@ -1501,11 +1459,7 @@ Deno.test("a serving session's UNNAMED scoped read of a space it does not serve 
     const homeEngine = await server.engineForSpace(HOME_SPACE);
     const holder = executionLeaseHolder(SERVICE);
     assertEquals(
-      acquireExecutionLease(homeEngine, {
-        space: HOME_SPACE,
-        holder,
-        ttlMs: 600_000,
-      }),
+      homeEngine.executionLeases.acquire(HOME_SPACE, holder),
       true,
     );
     const coHosted = await connect(server, { inProcess: true });

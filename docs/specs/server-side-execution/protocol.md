@@ -9,9 +9,8 @@ between client, memory server, and SpaceServer.
   `/api/storage/memory` (`runtime/toolshed/routes/storage/memory/`).
 - Client storage stack: `runtime/runner/src/storage/` (`interface.ts`,
   `extended-storage-transaction.ts`, `query.ts`, `reactivity-log.ts`).
-- Store tables: `commit`, `revision`, `head`, `branch` (engine-v3), and
-  `execution_lease` (serving-loop.md §2 — the
-  reduced three-field shape; the v1-branch shape was prior art only).
+- Store tables: `commit`, `revision`, `head`, `branch` (engine-v3). The
+  lease (serving-loop.md §2) is held in the memory server's memory.
 
 ## 1. Commit classes
 
@@ -348,9 +347,9 @@ load-bearing enforcement; commit-level identity is not load-bearing
 | `authored` doc write | session authenticated → write authority on doc/path (existing ACL) → CAS on base revision |
 | `authored` event append | session authenticated → append authority on stream doc → `eventId` unique among stream entries above the stream's `eventWatermark` (CAS — the dedupe horizon, events.md §4) → the memory server STAMPS `firedAt` from the commit envelope (authenticated principal + session); a client-supplied `firedAt` that disagrees is REJECTED, never corrected |
 | `authored`, server-produced (outbox event append, `.inSpace` provisioning) | commit metadata carries the acting identity (`actingPrincipal` + `actingSession` — the ORIGINATING chain actor, events.md §2) + `capabilityRef` → admission validates that capability grant against the target doc/stream (a delegated-capability check, NEVER session-identity impersonation) → for event appends, `firedAt` stamps from the validated acting identity (the stamping paragraph below) → CAS. *(Phase-1 bound, stage D/F: the landed validation is carriage PRESENCE + COMPLETENESS — authored class only, non-empty `actingPrincipal` + `capabilityRef`, a sessionless batch refused for session-scoped writes (scopes.md §5) — with scoped writes keyed from the carried identity; RESOLVING the grant against the target doc/stream awaits per-doc grants, which today's ACL model does not hold, and is the named owed hardening — verification-coverage.md OW13.)* **Genesis of a provisioned space (RULED 2026-08-18):** the FIRST commit into a `.inSpace()`-minted space is its ACL, signed by the SPACE'S OWN identity (a key generated for that one commit and then dropped — [random space identities](../random-space-identities.md)), and that same commit names the ACTING user OWNER (`{ [actor]: "OWNER" }` — the shape a client mints), together with any grants the `inSpace()` call names; the space is created before the handler re-runs, over a session of the serving runtime's own signed by that key, which reaches the space's owner where the host has a route, and the calling space's allocation record, written in the handler's commit, is what later runs read; every later write into the space is the actor's, through this row's delegated carriage or a client's own session; the serving identity is neither owner nor actor at any step and appears nowhere in the ACL (verification-coverage.md OW31 — the build is owed post-merge, before the flip). **An access-list write:** the one server-produced authored commit of a space's ACL document `of:<space>` is a served handler's `grantSpaceAccess()` or `revokeSpaceAccess()` change, and past carriage completeness it is admitted by the memory server's own INV-12 check KEYED ON THE CARRIED ACTOR (`Server.commitServedAclChange()`: the session plane's `#validateAclCommit` and capability check, one implementation, with the carried actor as the principal) — INV-12's shape, the genesis rule (so a served commit never initializes a list), and `OWNER` for the actor but for the removal of its own entry, on the same `acl.mode` dial. Its grant is RESOLVED, not only present: `capabilityRef` must be `event-consequence:<eventId>`, naming the durable entry the run delivers, and that entry's `firedAt` must name the carried actor. The serving loop asks the same decision at the run's seal (`Server.checkServedAclChange()`), so a refusal fails that run alone (serving-loop.md §3d). With the host given a route, a change to a space other than the home is sent to that space's owner as a `served` `acl` (memory-v2 04-protocol.md §4.3.12), and the owner's server decides and commits it the same way. *(The co-hosted process is trusted for the carried actor here as for every delegated commit, LT5; the owner's ruling on this admission decision is open.)* |
-| `derived` | producer holds the live `execution_lease` for the space (one equality check) → no operation on the space's ACL document `of:<space>`, in any memory ACL mode (no derived producer writes it; INV-12) → CAS |
+| `derived` | producer holds the execution lease for the space (one equality check against the memory server's map) → no operation on the space's ACL document `of:<space>`, in any memory ACL mode (no derived producer writes it; INV-12) → CAS |
 | `system` | unchanged from today |
-| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03; restated by owner routing R3, RULED 2026-11-01) | the requester is the read space's own serving session on this memory server — a session from this process (`Connection.inProcess`: the in-process transport or the worker's port opened it, never a socket) whose principal holds the space's live `execution_lease` — or a session authenticated as the deployment's service identity, the delegating class, from any process → the named instance is read: the serving session names any instance of the space it serves, and a service-identity session reading a space it does not serve here names an actor's instance under that actor's READ grant in the space's access list, the grant-scoped read below (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space). A lease held here admits only the session that holds it in this process; a sibling process's session carries the same principal over a socket and reads under the grant. Any other session naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `runtime/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. An admitted session may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard applies to the sessions the row refuses. A named root in a space the requester does NOT serve is admitted on the named actor's READ grant in that space's access list and refused without one — the grant-scoped read below, RULED 2026-10-27. With owner routing, the serving runtime's session in every space but its home reaches that space's owner from another process, and the grant is what admits it there.)* |
+| READ naming an explicit `entity_scope_key` (not a commit — the read side of R-Q6b; S1; widened by FP2, RULED 2026-08-03; restated by owner routing R3, RULED 2026-11-01) | the requester is the read space's own serving session on this memory server — a session from this process (`Connection.inProcess`: the in-process transport or the worker's port opened it, never a socket) whose principal holds the space's execution lease — or a session authenticated as the deployment's service identity, the delegating class, from any process → the named instance is read: the serving session names any instance of the space it serves, and a service-identity session reading a space it does not serve here names an actor's instance under that actor's READ grant in the space's access list, the grant-scoped read below (the read-side twin of §2's inter-server trust ruling: a home SpaceServer reads FOREIGN scoped instances for cross-space derivations, closing the silent-empty-instance trap cross-space). A lease held here admits only the session that holds it in this process; a sibling process's session carries the same principal over a socket and reads under the grant. Any other session naming a `scope_key` is REJECTED (today the wire cannot even express one); a request naming none resolves from the authenticated session as today (the shared `resolveScopeKey` in `runtime/memory/v2.ts`). *(Fan-out stage A, 2026-08-16 — the runner ISSUES these: a serving runtime's per-instance run whose read of a scoped doc names an instance other than the runtime's own — the demand-supplied identity's — loads it as an explicit-instance read (`Cell.sync`/`syncCell` with the run identity, the transaction layer's kick for a never-loaded instance, the presync of a served event's inputs as the event's actor), so the serving replica holds that principal's instance keyed apart from the service's; own-identity reads name nothing and keep the no-key admission fast path. An admitted session may name TWO instances of one (branch, id, scope) — its frames carry `scope_key` (§3) — the wire collapse guard applies to the sessions the row refuses. A named root in a space the requester does NOT serve is admitted on the named actor's READ grant in that space's access list and refused without one — the grant-scoped read below, RULED 2026-10-27. With owner routing, the serving runtime's session in every space but its home reaches that space's owner from another process, and the grant is what admits it there.)* |
 
 That is the ENTIRE admission surface — the last row is the one
 READ-side check; every row above it is commit admission. No scope
@@ -472,7 +471,7 @@ keys on both sides of the wire, while the client-facing protocol is
 untouched: a session the row refuses naming a `scope_key` is rejected (today the
 wire cannot even express one — the field is new), and client reads
 keep resolving from the session. FP2 (RULED 2026-08-03) widened the
-holder condition to ANY live lease holder on the co-hosted memory
+holder condition to ANY lease holder on the co-hosted memory
 server, so cross-space scoped reads (§2b's free read row) can name
 their foreign instance instead of silently resolving
 `user:<serviceDID>`, and Phase 5 sharpened the equality to the FULL
@@ -754,13 +753,13 @@ execution and downgrade behavior.
   before — the OFF-arm wire is byte-identical. Amended 2026-08-17 (the
   stage-A independent review's finding 1): the keying is the session's
   STICKY wire vocabulary — armed by the admission, kept for the
-  session's life, never hung from the live lease — so an instance
+  session's life, never hung from the lease — so an instance
   delivered keyed is always retracted keyed (an unkeyed remove would
   name the client's OWN instance: a former holder's catch-up wiped the
   service's doc and kept the stale foreign one). Amended again by owner
   routing R3 (2026-11-01): the instances an admitted session named are
   DELIVERED to it for the session's life — the admission is the
-  session's, not the lease's, so a lapse or a handover of the lease
+  session's, not the lease's, so a release or a handover of the lease
   changes nothing on its wire, and a resumed session's catch-up carries
   them keyed as well.)*
 - **Basis-index rows are NOT part of the pushed commit** (T2). They
@@ -770,8 +769,8 @@ execution and downgrade behavior.
 - **Push priority** (Phase 6 hardening, but the contract is fixed now):
   when flushing a batch to a client socket, `derived` commits touching
   docs that client subscribes to go first; everything else follows.
-  Bookkeeping MUST NOT ride the commit stream at all (lease renewals are
-  table updates; watermarks piggyback on derived commits), so in practice
+  Bookkeeping MUST NOT ride the commit stream at all (the lease lives in
+  memory; watermarks piggyback on derived commits), so in practice
   priority is about big authored blobs vs small derived values.
   *(LANDED Phase 6 — the implementation shape, stated so no one infers a
   stronger one: each session gets ONE frame per flush cycle, so priority
@@ -1002,7 +1001,7 @@ disabled (README §3.5).
   ledger LD5 ratified 2026-08-03 — the read half of §1's
   transaction identity model). That is the only read-side addition
   to the wire: one optional field on the read, admissible only for
-  a live lease holder on the co-hosted memory server — its own
+  a lease holder on the co-hosted memory server — its own
   space's lease (FP2, ruled 2026-08-03). Reads that name nothing
   are unchanged.
 - Basis-index rows (serving-loop.md §3b) ride INSIDE the derived

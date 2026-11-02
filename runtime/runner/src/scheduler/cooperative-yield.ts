@@ -1,5 +1,5 @@
 // The serving scheduler's cooperative macrotask yield (server-execution v2
-// stage C tuning, T3; serving-loop.md §2/§3).
+// stage C tuning, T3; serving-loop.md §3).
 //
 // Why: the settle loop (`settle.ts`) runs every action of a pass on one
 // microtask chain — no macrotask boundary from the first run to the
@@ -7,10 +7,7 @@
 // stage-C attribution
 // measured chat event waves of 2.6–3.6 s in which the 100-ms flush
 // deadline fired 2.5–8.3 s LATE (`wavesBudgetExhausted` was a symptom,
-// not a bound), the lease-renew `setInterval` starved for up to 10 s
-// against a 15-s TTL (t2: `wave-commit-rejected` then `lease-lost` on
-// every active space within 10 ms — the process's renew timers missing
-// together), and the memory server's 5-ms push flush waited too. The
+// not a bound), and the memory server's 5-ms push flush waited too. The
 // timers all ride the macrotask queue the loop never yields to.
 //
 // What: a time-sliced yield. `maybeYield()` is called between runs;
@@ -19,13 +16,10 @@
 // primitive that lets DUE timers fire in deadline order before it
 // resumes; measured on Deno: a MessageChannel turn or `setImmediate`
 // let 0–2 of 8 due timers fire across a 360-ms loop, `setTimeout(0)`
-// all 8 within a few ms of their deadlines) and reports the slice to the
-// installed observer FIRST, synchronously — the mid-wave lease renew
-// rides that hook, so it never depends on the timer queue being
-// serviced. Between yields nothing changes: the OFF arm and client
-// runtimes never construct one of these (the scheduler creates it only
-// under `runtime.servingPosture`), so their settle loops keep the exact
-// microtask shape they had.
+// all 8 within a few ms of their deadlines). Between yields nothing
+// changes: the OFF arm and client runtimes never construct one of these
+// (the scheduler creates it only under `runtime.servingPosture`), so their
+// settle loops keep the exact microtask shape they had.
 //
 // Bound, stated honestly: the deadline becomes honest to within ONE
 // action plus a slice — an action's per-demander instance runs (a
@@ -34,13 +28,6 @@
 // design half of stage C, the per-demander walk). The yield is NOT
 // placed inside the fan-out loop (see run.ts's note): a macrotask there
 // let a run's own async seal refusal re-enter the pass.
-
-import { getLogger } from "@commonfabric/logger";
-
-const logger = getLogger("cooperative-yield", {
-  enabled: true,
-  level: "warn",
-});
 
 /** One frame's worth of continuous scheduler work per macrotask turn on a
  * serving runtime. Sized against the yield's own cost (~2 ms per
@@ -54,10 +41,6 @@ export class CooperativeYield {
   readonly #sliceMs: number;
   #sliceStart = performance.now();
   #yields = 0;
-
-  /** The mid-wave hook (the SpaceServer's lease renew): called
-   * synchronously at every yield, BEFORE the macrotask turn. */
-  onYield: (() => void) | undefined;
 
   constructor(sliceMs: number = DEFAULT_SERVING_YIELD_SLICE_MS) {
     this.#sliceMs = sliceMs;
@@ -87,21 +70,9 @@ export class CooperativeYield {
     return this.yieldNow();
   }
 
-  /** Yield one macrotask turn unconditionally: report the slice to the
-   * observer (synchronously — see the header), then let due timers run. */
+  /** Yield one macrotask turn unconditionally, which lets due timers run. */
   yieldNow(): Promise<void> {
     this.#yields += 1;
-    try {
-      this.onYield?.();
-    } catch (error) {
-      // The observer is the serving loop's; a throw there must not take
-      // the scheduler down with it (same containment posture as the
-      // replica's observer seams).
-      logger.warn("yield-observer-failed", () => [
-        "cooperative-yield observer threw",
-        error,
-      ]);
-    }
     return new Promise<void>((resolve) => setTimeout(resolve, 0)).then(
       () => {
         this.#sliceStart = performance.now();

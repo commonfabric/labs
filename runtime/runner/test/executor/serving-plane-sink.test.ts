@@ -2,13 +2,24 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { Operation } from "@commonfabric/memory/v2";
+import {
+  acquireServerExecutionEnabler,
+  type Operation,
+} from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { ExecutionLeases } from "@commonfabric/memory/v2/execution-lease";
 
 import {
   ServingPlane,
   servingPlaneEndpoint,
 } from "../../src/executor/serving-port-plane.ts";
+import {
+  type BridgeNotices,
+  type BridgeRequests,
+  type PlaneNotices,
+  type PlaneRequests,
+  PortEndpoint,
+} from "../../src/executor/serving-port-protocol.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 
 const space = "did:key:z6MkServingPlaneSinkReads" as MemorySpace;
@@ -72,7 +83,6 @@ describe("serving-plane-sink", () => {
       foreignEngineFor: () => engine,
       sessionId: "holder",
       localSeqRef: { value: 0 },
-      onHomeRefused: () => {},
     });
     const doc = { id, scopeKey: "space" };
     expect(
@@ -84,5 +94,62 @@ describe("serving-plane-sink", () => {
         sessionId: "bob-session",
       }),
     ).toEqual([]);
+  });
+
+  it("admits a derived commit on the worker's own connection only while the memory server's map names its loop", async () => {
+    // The outbox's failure notice is such a commit, and the only one.
+    const leases = new ExecutionLeases();
+    const bridge = new PortEndpoint<
+      BridgeRequests,
+      BridgeNotices,
+      PlaneRequests,
+      PlaneNotices
+    >(channel.port2, () => {});
+    bridge.onRequest("space.open", () => ({ url: toFileUrl(path).href }));
+    bridge.onRequest(
+      "server.acquireExecutionLease",
+      ({ space, holder }) => leases.acquire(space, holder),
+    );
+    bridge.onRequest(
+      "server.releaseExecutionLease",
+      ({ space, holder }) => leases.release(space, holder),
+    );
+    const releaseServerExecution = acquireServerExecutionEnabler();
+    try {
+      const own = await plane.server.engineForSpace(space);
+      const holder = "did:key:service#worker";
+      const notice = (seq: number) => () =>
+        Engine.applyCommit(own, {
+          sessionId: holder,
+          space,
+          commitClass: "derived",
+          holder,
+          commit: {
+            localSeq: seq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{ op: "set", id, value: { value: { seq } } }],
+          },
+        });
+
+      expect(notice(1)).toThrow("execution lease");
+
+      leases.acquire(space, "did:key:service#rival");
+      expect(await plane.server.executionLeases.acquire(space, holder))
+        .toBe(false);
+      expect(notice(1)).toThrow("execution lease");
+      leases.release(space, "did:key:service#rival");
+
+      expect(await plane.server.executionLeases.acquire(space, holder))
+        .toBe(true);
+      expect(leases.holderOf(space)).toBe(holder);
+      expect(notice(1)).not.toThrow();
+
+      await plane.server.executionLeases.release(space, holder);
+      expect(leases.holderOf(space)).toBeUndefined();
+      expect(notice(2)).toThrow("execution lease");
+    } finally {
+      releaseServerExecution();
+      bridge.close();
+    }
   });
 });

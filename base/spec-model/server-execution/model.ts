@@ -952,7 +952,7 @@ export type Step =
   | { kind: "enact"; session: SessionId; space: SpaceId }
   | { kind: "ack"; session: SessionId; space: SpaceId }
   | { kind: "reload"; session: SessionId }
-  | { kind: "expireLease"; space: SpaceId }
+  | { kind: "releaseLease"; space: SpaceId }
   | { kind: "reacquire"; space: SpaceId }
   | { kind: "restartProcess"; space: SpaceId }
   | { kind: "sealProbe"; space: SpaceId }
@@ -1084,8 +1084,8 @@ export function apply(w0: World, step: Step): World {
       w.clients[step.session].enactedNonces = [];
       break;
     }
-    case "expireLease": {
-      // the memory server's clock expires the row: matches NOBODY
+    case "releaseLease": {
+      // the lease ends (a park, or a replaced worker): matches NOBODY
       // (protocol §2; serving-loop §2)
       w.spaces[step.space].leaseHolder = null;
       break;

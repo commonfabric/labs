@@ -139,7 +139,7 @@ Status legend:
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
 | 63 | Commit classes / `derivedThrough` / `consequenceOf` metadata | `runtime/memory/v2.ts` (`CommitClass`), `executor/engine-wave-sink.ts` (`derivedThrough` set on the wave commit; `executor/watermark.ts` describes it), `runtime/memory/v2/engine.ts` (commit-row `annotations`, `consequenceOf` carriage in `applyWaveCommit`) | protocol §1, §7 | COVERED |
-| 64 | `execution_lease` table | `runtime/memory/v2/engine.ts` (the `execution_lease` DDL; the derived-class lease check in `applyCommitTransaction`) | serving-loop §Anchors, §2 | COVERED |
+| 64 | the lease in memory | `runtime/memory/v2/execution-lease.ts` (the map); `runtime/memory/v2/engine.ts` (the derived-class lease check in `applyCommitTransaction`) | serving-loop §2 | COVERED |
 | 65 | `externalSinkDisposition` / client egress suppression | not present on main; egress is CFC sink-request verification at release (`verifySinkRequestRelease` in `cfc/sink-request.ts`) | README §3.1, §3.4 | GAP |
 | 66 | Settled-ness watermark; `waitForSettled` | not present today (tests poll `settled()`/text) | protocol §4, testing §3 | COVERED |
 | 67 | Mergeable ops (push/addUnique/increment; op poisoning on whole-value set) | `storage/mergeable-ops.ts`, `cell.ts` (the op poisoning in `Cell.set()`) | README §1 (authored machinery unchanged) | COVERED |
@@ -567,12 +567,13 @@ with the disposition still stands: the sync-path comment in
 `scheduler/invalidation.ts` (pushes had to stay unshaped for adoption)
 lost its reason, so the shaping decision is due a re-check (N10).
 
-**N64 (execution_lease).** serving-loop §Anchors and §2 describe
-`execution_lease` as an existing table, and it is:
-`runtime/memory/v2/engine.ts` creates it (one row per space: `space`,
-`holder`, `expires_at` — §2's shape), and `applyCommitTransaction`
-there makes the derived-class admission equality check against the
-live row.
+**N64 (the lease in memory).** serving-loop §2 describes a map from space to
+holder that each memory server keeps in memory, and it is:
+`ExecutionLeases` in `runtime/memory/v2/execution-lease.ts`, which a `Server`
+shares with every engine it opens, and `applyCommitTransaction` in
+`runtime/memory/v2/engine.ts` makes the derived-class admission equality check
+against it. The engine's schema still creates an `execution_lease` table, which
+nothing reads or writes.
 
 **N65 (egress suppression is new construction).** README §3.4
 requires "client suppresses egress" and "server performs egress" to

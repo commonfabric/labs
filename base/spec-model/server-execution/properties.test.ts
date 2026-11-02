@@ -483,7 +483,7 @@ Deno.test("C6: derived admission is the lease equality check — forgeries and n
   assert(
     !admitDerived(sp, { holder: me, envelope: sessionKey(U1, S1) }),
   );
-  sp.leaseHolder = null; // expired lease matches NOBODY (protocol §2)
+  sp.leaseHolder = null; // a released lease matches NOBODY (protocol §2)
   assert(!admitDerived(sp, { holder: me, envelope: "service:A" }));
 });
 
@@ -493,7 +493,7 @@ Deno.test("C6: derived admission is the lease equality check — forgeries and n
 
 const C7_MENU: Step[] = [
   { kind: "sealProbe", space: "A" },
-  { kind: "expireLease", space: "A" },
+  { kind: "releaseLease", space: "A" },
   { kind: "restartProcess", space: "A" },
   { kind: "reacquire", space: "A" },
   { kind: "deliverProbe", space: "A" },
@@ -538,7 +538,7 @@ Deno.test("C7b: the residue the MUST exists for — discipline OFF makes a same-
   // probe → the one equality check rejects it (DR1's free fence)
   let w = c7World(false);
   w = apply(w, { kind: "sealProbe", space: "A" });
-  w = apply(w, { kind: "expireLease", space: "A" });
+  w = apply(w, { kind: "releaseLease", space: "A" });
   w = apply(w, { kind: "restartProcess", space: "A" });
   w = apply(w, { kind: "reacquire", space: "A" });
   w = apply(w, { kind: "deliverProbe", space: "A" });
@@ -794,7 +794,7 @@ Deno.test("C0-guards: connection guards; no-actor space writes carry no attribut
   // lease lost between compute and commit: the wave ABORTS (§2)
   let w2 = apply(w0, { kind: "fire", session: S1, space: "A", stream: "s" });
   w2 = apply(w2, { kind: "waveCompute", space: "A" });
-  w2 = apply(w2, { kind: "expireLease", space: "A" });
+  w2 = apply(w2, { kind: "releaseLease", space: "A" });
   w2 = apply(w2, { kind: "waveCommit", space: "A" });
   assertEquals(
     w2.spaces.A.commits.filter((c) => c.class === "derived").length,
