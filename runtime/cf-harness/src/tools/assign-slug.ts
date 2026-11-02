@@ -18,6 +18,7 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
@@ -136,9 +137,6 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
   tags: ["fabric", "piece"],
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * What each `SlugResolutionError` code says about the name.
  *
@@ -220,7 +218,7 @@ const slugAvailability = async (
   try {
     binding = await readSlugBinding(pieces, slug);
   } catch (error) {
-    return { state: "unknown", reason: errorMessage(error) };
+    return { state: "unknown", reason: describeFailure(error) };
   }
   try {
     const holder = await resolvePieceAddress(pieces, slug);
@@ -233,7 +231,7 @@ const slugAvailability = async (
     // Only `unknown` carries the resolver's text. The other two are answers
     // about what the space holds, and their refusals name the caller's own
     // slug and nothing the caller did not already have.
-    if (state === "unknown") return { state, reason: errorMessage(error) };
+    if (state === "unknown") return { state, reason: describeFailure(error) };
     return state === "free" ? { state, binding } : { state };
   }
 };
@@ -287,7 +285,7 @@ export const assignSlugTool: HarnessToolDefinition<
       requested = validateSlug(input.slug);
     } catch (error) {
       return errorOutput(
-        `assign_slug slug is invalid: ${errorMessage(error)}`,
+        `assign_slug slug is invalid: ${describeFailure(error)}`,
       );
     }
     let pieces: PiecesController;
@@ -296,7 +294,7 @@ export const assignSlugTool: HarnessToolDefinition<
     } catch (error) {
       return errorOutput(
         `assign_slug could not establish the fabric session: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -331,7 +329,7 @@ export const assignSlugTool: HarnessToolDefinition<
     } catch (error) {
       return errorOutput(
         `assign_slug could not load the referenced piece: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -402,7 +400,7 @@ export const assignSlugTool: HarnessToolDefinition<
         } catch (error) {
           return errorOutput(
             `assign_slug slug "${requested}" is taken and no free slug can ` +
-              `be derived from it: ${errorMessage(error)}`,
+              `be derived from it: ${describeFailure(error)}`,
           );
         }
       }
@@ -432,7 +430,7 @@ export const assignSlugTool: HarnessToolDefinition<
         } catch (error) {
           return errorOutput(
             `assign_slug failed while listing the piece: ${
-              errorMessage(error)
+              describeFailure(error)
             }`,
           );
         }
@@ -456,7 +454,9 @@ export const assignSlugTool: HarnessToolDefinition<
         await ensureRegistered(pieces, cell, targetId);
       } catch (error) {
         return errorOutput(
-          `assign_slug failed while listing the piece: ${errorMessage(error)}`,
+          `assign_slug failed while listing the piece: ${
+            describeFailure(error)
+          }`,
         );
       }
       listed = true;
@@ -486,7 +486,7 @@ export const assignSlugTool: HarnessToolDefinition<
         }
         return errorOutput(
           `assign_slug failed while naming the piece: ${
-            errorMessage(error)
+            describeFailure(error)
           }. The piece is listed in this space.`,
         );
       }

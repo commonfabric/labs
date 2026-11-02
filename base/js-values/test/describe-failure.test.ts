@@ -3,8 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
-const UNDESCRIBABLE =
-  "The failure carries nothing that can be written as a message.";
+const UNDESCRIBABLE = "error could not be converted to text";
 
 describe("describe-failure", () => {
   describe("describeFailure()", () => {
