@@ -694,6 +694,45 @@ describe("external content observation", () => {
     });
   });
 
+  it("refuses a link the schema does not describe when its content fails the write gate", async () => {
+    await withRuntime(async (runtime) => {
+      const seedTx = runtime.edit();
+      const linked = runtime.getCell(
+        space,
+        "external-content-undescribed-source",
+        {
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+          ifc: { confidentiality: [SECRET] },
+        },
+        seedTx,
+      );
+      linked.set({ title: "undescribed linked row" });
+      expect((await seedTx.commit().settled).ok).toBeDefined();
+
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-undescribed-link",
+          schema: {
+            type: "object",
+            properties: { title: { type: "string" } },
+            additionalProperties: false,
+            ifc: { maxConfidentiality: [] },
+          },
+          value: { title: "public", extra: linked },
+          producer: PRODUCER,
+        })).rejects.toThrow(/traversed external content observation/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
   it("uses the full consumed integrity label for input requirements", async () => {
     await withRuntime(async (runtime) => {
       const targetTx = runtime.edit();

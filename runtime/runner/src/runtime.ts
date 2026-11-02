@@ -1373,6 +1373,23 @@ const externalObservationRefusal = (
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
 
+/**
+ * Helper for `Runtime.prepareExternalContentObservation()`, which reads every
+ * document an observed value links to, wherever the link sits in the value,
+ * since writing the value stores each link whether its schema describes the
+ * place or not.
+ */
+const linksInValue = (value: unknown, links: CellLink[] = []): CellLink[] => {
+  if (isCellLink(value)) {
+    links.push(value);
+  } else if (Array.isArray(value)) {
+    for (const item of value) linksInValue(item, links);
+  } else if (typeof value === "object" && value !== null) {
+    for (const item of Object.values(value)) linksInValue(item, links);
+  }
+  return links;
+};
+
 /** A document a commit retry's catch-up could not load, and the reason. */
 export type CommitRetryPullFailure = {
   space: MemorySpace;
@@ -4116,12 +4133,27 @@ export class Runtime {
       // this one.
       tx.abort("external content observation staged");
       finalTx = this.edit();
+      const finalCell = this.getCell<unknown>(
+        options.space,
+        options.cause,
+        options.schema,
+        finalTx,
+      );
       this.getImmutableCell(
         options.space,
         options.value,
         options.schema,
         finalTx,
       ).get({ traverseCells: true });
+      // The schema-guided read above follows only what the target schema
+      // describes; each link the value stores is read as well, through its
+      // own schema, so a link in a place the schema leaves out still gates.
+      for (const link of linksInValue(options.value)) {
+        const target = parseLink(link, finalCell);
+        this.getCellFromLink(target, target.schema, finalTx).get({
+          traverseCells: true,
+        });
+      }
       // The staged traversal loaded everything this read reaches; a load it
       // starts here would leave a hole the input check reads as nothing.
       if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
@@ -4130,12 +4162,6 @@ export class Runtime {
           finalTx.getCfcState(),
         );
       }
-      const finalCell = this.getCell<unknown>(
-        options.space,
-        options.cause,
-        options.schema,
-        finalTx,
-      );
       finalCell.set(options.value);
       // Read the written value back as well: the read through the immutable
       // cell carries only the labels of the documents the value links to,
