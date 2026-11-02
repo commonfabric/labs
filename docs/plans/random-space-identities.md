@@ -129,9 +129,10 @@ in this order, each step a change of its own:
 1. **Every client handles the deletion before any server sends it.** The Memory
    server sends the `deleted` marker and the `deleted` revocation reason to
    every client whatever it advertises, so each client in use has to handle
-   both first: this repository's Memory client, runtime, renderer and shell; CFS,
-   which runs against a pinned tag of this repository, so that tag has to be
-   one that handles them; and the Weaver app. That includes reading an
+   both first: this repository's Memory client, runtime, renderer and shell,
+   and every client outside this repository, including one that runs against a
+   pinned tag of it, whose tag then has to be one that handles them. That
+   includes reading an
    invitation operation's `space-deleted` as final rather than retrying it,
    and an `AuthorizationError` marked `deleted` as a refusal no later grant
    heals.

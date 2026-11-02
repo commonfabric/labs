@@ -321,8 +321,8 @@ Consumers call `markDeleted` when they come upon a deleted space, and nothing
 sweeps the catalog for them. Every runtime that holds a person's catalog and
 hears of a refusal marked `deleted` sends it, when the catalog holds the space
 as saved or archived, at the revision its view shows: the shell on a
-`spaceaccesslost` marked `deleted`, and CFS, the Weaver app's backend, on the
-same refusal. A catalog only the shell kept up would never record a deletion
+`spaceaccesslost` marked `deleted`, and a runtime that holds the catalog
+outside the shell, such as a native client's, on the same refusal. A catalog only the shell kept up would never record a deletion
 for a person who uses another client. A pattern that lists catalog entries
 sends it for an entry whose `spaceDeleted(space)` reads `true`. As with the
 other commands, the whole of what the handler does is
