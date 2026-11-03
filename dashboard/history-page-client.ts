@@ -242,7 +242,9 @@ export function followHistoryPage<P extends CollectionProgress>(
     title.textContent = text.title;
     total.textContent = text.total;
     detail.textContent = text.detail;
-    if (state.phase === "discovering") bar.removeAttribute("value");
+    if (state.phase === "discovering" || !state.totalRuns) {
+      bar.removeAttribute("value");
+    }
     else {
       bar.setAttribute("max", String(Math.max(1, state.totalRuns)));
       bar.setAttribute("value", String(state.completedRuns));

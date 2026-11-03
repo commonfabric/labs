@@ -1119,6 +1119,16 @@ describe("history-page-client", () => {
               });
               expect(panel(page)).toEqual(history.progress("discovering").text);
               expect(bar.attributes.has("value")).toBe(false);
+
+              await page.dispatch(stream, "progress", {
+                data: JSON.stringify(fetching.state),
+              });
+              expect(bar.attributes.get("value")).toBe("6");
+
+              await page.dispatch(stream, "progress", {
+                data: JSON.stringify({ ...fetching.state, totalRuns: 0 }),
+              });
+              expect(bar.attributes.has("value")).toBe(false);
             });
 
             it("loads the charts when a collection finishes on a page served before any data", async () => {
