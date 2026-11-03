@@ -1956,7 +1956,7 @@ describe("Home shared-space catalog", () => {
           // is done.
           const titlesOf = (catalog: SharedSpaceCatalog | undefined) =>
             Object.values(catalog?.entries ?? {}).map((entry) => entry.title);
-          const catalog = await waitForCellValue<SharedSpaceCatalog>(
+          const listed = await waitForCellValue<SharedSpaceCatalog>(
             runtime,
             home.key("sharedSpaceCatalog"),
             (value) => {
@@ -1966,7 +1966,7 @@ describe("Home shared-space catalog", () => {
             },
             { stuckLabel: "the catalog listing both groups" },
           );
-          expect(titlesOf(catalog)).toEqual(
+          expect(titlesOf(listed)).toEqual(
             expect.arrayContaining(["Team later", "Team earlier"]),
           );
         });
