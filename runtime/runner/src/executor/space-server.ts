@@ -8247,7 +8247,8 @@ export class SpaceServer implements TransactionSealDestination {
    * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
    * it — or dispose it, as every other park does. Once the park
    * completes, the host re-activates a space that still meets the ACTIVE
-   * criteria, unless a rival's lease caused the park. */
+   * criteria, unless a rival's lease caused the park or the park is
+   * `SPACE_DELETED_PARK`, which ends the space's tenures for good. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the loop's idle park runs unawaited — is
     // what a second caller waits for: the host's close must not return while
