@@ -8,6 +8,8 @@ import { pieceUrl } from "../../src/piece-url.ts";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
+  consoleCodexHealthProbe,
+  consoleCodexReadiness,
   consoleDataDirectories,
   consoleHealthRows,
   consoleHelpText,
@@ -1764,30 +1766,38 @@ describe("console/server", () => {
       ).toEqual(["unknown", "unknown"]);
     });
 
-    for (const mode of ["missing", "key", "none", "codex"] as const) {
+    it("leaves a codex credential to its live probe, which names the store", async () => {
+      const rows = consoleHealthRows(await config(), undefined, {
+        modelProvider: "openai-codex",
+        modelAuthSource: "cf-harness-local-store",
+      });
+      expect(rows.find((row) => row.id === "model.provider")?.value).toBe(
+        "openai-codex",
+      );
+      expect(rows.find((row) => row.id === "model.auth")).toBeUndefined();
+      expect(consoleCodexHealthProbe("/console/.cf-harness").initial)
+        .toMatchObject([{
+          id: "model.auth",
+          source: "harness credential store",
+          detail: "/console/.cf-harness/auth.json",
+        }]);
+    });
+
+    for (const mode of ["missing", "key", "none"] as const) {
       it(`reports ${mode} credential provenance without publishing a credential`, async () => {
-        const options: CreateHarnessPromptLoopOptions = mode === "codex"
-          ? {
-            modelProvider: "openai-codex",
-            modelAuthSource: "cf-harness-local-store",
-          }
-          : {
-            modelProvider: "openai-compatible-gateway",
-            gatewayAuthMode: mode === "none" ? "none" : "bearer",
-            ...(mode === "key" ? { apiKey: "secret-test-value" } : {}),
-          };
+        const options: CreateHarnessPromptLoopOptions = {
+          modelProvider: "openai-compatible-gateway",
+          gatewayAuthMode: mode === "none" ? "none" : "bearer",
+          ...(mode === "key" ? { apiKey: "secret-test-value" } : {}),
+        };
         const rows = consoleHealthRows(await config(), undefined, options, {
           CF_HARNESS_API_KEY: mode === "key" ? "secret-test-value" : undefined,
         });
         expect(rows.find((row) => row.id === "model.auth")).toMatchObject({
           label: "Model Authentication",
           state: mode === "missing" ? "failed" : "ok",
-          source: mode === "codex"
-            ? "harness credential store"
-            : "console environment",
-          detail: mode === "codex"
-            ? "/console/.cf-harness/auth.json"
-            : mode === "none"
+          source: "console environment",
+          detail: mode === "none"
             ? "CF_HARNESS_GATEWAY_AUTH_MODE"
             : mode === "key"
             ? "CF_HARNESS_API_KEY"
@@ -5046,3 +5056,83 @@ const kindsUntil = async (
   (await envelopesUntil(response, finalKind)).map((envelope) =>
     envelope.event.kind
   );
+
+describe("console/server model readiness", () => {
+  /** A server whose readiness the test flips, counting the turns it runs. */
+  const serverWithReadiness = async (readiness: { refusal?: string }) => {
+    let turns = 0;
+    const server = new ConsoleServer(
+      await config(),
+      (onEvent) =>
+        new HarnessInteractiveChatService({
+          createPromptLoop: (options) => {
+            turns += 1;
+            return answeringLoop(options);
+          },
+          now: advancingClock(),
+          onEvent,
+        }),
+      undefined,
+      undefined,
+      () => Promise.resolve(readiness.refusal),
+    );
+    return { server, turns: () => turns };
+  };
+
+  it("refuses a turn before it starts while the model is not ready, and serves one once it is, without a restart", async () => {
+    const readiness: { refusal?: string } = {
+      refusal: "cf-harness Codex is disconnected",
+    };
+    const { server, turns } = await serverWithReadiness(readiness);
+
+    const refused = await server.handle(
+      jsonRequest("/api/task", { text: "hello" }),
+    );
+    expect(refused.status).toBe(503);
+    expect((await refused.json()).error).toBe(
+      "cf-harness Codex is disconnected",
+    );
+    expect(turns()).toBe(0);
+    const listed = await server.handle(getRequest("/api/sessions"));
+    expect((await listed.json()).sessions).toEqual([]);
+
+    readiness.refusal = undefined;
+    const started = await server.handle(
+      jsonRequest("/api/task", { text: "hello" }),
+    );
+    expect(started.status).toBe(200);
+    const { sessionId, turnId } = await started.json();
+    await server.service.waitForTurn(sessionId, turnId);
+    expect(turns()).toBe(1);
+  });
+
+  it("reads an unconnected Codex store as not ready", async () => {
+    const harnessHome = await Deno.makeTempDir();
+    try {
+      const refusal = await consoleCodexReadiness(harnessHome)();
+      expect(refusal).toMatch(/^cf-harness Codex is (?!connected)/);
+      expect(refusal).toContain("cf-harness auth login openai-codex");
+    } finally {
+      await Deno.remove(harnessHome, { recursive: true });
+    }
+  });
+
+  it("reports the Codex credential live, failed while unconnected and ok once connected", async () => {
+    const readiness: { refusal?: string } = {
+      refusal: "cf-harness Codex is disconnected",
+    };
+    const probe = consoleCodexHealthProbe(
+      "/harness-home",
+      () => Promise.resolve(readiness.refusal),
+    );
+    const [unconnected] = await probe.read();
+    expect(unconnected.id).toBe("model.auth");
+    expect(unconnected.state).toBe("failed");
+    expect(unconnected.reason).toBe("cf-harness Codex is disconnected");
+
+    readiness.refusal = undefined;
+    const [connected] = await probe.read();
+    expect(connected.state).toBe("ok");
+    expect(connected.value).toBe("cf-harness-local-store connected");
+  });
+});

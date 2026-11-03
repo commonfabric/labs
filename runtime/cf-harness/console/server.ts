@@ -193,6 +193,7 @@ import { ConsoleBrowserHost } from "./browser-host.ts";
 import { parseConnectorGrants } from "./connector-grants.ts";
 import {
   ConsoleHealth,
+  type ConsoleHealthFact,
   type ConsoleHealthProbe,
   type ConsoleHealthRow,
   consoleHealthUrl,
@@ -1123,10 +1124,39 @@ const CONSOLE_PROMPT_SLOT = createCliPromptSlotBinding({
 });
 
 /**
+ * Why a console turn cannot start for want of a model credential, or
+ * `undefined` when it can.
+ */
+export type ConsoleModelReadiness = () => Promise<string | undefined>;
+
+/**
+ * The Codex credential's readiness, read from the store each time it is asked.
+ * It is asked at every turn rather than once at startup: a console launched
+ * before Codex was connected (a first setup starts it before anyone has signed
+ * in) serves turns as soon as it is, with no restart, and a turn on an
+ * unconnected harness is still refused before it starts rather than failing
+ * after the page said it had.
+ */
+export const consoleCodexReadiness = (
+  harnessHome: string,
+): ConsoleModelReadiness =>
+async () => {
+  const status = await new OpenAICodexAuthService(
+    new FileHarnessCredentialStore({
+      path: defaultHarnessCredentialStorePath(harnessHome),
+    }),
+    CONSOLE_CREDENTIAL_OWNER.ownerKey,
+  ).status();
+  return status.status === "connected"
+    ? undefined
+    : `cf-harness Codex is ${status.status}; connect it with \`cf-harness auth login openai-codex\``;
+};
+
+/**
  * The provider binding, resolved the way the local single-user host resolves
- * it: the persisted preference names the provider, and a Codex provider is
- * preflighted so an unconnected harness is a startup failure rather than a
- * turn that fails after the page said it had started.
+ * it: the persisted preference names the provider. A Codex provider's
+ * credential is not required here; `consoleCodexReadiness` checks it at each
+ * turn, and the client reads it from the store at each request.
  */
 const resolveModelOptions = async (
   config: ConsoleConfig,
@@ -1159,15 +1189,6 @@ const resolveModelOptions = async (
   const credentialStore = new FileHarnessCredentialStore({
     path: defaultHarnessCredentialStorePath(config.harnessHome),
   });
-  const status = await new OpenAICodexAuthService(
-    credentialStore,
-    CONSOLE_CREDENTIAL_OWNER.ownerKey,
-  ).status();
-  if (status.status !== "connected") {
-    throw new Error(
-      `cf-harness Codex is ${status.status}; connect it with \`cf-harness auth\` before starting the console server`,
-    );
-  }
   return {
     modelProvider: provider,
     modelAuthSource: "cf-harness-local-store",
@@ -1332,23 +1353,21 @@ export const consoleHealthRows = (
       detail: defaultHarnessProviderSettingsPath(config.harnessHome),
       state: "ok",
       checkedAt,
-    }, {
+    });
+    // A Codex credential can be connected after the console starts, so its
+    // row is the live probe `createConsoleHealth` adds, not a launch fact.
+    if (provider === "openai-codex") return rows;
+    rows.push({
       id: "model.auth",
       group: "model",
       label: "Model Authentication",
       value: missingKey
         ? "bearer API key not configured"
-        : provider === "openai-codex"
-        ? "cf-harness-local-store connected"
         : modelOptions.gatewayAuthMode === "none"
         ? "gateway authentication disabled"
         : "API key configured; provider acceptance not checked",
-      source: provider === "openai-codex"
-        ? "harness credential store"
-        : "console environment",
-      detail: provider === "openai-codex"
-        ? defaultHarnessCredentialStorePath(config.harnessHome)
-        : modelOptions.gatewayAuthMode === "none"
+      source: "console environment",
+      detail: modelOptions.gatewayAuthMode === "none"
         ? "CF_HARNESS_GATEWAY_AUTH_MODE"
         : missingKey
         ? "CF_HARNESS_API_KEY / OPENAI_API_KEY"
@@ -1473,6 +1492,54 @@ const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
  * is the process's environment unless given, since that is the one runsc
  * runs with. `host.platform` replaces `Deno.build.os`.
  */
+/** The Codex credential's row, read from the store at each refresh. */
+export const consoleCodexHealthProbe = (
+  harnessHome: string,
+  readiness: ConsoleModelReadiness = consoleCodexReadiness(harnessHome),
+): ConsoleHealthProbe => {
+  const fact: ConsoleHealthFact = {
+    id: "model.auth",
+    group: "model",
+    label: "Model Authentication",
+    value: "not checked",
+    source: "harness credential store",
+    detail: defaultHarnessCredentialStorePath(harnessHome),
+  };
+  return {
+    id: fact.id,
+    initial: [fact],
+    read: async () => {
+      const refusal = await readiness();
+      const checkedAt = new Date().toISOString();
+      return [
+        refusal === undefined
+          ? {
+            ...fact,
+            value: "cf-harness-local-store connected",
+            state: "ok",
+            checkedAt,
+          }
+          : {
+            ...fact,
+            value: "not connected",
+            reason: refusal,
+            remedy:
+              "Connect Codex with `cf-harness auth login openai-codex`; the console needs no restart.",
+            state: "failed",
+            checkedAt,
+          },
+      ];
+    },
+    unavailable: (checkedAt) => [{
+      ...fact,
+      value: "not verified",
+      reason: "The harness credential store could not be read.",
+      state: "unknown",
+      checkedAt,
+    }],
+  };
+};
+
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
@@ -1482,6 +1549,9 @@ export const createConsoleHealth = (
   host: { platform?: SandboxPlatform } = {},
 ): ConsoleHealth =>
   new ConsoleHealth(consoleHealthRows(config, launch, modelOptions, env), [
+    ...(modelOptions?.modelProvider === "openai-codex"
+      ? [consoleCodexHealthProbe(config.harnessHome)]
+      : []),
     consoleRunscHealthProbe(
       () => resolveConsoleRunscConfig(config, env, host.platform),
       consoleTurnEnforcementMode(config),
@@ -1566,6 +1636,7 @@ export class ConsoleServer {
   readonly #clientFeatures: readonly HarnessClientFeature[];
   readonly #service: HarnessInteractiveChatService;
   readonly #health: ConsoleHealth;
+  readonly #modelReadiness: ConsoleModelReadiness;
   readonly #patternIndexClientFactory:
     | HarnessPatternIndexClientFactory
     | undefined;
@@ -1603,8 +1674,10 @@ export class ConsoleServer {
     ) => HarnessInteractiveChatService,
     patternIndexClientFactory?: HarnessPatternIndexClientFactory,
     health?: ConsoleHealth,
+    modelReadiness: ConsoleModelReadiness = () => Promise.resolve(undefined),
   ) {
     this.#config = config;
+    this.#modelReadiness = modelReadiness;
     this.#clientFeatures = config.allowBrowserHost
       ? [...HARNESS_SUPPORTED_CLIENT_FEATURES, "browser_host"]
       : HARNESS_SUPPORTED_CLIENT_FEATURES;
@@ -2198,6 +2271,12 @@ export class ConsoleServer {
     const text = body.text;
     if (typeof text !== "string" || text.trim() === "") {
       return Response.json({ error: "text is required" }, { status: 400 });
+    }
+    // Refused here, before anything starts, so the page never shows a turn
+    // that then fails for want of a model credential.
+    const unready = await this.#modelReadiness();
+    if (unready !== undefined) {
+      return Response.json({ error: unready }, { status: 503 });
     }
     if (body.sessionId !== undefined && typeof body.sessionId !== "string") {
       return Response.json({ error: "sessionId must be a string" }, {
@@ -2913,6 +2992,9 @@ export const startConsoleServer = async (
       indexFactory,
       host,
     ),
+    modelOptions.modelProvider === "openai-codex"
+      ? consoleCodexReadiness(config.harnessHome)
+      : undefined,
   );
   await server.service.initializeFromStore();
 
