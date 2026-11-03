@@ -39,6 +39,9 @@ describe("reap", () => {
         } as never);
       apply([{ op: "set", id: ACL, value: { value: { [ALICE]: "OWNER" } } }]);
       apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
+      engine.database.exec(
+        `CREATE TABLE private_rows (x TEXT); INSERT INTO private_rows VALUES ('a')`,
+      );
       apply([{
         op: "set",
         id: ACL,
@@ -92,6 +95,16 @@ describe("reap", () => {
       ).toContain("head: only the kept rows, unchanged");
     });
 
+    it("fails a result holding a row of a table the reap empties", () => {
+      tamper(`INSERT INTO private_rows VALUES ('a')`);
+      const verification = verifyReap({ result: out, against: store });
+      expect(
+        verification.checks.filter((check) => !check.passed).map((check) =>
+          check.name
+        ),
+      ).toContain("private_rows: only the kept rows, unchanged");
+    });
+
     it("fails a result whose deletion commit was changed", () => {
       tamper(`UPDATE "commit" SET session_id = 'someone-else'`);
       const verification = verifyReap({ result: out, against: store });
@@ -122,9 +135,11 @@ describe("reap", () => {
       close(engine);
       const verification = verifyReap({ result: out, against: live });
       expect(verification.ok).toBe(false);
-      expect(verification.checks.map((check) => check.name)).toContain(
-        "the backup's ACL document holds a deletion tombstone",
-      );
+      expect(
+        verification.checks.find((check) =>
+          check.name === "the backup's ACL document holds a deletion tombstone"
+        )?.passed,
+      ).toBe(false);
     });
   });
 });
