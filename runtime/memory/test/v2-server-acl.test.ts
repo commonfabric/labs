@@ -4610,6 +4610,73 @@ describe("v2-server-acl", () => {
       });
     }
 
+    it("refuses a command whose routed authority has ended as routed, ahead of the deletion", async () => {
+      // The deletion check comes once the command is routed to a space this
+      // server serves, so an ended routed authority is what a command meets
+      // first, deleted space or not, and the session is revoked for it.
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-deleted-routed-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-deleted-routed";
+      const server = new Server({
+        store,
+        subscriptionRefreshDelayMs: 0,
+        authorizeSessionOpen: (message) => {
+          const iss = message.invocation?.iss;
+          return typeof iss === "string" ? iss : undefined;
+        },
+        sessionOpenAuth: { audience: TEST_AUDIENCE },
+        acl: { mode: "enforce", serviceDids: [SERVICE] },
+        ownsSpace: (target) => target === space,
+      });
+      let owns = true;
+      const messages: ServerMessage[] = [];
+      const connection = server.connectRouted(
+        (message) => messages.push(message),
+        (target) => owns && target === space,
+      );
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        await connection.receive(encodeMemoryBoundary(HELLO));
+        shiftMessage(messages);
+        connection.admitRoutedPrincipal(ALICE, server.nowSeconds() + 600);
+        await connection.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: nextRequestId("routed-open"),
+          space,
+          principal: ALICE,
+          session: {},
+        }));
+        const opened = nextResponse<SessionOpenResult>(messages);
+        expectExists(opened.ok);
+        await deleteElsewhere(store, space, ALICE);
+
+        owns = false;
+        await connection.receive(encodeMemoryBoundary({
+          type: "graph.query",
+          requestId: nextRequestId("routed-query"),
+          space,
+          sessionId: opened.ok.sessionId,
+          query: { roots: [] },
+        }));
+        expect(messages.map((message) => message.type)).toEqual([
+          "session/revoked",
+          "response",
+        ]);
+        expect(messages[0]).toMatchObject({ reason: "unauthorized" });
+        expect((messages[1] as ResponseMessage<unknown>).error).toEqual({
+          name: "SessionRevokedError",
+          message: "Routed memory authority ended",
+        });
+        expect(connection.hasSession(space, opened.ok.sessionId)).toBe(false);
+      } finally {
+        connection.close();
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
     for (const mode of ["off", "enforce"] as const) {
       it(`refuses an operator's direct write, in \`${mode}\` mode`, async () => {
         await withSpace(
