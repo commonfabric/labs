@@ -153,9 +153,9 @@ export function spawnBrowserProcess(
  * Helper for everything that ends a browser this module spawned, which stops
  * its process group and then closes the pipe that group's job was reading.
  *
- * Closing a stream that is already closed rejects, which is where a second
- * close arrives after a first that failed further on, so that is not a failure
- * here.
+ * Closing a stream that is already closed rejects with a `TypeError`, which is
+ * where a second close arrives after a first that failed further on, so that is
+ * not a failure here. Any other rejection is.
  */
 async function stopSpawnedBrowser(
   child: Deno.ChildProcess,
@@ -164,7 +164,11 @@ async function stopSpawnedBrowser(
   try {
     await stopBrowserProcess(child, closed);
   } finally {
-    await child.stdin.close().catch(() => {});
+    await child.stdin.close().catch((error) => {
+      if (!(error instanceof TypeError)) {
+        throw error;
+      }
+    });
   }
 }
 

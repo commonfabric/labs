@@ -574,9 +574,20 @@ export class ShellIntegration {
       }
       await this.disposeRuntime();
       await this.#page?.close();
-    } finally {
-      await this.#browser?.close();
+    } catch (error) {
+      // The browser closes either way. The failure above is the diagnosis, so
+      // a close that fails as well is carried alongside it, not in its place.
+      try {
+        await this.#browser?.close();
+      } catch (closeFailure) {
+        throw new AggregateError(
+          [error, closeFailure],
+          "The shell's teardown failed, and its browser did not close.",
+        );
+      }
+      throw error;
     }
+    await this.#browser?.close();
   };
 
   #checkIsOk() {
