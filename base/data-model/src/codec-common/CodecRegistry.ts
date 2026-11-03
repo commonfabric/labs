@@ -361,11 +361,11 @@ export class CodecRegistry<Encoded> {
 
   /**
    * Guards against registering a codec under a tag that is not one. A decoder
-   * refuses a tag that is not syntactically a tag, per Section 9 of the formal
-   * spec, so a codec indexed under such a string could emit a value this same
-   * system would then refuse to read back. Checking here is what keeps the two
-   * sides of a round trip from disagreeing, and does it once per codec rather
-   * than once per value.
+   * refuses a tag that is not syntactically a tag, per Section 9 of
+   * `3-json-encoding.md`, so a codec indexed under such a string could emit a
+   * value this same system would then refuse to read back. Checking here is
+   * what keeps the two sides of a round trip from disagreeing, and does it once
+   * per codec rather than once per value.
    *
    * `undefined` is allowed and is not a tag: it marks a codec whose tag is
    * per-instance, read from the value by `tagForValue()` rather than fixed.

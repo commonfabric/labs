@@ -36,7 +36,7 @@ import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts"
  *   -- read off the codec's base class, on both sides of the trip.
  * * A tag comes from `tagForValue()` rather than from the value.
  * * An unrecognized tag becomes an `UnknownValue`, and one that is not a tag at
- *   all an error, per Section 9 of the formal spec.
+ *   all an error, per Section 9 of `3-json-encoding.md`.
  * * A codec's `decode()` result is deep-frozen, or built mutable, according to
  *   `mutable`, and a throw from one is re-raised or wrapped according to
  *   `lenient`.

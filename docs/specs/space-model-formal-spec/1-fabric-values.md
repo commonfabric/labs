@@ -6,7 +6,8 @@ values are identified by content.
 
 ## Status
 
-Draft formal spec — extracted from the data model proposal.
+Draft. Where the implementation in `base/data-model` does not yet meet a
+requirement, the section stating that requirement says so.
 
 ---
 
@@ -225,25 +226,13 @@ exposes none of them and a walk stops there (Section 8.6).
 >   functions in this sense — they are class instances whose encoding is
 >   handled by their class's `[CODEC]`.)
 >
-> A proposed, deliberately narrow exception adds a `FabricFactory` arm for
-> builder-created factories and codec-decoded factory shells admitted to the
-> internal data-model brand table. The function itself is the `FabricValue` and
-> encodes through `Factory@1`; there is no non-callable wrapper class. This
-> data-type brand does not grant executable trust, which is established
-> separately by resolving a content-addressed builder artifact. The exception is
-> not automatic under the current protocol: it requires branded-function
-> dispatch before generic function rejection, plus factory-state handling in
-> conversion, freezing, cloning, equality, hashing, and traversal. Every
-> unbranded function remains rejected. See [First-Class Encodable
-> Factories](../pattern-construction/node-factory-shipping.md).
->
 > Of the two JS primitive types whose `typeof` results (`"symbol"` and
 > `"function"`) describe non-data values, `symbol` has a corresponding
 > `FabricValue` arm (with the runtime interned-vs-unique restriction above) and
-> `"function"` does not **in the current model**. The proposal above adds only
-> the branded `FabricFactory` function arm. All other `typeof` results
-> (`"undefined"`, `"boolean"`, `"number"`, `"string"`, `"bigint"`, `"object"`)
-> have unconditional `FabricValue` arms.
+> `"function"` does not **in the current model**. A pending proposal (Appendix
+> A) would add only a branded `FabricFactory` function arm. All other `typeof`
+> results (`"undefined"`, `"boolean"`, `"number"`, `"string"`, `"bigint"`,
+> `"object"`) have unconditional `FabricValue` arms.
 
 #### `FabricConvertibleJsObject`
 
@@ -376,7 +365,13 @@ function-valued member is not representable.
 > throw with the message ``"Not representable as a `FabricValue`: unique
 > (uninterned) symbol"``.
 
-### 1.4 JS Object Wrapper Classes
+### 1.4 Special Objects
+
+This section specifies the classes the data model defines beyond the JavaScript
+built-ins. Section 1.4.6 gives the hierarchy they share. The `FabricInstance`
+classes are `FabricError`, `FabricMap`, `FabricSet` (1.4.2–1.4.4) and
+`FabricLink` (1.4.15); the `FabricPrimitive` classes are `FabricRegExp`
+(1.4.5) and those of Sections 1.4.7–1.4.14.
 
 Certain built-in JS types (`Error`, `Map`, `Set`) cannot have `Symbol`-keyed
 methods added via prototype patching in a reliable, cross-realm way. Rather than
@@ -415,8 +410,8 @@ not carry a `wireTypeTag` property (no fabric type does, save `UnknownValue` and
 | Wrapper Class | Wraps | Type Tag | Encoded State | Notes |
 |---------------|-------|----------|---------------|-------|
 | `FabricError` | `Error` | `Error@1` | `{ type, name?, message, stack?, cause?, ...custom }` | `type` is the constructor name (e.g. `"TypeError"`). `name` is the `.name` property if it differs from `type`, or `null` if it matches (the common case); a state with no `name` means the same as `null`, but an encoder writes the `null`. Includes `message`, `stack` (if present), `cause` (if present), and custom enumerable properties. The conversion layer (Section 8.2) recursively converts nested values (including `cause` and custom properties) before wrapping, ensuring all values are `FabricValue` by the time the codec's `encode()` runs. |
-| `FabricMap` | `Map` | `Map@1` | `[[key, value], ...]` | Entry pairs as an array of two-element arrays. Insertion order is preserved. Keys and values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.3). |
-| `FabricSet` | `Set` | `Set@1` | `[value, ...]` | Elements as an array. Iteration order is preserved. Values are recursively processed. **Implementation status: stubbed** — the tag is reserved and the class exists, but its members and codec currently throw (see Section 1.4.4). |
+| `FabricMap` | `Map` | `Map@1` | `[[key, value], ...]` | Entry pairs as an array of two-element arrays. Insertion order is preserved. Keys and values are recursively processed. Implementation stubbed; see Section 1.4.3. |
+| `FabricSet` | `Set` | `Set@1` | `[value, ...]` | Elements as an array. Iteration order is preserved. Values are recursively processed. Implementation stubbed; see Section 1.4.4. |
 
 (A JS `RegExp` is also bridged by the conversion layer, but into the
 `FabricRegExp` **primitive** — a `FabricPrimitive` subclass, not a wrapper. It
@@ -1248,7 +1243,7 @@ Like every `FabricPrimitive`, `FabricHash` hosts a `[JSON_CODEC]` (tag
 `Hash@1`). Its encoded state is `{ tag, hash }` — the algorithm tag plus the
 hash as an unpadded base64url string (i.e., `.hashString`); `canDecode()`
 refuses a state that is not a record of two strings, and `decode()` produces a
-`ProblematicValue` for a `hash` that is not valid base64url. See Section 5 of
+`ProblematicValue` for a `hash` that is not valid base64url. See Section 3 of
 `3-json-encoding.md` for the wire format.
 
 #### 1.4.10 `FabricBytes`
@@ -1705,8 +1700,8 @@ with wire tag `Link@1`. Its encoded state **is** the link's payload: the codec's
 constructed it with, and `decode()` rebuilds a `FabricLink` from it (or a
 `ProblematicValue`, Section 3.5, if the payload is malformed). The
 JSON wire form is the `/Link@1`-tagged envelope `{ "/Link@1": <payload> }`; see
-Section 3 of `3-json-encoding.md` for the wire encoding, and the migration table
-in Section 4 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
+Section 3 of `3-json-encoding.md` for the wire encoding, and the table in
+Section 7.2 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
 }`) map onto it.
 
 ```typescript
@@ -1967,11 +1962,7 @@ This split deliberately separates wire-format concerns from live in-process
 representation: the codec vocabulary lives in its own module area
 (`codec-interface/`), separate again from the machinery that reads it
 (`codec-common/`), and the dependency-free `interface.ts` carries no codec
-machinery at all. Two motivations drove this shape: the seam between
-`FabricValue`'s encoding/decoding and the JSON-layer serialization had grown
-rough and needed harmonizing, and the previous design had no clean affordance
-for legacy-data migration/import (see the decode-only tag discussion in Section
-2.4).
+machinery at all.
 
 ### 2.2 Symbols
 
@@ -2830,7 +2821,7 @@ No dedicated type guard function is needed.
 
 > **Why `instanceof` rather than a property-brand check.** `FabricInstance`
 > being an abstract class, `instanceof` is both the natural check and the more
-> robust one: a property-brand test such as `DECONSTRUCT in value` admits any
+> robust one: a property-brand test such as `BRAND in value` admits any
 > object that happens to carry that property without extending the base class.
 
 ### 2.8 Example: Temperature (Illustrative)
@@ -3222,13 +3213,13 @@ export class UnknownValue extends BaseFabricInstance {
   canonical text (Section 11 of `3-json-encoding.md`).
 - This allows data to round-trip through systems that don't understand it.
 
-### 3.5 `ProblematicValue` (Recommended)
+### 3.5 `ProblematicValue`
 
-It is recommended that implementations provide a `ProblematicValue` type,
-analogous to `UnknownValue`, for cases where encoding or decoding fails partway
-through. This allows graceful degradation rather than hard failures — for
-example, a type whose codec `decode()` throws can be preserved as a
-`ProblematicValue` with the original tag, state, and error information.
+`ProblematicValue` is a type analogous to `UnknownValue`, for cases where
+encoding or decoding fails partway through. This allows graceful degradation
+rather than hard failures — for example, a type whose codec `decode()` throws
+can be preserved as a `ProblematicValue` with the original tag, state, and
+error information.
 
 ```typescript
 // Shown for illustration only.
@@ -3666,11 +3657,11 @@ registrations. A caller needing classes of its own extends what this returns.
 | 〃 | `FabricDurationDay` | `DurationDay@1` | 〃 |
 | 〃 | `FabricRegExp` | `RegExp@1` | 〃 |
 | `register(cls[CODEC])` | `FabricError` | `Error@1` | Via `fabric-instances` `codecClasses()`. |
-| 〃 | `FabricMap` | `Map@1` | 〃 (implementation currently stubbed; see Section 1.4.3). |
-| 〃 | `FabricSet` | `Set@1` | 〃 (implementation currently stubbed; see Section 1.4.4). |
+| 〃 | `FabricMap` | `Map@1` | 〃 (stubbed; see Section 1.4.3). |
+| 〃 | `FabricSet` | `Set@1` | 〃 (stubbed; see Section 1.4.4). |
 | 〃 | `UnknownValue` | _(per-instance)_ | No `recognizedTypeTag`; `tagForValue()` reads the preserved tag (Section 3). |
 | 〃 | `ProblematicValue` | `Problematic@1` | Fixed tag of its own; the preserved tag rides inside the state, since it need not be a tag (Section 3.2). |
-| `registerPrimitive` | `BigIntCodec` (`bigint`) | `BigInt@1` | Encodes as unpadded base64 of minimal two's complement big-endian bytes. Standalone codec in `codec-json/` — no owned class to host a codec getter. |
+| `registerPrimitive` | `BigIntCodec` (`bigint`) | `BigInt@1` | Encodes as unpadded base64url of minimal two's complement big-endian bytes. Standalone codec in `codec-json/` — no owned class to host a codec getter. |
 | 〃 | `SpecialNumberCodec` (`number`) | `SpecialNumber@1` | Catches `-0` / `NaN` / `±Infinity`; finite numbers fall to self-representation. |
 | 〃 | `SymbolCodec` (`symbol`) | `Symbol@1` | Registry-interned symbols only; an uninterned symbol matches no codec and is correctly unencodable. |
 | 〃 | `UndefinedCodec` (`undefined`) | `Undefined@1` | Stateless; state is `null`. |
@@ -5040,24 +5031,14 @@ nothing for a mutable engine:
 These questions may need resolution during implementation but do not block the
 spec from being implementable.
 
-- **Type registry management**: How are codec engines configured? Static
-  registration? Dynamic discovery? Who owns the registry? The isolation
-  strategy (see `coordination/docs/2026-02-09-isolation-strategy.md`) proposes
-  per-`Runtime` configuration via `ExperimentalOptions`, which provides a
-  natural place for registry configuration per runtime instance.
+- **Type registry management**: Section 4.5 defines the default registry and
+  how a caller extends it. Whether registries are configured per `Runtime`
+  instance (for example through `ExperimentalOptions`), and who owns that
+  configuration, is open.
 
 - **Schema integration**: Each `FabricInstance` type implies a schema for its
   encoded state. How does this integrate with the schema language?
   Currently out of scope (schemas are listed as out-of-scope for this spec).
-
-- **Exact hash specification**: The precise byte-level format is defined in
-  `2-hash-byte-format.md`. All lengths and counts use unsigned LEB128
-  encoding; see that document for the complete specification of type tags,
-  encoding per type, and illustrative examples.
-
-- **Migration path**: Out of scope for this spec. The detailed migration plan
-  (sequencing of flag introductions, criteria for graduating each flag to
-  default-on) will be addressed in a separate document.
 
 - **`LiveEnvironment` extensibility**: The minimal interface defined in Section
   2.6 covers `Cell` decoding. Other future fabric types may need additional
@@ -5066,16 +5047,27 @@ spec from being implementable.
   indirection through an interface (rather than depending on `Runtime` directly)
   makes this straightforward.
 
-- **`getRaw()` / `setRaw()` middle-layer contract**: Emerging consensus is that
+- **`getRaw()` / `setRaw()` middle-layer contract**: The leaning is that
   `Cell.getRaw()` and `Cell.setRaw()` should traffic in `FabricValue` (middle
-  layer), not arbitrary convertible JS values (wild west). A usage survey of all
-  call sites in the codebase found that every existing caller operates on
-  well-defined `FabricValue`s (plain objects, arrays, strings, links, stream
-  markers) — no call site stores or retrieves JS types like `Error`, `Date`,
-  `RegExp`, `Map`, `Set`, or `Uint8Array` through these methods. Formalizing
-  this contract (e.g., refining the type parameter `T` of `IAnyCell` to `extends
-  FabricValue`) would make the implicit expectation explicit without breaking
-  any current caller. The `convertibleJsFromFabricValue()` /
-  `fabricFromConvertibleJsValue()` conversion in these methods (Section 4.9) is
-  correct but forward-looking: it will become load-bearing when user-facing
-  patterns start storing rich types through the schema-aware `set()` path.
+  layer), not arbitrary convertible JS values (wild west). No caller stores or retrieves a
+  JS type like `Error`, `Date`, `RegExp`, `Map`, `Set`, or `Uint8Array` through
+  these methods, so formalizing this contract (e.g., refining the type parameter
+  `T` of `IAnyCell` to `extends FabricValue`) would make the implicit
+  expectation explicit without breaking a caller. The
+  `convertibleJsFromFabricValue()` / `fabricFromConvertibleJsValue()`
+  conversion in these methods (Section 4.9) is correct but forward-looking: it
+  will become load-bearing when user-facing patterns start storing rich types
+  through the schema-aware `set()` path.
+
+- **`FabricFactory`**: A proposed, deliberately narrow exception to the
+  exclusion of functions (Section 1.2) adds a `FabricFactory` arm for
+  builder-created factories and codec-decoded factory shells admitted to the
+  internal data-model brand table. The function itself is the `FabricValue` and
+  encodes through `Factory@1`; there is no non-callable wrapper class. This
+  data-type brand does not grant executable trust, which is established
+  separately by resolving a content-addressed builder artifact. The exception is
+  not automatic under the current protocol: it requires branded-function
+  dispatch before generic function rejection, plus factory-state handling in
+  conversion, freezing, cloning, equality, hashing, and traversal. Every
+  unbranded function remains rejected. See [First-Class Encodable
+  Factories](../pattern-construction/node-factory-shipping.md).

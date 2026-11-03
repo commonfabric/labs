@@ -8,7 +8,7 @@ and the floors on the guarantees an implementation states.
 
 ## Status
 
-Draft formal spec — extracted from Section 5 of `1-fabric-values.md`.
+Draft formal spec.
 
 ---
 

@@ -16,7 +16,7 @@ import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
 
 /**
  * Whole-value JSON codec implementing the `/<Type>@<Version>` wire format from
- * the formal spec (Section 5).
+ * `3-json-encoding.md`.
  *
  * Public instance surface, one boundary type and two directions:
  * - `encode(value, env?)` -- full pipeline: tree-encode + stringify

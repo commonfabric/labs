@@ -13,8 +13,7 @@ hashes) for any given `FabricValue`.
 
 ## Status
 
-Draft byte-level spec — extracted from the formal spec Section 6.3 and the
-implementation plan Phase 6.1.
+Draft byte-level spec.
 
 ---
 
