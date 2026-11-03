@@ -8,7 +8,7 @@
  */
 
 import { Database } from "@db/sqlite";
-import { resolve } from "@std/path";
+import { basename, dirname, resolve } from "@std/path";
 
 import { decodeTrustedMemoryBoundary, type EntityDocument } from "../v2.ts";
 import { isDeletionTombstone } from "../acl.ts";
@@ -283,6 +283,68 @@ export const reapStore = async (
     result.close();
   }
   return { ...planned.plan, out, outBytes: fileSize(out) };
+};
+
+/** The cell databases beside a live store, as the install would move them. */
+export type LiveCellDatabases = {
+  /** The files beside the live store named with the space's prefix. */
+  files: string[];
+
+  /**
+   * The other spaces whose stores sit beside the live one and whose cell
+   * databases share the prefix, so that the files named with it cannot be
+   * told apart by name.
+   */
+  sharedWith: string[];
+};
+
+/** The space ids a store file name `name` can stand for: its stem as it is,
+ * and percent-decoded, which is how single-file mode writes it. */
+const storeNameSpaces = (name: string): string[] => {
+  const stem = name.slice(0, -".sqlite".length);
+  try {
+    const decoded = decodeURIComponent(stem);
+    return decoded === stem ? [stem] : [stem, decoded];
+  } catch {
+    return [stem];
+  }
+};
+
+/**
+ * The cell databases of `plan`'s space beside `live`, the space's live store,
+ * read from its directory without opening anything: the files the install
+ * moves out of the live directory, and the other spaces there whose cell
+ * databases share their prefix.
+ *
+ * @throws ReapRefused when `live` is not the store of `plan`'s space.
+ */
+export const liveCellDatabases = (
+  plan: ReapPlan,
+  live: string,
+): LiveCellDatabases => {
+  if (!storeNameSpaces(basename(live)).includes(plan.space)) {
+    throw new ReapRefused(
+      `${live} is not the live store of ${plan.space}, which is named <did>.sqlite`,
+    );
+  }
+  const files: string[] = [];
+  const sharedWith: string[] = [];
+  for (const entry of Deno.readDirSync(dirname(resolve(live)))) {
+    if (!entry.isFile || !entry.name.endsWith(".sqlite")) continue;
+    if (entry.name.startsWith(plan.cellDatabaseFilePrefix)) {
+      files.push(entry.name);
+    } else if (!entry.name.startsWith("cell-")) {
+      for (const space of storeNameSpaces(entry.name)) {
+        if (
+          space !== plan.space &&
+          cellDatabaseFilePrefix(space) === plan.cellDatabaseFilePrefix
+        ) {
+          sharedWith.push(space);
+        }
+      }
+    }
+  }
+  return { files: files.sort(), sharedWith: sharedWith.sort() };
 };
 
 /** A reap plan as an operator reads it. */

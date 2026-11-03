@@ -359,8 +359,8 @@ entry as it was.
 
 The memory server admits a space's deletion by its sole member, and from then on
 refuses the space marked `deleted`, so a runtime that holds such a space comes
-upon the deletion as this section describes. Nothing in this repository sends
-the deletion commit yet, which `cf space delete` will. Until a space is deleted,
+upon the deletion as this section describes. `cf space delete` sends the
+deletion commit. Until a space is deleted,
 `spaceDeleted(space)` reads `false` once the server has answered for the space
 and `undefined` before, a mark for a saved or archived entry at its observed
 revision answers `not-deleted`, and the `deleted` lists stay empty.

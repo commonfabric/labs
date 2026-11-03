@@ -420,7 +420,9 @@ INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'computed:x', 3, 0);
 });
 
 describe("cf space reap", () => {
-  const space = "did:key:z6MkCliReapSpace";
+  // Two DIDs, found by search, whose cell-database prefixes are the same.
+  const space = "did:key:z6MkCliReapShared00006pfs";
+  const sharing = "did:key:z6MkCliReapShared0000nvja";
   const alice = "did:key:z6MkCliReapAlice";
 
   /** A store the engine wrote for a space alice owns alone, with a document,
@@ -462,6 +464,23 @@ describe("cf space reap", () => {
       const planned = await cf(argv`space reap ${store} --dry-run --json`);
       expect(planned.code).toBe(0);
       expect(JSON.parse(planned.stdout.join("\n")).deletionSeq).toBe(3);
+
+      // The live directory, as the install finds it, with another space's
+      // store there whose cell databases share the prefix.
+      const liveDir = `${root}/live`;
+      await Deno.mkdir(liveDir);
+      await Deno.writeTextFile(`${liveDir}/${space}.sqlite`, "");
+      const named = await cf(
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
+      );
+      expect(named.code).toBe(0);
+      expect(text(named.stdout)).toContain("cell files none");
+      await Deno.writeTextFile(`${liveDir}/${sharing}.sqlite`, "");
+      const shared = await cf(
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
+      );
+      expect(shared.code).not.toBe(0);
+      expect(text(shared.stderr)).toContain(`with those of ${sharing}`);
 
       const ran = await cf(argv`space reap ${store} --out ${result}`);
       expect(ran.code).toBe(0);

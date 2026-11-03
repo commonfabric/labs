@@ -15,6 +15,7 @@ import {
 import {
   formatReapPlan,
   formatReapRun,
+  liveCellDatabases,
   planReap,
   ReapRefused,
   reapStore,
@@ -253,6 +254,58 @@ describe("reap", () => {
     } finally {
       db.close();
     }
+  });
+
+  describe("liveCellDatabases()", () => {
+    /** Two DIDs, found by search, whose cell-database prefixes are the same. */
+    const DELETED = "did:key:z6MkReapShared000026wu";
+    const SHARING = "did:key:z6MkReapShared0000dwfa";
+
+    /** A plan for `space`, as far as this function reads one. */
+    const planFor = (space: string) => ({
+      space,
+      aclId: `of:${space}`,
+      deletionSeq: 1,
+      deletedBy: ALICE,
+      removed: {},
+      cellDatabaseFilePrefix: cellDatabaseFilePrefix(space),
+    });
+
+    /** Writes an empty file named `name` in the test's directory. */
+    const touch = (name: string) =>
+      Deno.writeTextFileSync(`${dir}/${name}`, "");
+
+    it("names the cell databases beside the live store, and no other space shares their prefix", () => {
+      const plan = planFor(SPACE);
+      touch(`${SPACE}.sqlite`);
+      touch(`${plan.cellDatabaseFilePrefix}00000001.sqlite`);
+      touch(`${plan.cellDatabaseFilePrefix}00000001-wal`);
+      touch(`${cellDatabaseFilePrefix(ALICE)}00000002.sqlite`);
+      touch(`${ALICE}.sqlite`);
+
+      expect(liveCellDatabases(plan, `${dir}/${SPACE}.sqlite`)).toEqual({
+        files: [`${plan.cellDatabaseFilePrefix}00000001.sqlite`],
+        sharedWith: [],
+      });
+    });
+
+    it("names another space whose store sits beside the live one and whose prefix is the same", () => {
+      expect(cellDatabaseFilePrefix(DELETED)).toBe(
+        cellDatabaseFilePrefix(SHARING),
+      );
+      touch(`${DELETED}.sqlite`);
+      touch(`${SHARING}.sqlite`);
+
+      expect(
+        liveCellDatabases(planFor(DELETED), `${dir}/${DELETED}.sqlite`)
+          .sharedWith,
+      ).toEqual([SHARING]);
+    });
+
+    it("refuses a live store that is not the space's", () => {
+      expect(() => liveCellDatabases(planFor(SPACE), `${dir}/${ALICE}.sqlite`))
+        .toThrow(ReapRefused);
+    });
   });
 
   it("never overwrites a result", async () => {

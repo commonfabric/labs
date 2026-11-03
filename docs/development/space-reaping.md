@@ -29,10 +29,15 @@ of everything the reap removes; keeping it is the space owner's decision.
 
 ```bash
 # 0. The space is deleted: the dry run refuses any other store. Read the
-#    report, and note the cell databases it names.
+#    report, and note the cell databases it names beside the live store.
+#    It refuses when another space's store there has cell databases under
+#    the same prefix, which is a 32-bit hash of the DID: then the files
+#    under it cannot be told apart, and step 4 leaves every cell database
+#    in place.
 sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
   "VACUUM INTO '/data/replaced/<did>.dry-run-<date>.sqlite'"
-cf space reap '/data/replaced/<did>.dry-run-<date>.sqlite' --dry-run
+cf space reap '/data/replaced/<did>.dry-run-<date>.sqlite' --dry-run \
+  --live '/data/memory/engine-v3/engine-v3/<did>.sqlite'
 
 # 1. Stop every instance. (sudo.) Nothing writes any space from here on.
 for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
@@ -59,11 +64,9 @@ rm '/data/replaced/<did>.work.sqlite'
 
 # 4. Swap, as the compaction procedure's step 6 does, and move the space's
 #    cell databases aside too: the report names their prefix,
-#    cell-<hash>-, and a reap of a copy cannot reach them. (sudo.) The
-#    prefix is a 32-bit hash of the DID, which another space's cell
-#    databases can share, rarely; the mv moves such a file aside with the
-#    rest, never deletes it, and moving it back restores it. When the ls
-#    finds no cell database, leave the pattern out of the mv.
+#    cell-<hash>-, and a reap of a copy cannot reach them. (sudo.) Leave
+#    the pattern out of the mv when step 0 named no cell file, or refused
+#    because another space shares the prefix.
 cd /data/memory/engine-v3/engine-v3/
 ls -la '<did>.sqlite'* 'cell-<hash>-'*.sqlite
 sudo mv '<did>.sqlite'* 'cell-<hash>-'*.sqlite /data/replaced/

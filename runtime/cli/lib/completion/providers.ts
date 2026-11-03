@@ -1126,6 +1126,11 @@ const OPTION_VALUE_PROVIDERS: Readonly<Record<string, OptionProvider>> = {
     ["space compact"],
     () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   ),
+  // `cf space reap --dry-run --live` names the space's live store file.
+  live: onlyOn(
+    ["space reap"],
+    () => Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  ),
 };
 
 /** The scope kinds `cf space compact --scope` restricts a selection to. */

@@ -1448,14 +1448,17 @@ deletion commit's.
 Before it reports, the command checks the result against the store it was reaped
 from, read-only on both: integrity and foreign keys; the store's access-control
 document a deletion tombstone at the server sequence; and, for every table, the
-kept rows byte-identical and no other row. A result that fails a check is
-removed and the command exits nonzero. `--dry-run` reports what would be kept
-and removed, and writes nothing. The space's cell databases are files beside the
-live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, a
-32-bit hash of the DID that another space's can share, rarely, and the install
-that puts the result in place of the live store moves them out of the live
-directory, beside the live store it moves aside. `cf inspect summary` reads a
-reaped store as the deleted space it is.
+kept rows byte-identical and no other row, and no table the store lacks. A
+result that fails a check is removed and the command exits nonzero. `--dry-run`
+reports what would be kept and removed, and writes nothing. The space's cell
+databases are files beside the live store, not in it, so the report names them,
+`cell-<hash>-*.sqlite`, and `--dry-run --live <live.sqlite>` lists the files
+under that prefix beside the space's live store. The prefix is a 32-bit hash of
+the DID, and the dry run refuses when another space's store sits there whose
+cell databases share it, since the files under it cannot then be told apart by
+name. The install that puts the result in place of the live store moves them out
+of the live directory, beside the live store it moves aside.
+`cf inspect summary` reads a reaped store as the deleted space it is.
 
 ## Creating a space
 

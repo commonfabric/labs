@@ -41,6 +41,7 @@ import {
 import {
   formatReapPlan,
   formatReapRun,
+  liveCellDatabases,
   planReap,
   ReapRefused,
   reapStore,
@@ -808,6 +809,12 @@ export const space = new Command()
   )
   .option("--dry-run", "Report what would be kept and removed; write nothing.")
   .option(
+    "--live <path:string>",
+    "With --dry-run, the space's live store: name the cell databases beside " +
+      "it, and refuse when another space's there share their prefix.",
+    { depends: ["dry-run"] },
+  )
+  .option(
     "--out <path:string>",
     "Where the result is written; <store>.reaped.sqlite beside the source " +
       "by default. Never overwritten.",
@@ -822,23 +829,49 @@ export const space = new Command()
       const space = openSpace(store);
       try {
         let plan;
+        let cells;
         try {
           // The plan reads columns a store from before a migration lacks,
           // so the refusal a run would give comes first.
           await refuseUnmigratedStore(space.db);
           plan = planReap(space.db);
+          cells = options.live === undefined
+            ? undefined
+            : liveCellDatabases(plan, options.live);
         } catch (error) {
           if (error instanceof ReapRefused) {
             throw new ValidationError(error.message);
           }
           throw error;
         }
-        out(!!options.json, plan, () => {
-          console.log(formatReapPlan(plan));
-          console.log(
-            "schema     current; a run would read this store as it is",
+        if (cells !== undefined && cells.sharedWith.length > 0) {
+          // The install moves the cell databases by their prefix, which
+          // would take these spaces' along with the deleted one's.
+          throw new ValidationError(
+            `the cell databases of ${plan.space} share the prefix ` +
+              `${plan.cellDatabaseFilePrefix} with those of ` +
+              `${cells.sharedWith.join(", ")}, so which are whose cannot be ` +
+              "told by name: install the result leaving every cell database " +
+              "in place",
           );
-        });
+        }
+        out(
+          !!options.json,
+          cells === undefined ? plan : { ...plan, cellDatabases: cells.files },
+          () => {
+            console.log(formatReapPlan(plan));
+            if (cells !== undefined) {
+              console.log(
+                `cell files ${
+                  cells.files.length === 0 ? "none" : cells.files.join(" ")
+                }`,
+              );
+            }
+            console.log(
+              "schema     current; a run would read this store as it is",
+            );
+          },
+        );
       } finally {
         space.close();
       }
