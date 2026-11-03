@@ -170,7 +170,13 @@ Each of these gates fails CI on its own, and none of them run as part of
   reported the same way, but fail the gate only through a move the pairing
   reports among them. A pattern that fails to compile on
   either side fails the gate, unless that side's own
-  `tasks/pattern-compat-unevaluable.ts` lists it. The gate
+  `tasks/pattern-compat-unevaluable.ts` lists it. A pattern the merge base
+  builds and the change compiles from the same source to no assignment fails
+  the gate as well, since the comparison would otherwise lose it without saying
+  so; a helper module, which exports no pattern on either side, is not one. A
+  run that compares no patterns fails, whatever the cause, because it has
+  checked nothing, so a change that moves or edits every pattern lands apart
+  from a change to what numbers them. The gate
   compiles only for a change touching what a pattern's numbering is built by,
   which is `base/js-compiler/`, `runtime/runner/src/builder/`,
   `runtime/runner/src/builtins/`, `runtime/runner/src/harness/`,
