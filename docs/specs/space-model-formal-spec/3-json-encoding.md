@@ -62,30 +62,21 @@ All special types in JSON use a single convention: single-key objects where the
 key follows the pattern `/<Type>@<Version>`.
 
 - `/` — sigil prefix (nodding to IPLD heritage)
-- `<Type>` — type name
+- `<Type>` — type name, after any namespace prefixes
 - `@<Version>` — version number
 
-The tag is the key without its sigil, and its syntax is exact, because that
-syntax is what separates an unrecognized type from a malformation. A name is an
-uppercase ASCII letter followed by any number of ASCII letters and digits —
-`UpperCamelCase`. A version is a decimal integer with no leading zero, so the
-lowest version is 1. A tag is a name, `@`, and a version, with nothing before
-or after. `Bytes@1` and `Abc123@1234` are tags; `bytes@1`, `By-tes@1`,
-`Bytes@0`, `Bytes@01` and `Bytes@1.0` are not, and neither is any of those
-padded with whitespace or a newline.
+The key is a type tag with the sigil in front of it, and the tag is the key
+without its sigil. The tag syntax is not particular to JSON: it is the one
+every interchange format shares, defined in `1-fabric-values.md` Section 2.5.
+So `Bytes@1` and `sys.beep.Boop@1` are tags, written as the keys `/Bytes@1` and
+`/sys.beep.Boop@1`, while `bytes@1` and `sys.Boop` are not.
 
-A string outside that syntax is not an unrecognized tag; it is not a tag at
-all. A key naming one is a structural violation under Section 9 rather than an
-`UnknownValue` under Section 8, and that is what lets an `UnknownValue` always
-hold a real tag. The escapes `/quote` and `/object` (Section 6), and the
-sparse-array marker `/hole` (Section 3), fall outside the syntax deliberately,
-each being a structural marker the format handles itself rather than a type
-anything encodes.
-
-The syntax is not particular to JSON. It is the type-tag syntax the whole codec
-system shares: a registry refuses a codec that declares a fixed tag outside it,
-so no codec can claim a tag the decoder would reject, and a format that lays
-its tags out differently on the wire still writes tags of this syntax.
+A key whose remainder after the sigil is not a tag is a structural violation
+under Section 9 rather than an `UnknownValue` under Section 8. The escapes
+`/quote` and `/object` (Section 6), and the sparse-array marker `/hole`
+(Section 3), fall outside the tag syntax deliberately — none of them has an
+uppercase name or an `@<Version>` — each being a structural marker the format
+handles itself rather than a type anything encodes.
 
 This convention does **not** prohibit storing plain objects that happen to have
 `/`-prefixed keys. The escaping mechanism in Section 6 (`/object` and
@@ -456,7 +447,7 @@ decoded. It remains a plain object.
 **Freeze guarantee.** Although `/quote` skips type-tag interpretation, the
 result is still deep-frozen (arrays and plain objects within the quoted value
 are frozen via `Object.freeze()`). The immutability guarantee (see
-`1-fabric-values.md` Section 2.9) is a property of decoding output, not of
+`1-fabric-values.md` Section 2.10) is a property of decoding output, not of
 whether decoding occurred. A caller receiving a value from the engine's
 `decode()` can always assume it is immutable, regardless of whether it came from
 a `/quote` path, a decoded type, or a plain literal. An engine constructed with
@@ -502,7 +493,7 @@ gives a value one text (Section 11).
 The rule binds the encoder alone. **A conforming decoder must accept both
 forms** wherever each is well-formed, whichever an encoder would have chosen:
 `{ "/object": { "/x": 1 } }` decodes to the plain object `{ "/x": 1 }`, whose
-canonical text is `{"/quote":{"/x":1}}`. See `1-fabric-values.md` Section 2.9
+canonical text is `{"/quote":{"/x":1}}`. See `1-fabric-values.md` Section 2.10
 (immutability) and the freeze guarantee under `/quote` above for the properties
 a decoder preserves regardless of which form it sees.
 
