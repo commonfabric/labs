@@ -188,6 +188,30 @@ describe("served reads and calls", () => {
       expect(invocation?.result).toEqual({ saved: "alice" });
       expect(start.calls).toHaveLength(0);
     });
+
+    it("shapes the handler's result with no graph and no start", async () => {
+      const pieces = await clientPieces();
+      const start = spy(pieces.runtime, "start");
+      const setup = spy(pieces.runtime, "setup");
+
+      const { invocation } = await executePieceCallable(
+        config,
+        "setName",
+        ["--name", "alice"],
+        {
+          ...depsFor(pieces),
+          invocation: { id: crypto.randomUUID(), session: "test-session" },
+          selection: await parseCellSelectionOptions({
+            schema:
+              '{"type":"object","properties":{"saved":{"type":"string"}},"additionalProperties":false}',
+          }),
+        },
+      );
+
+      expect(invocation?.result).toEqual({ saved: "alice" });
+      expect(start.calls).toHaveLength(0);
+      expect(setup.calls).toHaveLength(0);
+    });
   });
 
   describe("getCellValue()", () => {
