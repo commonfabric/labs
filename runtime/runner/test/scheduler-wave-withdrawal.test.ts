@@ -785,6 +785,63 @@ describe("reactive wave withdrawal", () => {
       runtime.scheduler.unsubscribe(derive);
     });
   }
+  it("leaves a run down when one of its outputs lost to an authored value", async () => {
+    // Running again writes both outputs, and the replica now holds the commits
+    // they lost to, so the wave would let the authored value be overwritten.
+
+    const valued = runtime.getCell<string>(space, "mixed-valued", undefined);
+    const unvalued = runtime.getCell<string>(
+      space,
+      "mixed-unvalued",
+      undefined,
+    );
+    const wave = newWave();
+    const authored = runtime.edit();
+    valued.withTx(authored).set("authored");
+    unvalued.withTx(authored).setMetaRaw(
+      "result",
+      createSigilLinkFromParsedLink(valued.getAsNormalizedFullLink()),
+      rawMetaWriteAuthorization,
+    );
+    expect((await authored.commit().settled).error).toBeUndefined();
+    let flushing = false;
+    let recoveryWave: WaveAccumulator | undefined;
+    runtime.installSealDestination({
+      seal: (tx) => (flushing ? recoveryWave ??= newWave() : wave).seal(tx),
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+    });
+    let runs = 0;
+    const derive: Action = (tx) => {
+      runs++;
+      tx.writeValueOrThrow(valued.getAsNormalizedFullLink(), "derived");
+      tx.writeValueOrThrow(unvalued.getAsNormalizedFullLink(), "derived");
+    };
+    actions.push(derive);
+    runtime.scheduler.subscribe(derive, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    flushing = true;
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    expect(outcome.supersededWrites).toBe(2);
+    await runtime.scheduler.idleWithPendingCommits();
+
+    expect(runs).toBe(1);
+    expect(recoveryWave).toBeUndefined();
+    expect(
+      Engine.readState(engine, { id: valued.getAsNormalizedFullLink().id })
+        ?.document,
+    ).toEqual({ value: "authored" });
+    runtime.scheduler.unsubscribe(derive);
+  });
+
   for (const boundary of ["retained", "removed", "replaced"] as const) {
     it(
       boundary === "retained"

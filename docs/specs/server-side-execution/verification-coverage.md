@@ -10631,10 +10631,11 @@ supply; OW29/OW32/OW34 closed):
 - **A superseded write over a document left with no value (PROPOSED
   2026-11-02, awaiting ruling; serving-loop.md §3d).** The Q1 entry's
   "the drop re-arms nothing" stands for a commit that wrote a value.
-  One that left the document with no value re-arms the run once the
-  replica has taken it, impl-gate: pinned in
+  Commits that left every document the run lost with no value re-arm
+  the run once the replica has taken them, impl-gate: pinned in
   `runtime/runner/test/scheduler-wave-withdrawal.test.ts` (the re-run,
-  over a commit this replica held and one it had not taken) and
+  over a commit this replica held and one it had not taken, and the
+  mixed run that stays down) and
   `runtime/runner/test/scheduler/supersededOutputsOwed.test.ts` (the
   verdict, and the wait for the commit that decides it).
 

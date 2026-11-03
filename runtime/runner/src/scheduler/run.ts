@@ -1490,24 +1490,24 @@ function finalizeReactiveActionCommit(
     owner.pendingWaveRun = token;
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
-    delete owner.pendingWaveRun;
-    const readWithdrawn = outcome.error?.readDependencyWithdrawn === true &&
-      outcome.error?.waveWithdrawalCause === "contribution-dropped";
     const superseded = outcome.error?.supersededOutputs;
+    let owed: boolean | Promise<boolean> =
+      outcome.error?.readDependencyWithdrawn === true &&
+      outcome.error?.waveWithdrawalCause === "contribution-dropped";
+    if (!owed && superseded !== undefined) {
+      owed = supersededOutputsOwed(state.runtime, superseded);
+    }
+    if (owed instanceof Promise) {
+      owed = await owed;
+      // A newer run sealed during that wait, and its settlement decides.
+      if (owner.pendingWaveRun !== token) return;
+    }
+    delete owner.pendingWaveRun;
     if (
-      node.registrationToken !== registrationToken ||
-      (!readWithdrawn && superseded === undefined) ||
+      !owed || node.registrationToken !== registrationToken ||
       (!state.nodes.isEffect(args.action) &&
         !state.nodes.isComputation(args.action))
     ) return;
-    if (!readWithdrawn && superseded !== undefined) {
-      if (!await supersededOutputsOwed(state.runtime, superseded)) return;
-      // A newer run sealed during that wait, and its settlement decides now.
-      if (
-        owner.pendingWaveRun !== undefined ||
-        node.registrationToken !== registrationToken
-      ) return;
-    }
     const record = state.nodes.get(args.action);
     const current = fanOutRun === undefined
       ? record === node

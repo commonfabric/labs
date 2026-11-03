@@ -1603,10 +1603,18 @@ So the settlement of a run whose write was dropped as superseded names
 the documents it lost, each with the store's head when it was dropped.
 The scheduler waits for the replica to take those commits, because a
 run started sooner could read past a value that had not arrived, and
-re-arms the run if one of those documents then exists with no value
-(`scheduler/superseded-output.ts`). A commit that wrote a value keeps
-the disposition above: the derived output waits for the next input
-change.
+re-arms the run if every one of those documents then exists with no
+value (`scheduler/superseded-output.ts`). A commit that wrote a value
+keeps the disposition above: the derived output waits for the next
+input change. A run writes all its outputs again, so one document
+holding a value keeps the whole run from re-arming, and its other
+outputs wait with it.
+
+The wait does not hold the scheduler's `idle()` open, since a frame may
+never arrive and `idle()` must still resolve. So a replica that had not
+taken the commit can report idle, and W can pass the commit, before the
+run re-arms. A replica that had taken it re-arms the run as the
+settlement resolves.
 
 A contribution whose **read dependency is withdrawn** has a separate
 invalidation obligation. The accumulator records when its withdrawn-read

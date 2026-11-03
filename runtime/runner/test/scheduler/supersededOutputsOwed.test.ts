@@ -111,11 +111,32 @@ describe("supersededOutputsOwed()", () => {
     expect(await supersededOutputsOwed(runtime, [output])).toBe(false);
   });
 
-  it("returns true when any one of several documents holds no value", async () => {
+  it("returns true when every one of several documents holds no value", async () => {
+    const first = await authored(runtime, "structure-a", structureOnly);
+    const second = await authored(runtime, "structure-b", structureOnly);
+
+    expect(await supersededOutputsOwed(runtime, [first, second])).toBe(true);
+  });
+
+  it("returns false when one of several documents holds a value", async () => {
+    // The retry a true answer starts writes all of the run's outputs, which
+    // would overwrite this value with no input having changed.
+
     const value = await authored(runtime, "mixed-v", (cell) => cell.set(99));
     const structure = await authored(runtime, "mixed-s", structureOnly);
 
-    expect(await supersededOutputsOwed(runtime, [value, structure])).toBe(true);
+    expect(await supersededOutputsOwed(runtime, [value, structure])).toBe(
+      false,
+    );
+  });
+
+  it("answers at once for a commit the replica has taken", async () => {
+    // So a retry is queued as the wave's settlement resolves, ahead of a caller
+    // already waiting on `idle()`.
+
+    const output = await authored(runtime, "at-once", structureOnly);
+
+    expect(supersededOutputsOwed(runtime, [output])).toBe(true);
   });
 
   it("returns false for a document that does not exist", async () => {
@@ -144,10 +165,12 @@ describe("supersededOutputsOwed()", () => {
 
     const { output, settled } = await valueOnItsWay("on-its-way");
     let answered = false;
-    const owed = supersededOutputsOwed(runtime, [output]).then((result) => {
-      answered = true;
-      return result;
-    });
+    const owed = Promise.resolve(supersededOutputsOwed(runtime, [output])).then(
+      (result) => {
+        answered = true;
+        return result;
+      },
+    );
     const provider = runtime.storageManager.open(space);
     await provider.pullToServerHead?.();
     expect(answered).toBe(false);

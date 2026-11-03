@@ -97,8 +97,8 @@ const logger = getLogger("wave-accumulator", {
  * - `derivation` writes are PURE — re-derivable, so a write whose doc head
  *   advanced past the wave's basis is DROPPED; recomputation arrives through
  *   the ordinary dependency path (serving-loop.md §3d, RULED 2026-08-05),
- *   unless the commit that superseded the write left the document with no
- *   value, which re-arms the run ({@link SupersededOutput});
+ *   unless the commits that superseded the run's writes left its documents
+ *   with no value, which re-arms the run ({@link SupersededOutput});
  * - `event-handler` writes are NON-RE-DERIVABLE consequences — rebased and
  *   retried on conflict, and REQUEUED (rolled back to unconsequenced,
  *   never lost) when the rebase conflicts semantically;
@@ -427,7 +427,7 @@ type WaveSettlement = Result<
  * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
  * superseding commit unless it read the document, and a computed never reads
  * its own output. That commit can leave the document with no value, as a
- * client's piece start does, and then the run is owed again:
+ * client's piece start does, and then the run can be owed again:
  * `scheduler/superseded-output.ts`.
  */
 export interface SupersededOutput {
@@ -974,9 +974,10 @@ export interface WaveCommitOutcome {
   /** Event-handler contributions REFUSED as orphans (server-execution v2
    * stage C build W3, (α3); events.md §4's third clause): runs of an
    * LT1 same-wave cascade whose durable entry rode an emitter write
-   * this wave withdrew — a derivation's superseded per-doc drop (re-arms
-   * nothing), a dropped-whole or requeued emitter — so the entry never
-   * lands and nothing re-emits it. Withdrawn, disposition `dropped`,
+   * this wave withdrew — a derivation's superseded per-doc drop, a
+   * dropped-whole or requeued emitter — so the entry never lands and nothing
+   * re-emits it (a re-armed emitter appends an entry of its own). Withdrawn,
+   * disposition `dropped`,
    * NOT reported as requeued (there is no entry to retry); the serving
    * loop's `events.orphanDeliveriesRefused` feeds from this. */
   orphanDeliveriesRefused: number;
@@ -2379,8 +2380,9 @@ export class WaveAccumulator
      * Dropping costs nothing: the value is re-derivable, and a derivation
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
-     * path. One that did not read the doc runs again only if that commit
-     * left the doc with no value (SupersededOutput). A non-re-derivable
+     * path. One that did not read the doc runs again only if the commits
+     * it lost to left every doc with no value (SupersededOutput). A
+     * non-re-derivable
      * consequence takes no view check here: its
      * reads are held to the store ahead of this loop, and one with a stale
      * read is requeued whole before any doc of its reaches this, so what
@@ -2564,8 +2566,8 @@ export class WaveAccumulator
             // Pure derivation write superseded: DROP, sound because
             // re-derivable. Recomputation arrives through the ordinary
             // dependency path (§3d, RULED 2026-08-05), or, where the
-            // superseding commit leaves the doc with no value, through the
-            // settlement this records for the scheduler.
+            // superseding commits leave the run's docs with no value, through
+            // the settlement this records for the scheduler.
             droppedDocs[contribution.index].add(key);
             outcome.supersededWrites += this.#homeOpCountFor(
               contribution,
@@ -2724,8 +2726,9 @@ export class WaveAccumulator
           // clause, RULED 2026-08-18): an event-handler run of an LT1
           // same-wave cascade whose durable entry rode an emitter write
           // this wave WITHDRAWS — a DERIVATION emitter's superseded
-          // per-doc drop (§3d: the drop re-arms nothing, so nothing ever
-          // re-emits the entry), a dropped-whole emitter, or a requeued
+          // per-doc drop (§3d: nothing re-emits the entry, and an emitter the
+          // drop re-arms appends one of its own), a dropped-whole emitter, or
+          // a requeued
           // emitter the parentEventId thread did not reach — has NO
           // durable entry behind it. Delivering it would commit one
           // consequence for zero entries: the invariant broken from the
