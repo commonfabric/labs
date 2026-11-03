@@ -152,7 +152,7 @@ deno bench -A --no-check integration/lunch-poll-vote-burst.bench.ts
 `EXPERIMENTAL_SERVER_EXECUTION=false` is the loop-off arm;
 `SERVER_EXECUTION_WORKER=false` the main-thread arm;
 `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=false` the arm without view-scoped
-replication, whose default is off;
+replication, which is on by default under server execution;
 `SERVER_EXECUTION_FLUSH_DEADLINE_MS` the cadence. The bench prints, once, before
 its timed iterations, a
 `one burst cost N rejected commit(s) and M rolled-back write(s)` line from the

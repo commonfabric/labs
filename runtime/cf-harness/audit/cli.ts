@@ -24,6 +24,7 @@
  * artifact tree.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { CfcPostureReport } from "@commonfabric/runner/cfc";
 
 import {
@@ -234,7 +235,7 @@ export const readToolshedMeta = async (
     return {
       status: "unreachable",
       url: metaUrl,
-      detail: error instanceof Error ? error.message : String(error),
+      detail: describeFailure(error),
     };
   }
 };
@@ -336,7 +337,7 @@ export const runAuditCli = async (
     options = parseAuditCliArgs(args);
   } catch (error) {
     write(
-      `${error instanceof Error ? error.message : String(error)}\n${USAGE}`,
+      `${describeFailure(error)}\n${USAGE}`,
     );
     return 2;
   }
@@ -348,7 +349,7 @@ export const runAuditCli = async (
       // A spec that asserts nothing, or that could not be read, is the same
       // failure as an unreadable command line: the audit did not run the
       // comparison the caller asked for, and a green exit would say it had.
-      write(`${error instanceof Error ? error.message : String(error)}`);
+      write(`${describeFailure(error)}`);
       return 2;
     }
   }
@@ -415,7 +416,7 @@ export const runAuditCli = async (
   } catch (error) {
     write(
       `could not read --expected-failures ${options.expectedFailures}: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
     return 2;
@@ -433,7 +434,7 @@ export const runAuditCli = async (
     // it, and a verdict here would report otherwise.
     write(
       `--expected-failures ${options.expectedFailures} is not usable: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
     return 2;

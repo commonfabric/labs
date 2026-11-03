@@ -574,6 +574,16 @@ export type ServingLoopStats = {
      */
     originPendingDeferrals: number;
 
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * event's piece names a pattern whose program closure the space does not
+     * hold yet, within the grace the loop gives the closure to arrive
+     * (events.md §5). Counted per deferral. A count that grows while
+     * `processed` does not names a closure that is not arriving; past the
+     * grace the event becomes a `program-unavailable` delivery failure.
+     */
+    programWaitDeferrals: number;
+
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
      * preflight parked on an in-flight replica load its closure reads
@@ -649,6 +659,15 @@ export type ServingLoopStats = {
     dropped: number;
   };
   memo: { hits: number; misses: number; inflight: number };
+
+  /** The crossings this process sent to another space's owner through the
+   * deployment's route (`serving-loop.md` §2), by kind, each
+   * counted once the owner answered: the outbox's event appends, the
+   * wave's foreign batches, and its access-list changes into other
+   * spaces. Zero with the route off, and zero on a process every
+   * crossing of which stays home, so a deployment reads here whether
+   * routing is carrying its crossings. */
+  routed: { appends: number; batches: number; aclChanges: number };
   outbox: {
     queued: number;
     completed: number;
@@ -664,12 +683,12 @@ export type ServingLoopStats = {
     superseded: number;
   };
   /**
-   * `lost` counts renewals that found the row naming another holder or
-   * gone; `lapsesRecovered` counts renewals that found the holder's own row
-   * expired with no successor, as a renewal driver that synchronous work
-   * held past the TTL does, and extended it (serving-loop.md §2).
+   * `held` counts the tenures that acquired a lease. `lost` counts the leases
+   * the watchdog released when it killed a stalled serving worker
+   * (serving-loop.md §2). The thread that holds the memory server adds it to the
+   * counters each worker posts, so it carries across a worker's successors.
    */
-  lease: { held: number; lost: number; lapsesRecovered: number };
+  lease: { held: number; lost: number };
 
   /** OW45 arm-B server-ensure stage 1 (design PR #6209 §10): the
    * SpaceServer's space-root ensure — one lease-guarded owed step per
@@ -807,6 +826,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
     originPendingDeferrals: 0,
+    programWaitDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,
@@ -828,6 +848,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     dropped: 0,
   },
   memo: { hits: 0, misses: 0, inflight: 0 },
+  routed: { appends: 0, batches: 0, aclChanges: 0 },
   outbox: {
     queued: 0,
     completed: 0,
@@ -835,7 +856,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     budgetDeferrals: 0,
     superseded: 0,
   },
-  lease: { held: 0, lost: 0, lapsesRecovered: 0 },
+  lease: { held: 0, lost: 0 },
   rootEnsure: {
     runs: 0,
     created: 0,

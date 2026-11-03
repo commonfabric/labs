@@ -545,31 +545,31 @@ describe("startServerExecutionHost with the store read-through on", () => {
 });
 
 describe("ownerRoutingFromEnv()", () => {
-  it("is off when the knob is unset, empty or the literal false", () => {
+  it("is on when the knob is unset, empty or the literal true", () => {
     const warnings: string[] = [];
     for (
       const env of [{}, { SERVER_EXECUTION_OWNER_ROUTING: "" }, {
-        SERVER_EXECUTION_OWNER_ROUTING: "false",
+        SERVER_EXECUTION_OWNER_ROUTING: "true",
       }]
     ) {
       expect(ownerRoutingFromEnv(envOf(env), (m) => warnings.push(m))).toBe(
-        false,
+        true,
       );
     }
     expect(warnings).toEqual([]);
   });
 
-  it("is on for the literal true alone, and off with a warning for anything else", () => {
+  it("is off for the literal false alone, and on with a warning for anything else", () => {
     const warnings: string[] = [];
     const routingWith = (value: string) =>
       ownerRoutingFromEnv(
         envOf({ SERVER_EXECUTION_OWNER_ROUTING: value }),
         (m) => warnings.push(m),
       );
-    expect(routingWith("true")).toBe(true);
+    expect(routingWith("false")).toBe(false);
     expect(warnings).toEqual([]);
-    expect(routingWith("on")).toBe(false);
-    expect(routingWith("1")).toBe(false);
+    expect(routingWith("off")).toBe(true);
+    expect(routingWith("0")).toBe(true);
     expect(warnings.length).toBe(2);
     expect(warnings[0]).toContain("SERVER_EXECUTION_OWNER_ROUTING");
   });
@@ -599,12 +599,9 @@ describe("startServerExecutionHost with owner routing", () => {
     return server;
   };
 
-  it("keeps a routed plane for the lifecycle delivery while the loop runs, on either thread", async () => {
+  it("keeps a routed plane for the lifecycle delivery while the loop runs, on either thread, by default", async () => {
     for (const worker of ["false", "true"]) {
-      const server = await startWith({
-        SERVER_EXECUTION_OWNER_ROUTING: "true",
-        SERVER_EXECUTION_WORKER: worker,
-      });
+      const server = await startWith({ SERVER_EXECUTION_WORKER: worker });
       try {
         // Opened lazily: no session dials the route until a delivery needs
         // one, so the plane exists with no sessions.
@@ -619,7 +616,7 @@ describe("startServerExecutionHost with owner routing", () => {
   });
 
   it("keeps no routed plane with the knob off", async () => {
-    const server = await startWith({});
+    const server = await startWith({ SERVER_EXECUTION_OWNER_ROUTING: "false" });
     try {
       expect(serverExecutionRoute()).toBeUndefined();
     } finally {

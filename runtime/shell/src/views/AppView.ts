@@ -250,10 +250,10 @@ const PAGE_ORIGIN = "http://page.invalid";
  * origin.
  *
  * Each reader rewrites spellings the other keeps. The grammar refuses a space
- * name holding a character it reserves. A page URL percent-encodes some
- * characters and resolves dot segments, and the page reader takes an escaped
- * `@` at the head of the space for the space's mark. A name rewritten on the
- * way in comes back out naming another space.
+ * name holding a character it reserves. A page URL resolves dot segments, and
+ * the page reader decodes the percent escapes in the space and takes an `@` at
+ * its head for the space's mark. A name rewritten on the way in comes back out
+ * naming another space.
  */
 function readsBackAs(
   reference: string,

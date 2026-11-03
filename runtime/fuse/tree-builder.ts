@@ -1,6 +1,7 @@
 // tree-builder.ts — Convert JSON values to FsTree nodes
 
 import { isLinkRef, type SigilLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -144,7 +145,7 @@ export function stringifyEntryValue(
   try {
     return safeStringify(value);
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
+    const detail = describeFailure(cause);
     throw new Error(
       `Cannot serialize ${
         mountedEntryPath(tree, parentIno, fsName)

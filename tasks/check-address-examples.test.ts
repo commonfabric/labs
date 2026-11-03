@@ -17,7 +17,6 @@ import {
   main,
   proseOf,
   readDocuments,
-  refusalMessage,
 } from "./check-address-examples.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
@@ -304,21 +303,6 @@ describe("check-address-examples", () => {
     it("returns the same key for the same pair", () => {
       expect(exemptionKey("docs/a.md", "/@x/y"))
         .toBe(exemptionKey("docs/a.md", "/@x/y"));
-    });
-  });
-
-  describe("refusalMessage()", () => {
-    it("returns the message of an `Error`", () => {
-      expect(refusalMessage(new Error("the prefix is retired")))
-        .toBe("the prefix is retired");
-    });
-
-    it("returns a value of another kind whole", () => {
-      // Reaching into such a value for a `message` would put `undefined` in
-      // the report, which says less than the value does.
-
-      expect(refusalMessage("refused")).toBe("refused");
-      expect(refusalMessage(undefined)).toBe("undefined");
     });
   });
 

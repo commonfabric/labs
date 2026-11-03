@@ -7,9 +7,12 @@ const MIME_TYPES: Record<string, string> = {
   "json": "application/json",
   "map": "application/json",
   "md": "text/plain",
+  "png": "image/png",
   "svg": "image/svg+xml",
+  "ts": "text/typescript",
   "ttf": "font/ttf",
   "txt": "text/plain",
+  "webmanifest": "application/manifest+json",
 };
 
 const DEFAULT_MIME_TYPE = "application/octet-stream";

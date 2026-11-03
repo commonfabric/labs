@@ -20,6 +20,17 @@ const spaceB = "did:key:z6Mk-space-access-watch-b" as MemorySpace;
 class FakeStorage {
   observers = new Set<(space: MemorySpace) => void>();
 
+  answerObservers = new Set<(space: MemorySpace) => void>();
+
+  subscribeSpaceAnswer(observer: (space: MemorySpace) => void): () => void {
+    this.answerObservers.add(observer);
+    return () => this.answerObservers.delete(observer);
+  }
+
+  answer(space: MemorySpace): void {
+    for (const observer of [...this.answerObservers]) observer(space);
+  }
+
   subscribeSpaceAccessChange(
     observer: (space: MemorySpace) => void,
   ): () => void {
@@ -85,6 +96,49 @@ describe("SpaceAccessWatch", () => {
         watch.rerunOnChange(spaceA, fakeAction());
         watch.rerunOnChange(spaceB, fakeAction());
         expect(storage.observers.size).toBe(1);
+      });
+    });
+
+    describe("rerunOnAnswer()", () => {
+      it("runs each action waiting on a space at the server's next answer for it, and only once", () => {
+        const { storage, invalidated, watch } = watchOverFake();
+        const first = fakeAction();
+        const second = fakeAction();
+        const other = fakeAction();
+        watch.rerunOnAnswer(spaceA, first);
+        watch.rerunOnAnswer(spaceA, second);
+        watch.rerunOnAnswer(spaceB, other);
+        expect(invalidated).toEqual([]);
+
+        storage.answer(spaceA);
+        expect(invalidated).toEqual([first, second]);
+        storage.answer(spaceA);
+        expect(invalidated).toEqual([first, second]);
+        expect([...watch.accessForTestingOnly.answering.keys()]).toEqual([
+          spaceB,
+        ]);
+      });
+
+      it("subscribes to the storage manager once, however many actions register", () => {
+        const { storage, watch } = watchOverFake();
+        expect(storage.answerObservers.size).toBe(0);
+        watch.rerunOnAnswer(spaceA, fakeAction());
+        watch.rerunOnAnswer(spaceB, fakeAction());
+        expect(storage.answerObservers.size).toBe(1);
+      });
+
+      it("runs nothing for an action the scheduler let go, or once disposed", () => {
+        const { storage, invalidated, unsubscribe, watch } = watchOverFake();
+        const gone = fakeAction();
+        watch.rerunOnAnswer(spaceA, gone);
+        unsubscribe(gone);
+        storage.answer(spaceA);
+        watch.rerunOnAnswer(spaceB, fakeAction());
+        watch.dispose();
+        storage.answer(spaceB);
+
+        expect(invalidated).toEqual([]);
+        expect(storage.answerObservers.size).toBe(0);
       });
     });
 

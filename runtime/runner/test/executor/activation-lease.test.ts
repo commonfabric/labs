@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { toFileUrl } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -7,11 +8,9 @@ import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey, streamEntriesDocId } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
-  acquireExecutionLease,
-  ExecutionLeaseCycle,
+  adoptProcessInstanceId,
   executionLeaseHolder,
-  liveExecutionLeaseHolder,
-  releaseExecutionLease,
+  processInstanceId,
 } from "@commonfabric/memory/v2/execution-lease";
 import {
   insertExecutionOutboxRows,
@@ -19,7 +18,7 @@ import {
 } from "@commonfabric/memory/v2/execution-outbox";
 import { defer } from "@commonfabric/async/defer";
 
-import { ExecutorHost } from "../../src/executor/host.ts";
+import { ExecutorHost, SpaceNotServedError } from "../../src/executor/host.ts";
 import {
   type RuntimeFactoryContext,
   SpaceServer,
@@ -42,6 +41,7 @@ const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
 
 async function fixture(options: {
+  store?: URL;
   factoryError?: Error;
   disposeError?: Error;
   servingPosture?: boolean;
@@ -50,7 +50,10 @@ async function fixture(options: {
     server: ReturnType<typeof newSharedServer>,
   ) => ReturnType<typeof newSharedServer>;
 } = {}) {
-  const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
+  const server = newSharedServer({
+    subscriptionRefreshDelayMs: 0,
+    ...(options.store === undefined ? {} : { store: options.store }),
+  });
   const engine = await server.engineForSpace(space);
   const manager = EmulatedStorageManager.connectTo(server, {
     as: serviceSigner,
@@ -138,10 +141,11 @@ async function fixture(options: {
   };
 }
 
-async function freshServingRuntime(server: ReturnType<typeof newSharedServer>) {
-  const manager = EmulatedStorageManager.connectTo(server, {
-    as: serviceSigner,
-  });
+async function freshServingRuntime(
+  server: ReturnType<typeof newSharedServer>,
+  as: Identity = serviceSigner,
+) {
+  const manager = EmulatedStorageManager.connectTo(server, { as });
   let runtime: Runtime;
   try {
     runtime = new Runtime({
@@ -179,15 +183,15 @@ describe("activation-lease", () => {
   for (const initializationMs of [0, 20_000]) {
     it(`commits its first work after ${initializationMs}ms of gated initialization`, async () => {
       const f = await fixture();
-      // Lease time and interval callbacks advance together; scheduler and
-      // transport dispatch still drain through ordinary task boundaries.
+      // Time advances by hand; scheduler and transport dispatch still drain
+      // through ordinary task boundaries.
       using time = new FakeTime();
       using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
       using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
       const activation = f.serving.activate();
       try {
         await f.entered.promise;
-        expect(liveExecutionLeaseHolder(f.engine, space)).toBe(
+        expect(f.engine.executionLeases.holderOf(space)).toBe(
           f.serving.holder,
         );
         const initialHead = Engine.serverSeq(f.engine);
@@ -196,7 +200,7 @@ describe("activation-lease", () => {
         f.release.resolve();
         expect(await activation).toBe(true);
         await commitFirstWork(f);
-        expect(liveExecutionLeaseHolder(f.engine, space)).toBe(
+        expect(f.engine.executionLeases.holderOf(space)).toBe(
           f.serving.holder,
         );
       } finally {
@@ -207,13 +211,121 @@ describe("activation-lease", () => {
     });
   }
 
+  it("keeps its lease through minutes of held-up work, and commits under it after", async () => {
+    // Nothing reads a clock to keep or end a tenure, so a settle or a compile
+    // that holds the loop for any length of time costs the lease nothing.
+    const f = await fixture();
+    using time = new FakeTime();
+    using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
+    using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
+    const activation = f.serving.activate();
+    try {
+      await f.entered.promise;
+      f.release.resolve();
+      expect(await activation).toBe(true);
+      time.tick(300_000);
+      expect(f.serving.active).toBe(true);
+      await commitFirstWork(f);
+      expect(f.engine.executionLeases.holderOf(space)).toBe(f.serving.holder);
+      expect(f.stats.lease.lost).toBe(0);
+    } finally {
+      await f.close(activation);
+    }
+  });
+
+  it("serves a space at once after a restart, whatever its predecessor held or left in the store", async () => {
+    // The predecessor never releases, as a killed process does not, and the
+    // row is what a process keeping the lease in the store would have left. Time
+    // stands still throughout, so the successor waits for neither.
+    const directory = await Deno.makeTempDir();
+    const store = toFileUrl(`${directory}/`);
+    const predecessor = await fixture({ store });
+    using _time = new FakeTime();
+    using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
+    using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
+    const predecessorActivation = predecessor.serving.activate();
+    await predecessor.entered.promise;
+    predecessor.release.resolve();
+    expect(await predecessorActivation).toBe(true);
+    predecessor.engine.database.prepare(
+      `INSERT INTO execution_lease (space, holder, expires_at)
+       VALUES (:space, :holder, :expires_at)`,
+    ).run({
+      space,
+      holder: predecessor.serving.holder,
+      expires_at: Date.now() + 3_600_000,
+    });
+
+    adoptProcessInstanceId(crypto.randomUUID());
+    try {
+      const restarted = await fixture({ store });
+      const activation = restarted.serving.activate();
+      try {
+        await restarted.entered.promise;
+        restarted.release.resolve();
+        expect(await activation).toBe(true);
+        expect(restarted.serving.holder).not.toBe(predecessor.serving.holder);
+        expect(restarted.engine.executionLeases.holderOf(space))
+          .toBe(restarted.serving.holder);
+        await commitFirstWork(restarted);
+      } finally {
+        await restarted.close(activation);
+      }
+    } finally {
+      adoptProcessInstanceId(processInstanceId);
+      await predecessor.close(predecessorActivation);
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("refuses a rival ExecutorHost on the same server, which serves once the holder has gone", async () => {
+    const f = await fixture();
+    const parks: string[] = [];
+    let builds = 0;
+    const rivalIdentity = await Identity.fromPassphrase("activation rival");
+    const rival = new ExecutorHost({
+      server: f.server,
+      serviceIdentity: rivalIdentity.did(),
+      ensureSpaceRoots: false,
+      onSpaceParked: (_space, reason) => parks.push(reason),
+      createRuntime: () => {
+        builds += 1;
+        return freshServingRuntime(f.server, rivalIdentity);
+      },
+    });
+    const observe = () =>
+      rival.runLifecycleVerb(space, {
+        name: "observe-rival",
+        run: () => Promise.resolve(),
+      });
+    const activation = f.serving.activate();
+    try {
+      await f.entered.promise;
+      f.release.resolve();
+      expect(await activation).toBe(true);
+
+      await expect(observe()).rejects.toThrow(SpaceNotServedError);
+      expect(parks).toEqual(["lease-unavailable"]);
+      expect(builds).toBe(0);
+      expect(rival.stats().reactivationBackoffs).toBe(0);
+      expect(f.engine.executionLeases.holderOf(space)).toBe(f.serving.holder);
+
+      await f.serving.park("test-park");
+      await observe();
+      expect(builds).toBe(1);
+    } finally {
+      await rival.close();
+      await f.close(activation);
+    }
+  });
+
   it("keeps its lease while delegated append recovery opens a target space", async () => {
     const appendEntered = defer<void>();
     const releaseAppend = defer<void>();
     const f = await fixture({
       serverFacade: (server) =>
         new Proxy(server, {
-          get(target, property, receiver) {
+          get(target, property) {
             if (property === "commitDelegatedAppend") {
               return async (
                 ...args: Parameters<typeof server.commitDelegatedAppend>
@@ -223,7 +335,7 @@ describe("activation-lease", () => {
                 return await target.commitDelegatedAppend(...args);
               };
             }
-            const value = Reflect.get(target, property, receiver);
+            const value = Reflect.get(target, property);
             return typeof value === "function" ? value.bind(target) : value;
           },
         }),
@@ -289,7 +401,7 @@ describe("activation-lease", () => {
       time.tick(20_000);
       f.release.resolve();
       await expect(activation).rejects.toThrow("factory rejected");
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+      expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
       expect(f.stats.activeSpaces).toBe(0);
       expect(time.next()).toBe(false);
     } finally {
@@ -312,7 +424,7 @@ describe("activation-lease", () => {
         await f.entered.promise;
         f.release.resolve();
         await expect(activation).rejects.toThrow(invalidRuntime);
-        expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+        expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
         expect(f.disposeCalls).toBe(1);
         expect(f.stats.activeSpaces).toBe(0);
         expect(time.next()).toBe(false);
@@ -321,33 +433,6 @@ describe("activation-lease", () => {
       }
     });
   }
-
-  it("refuses activation and stops renewal when the lease store throws", async () => {
-    const f = await fixture();
-    using time = new FakeTime();
-    using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
-    using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
-    const activation = f.serving.activate();
-    try {
-      await f.entered.promise;
-      {
-        using _renew = stub(ExecutionLeaseCycle.prototype, "renew", () => {
-          throw new Error("lease store unavailable");
-        });
-        time.tick(5_000);
-      }
-      f.release.resolve();
-      expect(await activation).toBe(false);
-      expect(f.serving.active).toBe(false);
-      expect(f.stats.lease.lost).toBe(1);
-      expect(f.stats.waves).toBe(0);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
-      expect(time.next()).toBe(false);
-    } finally {
-      await f.close(activation);
-    }
-    expect(f.disposeCalls).toBe(1);
-  });
 
   it("disposes a rejected runtime even when observer cleanup throws", async () => {
     const f = await fixture({ servingPosture: false });
@@ -365,43 +450,14 @@ describe("activation-lease", () => {
         await expect(activation).rejects.toThrow("servingPosture");
       }
       expect(f.disposeCalls).toBe(1);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+      expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
       expect(time.next()).toBe(false);
     } finally {
       await f.close(activation);
     }
   });
 
-  for (const renewBeforeRelease of [false, true]) {
-    it(`refuses initialization after a rival takes the lease ${renewBeforeRelease ? "at renewal" : "before renewal"}`, async () => {
-      const f = await fixture();
-      using time = new FakeTime();
-      using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
-      using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
-      const activation = f.serving.activate();
-      const rival = executionLeaseHolder("did:key:activation-rival");
-      try {
-        await f.entered.promise;
-        releaseExecutionLease(f.engine, { space, holder: f.serving.holder });
-        expect(acquireExecutionLease(f.engine, { space, holder: rival }))
-          .toBe(true);
-        if (renewBeforeRelease) time.tick(5_000);
-        f.release.resolve();
-        expect(await activation).toBe(false);
-        expect(f.serving.active).toBe(false);
-        expect(f.stats.waves).toBe(0);
-        expect(f.stats.activeSpaces).toBe(0);
-        expect(f.stats.lease.lost).toBe(1);
-        expect(f.disposeCalls).toBe(1);
-        expect(liveExecutionLeaseHolder(f.engine, space)).toBe(rival);
-        expect(time.next()).toBe(false);
-      } finally {
-        await f.close(activation);
-      }
-    });
-  }
-
-  it("refuses factory reads of another user's instance after lease takeover", async () => {
+  it("refuses reads of another user's instance through the factory's read-through once the tenure has parked", async () => {
     const f = await fixture();
     const aliceManager = EmulatedStorageManager.connectTo(f.server, {
       as: aliceSigner,
@@ -426,20 +482,17 @@ describe("activation-lease", () => {
     using _timeout = stub(globalThis, "setTimeout", realSetTimeout);
     using _clearTimeout = stub(globalThis, "clearTimeout", realClearTimeout);
     const activation = f.serving.activate();
-    const rival = executionLeaseHolder("did:key:read-through-rival");
     try {
       const context = await f.entered.promise;
       expect(context.storeReadThrough).toBeDefined();
       expect(context.storeReadThrough!(address)?.doc?.value).toBe(7);
-      releaseExecutionLease(f.engine, { space, holder: f.serving.holder });
-      expect(acquireExecutionLease(f.engine, { space, holder: rival })).toBe(
-        true,
-      );
+      f.release.resolve();
+      expect(await activation).toBe(true);
+      expect(context.storeReadThrough!(address)?.doc?.value).toBe(7);
+      await f.serving.park("test-park");
       expect(context.storeReadThrough!(address)).toBeUndefined();
       expect(Engine.read(f.engine, address)?.value).toBe(7);
-      f.release.resolve();
-      expect(await activation).toBe(false);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBe(rival);
+      expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
       expect(time.next()).toBe(false);
     } finally {
       try {
@@ -461,8 +514,8 @@ describe("activation-lease", () => {
       "cleanup warm",
     ] as const
   ) {
-    it(`reactivates ${demand} demand after initialization loses its lease without a successor`, async () => {
-      const f = await fixture();
+    it(`reactivates ${demand} demand after initialization fails`, async () => {
+      const f = await fixture({ factoryError: new Error("factory rejected") });
       const aliceManager = EmulatedStorageManager.connectTo(f.server, {
         as: aliceSigner,
       });
@@ -502,13 +555,16 @@ describe("activation-lease", () => {
           SpaceServer.prototype,
           "activate",
           async function (this: SpaceServer) {
-            const activated = await activate.call(this);
-            if (demand === "cleanup warm" && !activated && builds === 1) {
-              // Cleanup removed the old server, but its host activation still
-              // owns the in-flight record until this result returns.
-              warmNotice();
+            try {
+              return await activate.call(this);
+            } catch (error) {
+              if (demand === "cleanup warm" && builds === 1) {
+                // Cleanup removed the old server, but its host activation
+                // still owns the in-flight record until this result returns.
+                warmNotice();
+              }
+              throw error;
             }
-            return activated;
           },
         );
         if (demand === "session") {
@@ -535,7 +591,7 @@ describe("activation-lease", () => {
           warmNotice();
         }
         // This joins an existing activation, or starts the late-warm case.
-        // No request is issued after lease loss until a fresh factory runs.
+        // No request is issued after the failure until a fresh factory runs.
         const firstAttempt = host.runLifecycleVerb(space, {
           name: "observe-initial-activation",
           run: () => Promise.resolve(),
@@ -545,9 +601,6 @@ describe("activation-lease", () => {
         expect(f.server.hasLiveSessionsForSpace(space, {
           excludePrincipal: serviceSigner.did(),
         })).toBe(demand === "session");
-        const first = host.spaceServer(space)!;
-        releaseExecutionLease(f.engine, { space, holder: first.holder });
-        time.tick(5_000);
         f.release.resolve();
         await expect(firstAttempt).rejects.toThrow("not served");
         expect(host.stats().reactivationBackoffs).toBe(1);
@@ -559,7 +612,6 @@ describe("activation-lease", () => {
         await commitFirstWork({ runtime, engine: f.engine });
         expect(builds).toBe(2);
         expect(host.stats().activeSpaces).toBe(1);
-        expect(f.disposeCalls).toBe(1);
         if (
           demand === "warm" || demand === "late warm" ||
           demand === "cleanup warm"
@@ -583,8 +635,8 @@ describe("activation-lease", () => {
   }
 
   for (const boundary of ["no demand", "rival", "closed"] as const) {
-    it(`does not rebuild beyond the ${boundary} boundary after initialization lease loss`, async () => {
-      const f = await fixture();
+    it(`does not rebuild beyond the ${boundary} boundary after initialization fails`, async () => {
+      const f = await fixture({ factoryError: new Error("factory rejected") });
       const aliceManager = EmulatedStorageManager.connectTo(f.server, {
         as: aliceSigner,
       });
@@ -608,6 +660,13 @@ describe("activation-lease", () => {
       });
       let closing: Promise<void> | undefined;
       const rival = executionLeaseHolder("did:key:initialization-successor");
+      const leases = f.server.executionLeases;
+      const release = leases.release.bind(leases);
+      using _release = stub(leases, "release", (releasedSpace, holder) => {
+        release(releasedSpace, holder);
+        // The rival takes the space ahead of the successor the host schedules.
+        if (boundary === "rival") leases.acquire(releasedSpace, rival);
+      });
       try {
         if (boundary !== "no demand") {
           await alice.getCell<number>(space, "remaining-demand", undefined)
@@ -618,14 +677,7 @@ describe("activation-lease", () => {
           run: () => Promise.resolve(),
         });
         await f.entered.promise;
-        const first = host.spaceServer(space)!;
         if (boundary === "closed") closing = host.close();
-        releaseExecutionLease(f.engine, { space, holder: first.holder });
-        if (boundary === "rival") {
-          expect(acquireExecutionLease(f.engine, { space, holder: rival }))
-            .toBe(true);
-        }
-        time.tick(5_000);
         f.release.resolve();
         await expect(initial).rejects.toThrow("not served");
         if (boundary === "rival") {
@@ -637,14 +689,13 @@ describe("activation-lease", () => {
             run: () => Promise.resolve(),
           })).rejects.toThrow("not served");
           expect(host.stats().reactivationBackoffs).toBe(1);
-          expect(liveExecutionLeaseHolder(f.engine, space)).toBe(rival);
+          expect(f.engine.executionLeases.holderOf(space)).toBe(rival);
         } else {
           await closing;
           expect(host.stats().reactivationBackoffs).toBe(0);
-          expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+          expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
         }
         expect(builds).toBe(1);
-        expect(f.disposeCalls).toBe(1);
         expect(host.stats().activeSpaces).toBe(0);
       } finally {
         f.release.resolve();
@@ -660,8 +711,8 @@ describe("activation-lease", () => {
     });
   }
 
-  it("backs off repeated initialization lease loss and cancels the next rebuild on close", async () => {
-    const f = await fixture();
+  it("backs off repeated initialization failure and cancels the next rebuild on close", async () => {
+    const f = await fixture({ factoryError: new Error("factory rejected") });
     const aliceManager = EmulatedStorageManager.connectTo(f.server, {
       as: aliceSigner,
     });
@@ -678,8 +729,8 @@ describe("activation-lease", () => {
     const backoffBase = 123_456;
     const backoffDelays: number[] = [];
     const backoffTimers = new Set<Parameters<typeof clearTimeout>[0]>();
-    // Only the host backoffs join the lease clock. Transport and scheduler
-    // callbacks still run on their real event boundaries.
+    // Only the host backoffs join the controlled clock. Transport and
+    // scheduler callbacks still run on their real event boundaries.
     using _timeout = stub(
       globalThis,
       "setTimeout",
@@ -711,10 +762,9 @@ describe("activation-lease", () => {
       },
       createRuntime: async (_space, context) => {
         if (++builds === 1) return await f.createRuntime(context);
-        const built = await freshServingRuntime(f.server);
         secondStarted.resolve();
         await releaseSecond.promise;
-        return built;
+        throw new Error("factory rejected");
       },
     });
     const observe = () =>
@@ -726,11 +776,6 @@ describe("activation-lease", () => {
       await alice.getCell<number>(space, "backoff-demand", undefined).sync();
       await f.entered.promise;
       const initial = observe();
-      releaseExecutionLease(f.engine, {
-        space,
-        holder: host.spaceServer(space)!.holder,
-      });
-      time.tick(5_000);
       f.release.resolve();
       await expect(initial).rejects.toThrow("not served");
       expect(backoffDelays).toEqual([backoffBase]);
@@ -740,11 +785,6 @@ describe("activation-lease", () => {
       await secondStarted.promise;
       expect(builds).toBe(2);
       const second = observe();
-      releaseExecutionLease(f.engine, {
-        space,
-        holder: host.spaceServer(space)!.holder,
-      });
-      time.tick(5_000);
       releaseSecond.resolve();
       await expect(second).rejects.toThrow("not served");
       expect(backoffDelays).toEqual([backoffBase, backoffBase * 2]);
@@ -752,7 +792,7 @@ describe("activation-lease", () => {
       await host.close();
       expect(builds).toBe(2);
       expect(time.next()).toBe(false);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+      expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
     } finally {
       f.release.resolve();
       releaseSecond.resolve();
@@ -798,11 +838,11 @@ describe("activation-lease", () => {
       await f.disposeEntered.promise;
       expect(closed).toBe(false);
       expect(f.disposeCalls).toBe(1);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeDefined();
+      expect(f.engine.executionLeases.holderOf(space)).toBeDefined();
       releaseDisposal.resolve();
       await closing;
       expect(closed).toBe(true);
-      expect(liveExecutionLeaseHolder(f.engine, space)).toBeUndefined();
+      expect(f.engine.executionLeases.holderOf(space)).toBeUndefined();
       expect(host.stats().activeSpaces).toBe(0);
       expect(time.next()).toBe(false);
     } finally {

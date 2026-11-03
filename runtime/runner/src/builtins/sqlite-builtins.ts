@@ -87,6 +87,7 @@ import {
   sqliteRowToWire,
 } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type Cell,
@@ -110,9 +111,6 @@ type SqliteDbRef = WireSqliteDbRef & {
   rev?: number;
 };
 type WireParams = SqliteParamsWire | undefined;
-
-const errMsg = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /** The sink every sqlite query request is staged under. */
 export const SQLITE_QUERY_SINK = "sqliteQuery";
@@ -1152,7 +1150,7 @@ export function sqliteQuery(
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
-        error: errMsg(error),
+        error: describeFailure(error),
         ...correlation,
       });
       return;
@@ -1164,7 +1162,7 @@ export function sqliteQuery(
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
-        error: errMsg(error),
+        error: describeFailure(error),
         ...correlation,
       });
       return;
@@ -2024,7 +2022,7 @@ export function sqliteQuery(
               );
             }
           } catch (error) {
-            await failQuery(errMsg(error));
+            await failQuery(describeFailure(error));
           }
         } finally {
           inFlightIssues.delete(effectKey);

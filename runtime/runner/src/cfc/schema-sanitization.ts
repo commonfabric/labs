@@ -20,6 +20,7 @@ import {
   FABRIC_PRIMITIVE_SCHEMA_TYPES,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -892,7 +893,7 @@ export const validateSchemaDefinition = (
   try {
     deepFrozenCloneAndInternSchema(schema);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     return `$: schema cannot be normalized: ${message}`;
   }
   return validateSchemaDefinitionInternal(schema, fullSchema, "$", {

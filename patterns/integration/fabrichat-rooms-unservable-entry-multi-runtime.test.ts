@@ -4,7 +4,9 @@
  * one for a space on another host, or for one not yet created. The manager
  * looks for a room behind every saved entry; a space it can't serve leaves
  * that entry's room unfound, and the groups the person creates are still
- * listed. A saved entry for a served space that holds no room, and a catalog
+ * listed. A membership the person keeps in a room in such a space leaves that
+ * room unlisted the same way, and the people of the rooms listed are still
+ * read. A saved entry for a served space that holds no room, and a catalog
  * with no other entry, are the controls.
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
@@ -99,6 +101,22 @@ describe("fabrichat rooms beside an unservable catalog entry across runtimes", (
     await harness!.settle();
   };
 
+  /**
+   * Records a membership of `kind` in a room in a space this replica can't
+   * serve: a document there under the id of one the person's profile has here.
+   */
+  const rememberUnservedRoom = async (
+    ada: MultiRuntimeSession,
+    kind: "direct" | "group",
+  ) => {
+    const { id } = await ada.link(["profiles", 0]);
+    await ada.send("remember", {
+      room: { "/": { "link@1": { id, space: UNSERVED_SPACE, path: [] } } },
+      kind,
+    });
+    await harness!.settle();
+  };
+
   /** The kinds `rooms` lists, as a client demanding a plain array reads it. */
   const listedKinds = async (ada: MultiRuntimeSession) =>
     ((await ada.readAs(["rooms"], ROOMS_DEMAND)) as
@@ -129,6 +147,22 @@ describe("fabrichat rooms beside an unservable catalog entry across runtimes", (
         await createGroup(ada, "g-second");
         expect(await listedKinds(ada)).toEqual(["group", "group"]);
       });
+
+      for (const kind of ["group", "direct"] as const) {
+        it(`lists each new group, and the people of the rooms listed, beside a ${kind} membership in a room this replica can't serve`, async () => {
+          const ada = await start(serverExecution, undefined);
+          await rememberUnservedRoom(ada, kind);
+          expect(await ada.read(["people"])).toEqual({});
+          expect(await listedKinds(ada)).toEqual([]);
+
+          await createGroup(ada, "g-first");
+          expect(await ada.read(["people"])).toEqual({});
+          expect(await listedKinds(ada)).toEqual(["group"]);
+          await createGroup(ada, "g-second");
+          expect(await ada.read(["people"])).toEqual({});
+          expect(await listedKinds(ada)).toEqual(["group", "group"]);
+        });
+      }
 
       it("lists each new group beside a saved entry for a served space that holds no room", async () => {
         // The person's profile has a space of its own, served here, whose root

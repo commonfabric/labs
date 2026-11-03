@@ -453,6 +453,9 @@ export type DeliveryFailureClass =
   | "authorization"
   | "protocol"
   | "timeout"
+  /** The space lacks the program closure of the pattern the event's piece
+   * runs, past the serving loop's grace for its arrival (events.md §5). */
+  | "program-unavailable"
   | "unknown";
 
 /** Durable processing state for an event whose runnable handler has not yet
@@ -1437,6 +1440,18 @@ export type MemoryProtocolFlags = {
    */
   spaceInvites?: boolean;
 
+  /**
+   * Server capability: the server records a space's instance-naming mark and
+   * enforces INV-16 (04-protocol.md §4.1.1): a marked space admits only
+   * sessions, and commits, that declare `instanceNames: true`; the first
+   * commit from such a session marks the space; and a declaring session is
+   * admitted to an unmarked space only while the server's posture names
+   * instances. Build-inherent, so a server of this version always advertises
+   * it. Absent (an older server) parses to false; such a server admits a
+   * declaring session's commits and marks nothing.
+   */
+  instanceNameMark?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1495,6 +1510,7 @@ export type WireMemoryProtocolFlags = {
   patternLifecycle?: boolean;
   servedRequests?: boolean;
   spaceInvites?: boolean;
+  instanceNameMark?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1533,6 +1549,17 @@ export type SessionDescriptor = {
 
   /** Assert the immutable declared kind when mounting or resuming. */
   spaceKind?: string;
+
+  /**
+   * Present when the session's runtime names instances, and absent when it
+   * binds a parent's children by position (INV-16, 04-protocol.md §4.1.2).
+   * Declared afresh on every open, and signed into the session.open
+   * invocation with the rest of this descriptor. A server advertising
+   * `instanceNameMark` admits only declaring sessions, and their commits, to a
+   * space it has marked, and marks a space at the first commit it admits from
+   * one.
+   */
+  instanceNames?: true;
 
   sessionId?: SessionId;
   seenSeq?: number;
@@ -2319,10 +2346,9 @@ export type EventAttentionResolveResult = {
 };
 
 /**
- * Most UTF-8 bytes a `pattern.lifecycle` message may take, as many as the
- * HTTP route takes in a body. A routed connection bounds every request more
- * tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
- * smaller bound before sending it.
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take. A routed
+ * connection bounds every request more tightly (`ROUTED_QUEUE_LIMIT`), and a
+ * client holds a request to the smaller bound before sending it.
  */
 export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -2570,7 +2596,14 @@ export type SessionRevokedMessage = {
   type: "session/revoked";
   space: string;
   sessionId: SessionId;
-  reason: "taken-over" | "unauthorized";
+  /**
+   * `taken-over`: a newer connection resumed the session. `unauthorized`: an
+   * access-list change left its principal without access. `deleted`: its space
+   * was deleted, so no principal will be admitted to it again (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`). `instance-names`: a naming
+   * commit marked the space and the session declares no naming (INV-16).
+   */
+  reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 };
 
 /**
@@ -2625,8 +2658,19 @@ export type V2Error = {
   /** Positive evidence that the server made a durable, no-commit verdict. */
   permanentEvidence?: true;
 
-  /** Engine revision whose ACL state produced an authorization denial. */
+  /**
+   * On a refusal the space's ACL state decided, the `seq` at which the ACL
+   * document is stored, or 0 when the space has none: the document's revision,
+   * not the server's current sequence (`04-protocol.md` §4.5.1).
+   */
   aclRevision?: number;
+
+  /**
+   * Present on an `AuthorizationError` for a deleted space, which every
+   * principal is refused for good (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`).
+   */
+  deleted?: true;
 };
 
 export type V2Result<Value> = { ok: Value } | { error: V2Error };
@@ -2904,6 +2948,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records the diagnostics a client
   // reports about its session.
   sessionReportV1: true,
+  // Build-inherent: this build's server records a space's instance-naming
+  // mark and admits sessions and commits by it (INV-16).
+  instanceNameMark: true,
   // Configuration rather than build-inherent: a `Server` advertises each
   // from what it was given (`Server.memoryProtocolFlags()`).
   patternLifecycle: false,
@@ -3171,6 +3218,13 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const instanceNameMark = value.instanceNameMark;
+  if (
+    instanceNameMark !== undefined && typeof instanceNameMark !== "boolean"
+  ) {
+    return null;
+  }
+
   const syncCrossingsV1 = value.syncCrossingsV1;
   if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
     return null;
@@ -3255,6 +3309,9 @@ export const parseMemoryProtocolFlags = (
     // treats the owner as unavailable.
     servedRequests: servedRequests === true,
     spaceInvites: spaceInvites === true,
+    // Absent (an older server) parses to false: the server records no mark
+    // and admits a declaring session's commits without one.
+    instanceNameMark: instanceNameMark === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
     syncCrossingsV1: syncCrossingsV1 === true,
@@ -3314,6 +3371,7 @@ export const wireMemoryProtocolFlags = (
   patternLifecycle: flags.patternLifecycle,
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
+  instanceNameMark: flags.instanceNameMark,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

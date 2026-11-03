@@ -13,6 +13,7 @@
 
 import { hashStringOf } from "@commonfabric/data-model";
 import type { FabricValue } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isACL } from "@commonfabric/memory/acl";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import {
@@ -106,9 +107,6 @@ const differingMembers = (
     !sameValue(left[key] ?? null, right[key] ?? null)
   );
 
-const message = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /** Whether a decoded payload is a plan the run stored, shaped as the
  * checks below read it. */
 const isReportShape = (value: unknown): value is CompactionReport => {
@@ -144,7 +142,7 @@ const marker = (
     }
     return { marker: decoded };
   } catch (error) {
-    return { error: message(error) };
+    return { error: describeFailure(error) };
   }
 };
 
@@ -237,7 +235,7 @@ export function verifyCompaction(
         }
       } catch (error) {
         malformed.push(
-          `seq ${row.seq}: payload does not decode (${message(error)})`,
+          `seq ${row.seq}: payload does not decode (${describeFailure(error)})`,
         );
       }
       if (row.class !== "system") {
@@ -788,7 +786,7 @@ export function verifyCompaction(
               }
             } catch (error) {
               problems.push(
-                `seq ${audit.seq}: does not decode (${message(error)})`,
+                `seq ${audit.seq}: does not decode (${describeFailure(error)})`,
               );
               continue;
             }
@@ -943,7 +941,11 @@ export function verifyCompaction(
             : `${leftPrint.hash} ≠ ${rightPrint.hash}`,
         );
       } catch (error) {
-        check("fingerprint", false, `could not be computed: ${message(error)}`);
+        check(
+          "fingerprint",
+          false,
+          `could not be computed: ${describeFailure(error)}`,
+        );
       }
     }
 

@@ -45,6 +45,7 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -1999,7 +2000,7 @@ export async function runTestPattern(
               name: actionName,
               passed: false,
               afterAction: null,
-              error: err instanceof Error ? err.message : String(err),
+              error: describeFailure(err),
               durationMs: performance.now() - itemStart,
             });
           }
@@ -2164,9 +2165,7 @@ export async function runTestPattern(
             } catch (err) {
               return {
                 passed: false,
-                error: `Error reading assertion: ${
-                  err instanceof Error ? err.message : String(err)
-                }`,
+                error: `Error reading assertion: ${describeFailure(err)}`,
               };
             }
           };
@@ -2192,7 +2191,7 @@ export async function runTestPattern(
             ));
           } catch (err) {
             passed = false;
-            error = err instanceof Error ? err.message : String(err);
+            error = describeFailure(err);
           } finally {
             releaseDemand?.();
           }
@@ -2346,7 +2345,7 @@ export async function runTestPattern(
       servedWarnings,
     };
   } catch (err) {
-    let errorMessage = err instanceof Error ? err.message : String(err);
+    let errorMessage = describeFailure(err);
     if (initializationBudgetPending) {
       try {
         await (initializationBudgetSettlement ?? runtime.settled(Infinity));

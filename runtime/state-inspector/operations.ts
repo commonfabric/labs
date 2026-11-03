@@ -1,4 +1,5 @@
 import type { FabricValue } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { parsePointer } from "@commonfabric/memory/v2/path";
 
 import type { SpaceDb } from "./db.ts";
@@ -142,7 +143,7 @@ const decode = (value: string): FabricValue => {
     return decodeStored(value);
   } catch (error) {
     return {
-      decodeError: error instanceof Error ? error.message : String(error),
+      decodeError: describeFailure(error),
       stored: value,
     };
   }

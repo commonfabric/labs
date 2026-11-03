@@ -59,7 +59,7 @@ const EXPERIMENTAL = withServerExecutionDefault(
 const SERVER_EXECUTION_RESOLVED = EXPERIMENTAL.serverExecution;
 const VIEW_SCOPED_REQUESTED = SERVER_EXECUTION_RESOLVED &&
   (EXPERIMENTAL.webViewScopedReplication ??
-    EXPERIMENTAL.viewScopedReplication ?? false);
+    EXPERIMENTAL.viewScopedReplication ?? true);
 
 /**
  * The ON arm's STEP-level skip guard (tasks/server-execution-on-skips.ts):

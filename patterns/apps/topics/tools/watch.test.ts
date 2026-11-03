@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CSI, stripAnsi } from "@commonfabric/cli/view/ansi";
+import { urlToAppView } from "@commonfabric/navigation";
 
 import {
   BOARD,
@@ -24,6 +25,7 @@ import {
   consoleTerminal,
   systemClock,
   type Terminal,
+  topicLinks,
   watchBoard,
 } from "./watch.ts";
 
@@ -438,6 +440,40 @@ describe("watch", () => {
 
       await expect(watching).rejects.toThrow("memory session closed");
       expect(terminal.writes.at(-1)).toContain(LEAVE);
+    });
+  });
+
+  describe("topicLinks()", () => {
+    const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+    const opened = (space: string, apiUrl = "https://fabric.example") =>
+      urlToAppView(new URL(`${topicLinks({ apiUrl, space })}42`));
+
+    it("links a Topic in a space named by its DID to that space and that Topic", () => {
+      expect(topicLinks({ apiUrl: "https://fabric.example", space: DID }))
+        .toBe(`https://fabric.example/${DID}/top/`);
+      expect(opened(DID)).toEqual({
+        spaceDid: DID,
+        pieceSlug: "top",
+        pieceMember: "42",
+      });
+    });
+
+    it("links a Topic in a space with a plain name to that space and that Topic", () => {
+      expect(opened("topics-dev", "https://fabric.example/")).toEqual({
+        spaceName: "topics-dev",
+        pieceSlug: "top",
+        pieceMember: "42",
+      });
+    });
+
+    it("keeps the path the deployment's address has", () => {
+      expect(topicLinks({ apiUrl: "https://fabric.example/shell", space: DID }))
+        .toBe(`https://fabric.example/shell/${DID}/top/`);
+    });
+
+    it("throws for a board that names no space", () => {
+      expect(() => topicLinks({ apiUrl: "https://fabric.example", space: "" }))
+        .toThrow("without a space");
     });
   });
 

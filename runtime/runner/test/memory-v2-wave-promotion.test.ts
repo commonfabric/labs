@@ -314,8 +314,12 @@ describe("memory-v2-wave-promotion", () => {
     const space = signer.did();
     const engine = await server.engineForSpace(space);
     const holder = executionLeaseHolder(`wave-promotions:${space}`);
-    const lease = new ExecutionLeaseCycle({ engine, space, holder });
-    expect(lease.acquire()).toBe(true);
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
     const replica = manager.open(space).replica as SpaceReplica;
     const waves: WaveAccumulator[] = [];
     const newWave = () => {
@@ -436,8 +440,12 @@ describe("memory-v2-wave-promotion", () => {
     const engine = await server.engineForSpace(space);
     const foreignEngine = await server.engineForSpace(foreign);
     const holder = executionLeaseHolder(`wave-promotions:${space}`);
-    const lease = new ExecutionLeaseCycle({ engine, space, holder });
-    expect(lease.acquire()).toBe(true);
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    expect(await lease.acquire()).toBe(true);
     expect(
       Engine.applyCommit(foreignEngine, {
         sessionId: "wave-promotion-genesis",

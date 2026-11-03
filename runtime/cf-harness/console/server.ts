@@ -66,6 +66,7 @@ import {
 } from "@commonfabric/pattern-index/front";
 import { legacySpaceDid } from "@commonfabric/identity";
 import { type DID, isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   dirname,
   extname,
@@ -587,7 +588,7 @@ const readSystemPromptFile = (path: string, cwd: string): string => {
   } catch (error) {
     throw new Error(
       `--system-prompt-file could not be read: ${resolved}: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -2211,7 +2212,7 @@ export class ConsoleServer {
       patternRefs = parseTaskPatternRefs(body.patternRefs);
     } catch (error) {
       return Response.json({
-        error: error instanceof Error ? error.message : String(error),
+        error: describeFailure(error),
       }, { status: 400 });
     }
     let browserHost: ConsoleBrowserHost | undefined;
@@ -2645,7 +2646,7 @@ export class ConsoleServer {
       afterSequence = parseAfterSequence(url.searchParams.get("afterSequence"));
     } catch (error) {
       return Response.json({
-        error: error instanceof Error ? error.message : String(error),
+        error: describeFailure(error),
       }, { status: 400 });
     }
     const resumeFrom = afterSequence ?? 0;
@@ -2925,7 +2926,7 @@ export const startConsoleServer = async (
       }
     },
     onError: (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeFailure(error));
       return new Response("internal error", { status: 500 });
     },
   }, (request) => server.handle(request)).finished.finally(() => {
@@ -2940,7 +2941,7 @@ if (import.meta.main) {
   } catch (error) {
     // A misconfigured server is an operator's problem to fix, and the message
     // is the whole of what they need; the stack behind it is noise.
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

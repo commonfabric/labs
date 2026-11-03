@@ -48,6 +48,7 @@ import {
 } from "@commonfabric/piece";
 import { LINK_MARKER_KEY } from "@commonfabric/piece/verb-input";
 import type { PieceCallableListing } from "@commonfabric/piece/verb-listing";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
@@ -108,7 +109,6 @@ import {
   holdsControlCharacter,
   isScopeWord,
   MEMBER_SPELLINGS,
-  messageOf,
   type Move,
   type PathSegment,
   type PendingMove,
@@ -418,7 +418,7 @@ async function get(
       });
   } catch (thrown) {
     if (!(thrown instanceof CellSelectionError)) throw thrown;
-    return refuse(messageOf(thrown));
+    return refuse(describeFailure(thrown));
   }
   const at = await aimed(shuttle, line.operands[0], "get", deps);
   if (at.kind === "refused") return at;
@@ -866,7 +866,9 @@ async function set(
     if (wrote.kind !== "ran") return wrote;
     landed = wrote.answer;
   } catch (thrown) {
-    if (thrown instanceof ValidationError) return refuse(messageOf(thrown));
+    if (thrown instanceof ValidationError) {
+      return refuse(describeFailure(thrown));
+    }
     throw thrown;
   }
   return wroteAt(landed, at.input);
@@ -977,8 +979,8 @@ async function edit(
     parsed = JSON.parse(editing.text);
   } catch (thrown) {
     return refuse(
-      `What the editor saved is not JSON: ${messageOf(thrown)}. Nothing was ` +
-        `written, and the text is in \`${editing.file}\`.`,
+      `What the editor saved is not JSON: ${describeFailure(thrown)}. ` +
+        `Nothing was written, and the text is in \`${editing.file}\`.`,
     );
   }
   // The one site that spells `guarded`'s pair out rather than calling it, and
@@ -1001,7 +1003,9 @@ async function edit(
       { loadPieces: () => shuttle.connection.pieces() },
     );
   } catch (thrown) {
-    if (thrown instanceof ValidationError) return refuse(messageOf(thrown));
+    if (thrown instanceof ValidationError) {
+      return refuse(describeFailure(thrown));
+    }
     throw thrown;
   }
   // The write landed, so the cell holds the text and the file holds nothing
@@ -1057,7 +1061,7 @@ async function link(
     if (
       thrown instanceof LinkValidationError || thrown instanceof ValidationError
     ) {
-      return refuse(messageOf(thrown));
+      return refuse(describeFailure(thrown));
     }
     throw thrown;
   }
@@ -1135,7 +1139,9 @@ async function listVerbs(
     if (read.kind !== "ran") return read;
     listing = read.answer;
   } catch (thrown) {
-    if (thrown instanceof ValidationError) return refuse(messageOf(thrown));
+    if (thrown instanceof ValidationError) {
+      return refuse(describeFailure(thrown));
+    }
     throw thrown;
   }
   const partition = partitionVerbListing(listing.verbs);
@@ -1187,7 +1193,9 @@ async function describe(
     if (read.kind !== "ran") return read;
     description = read.answer;
   } catch (thrown) {
-    if (thrown instanceof ValidationError) return refuse(messageOf(thrown));
+    if (thrown instanceof ValidationError) {
+      return refuse(describeFailure(thrown));
+    }
     throw thrown;
   }
   return paged(
@@ -2299,7 +2307,7 @@ async function resolvedPiece(
   } catch (thrown) {
     if (!(thrown instanceof SlugResolutionError)) throw thrown;
     return refuse(
-      `\`${move.operand}\` reaches no piece: ${messageOf(thrown)}`,
+      `\`${move.operand}\` reaches no piece: ${describeFailure(thrown)}`,
     );
   }
   if (resolved.kind !== "ran") return resolved;
@@ -2633,7 +2641,7 @@ async function resolveTarget(
   try {
     reference = normalizeLLMFriendlyRef(address);
   } catch (thrown) {
-    return { kind: "refused", reason: messageOf(thrown) };
+    return { kind: "refused", reason: describeFailure(thrown) };
   }
   if (reference === undefined) {
     return {
@@ -3060,9 +3068,9 @@ function valueOf(
     return JSON_OPENERS.test(token)
       ? refuse(
         `\`${escapeControlCharacters(token)}\` is not JSON: ` +
-          `${messageOf(thrown)}. A value opening with \`{\`, \`[\`, \`"\`, ` +
-          `\`-\` or a digit is read as JSON; anything else is the string it ` +
-          `spells.`,
+          `${describeFailure(thrown)}. A value opening with \`{\`, ` +
+          `\`[\`, \`"\`, \`-\` or a digit is read as JSON; anything else is ` +
+          `the string it spells.`,
       )
       : { kind: "value", value: token };
   }
@@ -3424,7 +3432,7 @@ async function invoke(
     }
     if (thrown instanceof ValidationError) {
       return refuse(
-        [...said(printed), ...said([messageOf(thrown)])].join("\n"),
+        [...said(printed), ...said([describeFailure(thrown)])].join("\n"),
       );
     }
     throw thrown;

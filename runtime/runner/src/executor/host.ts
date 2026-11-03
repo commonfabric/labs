@@ -12,8 +12,8 @@
 //   provisioning path when its wave staged setup into the space, which
 //   activates a sessionless target where an ordinary authored write
 //   deliberately does not (T11.Q7's write-alone parking);
-// - plane (c): lease acquire/renew by direct table write (the
-//   SpaceServer's cycle);
+// - plane (c): lease acquire and release on the memory server's lease map
+//   (the SpaceServer's cycle);
 // - plane (d): admitted-commit records route to the space's SpaceServer
 //   feed (self-echo skipped there by class + holder).
 //
@@ -64,14 +64,14 @@ export type {
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
- * serve the space the verb names: the host is closed, or another process
- * holds the space's execution lease.
+ * serve the space the verb names: the host is closed, or another holder on
+ * this memory server has the space's execution lease.
  */
 export class SpaceNotServedError extends Error {
   constructor(space: MemorySpace) {
     super(
       `space ${space} is not served by this process (host closed, or ` +
-        "its execution lease is held elsewhere)",
+        "another holder has its execution lease)",
     );
     this.name = "SpaceNotServedError";
   }
@@ -154,7 +154,7 @@ export type ExecutorHostOptions = {
 
   /**
    * The deployment's route to each space's owner
-   * (`serving-loop-owner-routing.md`). Present, the host sends every
+   * (`serving-loop.md` §2). Present, the host sends every
    * crossing into a space other than the one a tenure serves through that
    * space's owner, over a routed plane it keeps for its life; absent, every
    * crossing goes through this process's server.
@@ -310,10 +310,22 @@ export class ExecutorHost {
     return { failureParkStreaks: this.#failureParkStreaks };
   }
 
+  /** The `events` block of {@link stats}, alone and in its own copy. */
+  eventStats(): ServingLoopStats["events"] {
+    refreshDeliveryCheckpointStats(this.#stats);
+    return {
+      ...this.#stats.events,
+      needsAttention: {
+        ...this.#stats.events.needsAttention,
+        byPhase: { ...this.#stats.events.needsAttention.byPhase },
+      },
+    };
+  }
+
   /** The §7 counters, live: static counts merged with per-space state
    * (activeSpaces and watermarkLag read the current SpaceServers). */
   stats(): ServingLoopStats {
-    refreshDeliveryCheckpointStats(this.#stats);
+    const events = this.eventStats();
     let watermarkLag = 0;
     let activeSpaces = 0;
     for (const server of this.#spaces.values()) {
@@ -327,13 +339,7 @@ export class ExecutorHost {
       // the top-level spread shares its reference (the same reason as
       // NIT-1's settle-series copy below).
       derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events: {
-        ...this.#stats.events,
-        needsAttention: {
-          ...this.#stats.events.needsAttention,
-          byPhase: { ...this.#stats.events.needsAttention.byPhase },
-        },
-      },
+      events,
       demand: { ...this.#stats.demand },
       settle: {
         // NIT-1: deep-copy the entries — a series row stays live after it
@@ -350,6 +356,7 @@ export class ExecutorHost {
         })),
       },
       memo: { ...this.#stats.memo },
+      routed: { ...this.#stats.routed },
       outbox: { ...this.#stats.outbox },
       lease: { ...this.#stats.lease },
       lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
@@ -376,7 +383,7 @@ export class ExecutorHost {
    * is queued once more on the successor tenure.
    *
    * Throws {@link SpaceNotServedError} when this process cannot serve the
-   * space — the host is closed, or another process holds the space's lease.
+   * space — the host is closed, or another holder has the space's lease.
    */
   runLifecycleVerb<T>(
     space: MemorySpace,
@@ -433,7 +440,10 @@ export class ExecutorHost {
     // argument link into the viewer's home space, whose pre-genesis
     // session that space's genesis ACL de-authorized. Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
-    // space, so the fan-out costs one map walk per ACL-doc admission.
+    // space, so the fan-out costs one map walk per ACL-doc admission. Only
+    // this server's admissions reach here; a list that changes on another
+    // process's owner reaches a serving runtime's replica of that space
+    // over its routed session, which watches the list itself.
     if (
       this.#spaces.size > 0 &&
       notice.writes.some((write) => write.id === `of:${notice.space}`)
@@ -697,8 +707,7 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
-          const rivalHoldsLease = reason === "lease-unavailable" ||
-            reason === "lease-lost";
+          const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
           } else if (!rivalHoldsLease) {
@@ -763,7 +772,7 @@ export class ExecutorHost {
         // close() ran while this activation was in flight (it awaits us,
         // but park() on a not-yet-active server is a no-op — so the
         // just-activated server must park itself, or it serves and
-        // renews a lease after the host closed).
+        // holds a lease after the host closed).
         await server.park("host-closed");
       }
     } catch (error) {
@@ -965,7 +974,7 @@ export class ExecutorHost {
     for (const wake of [...this.#backoffWakers]) wake();
     // Await in-flight activations FIRST: an activation past its #closed
     // check would otherwise register and start serving after close
-    // returned (a leaked runtime renewing a lease nobody can take), and
+    // returned (a leaked runtime holding a lease nobody can take), and
     // park() on a not-yet-active server is a no-op — so the park sweep
     // below cannot stop it. #activateInner's own post-activate check
     // parks the freshly-activated server once #closed is set; awaiting
@@ -976,7 +985,7 @@ export class ExecutorHost {
         this.#activating.values(),
       );
     }
-    // A server already parking on its own — a lost lease, a failed loop
+    // A server already parking on its own — an idle park, a failed loop
     // — has park() return at once, so its completion is awaited through
     // whenParked: close() must not return while a tenure's runtime is
     // still being disposed against a memory server the caller closes

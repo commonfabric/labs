@@ -278,6 +278,7 @@ describe("topics command", () => {
         { number: "42", address: "of:fid1:e42", piece: "of:fid1:p42" },
       ] as Topic[],
       spaces: ["my-space", "did:key:z6Mk-space"],
+      apiUrl: "https://board.example",
     };
 
     it("returns the Topic a number names, however the number is written", () => {
@@ -286,8 +287,12 @@ describe("topics command", () => {
           "42",
           "#42",
           "top/42",
+          "/top/42",
           "//my-space/top/42",
+          "//my-space/42",
+          "//my-space/#42",
           "//did:key:z6Mk-space/top/42",
+          "https://board.example/my-space/top/42",
         ]
       ) {
         expect(findTopic(read, reference).piece).toBe("of:fid1:p42");
@@ -295,20 +300,184 @@ describe("topics command", () => {
     });
 
     it("returns the Topic its address or its piece's address names", () => {
-      expect(findTopic(read, "/of:fid1:e4").number).toBe("4");
+      for (
+        const reference of [
+          "of:fid1:e4",
+          "/of:fid1:e4",
+          "fid1:e4",
+          "/fid1:e4",
+          "//my-space/fid1:e4",
+          "//did:key:z6Mk-space/of:fid1:e4",
+          "fid1:p4",
+          "//my-space/of:fid1:p4",
+          "/of:fid1:e4#result",
+          "/of:fid1:e4@space",
+        ]
+      ) {
+        expect(findTopic(read, reference).number).toBe("4");
+      }
       expect(findTopic(read, "of:fid1:p42").number).toBe("42");
     });
 
-    it("throws for a Topic the board does not hold, or a number in another space, naming it once", () => {
+    describe("given part of an address", () => {
+      const quoting = {
+        ...read,
+        topics: [
+          {
+            number: "5",
+            address: "of:fid1:3MmaxyNMtCzB8R_FBZ4tE1_Q3z1MQ_12345678",
+            piece: "of:fid1:Wq8vRk2LmPz5",
+          },
+          {
+            number: "6",
+            address: "of:fid1:AEVJwT4HnfruI0_3MmaxyNMtCzB8R",
+            piece: "of:fid1:p6",
+          },
+          {
+            number: "7",
+            address: "of:fid1:e7",
+            piece: "of:fid1:AEVJwT4HnfruI0",
+          },
+        ] as Topic[],
+      };
+
+      it("returns the one Topic whose address or piece's address holds it", () => {
+        expect(findTopic(quoting, "Wq8vRk2LmP").number).toBe("5");
+        for (
+          const reference of [
+            "FBZ4tE1_Q3z1MQ",
+            "B8R_FBZ4tE1",
+            "fid1:3MmaxyNMtCzB8R_FBZ4",
+            "/of:fid1:3MmaxyNMtCzB8R_FB",
+          ]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("5");
+        }
+      });
+
+      it("returns the Topic it names whole, though another's address holds it", () => {
+        for (
+          const reference of ["fid1:AEVJwT4HnfruI0", "/of:fid1:AEVJwT4HnfruI0"]
+        ) {
+          expect(findTopic(quoting, reference).number).toBe("7");
+        }
+      });
+
+      it("throws for a part of more than one Topic's address, naming each", () => {
+        expect(() => findTopic(quoting, "AEVJwT4HnfruI0")).toThrow(
+          "it is part of the address or piece address of each of top/6, top/7.",
+        );
+        expect(() => findTopic(quoting, "3MmaxyNMtCzB8R")).toThrow(
+          '`"3MmaxyNMtCzB8R"` names no Topic on this board: it is part of ' +
+            "the address or piece address of each of top/5, top/6.",
+        );
+      });
+
+      it("throws for a part quoting fewer than eight characters of an id", () => {
+        for (
+          const reference of ["Q3z1MQ_", "fid1:3Mmaxy", "/of:fid1:", "of"]
+        ) {
+          expect(() => findTopic(quoting, reference)).toThrow(
+            `The board has no Topic \`"${reference}"\`.`,
+          );
+        }
+        expect(findTopic(quoting, "_Q3z1MQ_").number).toBe("5");
+      });
+
+      it("reads a number as a number, though an address holds it", () => {
+        expect(() => findTopic(quoting, "12345678")).toThrow(
+          "The board has no Topic top/12345678.",
+        );
+      });
+    });
+
+    it("returns the Topic a page on the board's server shows", () => {
+      for (
+        const reference of [
+          "https://board.example/my-space/fid1:e4",
+          "https://board.example/my-space/of:fid1:p4",
+          "https://board.example/@my-space/fid1:e4",
+          "https://board.example/did:key:z6Mk-space/fid1:e4",
+          "https://board.example/my-space/top/4",
+        ]
+      ) {
+        expect(findTopic(read, reference).piece).toBe("of:fid1:p4");
+      }
+    });
+
+    it("throws for a Topic the board does not hold, naming it once", () => {
       expect(() => findTopic(read, "#7")).toThrow(
         "The board has no Topic top/7.",
       );
       expect(() => findTopic(read, "/of:fid1:other")).toThrow(
         'The board has no Topic `"/of:fid1:other"`.',
       );
-      expect(() => findTopic(read, "//other-space/top/42")).toThrow(
-        "The board has no Topic //other-space/top/42.",
+      expect(() => findTopic(read, "fid1:other")).toThrow(
+        'The board has no Topic `"fid1:other"`.',
       );
+    });
+
+    it("throws for a reference in another space, naming both spaces", () => {
+      for (
+        const reference of [
+          "//other-space/top/42",
+          "//other-space/fid1:e4",
+          "https://board.example/other-space/fid1:e4",
+          "https://board.example/other-space/top/4",
+        ]
+      ) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: it names the ` +
+            "space other-space, not the board's, my-space.",
+        );
+      }
+    });
+
+    it("throws for a long page URL the board does not hold, naming all of it", () => {
+      const reference = "https://board.example/my-space/fid1:" + "x".repeat(60);
+
+      expect(() => findTopic(read, reference)).toThrow(
+        `The board has no Topic \`"${reference}"\`.`,
+      );
+    });
+
+    it("throws for a page on another server, naming both servers", () => {
+      expect(() =>
+        findTopic(read, "https://elsewhere.example/my-space/fid1:e4")
+      ).toThrow(
+        '`"https://elsewhere.example/my-space/fid1:e4"` names no Topic on ' +
+          "this board: it is a page on https://elsewhere.example, not on " +
+          "the board's server, https://board.example.",
+      );
+    });
+
+    it("throws for a reference to something other than a Topic's number or a piece", () => {
+      for (
+        const reference of [
+          "/of:fid1:e4/title",
+          "/of:fid1:e4#argument",
+          "/of:fid1:e4@user",
+          "//my-space/top/4/comments",
+          "https://board.example/",
+          "https://board.example/my-space",
+          "https://board.example/my-space/fid1:e4/title",
+          "https://board.example/my-space/top/4/comments",
+          "https://board.example/my-space/other/4",
+        ]
+      ) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: it names ` +
+            "neither a Topic's number nor a piece.",
+        );
+      }
+    });
+
+    it("throws for a reference that does not parse, naming it", () => {
+      for (const reference of ["#4a", "fid1:e4#bar", "computed:fid1:e4"]) {
+        expect(() => findTopic(read, reference)).toThrow(
+          `\`"${reference}"\` names no Topic on this board: `,
+        );
+      }
     });
   });
 
@@ -420,6 +589,16 @@ describe("topics command", () => {
       );
     });
 
+    it("prints the Topic a page on the board's server shows", async () => {
+      await showAction(
+        {},
+        [`http://localhost:1/${SPACE}/fid1:topic-alias-1`],
+        deps,
+      );
+
+      expect(printed()).toMatch(/^# top\/1: Flaky fryer test\n/);
+    });
+
     it("prints the Topics the board holds, then throws naming those it does not", async () => {
       await expect(showAction({}, ["99999", "1", "#7"], deps)).rejects
         .toThrow("The board has no Topics top/99999, top/7.");
@@ -431,6 +610,17 @@ describe("topics command", () => {
       await expect(showAction({}, ["9"], deps)).rejects.toThrow(
         "The board has no Topic top/9.",
       );
+      expect(output.length).toBe(shown);
+    });
+
+    it("throws for a reference to another space before printing any Topic", async () => {
+      const shown = output.length;
+
+      await expect(showAction({}, ["1", "//other-space/top/2"], deps)).rejects
+        .toThrow(
+          '`"//other-space/top/2"` names no Topic on this board: it names ' +
+            "the space other-space",
+        );
       expect(output.length).toBe(shown);
     });
   });
@@ -1161,6 +1351,18 @@ describe("topics command", () => {
         body: "Reproduced with cold oil.",
         sentAt: 2000,
       }]);
+    });
+
+    it("shows a Topic named by part of its address", async () => {
+      await run("show", "topic-alias-1", "c-piece-2", "--json");
+      const shown = JSON.parse(printed());
+
+      expect(shown.map((topic: { number: string }) => topic.number)).toEqual(
+        ["1", "2"],
+      );
+      await expect(run("show", "alias-1")).rejects.toThrow(
+        'The board has no Topic `"alias-1"`.',
+      );
     });
 
     it("shows only the comments `--last` and `--comments-since` leave", async () => {

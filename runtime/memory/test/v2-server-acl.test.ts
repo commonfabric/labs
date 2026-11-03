@@ -4255,6 +4255,133 @@ describe("v2-server-acl", () => {
     });
   });
 
+  describe("an ACL refusal's `aclRevision`", () => {
+    it("names the `seq` at which the ACL document is stored, not the server's current sequence, and moves only with the document", async () => {
+      const server = createAclServer("memory://acl-revision-document-seq", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-acl-revision-space";
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        const alice = await connect(server);
+        const aliceSession = await openSession(alice, space, ALICE);
+        expectExists(aliceSession.ok);
+        const aliceId = aliceSession.ok.sessionId;
+        // The genesis ACL is the space's first commit.
+        const genesisSeq = 1;
+        let localSeq = 0;
+        for (const n of [1, 2, 3]) {
+          const write = await transactSet(
+            alice,
+            space,
+            aliceId,
+            `of:doc:${n}`,
+            { n },
+            ++localSeq,
+          );
+          expectExists(write.ok);
+        }
+
+        const bob = await connect(server);
+        const refused = await openSession(bob, space, BOB);
+        expect(refused.error).toMatchObject({
+          name: "AuthorizationError",
+          permanentEvidence: true,
+          aclRevision: genesisSeq,
+        });
+
+        const changed = await transactSet(
+          alice,
+          space,
+          aliceId,
+          `of:${space}`,
+          { [ALICE]: "OWNER", [CAROL]: "READ" },
+          ++localSeq,
+        );
+        expectExists(changed.ok);
+        const later = await transactSet(
+          alice,
+          space,
+          aliceId,
+          "of:doc:later",
+          { later: true },
+          ++localSeq,
+        );
+        expectExists(later.ok);
+        expect(later.ok.seq).toBeGreaterThan(changed.ok.seq);
+
+        const refusedAgain = await openSession(
+          await connect(server),
+          space,
+          BOB,
+        );
+        expect(refusedAgain.error).toMatchObject({
+          name: "AuthorizationError",
+          permanentEvidence: true,
+          aclRevision: changed.ok.seq,
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("is 0 for a space whose store holds no ACL document, whatever its history", async () => {
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-revision-none-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-revision-no-acl";
+      try {
+        const seedServer = createAclServer(store, { mode: "off" });
+        try {
+          const seed = await connect(seedServer);
+          const opened = await openSession(seed, space, ALICE);
+          expectExists(opened.ok);
+          for (const n of [1, 2]) {
+            const write = await transactSet(
+              seed,
+              space,
+              opened.ok.sessionId,
+              `of:doc:${n}`,
+              { n },
+              n,
+            );
+            expectExists(write.ok);
+          }
+        } finally {
+          await seedServer.close();
+        }
+
+        const server = createAclServer(store, { mode: "enforce" });
+        try {
+          // A space without an ACL admits authenticated principals only, so
+          // an anonymous open is refused by its ACL state.
+          const { connection, messages, sessionOpen } = await connect(server);
+          await connection.receive(encodeMemoryBoundary({
+            type: "session.open",
+            requestId: nextRequestId("open"),
+            space,
+            session: {},
+            invocation: {
+              aud: sessionOpen.audience,
+              challenge: sessionOpen.challenge.value,
+            },
+          }));
+          const refused = nextResponse<SessionOpenResult>(messages);
+          expect(refused.error).toMatchObject({
+            name: "AuthorizationError",
+            permanentEvidence: true,
+            aclRevision: 0,
+          });
+        } finally {
+          await server.close();
+        }
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  });
+
   describe("sameAcl()", () => {
     it("returns `true` only for the exact principals and capabilities in any key order, and `false` for an array or scalar", () => {
       const expected = { [ALICE]: "OWNER" as const, [BOB]: "WRITE" as const };

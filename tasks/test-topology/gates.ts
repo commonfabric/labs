@@ -685,6 +685,10 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     // patterns.
     whole: units,
     unitsForChange: patternsReached(root, files, new Set(units)),
+    sourcesOf(unit) {
+      const source = byKey.get(unit);
+      return source === undefined ? [] : [source];
+    },
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };

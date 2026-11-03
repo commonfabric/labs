@@ -646,7 +646,7 @@ export class DomApplicator {
     this.#discardPendingForNodeIds(removedNodeIds);
     if (!node) return;
 
-    logger.timeStart("remove-node", String(nodeId));
+    const startTime = performance.now();
 
     // Recursively clean up descendants first (O(n) via parent/children tracking)
     const descendantCount = this.#cleanupDescendants(nodeId);
@@ -678,11 +678,15 @@ export class DomApplicator {
     // Remove from tracking
     this.#nodes.delete(nodeId);
 
-    const elapsed = logger.timeEnd("remove-node", String(nodeId));
+    const elapsed = logger.timeDetailed(
+      () => `node ${nodeId}`,
+      startTime,
+      "remove-node",
+    );
     if (descendantCount > 0) {
       logger.debug("remove-node", () => [
         `Removed node ${nodeId} with ${descendantCount} descendants in ${
-          elapsed?.toFixed(2)
+          elapsed.toFixed(2)
         }ms`,
       ]);
     }

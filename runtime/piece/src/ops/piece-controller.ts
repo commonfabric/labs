@@ -5,6 +5,7 @@ import {
   taggedHashStringOf,
 } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import {
   applyPieceSourceTransition,
@@ -458,7 +459,7 @@ export function pinnedSourceMoved(
   pinned: { identity: string; symbol: string } | undefined,
 ): unknown {
   if (pinned === undefined) return error;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   if (!message.includes(PIECE_SOURCE_MOVED)) return error;
   return new PieceSourceChangedError(
     `The piece moved off ${pinned.identity}#${pinned.symbol} before the ` +
@@ -1949,7 +1950,7 @@ function linkMatchesCommittedState(
 function incompatibleLinkError(displayPath: string, cause: unknown): Error {
   return new Error(
     `input link at ${displayPath} schema is not compatible: ${
-      cause instanceof Error ? cause.message : String(cause)
+      describeFailure(cause)
     }`,
   );
 }
@@ -3392,7 +3393,7 @@ class PiecePropIo implements PieceCellIo {
         } catch (error) {
           throw new Error(
             `updated ${this.#type} does not match its write destination: ${
-              error instanceof Error ? error.message : String(error)
+              describeFailure(error)
             }`,
           );
         }
@@ -4567,7 +4568,7 @@ export class PieceController<T = unknown> {
         if (committed) {
           return {
             status: "applied",
-            executionWarning: pieceSourceErrorMessage(error),
+            executionWarning: describeFailure(error),
           };
         }
         throw pinnedSourceMoved(error, proved);
@@ -4745,7 +4746,7 @@ export class PieceController<T = unknown> {
           if (action.kind === "adopt") {
             await this.#recordReconciliation(expected, origin, {
               outcome: "unreachable",
-              detail: pieceSourceErrorMessage(error),
+              detail: describeFailure(error),
             });
           }
           throw error;
@@ -4890,9 +4891,7 @@ export class PieceController<T = unknown> {
                     previous.pattern?.argumentSchema,
                   );
                 } catch (error) {
-                  const message = error instanceof Error
-                    ? error.message
-                    : String(error);
+                  const message = describeFailure(error);
                   if (acceptedReview?.issues.retainedLinks === message) return;
                   throw error;
                 }
@@ -4946,13 +4945,13 @@ export class PieceController<T = unknown> {
           : error;
         return {
           status: "applied",
-          executionWarning: pieceSourceErrorMessage(cause),
+          executionWarning: describeFailure(cause),
         };
       }
       const waivedSchema = reviewed?.waivedSchema;
       if (
         reviewed !== undefined && waivedSchema !== undefined &&
-        pieceSourceErrorMessage(error).includes(PIECE_RELEASE_OVERTAKEN)
+        describeFailure(error).includes(PIECE_RELEASE_OVERTAKEN)
       ) {
         // The candidate stopped being the later release while it was set
         // up, so the comparison its review left out applies after all.
@@ -5257,7 +5256,7 @@ export class PieceController<T = unknown> {
         const cause = error instanceof PatternSetupPostCommitError
           ? error.cause
           : error;
-        const warning = pieceSourceErrorMessage(cause);
+        const warning = describeFailure(cause);
         console.warn(
           "Piece source was saved, but refreshing the running piece failed:",
           cause,
@@ -5497,7 +5496,7 @@ function assertPieceSourceRetainedLinksCompatible(
   } catch (error) {
     throw new Error(
       RETAINED_INPUT_COMPATIBILITY_PREFIX +
-        (error instanceof Error ? error.message : String(error)),
+        describeFailure(error),
       { cause: error },
     );
   }
@@ -5547,7 +5546,7 @@ function pieceSourceArgumentEvidence(
         })) ?? null,
       };
     } catch (error) {
-      return { path: suppliedLink.path, error: pieceSourceErrorMessage(error) };
+      return { path: suppliedLink.path, error: describeFailure(error) };
     }
   });
   return taggedHashStringOf({ raw, links });
@@ -5670,7 +5669,7 @@ async function pieceSourceCompatibilityReview(
     try {
       assertPatternSchemasBackwardCompatible(previous.pattern, candidate);
     } catch (error) {
-      schema = error instanceof Error ? error.message : String(error);
+      schema = describeFailure(error);
     }
   }
   if (schema !== undefined && !options.gatedRelease) issues.schema = schema;
@@ -5686,7 +5685,7 @@ async function pieceSourceCompatibilityReview(
       candidate,
     );
   } catch (error) {
-    issues.argument = pieceSourceErrorMessage(error);
+    issues.argument = describeFailure(error);
   }
 
   try {
@@ -5698,9 +5697,7 @@ async function pieceSourceCompatibilityReview(
       previous.pattern?.argumentSchema,
     );
   } catch (error) {
-    issues.retainedLinks = error instanceof Error
-      ? error.message
-      : String(error);
+    issues.retainedLinks = describeFailure(error);
   }
 
   const cfc = pieceSourceCfcEnvelopeIssue(
@@ -5892,10 +5889,6 @@ function isOverridableArgumentCompatibilityError(error: unknown): boolean {
   return error.message.includes(
     "updated arguments do not match the candidate schema:",
   ) || error.message.includes(RETAINED_INPUT_COMPATIBILITY_PREFIX);
-}
-
-function pieceSourceErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { createTestSpace, env } from "@commonfabric/integration";
 import { type DID, Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { isLink } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -79,6 +80,10 @@ describe("profile-before-home integration test", () => {
     await waitForRuntimeIdle(page);
 
     // Home links a root, and a runtime that never saw the browser opens it.
+    // With server execution on, the profile handler runs on the server after
+    // the browser commits the event, and waits there for Home's own space to
+    // link a root. The browser going idle covers neither the root nor the
+    // profile, so each wait is on the cell that holds it.
     const home = await initializePiecesController({
       space: identity.did(),
       apiUrl: new URL(API_URL),
@@ -86,13 +91,24 @@ describe("profile-before-home integration test", () => {
     });
     try {
       const spaceCell = home.runtime.getCell(identity.did(), identity.did());
-      await spaceCell.sync();
-      const slot = (spaceCell.getRaw() as { defaultPattern?: unknown })
-        .defaultPattern;
-      expect(isLink(slot)).toBe(true);
+      const defaultPattern = () =>
+        (spaceCell.getRaw() as { defaultPattern?: unknown } | undefined)
+          ?.defaultPattern;
+      await waitForCellValue(
+        home.runtime,
+        spaceCell,
+        () => isLink(defaultPattern()),
+        { stuckLabel: "Home links a root" },
+      );
+      expect(isLink(defaultPattern())).toBe(true);
       const root = (await home.ensureDefaultPattern()).getCell();
       const profiles = root.key("profiles" as never).resolveAsCell();
-      await profiles.sync();
+      await waitForCellValue(
+        home.runtime,
+        profiles,
+        () => (profiles.getRaw() as unknown[] | undefined)?.length === 1,
+        { stuckLabel: "Home lists the profile" },
+      );
       expect(profiles.getRaw()).toHaveLength(1);
     } finally {
       await home.dispose();

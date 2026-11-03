@@ -35,6 +35,7 @@ import {
   PieceController,
   type PiecesController,
 } from "@commonfabric/piece/ops";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -480,9 +481,6 @@ export const sealedPositionLink = (
   }
   return { "@link": ref };
 };
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The entry path `compileAndSavePattern` wraps bare source under. Written out
@@ -1017,7 +1015,7 @@ export const runPatternTool: HarnessToolDefinition<
         label: "run_pattern resultSchema",
       });
     } catch (error) {
-      return errorOutput("error", errorMessage(error));
+      return errorOutput("error", describeFailure(error));
     }
     let session;
     try {
@@ -1025,7 +1023,7 @@ export const runPatternTool: HarnessToolDefinition<
     } catch (error) {
       return errorOutput(
         "error",
-        `fabric session unavailable: ${errorMessage(error)}`,
+        `fabric session unavailable: ${describeFailure(error)}`,
       );
     }
     const { pieces } = session;
@@ -1122,7 +1120,7 @@ export const runPatternTool: HarnessToolDefinition<
           ...errorOutput(
             "error",
             `pattern index lookup failed for "${patternId}": ${
-              errorMessage(error)
+              describeFailure(error)
             }`,
           ),
           ...(error instanceof PatternIndexError && error.detail !== undefined
@@ -1172,7 +1170,7 @@ export const runPatternTool: HarnessToolDefinition<
           "error",
           "the published patterns this source composes could not be made available; the failure text is retained in the run artifact and withheld here, since it can quote source you did not author",
         ),
-        rawCauseMessage: errorMessage(error),
+        rawCauseMessage: describeFailure(error),
       };
     }
     let pattern;
@@ -1190,14 +1188,14 @@ export const runPatternTool: HarnessToolDefinition<
       return patternId === undefined
         ? errorOutput(
           "compile-error",
-          withRuntimeModuleCorrection(errorMessage(error)),
+          withRuntimeModuleCorrection(describeFailure(error)),
         )
         : {
           ...errorOutput(
             "compile-error",
             `the indexed pattern "${patternId}" did not compile; the diagnostic is retained in the run artifact and withheld here, since it quotes source you did not author`,
           ),
-          rawCauseMessage: errorMessage(error),
+          rawCauseMessage: describeFailure(error),
         };
     }
     // An input's value must match the compiled pattern's argument schema for
@@ -1377,13 +1375,13 @@ export const runPatternTool: HarnessToolDefinition<
       // model never saw, so the artifact keeps the text and the model gets
       // the fact of the failure — the same division the compile path makes.
       return patternId === undefined
-        ? errorOutput("error", errorMessage(error))
+        ? errorOutput("error", describeFailure(error))
         : {
           ...errorOutput(
             "error",
             `the indexed pattern "${patternId}" failed while starting; the failure text is retained in the run artifact and withheld here, since it can quote source you did not author`,
           ),
-          rawCauseMessage: errorMessage(error),
+          rawCauseMessage: describeFailure(error),
         };
     }
     recordOutcome("instantiated");
@@ -1671,7 +1669,7 @@ export const runPatternTool: HarnessToolDefinition<
         );
         linkedStringCount = sanitized.linkedStringCount;
       } catch (error) {
-        valueError = errorMessage(error);
+        valueError = describeFailure(error);
       }
     }
     // A result that settled to nothing is not a success to report. When the
@@ -1966,7 +1964,7 @@ export const runPatternTool: HarnessToolDefinition<
         // identically from outside, so its text goes to the artifact rather
         // than nowhere — a check that fails silently for its own reasons is
         // the failure this gate exists to remove.
-        outcome = recorded("probe-failed", errorMessage(error));
+        outcome = recorded("probe-failed", describeFailure(error));
       }
       return signal?.aborted === true ? "cancelled" : outcome;
     };

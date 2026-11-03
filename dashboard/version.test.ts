@@ -4,7 +4,13 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { dashboardVersion, processStartVersion } from "./version.ts";
+import {
+  dashboardVersion,
+  processStartVersion,
+  SERVING_VERSION,
+  VERSION_HEADER,
+  withVersionHeader,
+} from "./version.ts";
 
 const DEPLOYED_COMMIT = "1".repeat(40);
 const START = new Date("2026-08-05T07:15:34.820Z");
@@ -59,4 +65,22 @@ Deno.test("dashboard image requires the publishing workflow commit", async () =>
     dockerfile,
     "grep -Eq '^[0-9a-f]{40}$'",
   );
+});
+
+Deno.test("a response served by this version names it and keeps everything else", async () => {
+  const served = withVersionHeader(
+    new Response("gone", {
+      status: 410,
+      headers: { "content-type": "text/plain" },
+    }),
+  );
+  assertEquals(served.status, 410);
+  assertEquals(served.headers.get("content-type"), "text/plain");
+  assertEquals(served.headers.get(VERSION_HEADER), SERVING_VERSION);
+  assertEquals(await served.text(), "gone");
+
+  const redirect = withVersionHeader(Response.redirect("http://x/next", 303));
+  assertEquals(redirect.status, 303);
+  assertEquals(redirect.headers.get("location"), "http://x/next");
+  assertEquals(redirect.headers.get(VERSION_HEADER), SERVING_VERSION);
 });

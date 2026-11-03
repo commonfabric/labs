@@ -1,7 +1,9 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import type { FabricPlainObject } from "@commonfabric/api";
 import { connect, loopback } from "../v2/client.ts";
+import { ROUTED_PART_BYTES, ROUTED_QUEUE_LIMIT } from "../v2/routed-limits.ts";
 import {
   type ServedRequestCall,
   type ServedRequestHandler,
@@ -31,8 +33,16 @@ class Wire {
     (response: ResponseMessage<FabricPlainObject>) => void
   >();
 
+  #refusing = false;
+  #refusingNext = false;
+
   constructor(server: Server) {
     this.#connection = server.connect((message) => {
+      if (this.#refusing) throw new Error("the socket has closed");
+      if (this.#refusingNext) {
+        this.#refusingNext = false;
+        throw new Error("the message could not be encoded");
+      }
       const waiter = message.type === "response"
         ? this.#waiting.get(message.requestId)
         : undefined;
@@ -73,6 +83,16 @@ class Wire {
     >();
     this.#waiting.set(requestId, resolve);
     return promise;
+  }
+
+  /** Makes the next send throw, and the sends after it go through. */
+  refuseNextSend(): void {
+    this.#refusingNext = true;
+  }
+
+  /** Makes every later send throw, as a transport whose socket closed does. */
+  refuseSends(): void {
+    this.#refusing = true;
   }
 
   close(): void {
@@ -366,9 +386,147 @@ describe("served", () => {
       expect(response.error?.code).toBe("payload-too-large");
       expect(calls).toEqual([]);
     });
+
+    it("reports an answer its transport refuses instead of leaving it unhandled", async () => {
+      const server = newServer();
+      server.setServedRequestHandler(recording().handler);
+      const { wire, sessionId } = await openSession(server, SERVICE);
+      const reported = Promise.withResolvers<unknown[]>();
+      using _logged = stub(console, "error", (...args: unknown[]) => {
+        reported.resolve(args);
+      });
+      wire.refuseSends();
+
+      await request(wire, sessionId);
+
+      const [message, error] = await reported.promise;
+      expect(message).toContain("could not be sent");
+      expect(error).toBeInstanceOf(Error);
+    });
+
+    it("answers with `internal` when the result cannot be sent but a refusal can", async () => {
+      const server = newServer();
+      server.setServedRequestHandler(recording().handler);
+      const { wire, sessionId } = await openSession(server, SERVICE);
+      using _logged = stub(console, "error", () => {});
+      wire.refuseNextSend();
+
+      const response = await wire.response(await request(wire, sessionId));
+
+      expect(response.error?.name).toBe("ServedRequestRefusal");
+      expect(response.error?.code).toBe("internal");
+    });
+
+    it("drops the answer to a request whose connection closed while it ran", async () => {
+      const server = newServer();
+      const release = Promise.withResolvers<void>();
+      const ran = Promise.withResolvers<void>();
+      server.setServedRequestHandler(async () => {
+        ran.resolve();
+        await release.promise;
+        return { ok: { seq: 7, deduped: false } };
+      });
+      const { wire, sessionId } = await openSession(server, SERVICE);
+      await request(wire, sessionId);
+      await ran.promise;
+
+      wire.close();
+      release.resolve();
+      await server.close();
+
+      expect(wire.next()).toBeUndefined();
+    });
+
+    it("refuses with a session error a request naming a session the space never opened", async () => {
+      const server = newServer();
+      const { calls, handler } = recording();
+      server.setServedRequestHandler(handler);
+
+      const response = await server.runServedRequest({
+        type: "served",
+        requestId: "absent-session",
+        space: SPACE,
+        sessionId: "never-opened",
+        kind: "append",
+        body: {},
+      });
+
+      expect(response.error?.name).toBe("SessionError");
+      expect(calls).toEqual([]);
+    });
   });
 
   describe("client", () => {
+    const asService = (
+      _space: string,
+      _descriptor: unknown,
+      context: { audience: string; challenge: { value: string } },
+    ) => ({
+      invocation: {
+        iss: SERVICE,
+        aud: context.audience,
+        challenge: context.challenge.value,
+      },
+      authorization: {},
+    });
+
+    const codeOf = (call: Promise<unknown>) =>
+      call.then(
+        () => undefined,
+        (error: unknown) => (error as Error & { code?: string }).code,
+      );
+
+    it("throws `payload-too-large` without sending, for a request past the direct bound", async () => {
+      const server = newServer();
+      const { calls, handler } = recording();
+      server.setServedRequestHandler(handler);
+      const client = await connect({ transport: loopback(server) });
+      try {
+        const session = await client.mount(SPACE, {}, asService);
+
+        // Two bytes a character, so the request passes the byte bound
+        // with fewer characters than the bound counts.
+        expect(
+          await codeOf(session.runServed("append", {
+            payload: "é".repeat(SERVED_REQUEST_MAX_BYTES / 2 + 1),
+          })),
+        ).toBe("payload-too-large");
+        expect(calls).toEqual([]);
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("sends a request past the routed bound on a direct connection, and refuses it without sending on a connection bounded as a routed one is", async () => {
+      const server = newServer();
+      const { calls, handler } = recording();
+      server.setServedRequestHandler(handler);
+      const body = { payload: "x".repeat(ROUTED_QUEUE_LIMIT + 1) };
+      const direct = await connect({ transport: loopback(server) });
+      const bounded = await connect({
+        transport: loopback(server, {
+          messageLimits: {
+            bytes: ROUTED_PART_BYTES,
+            values: null,
+            whole: ROUTED_QUEUE_LIMIT,
+          },
+        }),
+      });
+      try {
+        const directSession = await direct.mount(SPACE, {}, asService);
+        const boundedSession = await bounded.mount(SPACE, {}, asService);
+
+        expect(await directSession.runServed("append", body))
+          .toEqual({ seq: 7, deduped: false });
+        expect(await codeOf(boundedSession.runServed("append", body)))
+          .toBe("payload-too-large");
+        expect(calls).toHaveLength(1);
+      } finally {
+        await direct.close();
+        await bounded.close();
+      }
+    });
+
     it("sends a request through `runServed` and returns the handler's result", async () => {
       const server = newServer();
       const { calls, handler } = recording();

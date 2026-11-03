@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   PatternIndexEventType,
   PatternIndexPublishRequest,
@@ -112,9 +113,6 @@ export const patternCapabilityKey = (
       .sort(),
   ]);
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 export const createPatternIndexLedger = (
   getClient: HarnessPatternIndexClientFactory,
   options: { onError?: (message: string) => void } = {},
@@ -161,7 +159,7 @@ export const createPatternIndexLedger = (
       } catch (error) {
         onError(
           `run_pattern could not publish the pattern it ran to the pattern index: ${
-            errorMessage(error)
+            describeFailure(error)
           }`,
         );
       }
@@ -177,7 +175,7 @@ export const createPatternIndexLedger = (
         } catch (error) {
           onError(
             `run_pattern could not record the ${eventType} event for pattern index entry "${patternId}": ${
-              errorMessage(error)
+              describeFailure(error)
             }`,
           );
         }

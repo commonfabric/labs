@@ -254,6 +254,10 @@ export type EnsurePieceVerdict = {
    * `pattern-unloadable`, `start-declined`, and `origin-pending`. */
   root?: OwningRootAddress;
 
+  /** The content identity of the pattern a `pattern-unloadable` verdict
+   * could not load. */
+  patternIdentity?: string;
+
   /** Every doc id the traversal read (the demanded root plus chain
    * links): the demand cycle's commit-triggered re-arm watches these. */
   observedDocIds: string[];
@@ -460,6 +464,7 @@ async function ensureVerdict(
         return {
           started: false,
           reason: "pattern-unloadable",
+          patternIdentity: identityRef.identity,
           root,
           observedDocIds,
           observedDocs,

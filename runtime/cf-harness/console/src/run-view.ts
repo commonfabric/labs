@@ -5,6 +5,7 @@
  */
 
 import { html, LitElement, nothing, type TemplateResult } from "lit";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type ConsoleRunDetail, readRun, readRunFile } from "./api.ts";
 import "./steps-view.ts";
 
@@ -87,7 +88,7 @@ export class ConsoleRunView extends LitElement {
       if (read !== this.#reads) {
         return;
       }
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = describeFailure(error);
     }
   }
 
@@ -119,7 +120,7 @@ export class ConsoleRunView extends LitElement {
       }
     } catch (error) {
       if (stillShowing()) {
-        this.rawText = error instanceof Error ? error.message : String(error);
+        this.rawText = describeFailure(error);
       }
     }
   }

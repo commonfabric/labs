@@ -143,7 +143,7 @@ describe("SpaceServer", () => {
     /** Holds the answer to the next demand request until it settles. */
     let held: Promise<void> | undefined;
     const facade = initial === "served" ? server : new Proxy(server, {
-      get(target, key, receiver) {
+      get(target, key) {
         if (key === "demandForSpace") {
           return (
             _space: string,
@@ -155,7 +155,7 @@ describe("SpaceServer", () => {
             return hold === undefined ? demand : hold.then(() => demand);
           };
         }
-        const value = Reflect.get(target, key, receiver);
+        const value = Reflect.get(target, key);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

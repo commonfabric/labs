@@ -7,6 +7,7 @@ import {
   type RuntimeClient,
   type VNode,
 } from "@commonfabric/runtime-client";
+import { getLogger } from "@commonfabric/logger";
 import { MockDoc } from "../src/mock-doc.ts";
 import { VDomRenderer } from "../src/main/renderer.ts";
 import { getActiveRenders, render } from "../src/render.ts";
@@ -338,6 +339,55 @@ describe("main-renderer", () => {
         batchId: 7,
       }]);
 
+      await renderer.dispose();
+    });
+
+    it("records mounts, batches and unmounts under one timing key each", async () => {
+      const logger = getLogger("vdom-renderer");
+      const countOf = (key: string) => logger.getTimeStats(key)?.count ?? 0;
+      const before = ["mount", "batch", "unmount"].map(countOf);
+      const connection = new MockConnection();
+      const mock = new MockDoc(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+      );
+      const renderer = new VDomRenderer({
+        runtimeClient: {} as any,
+        connection: connection as any,
+        document: mock.document,
+      });
+      const cellRef = {
+        space: "did:key:test",
+        id: "cell-id",
+        path: [],
+        type: "application/json",
+      } as unknown as CellRef;
+
+      const container = mock.document.getElementById("root")!;
+      await renderer.render(container as unknown as HTMLElement, cellRef);
+      const mountId = renderer.getMountId();
+      if (mountId === null) {
+        throw new Error("expected renderer to have an active mount");
+      }
+      for (const batchId of [7, 8]) {
+        connection.emit("vdombatch", {
+          type: "vdom:batch",
+          batchId,
+          mountId,
+          ops: [{ op: "create-element", nodeId: batchId, tagName: "b" }],
+        });
+      }
+      await renderer.stopRendering();
+
+      expect(["mount", "batch", "unmount"].map(countOf)).toEqual([
+        before[0] + 1,
+        before[1] + 2,
+        before[2] + 1,
+      ]);
+      expect(
+        Object.keys(logger.timeStats).filter((key) =>
+          /^(mount|batch|unmount)\//.test(key)
+        ),
+      ).toEqual([]);
       await renderer.dispose();
     });
 

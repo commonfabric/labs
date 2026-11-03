@@ -1,6 +1,5 @@
 // The SpaceServer (server-execution v2 stage F, serving-loop.md §1, §3):
-// one committing runtime per ACTIVE space. It owns the lease (renewed on
-// a timer — stage B's cycle finally gets its cadence), the serving
+// one committing runtime per ACTIVE space. It owns the lease, the serving
 // Runtime (flag ON, builtins registered, the pattern-update posture
 // flipped server-side — §3e), the accepted-commit subscription (the
 // host's in-process feed — plane (d)), and the wave loop: wake on
@@ -35,6 +34,7 @@
 // seal; the durable outbound-append rows deliver and retire through
 // the outbox; `memo.*`/`outbox.*` counters are live.
 import { debugStr } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   canResolveScopeKey,
   type CellScope,
@@ -81,6 +81,44 @@ import { ViewPlanPublisher } from "./view-plan-publisher.ts";
  * criterion needs the drop) without racing the creation window. */
 const EVENT_DEFERRAL_REARM_MS = 250;
 
+/**
+ * How long a served event waits for the program closure of its piece's
+ * pattern to arrive in its space before the absence becomes a
+ * `program-unavailable` delivery failure (events.md §5;
+ * SpaceServerPolicy.programClosureGraceMs). This is an exception to the
+ * repository's no-timeout rule, and the reason is that nothing else can end
+ * the wait: the closure is written by whichever runtime created the piece,
+ * usually the serving runtime of another space, and this loop cannot observe
+ * that replication, only its commit landing here. The bound ends in the
+ * delivery-failure budget, not a drop; it cancels nothing in flight; and it
+ * is held in memory only, so a restart or a lease handoff starts it afresh.
+ */
+const PROGRAM_CLOSURE_GRACE_MS = 10_000;
+
+/**
+ * The recovery epoch a `program-unavailable` delivery failure waits on: the
+ * arrival of the closure entry document `docId` in the space (events.md §5).
+ */
+const programClosureEpoch = (docId: string): string =>
+  `program-closure:${docId}`;
+
+/** One served event's grace for its program closure to arrive
+ * (`SpaceServer.#programClosureGraces`). */
+type ProgramClosureGrace = {
+  /** The event's stream entry. */
+  readonly sidecarId: string;
+  readonly seq: number;
+
+  /** When the wait began, on the delivery-failure clock. */
+  readonly since: number;
+
+  /** The timer that ends the grace, while it runs. */
+  timer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Whether the grace has ended. */
+  expired: boolean;
+};
+
 /** The default bound on the tenure's awaited space-root ensure
  * (SpaceServerPolicy.rootEnsureDeadlineMs): generous — a cold compile
  * of the system root is seconds, not tens of seconds — because the
@@ -95,11 +133,8 @@ import {
 } from "../cell.ts";
 import { addressKey, type NormalizedFullLink } from "../link-types.ts";
 import {
-  EXECUTION_LEASE_RENEW_INTERVAL_MS,
-  EXECUTION_LEASE_TTL_MS,
   ExecutionLeaseCycle,
   executionLeaseHolder,
-  liveExecutionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import {
   selectForeignBasisRows,
@@ -131,6 +166,7 @@ import {
   type OwningRootAddress,
 } from "../ensure-piece-running.ts";
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
+import { sourceDocKey } from "../compilation-cache/cell-cache.ts";
 import { asPatternIdentityRef } from "../meta-seam.ts";
 import {
   stampWaveRunContext,
@@ -272,10 +308,10 @@ export type SpaceServerPolicy = {
 
   /** OW45 arm-B stage 1 (review F2): the bound on the tenure's
    * awaited space-root ensure. The ensure's resolve path fetches with
-   * no timeout of its own and can point at a remote host, and the
-   * renew timer is independent of the wave loop — so an UNBOUNDED
-   * await here would let one wedged fetch hold the first cycle open
-   * forever while the tenure keeps the lease (no failover, events
+   * no timeout of its own and can point at a remote host, and only a
+   * park ends a tenure — so an UNBOUNDED await here would let one wedged
+   * fetch hold the first cycle open forever while the tenure keeps the
+   * lease (no failover, events
    * queueing, no loop-failed park). On the deadline the ensure lands
    * in its counted-failure arm and the tenure proceeds serving; the
    * detached work's eventual writes stay safe — the CREATION arm
@@ -302,20 +338,16 @@ export type SpaceServerPolicy = {
    */
   maxParkedRuntimes?: number;
 
-  renewIntervalMs?: number;
-
   /** OW54's owner-ratified cumulative confirmed failed-state budget. */
   deliveryFailureBudgetMs?: number;
 
   /** Injected wall clock for deterministic delivery-budget verification. */
   deliveryFailureNow?: () => number;
 
-  /** The execution lease's TTL (serving-loop.md §2; production takes the
-   * wire default EXECUTION_LEASE_TTL_MS). A knob so tests can pin the
-   * mid-wave renew (stage C tuning T3) with a short tenure instead of
-   * waiting out the 15-s default; the mid-wave renew fires once a wave
-   * has run longer than TTL/3 without a renewal. */
-  leaseTtlMs?: number;
+  /** How long a served event waits for its pattern's program closure to
+   * arrive in the space before the absence is a delivery failure
+   * (PROGRAM_CLOSURE_GRACE_MS; events.md §5). */
+  programClosureGraceMs?: number;
 
   /** Deadline on the park's runtime dispose (park LIVENESS): a serving
    * runtime killed mid-wave can hang `runtime.dispose()` forever, and a
@@ -404,8 +436,6 @@ export type WaveCommitSinkDeps = {
   /** The tenure's holder, the session its derived commits are keyed under. */
   sessionId: string;
   localSeqRef: { value: number };
-  /** Called when the store refuses a home batch (serving-loop.md §2). */
-  onHomeRefused: () => void;
 };
 
 /** What a SpaceServer hands its runtime factory (see
@@ -426,7 +456,7 @@ export type RuntimeFactoryContext = {
 
   /**
    * The deployment's route to each space's owner
-   * (`serving-loop-owner-routing.md`), present while the host has one, for
+   * (`serving-loop.md` §2), present while the host has one, for
    * a factory to hand its storage manager: a session the manager opens as a
    * space's own key, the genesis of a space the serving runtime creates,
    * then dials that space's owner instead of this process's server.
@@ -482,7 +512,7 @@ export type SpaceServerOptions = {
    * disposing it (serving-loop.md §1, "Parking"). Returns the fenced
    * instance holding it when the caller keeps it, and `undefined` to have
    * the tenure dispose it as usual. A park for any other reason disposes
-   * its runtime without asking: a lost lease, a failed loop or a host
+   * its runtime without asking: a failed loop or a host
    * closing leaves nothing a successor should build on.
    */
   retainParkedRuntime?: (
@@ -505,7 +535,7 @@ export type SpaceServerOptions = {
   createWaveCommitSink?: (deps: WaveCommitSinkDeps) => WaveCommitSink;
 
   /**
-   * The host's routed plane (`serving-loop-owner-routing.md`): present, the
+   * The host's routed plane (`serving-loop.md` §5): present, the
    * tenure's outbox delivers each append to the target's owner through a
    * scope of it, held for the tenure. Absent, the appends are delivered to
    * this process's server.
@@ -816,7 +846,6 @@ export class SpaceServer implements TransactionSealDestination {
    * quiescence or the loop found no work.
    */
   #grownFlushDeadlineMs: number | undefined;
-  #initializing = false;
   #runtime: Runtime | undefined;
   #viewPlanPublisher = new ViewPlanPublisher();
   #disposeRuntime: (() => Promise<void>) | undefined;
@@ -831,13 +860,6 @@ export class SpaceServer implements TransactionSealDestination {
   #refusedWriteAfterPark = false;
 
   #sink: WaveCommitSink | undefined;
-  #renewTimer: ReturnType<typeof setInterval> | undefined;
-
-  /** Wall-clock of the last successful acquire/renew (stage C tuning T3):
-   * the mid-wave renew fires from the scheduler's cooperative yield once
-   * `now − lastRenewAt ≥ TTL/3`, i.e. exactly when the interval timer
-   * would have fired had the wave's settle let it. */
-  #lastRenewAt = 0;
 
   /** The drain's IN-FLIGHT copies (stage C tuning, T3's companion guard
    * — see `events.drainInFlightSkips`): eventId → phase. A re-drain must
@@ -1451,6 +1473,22 @@ export class SpaceServer implements TransactionSealDestination {
 
   readonly #deliveryLoadRecoveries = new Map<string, string>();
 
+  /**
+   * The served events waiting, within their grace, for their pattern's
+   * program closure to arrive in the space (events.md §5), by event id. Memory
+   * only, so a new tenure starts each grace afresh; an event whose absence
+   * already became a delivery failure has its checkpoint instead and no entry
+   * here.
+   */
+  readonly #programClosureGraces = new Map<string, ProgramClosureGrace>();
+
+  /** The closure entry documents events wait on (`#programClosureGraces`
+   * and the `program-unavailable` checkpoints), by document id, each with the
+   * events waiting on it: a commit writing one into the space wakes the drain
+   * and is the recovery its delivery failures wait on. An event leaves when
+   * the document arrives or the event is covered by a terminal notice. */
+  readonly #programClosureWaits = new Map<string, Set<string>>();
+
   /** The deferral backstop timer (see EVENT_DEFERRAL_REARM_MS): armed
    * when a drain pass left deferred/transient work behind, so the scan
    * re-arms after a REAL wait even when no input ever arrives. Input
@@ -1569,9 +1607,8 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /** Resolves when this SpaceServer has fully parked: its runtime
-   * disposed, and its lease released or the release's failure logged
-   * (the row expires by TTL either way). The host chains its
-   * re-evaluation of the space's ACTIVE criteria on it. */
+   * disposed, and its lease released or the release's failure logged. The
+   * host chains its re-evaluation of the space's ACTIVE criteria on it. */
   get whenParked(): Promise<void> {
     return this.#parked.promise;
   }
@@ -1604,44 +1641,35 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async activate(): Promise<boolean> {
     if (this.#active) return true;
-    const { engine, space } = this.#options;
+    const { space } = this.#options;
     const lease = new ExecutionLeaseCycle({
-      engine,
+      leases: this.#options.server.executionLeases,
       space,
       holder: this.#holder,
-      ...(this.#options.policy?.leaseTtlMs !== undefined
-        ? { ttlMs: this.#options.policy.leaseTtlMs }
-        : {}),
     });
-    if (!lease.acquire()) {
+    if (!await lease.acquire()) {
       this.#options.onParked?.("lease-unavailable");
       return false;
     }
     this.#lease = lease;
-    this.#lastRenewAt = Date.now();
     this.#options.stats.lease.held += 1;
 
-    // Initialization includes asynchronous factory and recovery work. The
-    // lease protects those reads before a serving loop can become active.
-    this.#initializing = true;
-    const renewMs = this.#options.policy?.renewIntervalMs ??
-      EXECUTION_LEASE_RENEW_INTERVAL_MS;
-    this.#renewTimer = setInterval(() => this.#renew(), renewMs);
     let activated = false;
     try {
-      activated = await this.#initializeRuntime(lease);
-      return activated;
+      await this.#initializeRuntime();
+      activated = true;
+      return true;
     } finally {
-      this.#initializing = false;
-      if (!activated) {
-        await this.#parkResources(
-          lease.held ? "activation-failed" : "activation-lease-lost",
-        );
-      }
+      if (!activated) await this.#parkResources("activation-failed");
     }
   }
 
-  async #initializeRuntime(lease: ExecutionLeaseCycle): Promise<boolean> {
+  /**
+   * Helper for `activate()`, which builds the tenure's runtime and starts its
+   * loop. Initialization includes asynchronous factory and recovery work, which
+   * the lease protects before a serving loop can become active.
+   */
+  async #initializeRuntime(): Promise<void> {
     const { engine, space } = this.#options;
     // The tenure's store read-through, handed to the factory so a factory
     // that reads the home space before returning installs it first, and
@@ -1672,8 +1700,6 @@ export class SpaceServer implements TransactionSealDestination {
     });
     this.#runtime = runtime;
     this.#disposeRuntime = dispose;
-    this.#renew();
-    if (!lease.held) return false;
     if (runtime.experimental.serverExecution !== true) {
       throw new Error(
         "SpaceServer runtime must run with serverExecution enabled " +
@@ -1709,13 +1735,6 @@ export class SpaceServer implements TransactionSealDestination {
       foreignEngineFor: (s) => this.#foreignEngineFor(s),
       sessionId: this.#holder,
       localSeqRef: this.#options.localSeqRef,
-      // A lapse the renewal drivers have not reached yet shows first as the
-      // memory server refusing a derived commit (serving-loop.md §2). The
-      // refused wave's work is withdrawn, so the lapse is not recovered: the
-      // tenure ends, and the loop parks on the abort.
-      onHomeRefused: () => {
-        this.#confirmLease(engine, { recoverLapse: false });
-      },
     };
     const sink = this.#options.createWaveCommitSink?.(sinkDeps) ??
       new EngineWaveCommitSink({
@@ -1740,7 +1759,6 @@ export class SpaceServer implements TransactionSealDestination {
               scopeKeyByOpIndex,
             ),
         }),
-        onHomeRefused: sinkDeps.onHomeRefused,
         // A served run's access-list change is admitted and committed by the
         // memory server itself, through the check its sessions' commits pass.
         commitServedAclChange: (change, envelope) =>
@@ -1757,7 +1775,7 @@ export class SpaceServer implements TransactionSealDestination {
     const routeScope = this.#options.route?.scope();
     const routed = routeScope === undefined
       ? sink
-      : routedWaveCommitSink(sink, routeScope, space);
+      : routedWaveCommitSink(sink, routeScope, space, this.#options.stats);
     this.#sink = this.#options.decorateWaveCommitSink?.(routed, space) ??
       routed;
     // The effect channel (stage G, serving-loop.md §4–§5). Phase 6
@@ -1850,34 +1868,8 @@ export class SpaceServer implements TransactionSealDestination {
       this.#pendingShadowFlipWake = true;
       this.#feedArrived?.resolve();
     };
-    runtime.storageManager.loadRecoveryObserver = (recovery) => {
-      const relevantEventIds = [...this.#deliveryCheckpoints]
-        .filter(([, checkpoint]) =>
-          checkpoint.phase === "dispatch-load" &&
-          checkpoint.state === "failed" &&
-          checkpoint.recoveryEpoch === recovery.failedEpoch
-        )
-        .map(([eventId]) => eventId);
-      for (
-        const [eventId, failedEpoch] of this.#uncommittedDeliveryFailureEpochs
-      ) {
-        if (failedEpoch === recovery.failedEpoch) {
-          relevantEventIds.push(eventId);
-        }
-      }
-      if (relevantEventIds.length === 0) return;
-      this.#deliveryLoadRecoveries.set(
-        recovery.failedEpoch,
-        recovery.recoveryEpoch,
-      );
-      for (const eventId of relevantEventIds) {
-        this.#deliveryCheckpointWriteBlocked.delete(eventId);
-        this.#attentionSealWriteBlocked.delete(eventId);
-        this.#deliveryWriteBlockedAt.delete(eventId);
-      }
-      this.#eventScanOwed = true;
-      this.#feedArrived?.resolve();
-    };
+    runtime.storageManager.loadRecoveryObserver = (recovery) =>
+      this.#observeLoadRecovery(recovery);
 
     // Phase 4 (builtins.md §4, LT3): the served navigateTo's
     // connectivity check — the intent write requires the acting session
@@ -1945,8 +1937,6 @@ export class SpaceServer implements TransactionSealDestination {
         ]);
       }
     }
-    this.#renew();
-    if (!lease.held) return false;
     logger.info?.("activate", () => [
       `space ${space} activated: W=${this.#watermark} scanHead=${scanHead} ` +
       `staleInstances=${stale.length}`,
@@ -1975,6 +1965,7 @@ export class SpaceServer implements TransactionSealDestination {
           entry.eventId,
           entry.deliveryDeferral,
         );
+        this.#rewatchProgramClosure(entry.eventId, entry.deliveryDeferral);
       }
     }
     if (pendingEventDocs.length > 0) {
@@ -2025,23 +2016,10 @@ export class SpaceServer implements TransactionSealDestination {
     // scheduler consults it at the reactive-action choke point and runs
     // a demanded action once per instance, stamped from the demand
     // registry through the seam above.
-    this.#renew();
-    if (!lease.held) return false;
     runtime.installSealDestination(this, {
       runStamper: (tx, info) => this.#stampRun(tx, info),
       runDemanderResolver: (pieceRootIds) => this.#demandersFor(pieceRootIds),
     });
-
-    // The MID-WAVE renew (stage C tuning T3, serving-loop.md §2): the
-    // renew timer above rides the macrotask queue a long settle used to
-    // starve (the attribution's t2: renew gaps to 10 s against the 15-s
-    // TTL, then `lease-lost` on every active space at once). The serving
-    // scheduler now yields a macrotask between runs (cooperative-yield.ts)
-    // — which already lets the timer fire — and reports every such yield
-    // here, where a renew is issued directly once the wave has run TTL/3
-    // without one: a belt that does not depend on the timer queue being
-    // serviced, only on the scheduler reaching a run boundary.
-    runtime.servingYieldObserver = () => this.#renewIfDue();
 
     this.#active = true;
     this.#options.stats.activeSpaces += 1;
@@ -2051,7 +2029,6 @@ export class SpaceServer implements TransactionSealDestination {
       this.#scheduleDeliveryFailureWake(eventId, checkpoint);
     }
     void this.#loop();
-    return true;
   }
 
   /** Resolved co-hosted engines for FOREIGN spaces this loop's waves
@@ -2108,7 +2085,7 @@ export class SpaceServer implements TransactionSealDestination {
         ]);
         wave.failForeignSpace(
           space,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -3447,10 +3424,9 @@ export class SpaceServer implements TransactionSealDestination {
 
   /**
    * Holds store read-through to protocol.md §3's lease-holder delivery rule.
-   * Another principal's instance requires a live lease. An active loop can
-   * renew and reacquire a lapsed tenure; initialization loss instead refuses
-   * the read and invalidates activation. Space-scoped documents and the
-   * service's own instances need no lease. A closed engine supplies nothing.
+   * Another principal's instance requires a current tenure, so a runtime that
+   * outlived its tenure reads none. Space-scoped documents and the service's
+   * own instances need no lease. A closed engine supplies nothing.
    */
   #leaseHolderReadThrough(
     engine: Engine.Engine,
@@ -3463,139 +3439,10 @@ export class SpaceServer implements TransactionSealDestination {
       if (!engine.database.open) return undefined;
       if (
         !scopeKeyApplicableTo(address.scopeKey, own) &&
-        !this.#confirmLease(engine)
+        this.#lease?.held !== true
       ) return undefined;
       return read(address);
     };
-  }
-
-  /**
-   * Whether the space's lease row names this holder live. A row that does
-   * not runs the renew arm, which recovers a lapse nobody claimed, or ends
-   * the tenure and then reacquires or parks, and the row is read again
-   * after it. `recoverLapse: false` has a lapse end the tenure, for a
-   * caller whose commit the store refused inside it. A closed engine
-   * confirms nothing.
-   */
-  #confirmLease(
-    engine: Engine.Engine,
-    options: { recoverLapse?: boolean } = {},
-  ): boolean {
-    if (!engine.database.open) return false;
-    const holds = () =>
-      liveExecutionLeaseHolder(engine, this.#options.space) === this.#holder;
-    if (holds()) return true;
-    this.#renew(options);
-    return holds();
-  }
-
-  /** The mid-wave renew (stage C tuning T3): called from the serving
-   * scheduler's cooperative yield; renews once the tenure has gone TTL/3
-   * without a renewal (the interval timer's own cadence), otherwise a
-   * no-op — so a wave shorter than TTL/3 costs nothing here and a wave
-   * longer than TTL/3 renews at the same cadence the timer would have. */
-  #renewIfDue(): void {
-    const lease = this.#lease;
-    if (lease === undefined || !this.#active) return;
-    const ttlMs = this.#options.policy?.leaseTtlMs ?? EXECUTION_LEASE_TTL_MS;
-    if (Date.now() - this.#lastRenewAt < ttlMs / 3) return;
-    this.#renew();
-  }
-
-  #renew(options: { recoverLapse?: boolean } = {}): void {
-    const lease = this.#lease;
-    if (
-      lease === undefined || (!this.#active && !this.#initializing) ||
-      (this.#initializing && !lease.held)
-    ) return;
-    // Stamped before the outcome is known: a FAILED renew ends the tenure
-    // (park or reacquire below), and a reacquire is itself a fresh
-    // tenure start.
-    this.#lastRenewAt = Date.now();
-    let renewed: boolean;
-    // A renewal that found the row expired recovered a lapse: synchronous
-    // work (a compile) held both renewal drivers past the TTL. The store
-    // refused every derived commit meanwhile and admitted no one else's,
-    // so the tenure continues.
-    let lapsed = false;
-    try {
-      const renewal = lease.renew(options);
-      renewed = renewal !== "lost";
-      lapsed = renewal === "recovered";
-    } catch (error) {
-      if (!this.#initializing || this.#active) throw error;
-      // A failed lease-store operation leaves initialization without an
-      // authority proof. Release ends the in-process tenure even if the
-      // unavailable store also rejects removal of the row.
-      try {
-        lease.release();
-      } catch (releaseError) {
-        logger.warn("activation-lease-release-failed", () => [
-          `space ${this.#options.space}: lease release failed during initialization`,
-          releaseError,
-        ]);
-      }
-      logger.warn("activation-lease-renew-failed", () => [
-        `space ${this.#options.space}: lease renewal threw during initialization`,
-        error,
-      ]);
-      renewed = false;
-    }
-    if (renewed && lapsed && this.#active) {
-      // A push pass that ran inside the lapse judged this runtime's
-      // loopback session a former holder; the row is live again, so the
-      // memory server re-arms the session's exemption now, as it does
-      // after the reacquire below.
-      this.#options.stats.lease.lapsesRecovered += 1;
-      logger.warn("lease-lapse-recovered", () => [
-        `space ${this.#options.space}: the lease lapsed with no successor ` +
-        "and its renewal extended it; the tenure continues (serving-loop.md §2)",
-      ]);
-      this.#options.server.noteLeaseReacquired({
-        space: this.#options.space,
-        principal: this.#options.serviceIdentity,
-      });
-    }
-    if (!renewed) {
-      // Stop committing immediately (serving-loop.md §2's MUST): the
-      // tenure ended inside renew(), so an in-flight wave aborts at its
-      // commit step. Then re-acquire or park. The reacquire keeps this
-      // loop serving ONLY when no wave sealed under the lapsed tenure:
-      // a wave that does abort at commit had its sealed derivations
-      // WITHDRAWN, and nothing re-arms their producers in place (no
-      // revert consumer; inputs unchanged), so #waveCycle parks the
-      // space on that abort rather than letting a continued loop mint a
-      // watermark-only advance over work that never re-ran.
-      this.#options.stats.lease.lost += 1;
-      logger.warn("lease-lost", () => [
-        `space ${this.#options.space}: lease renewal failed; ` +
-        "in-flight wave aborts (serving-loop.md §2)",
-      ]);
-      if (this.#initializing && !this.#active) {
-        // A factory or recovery read may belong to the expired tenure.
-        // Finish its outstanding await, then dispose without launching it.
-        clearInterval(this.#renewTimer);
-        this.#renewTimer = undefined;
-        this.#outbox?.close();
-        return;
-      }
-      if (!lease.acquire()) {
-        void this.park("lease-lost");
-        return;
-      }
-      // Survived the blip in-process. Any push pass that ran inside it
-      // judged this runtime's loopback session a FORMER holder and
-      // withheld or retracted its foreign instances (protocol.md §2's
-      // read row is live-lease admission); tell the co-hosted memory
-      // server the lease is live again so the session's exemption
-      // re-arms NOW — a full re-evaluation that re-delivers what the
-      // blip withheld — rather than on the next unrelated write (fan-out
-      // stage A's independent review, finding 1: the silent-stale half).
-      this.#options.server.noteLeaseReacquired({
-        space: this.#options.space,
-        principal: this.#options.serviceIdentity,
-      });
-    }
   }
 
   //
@@ -3666,7 +3513,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
     } catch (error) {
       logger.error("loop-failed", "serving loop failed", error);
-      // Zombie guard: an ACTIVE space whose loop died would renew its
+      // Zombie guard: an ACTIVE space whose loop died would hold its
       // lease forever while serving nothing — no successor can acquire,
       // and no cycle ever runs. Park instead: the lease releases, and
       // the host re-activates a space that still has demand with a
@@ -3786,6 +3633,202 @@ export class SpaceServer implements TransactionSealDestination {
       this.#eventScanOwed = true;
       this.#feedArrived?.resolve();
     }, EVENT_DEFERRAL_REARM_MS);
+  }
+
+  /**
+   * Takes `recovery` as the positive recovery evidence of every
+   * `dispatch-load` delivery failure waiting on its failed epoch (events.md
+   * §5), which wakes one retry of each: a load that settled a new generation
+   * of the document that failed, or a program closure that arrived.
+   */
+  #observeLoadRecovery(
+    recovery: { failedEpoch: string; recoveryEpoch: string },
+  ): void {
+    const relevantEventIds = [...this.#deliveryCheckpoints]
+      .filter(([, checkpoint]) =>
+        checkpoint.phase === "dispatch-load" &&
+        checkpoint.state === "failed" &&
+        checkpoint.recoveryEpoch === recovery.failedEpoch
+      )
+      .map(([eventId]) => eventId);
+    for (
+      const [eventId, failedEpoch] of this.#uncommittedDeliveryFailureEpochs
+    ) {
+      if (failedEpoch === recovery.failedEpoch) {
+        relevantEventIds.push(eventId);
+      }
+    }
+    if (relevantEventIds.length === 0) return;
+    this.#deliveryLoadRecoveries.set(
+      recovery.failedEpoch,
+      recovery.recoveryEpoch,
+    );
+    for (const eventId of relevantEventIds) {
+      this.#deliveryCheckpointWriteBlocked.delete(eventId);
+      this.#attentionSealWriteBlocked.delete(eventId);
+      this.#deliveryWriteBlockedAt.delete(eventId);
+    }
+    this.#eventScanOwed = true;
+    this.#feedArrived?.resolve();
+  }
+
+  /**
+   * Defers a served event whose piece names a pattern this runtime could not
+   * load, when the space's store does not hold the pattern's program closure
+   * (events.md §5). The closure is written by whichever runtime created the
+   * piece, so the event waits for it: within the grace
+   * (PROGRAM_CLOSURE_GRACE_MS) the deferral is settlement, spending no
+   * budget, writing no checkpoint and arming no backstop, and past it the
+   * absence is a `program-unavailable` delivery failure under the
+   * failed-state budget. Either way the commit that writes the closure's entry
+   * into the space wakes the event (`#programClosureWaits`), and either way
+   * the event holds the later arrivals behind it (§2). Returns `false`, and
+   * leaves the deferral to the deferral budget, when the store holds the
+   * closure's entry: what failed then is not its absence.
+   */
+  #deferForProgramClosure(
+    runtime: Runtime,
+    entry: StreamEventEntry,
+    streamEntry: { sidecarId: string; index: number; seq: number },
+    patternIdentity: string,
+  ): boolean {
+    const closureDocId = runtime.getCell(
+      this.#options.space,
+      sourceDocKey(patternIdentity),
+    ).getAsNormalizedFullLink().id;
+    if (
+      Engine.selectDocHead(this.#options.engine, {
+        id: closureDocId,
+        scopeKey: "space",
+      }) !== 0
+    ) {
+      return false;
+    }
+    const eventId = entry.eventId;
+    this.#waitForProgramClosure(closureDocId, eventId);
+    this.#options.onEventDeferred?.();
+    // The barrier's mid-pass half, as the other deferral arms carry it.
+    this.#loadParkDeferredInPass = true;
+    const checkpoint =
+      this.#pendingDeliveryCheckpointWrites.get(eventId)?.checkpoint ??
+        this.#deliveryCheckpoints.get(eventId) ??
+        entry.deliveryDeferral;
+    if (checkpoint === undefined) {
+      let grace = this.#programClosureGraces.get(eventId);
+      if (grace === undefined) {
+        grace = {
+          sidecarId: streamEntry.sidecarId,
+          seq: streamEntry.seq,
+          since: this.#deliveryFailureNow(),
+          timer: undefined,
+          expired: false,
+        };
+        this.#programClosureGraces.set(eventId, grace);
+        this.#armProgramClosureGraceEnd(eventId, grace);
+      }
+      if (
+        !grace.expired &&
+        this.#deliveryFailureNow() - grace.since < this.#programClosureGraceMs()
+      ) {
+        this.#options.stats.events.programWaitDeferrals += 1;
+        this.#drainInFlight.delete(eventId);
+        return true;
+      }
+    }
+    this.#endProgramClosureGrace(eventId);
+    this.#recordDeliveryFailure(runtime, entry, streamEntry, {
+      failureClass: "program-unavailable",
+      recoveryEpoch: programClosureEpoch(closureDocId),
+      permanentEvidence: false,
+    });
+    return true;
+  }
+
+  /**
+   * Has a replayed `program-unavailable` checkpoint wait on its closure
+   * again, or wake its retry at once when the closure arrived while no tenure
+   * watched for it (events.md §5).
+   */
+  #rewatchProgramClosure(eventId: string, checkpoint: DeliveryDeferral): void {
+    const epoch = checkpoint.recoveryEpoch;
+    const prefix = programClosureEpoch("");
+    if (
+      checkpoint.failureClass !== "program-unavailable" ||
+      checkpoint.state !== "failed" || epoch === undefined ||
+      !epoch.startsWith(prefix)
+    ) {
+      return;
+    }
+    const closureDocId = epoch.slice(prefix.length);
+    const head = Engine.selectDocHead(this.#options.engine, {
+      id: closureDocId,
+      scopeKey: "space",
+    });
+    if (head === 0) {
+      this.#waitForProgramClosure(closureDocId, eventId);
+    } else {
+      this.#observeLoadRecovery({
+        failedEpoch: epoch,
+        recoveryEpoch: `${epoch}@${head}`,
+      });
+    }
+  }
+
+  /** Has `eventId` wait on the arrival of `closureDocId` in the space
+   * (`#programClosureWaits`). */
+  #waitForProgramClosure(closureDocId: string, eventId: string): void {
+    let waiting = this.#programClosureWaits.get(closureDocId);
+    if (waiting === undefined) {
+      waiting = new Set();
+      this.#programClosureWaits.set(closureDocId, waiting);
+    }
+    waiting.add(eventId);
+  }
+
+  /** Takes `eventId` out of every program-closure wait, as when a terminal
+   * notice covers it. */
+  #forgetProgramClosureWait(eventId: string): void {
+    for (const [closureDocId, waiting] of this.#programClosureWaits) {
+      waiting.delete(eventId);
+      if (waiting.size === 0) this.#programClosureWaits.delete(closureDocId);
+    }
+  }
+
+  #programClosureGraceMs(): number {
+    return this.#options.policy?.programClosureGraceMs ??
+      PROGRAM_CLOSURE_GRACE_MS;
+  }
+
+  /** Arms the timer that ends `grace` (PROGRAM_CLOSURE_GRACE_MS's
+   * exception), whose firing re-drains the event to take it past the grace,
+   * or forgets the grace of an event that has its consequence by then. A
+   * wake belongs to the active tenure, as the delivery-failure wakes do. */
+  #armProgramClosureGraceEnd(
+    eventId: string,
+    grace: ProgramClosureGrace,
+  ): void {
+    if (!this.#active) return;
+    grace.timer = setTimeout(() => {
+      grace.timer = undefined;
+      grace.expired = true;
+      const stored = this.#storedStreamEntry(
+        grace.sidecarId,
+        eventId,
+        grace.seq,
+      );
+      if (stored === undefined || stored.consequenced === true) {
+        this.#programClosureGraces.delete(eventId);
+        return;
+      }
+      this.#eventScanOwed = true;
+      this.#feedArrived?.resolve();
+    }, this.#programClosureGraceMs());
+  }
+
+  #endProgramClosureGrace(eventId: string): void {
+    const grace = this.#programClosureGraces.get(eventId);
+    if (grace?.timer !== undefined) clearTimeout(grace.timer);
+    this.#programClosureGraces.delete(eventId);
   }
 
   #deliveryFailureNow(): number {
@@ -4104,6 +4147,7 @@ export class SpaceServer implements TransactionSealDestination {
         this.#uncommittedDeliveryFailureEpochs.delete(eventId);
         this.#setActiveDeliveryCheckpoint(eventId, undefined);
         this.#cancelDeliveryFailureWake(eventId);
+        this.#forgetProgramClosureWait(eventId);
         const stats = this.#options.stats.events.needsAttention;
         stats.total += 1;
         stats.byPhase[pending.attention.phase] += 1;
@@ -4268,6 +4312,24 @@ export class SpaceServer implements TransactionSealDestination {
           record.eventAppends.filter(
             (append) => append.retryOf !== undefined,
           ).length;
+      }
+      // A commit writing a closure entry that events wait on (events.md §5)
+      // re-drains them, and is the recovery the delivery failures of those
+      // past their grace wait on.
+      if (this.#programClosureWaits.size > 0) {
+        for (const write of record.writes) {
+          if (
+            write.scopeKey !== "space" ||
+            !this.#programClosureWaits.delete(write.id)
+          ) {
+            continue;
+          }
+          this.#eventScanOwed = true;
+          this.#observeLoadRecovery({
+            failedEpoch: programClosureEpoch(write.id),
+            recoveryEpoch: `${programClosureEpoch(write.id)}@${record.seq}`,
+          });
+        }
       }
       // Deferred events re-try on NEW INPUT (the creation-race arm:
       // the piece's pattern-run commit is exactly such a record) —
@@ -4830,8 +4892,11 @@ export class SpaceServer implements TransactionSealDestination {
               streamEntry,
               {
                 kind: "needs-attention",
-                message: "This event could not be delivered. Retry it after " +
-                  "restoring access.",
+                message: attention.failureClass === "program-unavailable"
+                  ? "This event could not be delivered: its program has " +
+                    "not reached this space. Retry it once it has."
+                  : "This event could not be delivered. Retry it after " +
+                    "restoring access.",
                 attention,
               },
             );
@@ -5063,6 +5128,17 @@ export class SpaceServer implements TransactionSealDestination {
                     );
                     if (arrivalHeld) {
                       this.#options.stats.events.arrivalHeldDeferrals += 1;
+                    } else if (
+                      "cause" in outcome &&
+                      outcome.cause === "pattern-unloadable" &&
+                      this.#deferForProgramClosure(
+                        runtime,
+                        entry,
+                        streamEntry,
+                        outcome.patternIdentity,
+                      )
+                    ) {
+                      return;
                     }
                     // A start declined for the loop's own follow of the
                     // piece's origin (§3e) is the loop waiting on itself:
@@ -7925,11 +8001,9 @@ export class SpaceServer implements TransactionSealDestination {
       // wave's sealed derivations, nothing re-arms their producers in
       // place (no revert consumer; the inputs did not change), and
       // #coverageHead has already claimed the input batch — a continued
-      // loop (the renew-blip reacquire path, where lease.acquire()
-      // succeeded and this runtime kept running) would mint a
-      // watermark-only advance next cycle over demanded derivations
-      // that never re-ran, making waitForSettled lie until the next
-      // input change. Re-activation's fresh-runtime recompute-on-demand
+      // loop would mint a watermark-only advance next cycle over demanded
+      // derivations that never re-ran, making waitForSettled lie until the
+      // next input change. Re-activation's fresh-runtime recompute-on-demand
       // is the ONLY post-abort recovery arm (serving-loop.md §6 step 2:
       // a demanded pull recomputes regardless).
       logger.warn("wave-aborted", () => [
@@ -8139,11 +8213,10 @@ export class SpaceServer implements TransactionSealDestination {
    * completes, the host re-activates a space that still meets the ACTIVE
    * criteria, unless a rival's lease caused the park. */
   async park(reason: string): Promise<void> {
-    // A park already in flight — the renew arm's lease-lost park runs
-    // unawaited — is what a second caller waits for: the host's close
-    // must not return while a tenure is still disposing, since the
-    // tenure releases its lease through the engine the host then closes.
-    // Before any park, a not-yet-active server has nothing to wait for.
+    // A park already in flight — the loop's idle park runs unawaited — is
+    // what a second caller waits for: the host's close must not return while
+    // a tenure is still disposing. Before any park, a not-yet-active server
+    // has nothing to wait for.
     if (!this.#active) {
       return this.#parkRequested ? this.#parked.promise : undefined;
     }
@@ -8171,10 +8244,6 @@ export class SpaceServer implements TransactionSealDestination {
         this.#options.stats.activeSpaces - 1,
       );
     }
-    if (this.#renewTimer !== undefined) {
-      clearInterval(this.#renewTimer);
-      this.#renewTimer = undefined;
-    }
     if (this.#deferredRescanTimer !== undefined) {
       clearTimeout(this.#deferredRescanTimer);
       this.#deferredRescanTimer = undefined;
@@ -8192,6 +8261,10 @@ export class SpaceServer implements TransactionSealDestination {
       clearTimeout(timer);
     }
     this.#deliveryFailureWakeTimers.clear();
+    for (const eventId of [...this.#programClosureGraces.keys()]) {
+      this.#endProgramClosureGrace(eventId);
+    }
+    this.#programClosureWaits.clear();
     for (const eventId of [...this.#deliveryCheckpoints.keys()]) {
       this.#setActiveDeliveryCheckpoint(eventId, undefined);
     }
@@ -8305,7 +8378,6 @@ export class SpaceServer implements TransactionSealDestination {
         this.#runtime.pieceStartCommitFailureObserver = undefined;
         this.#runtime.pieceOriginFollowed = undefined;
         this.#runtime.sealsCommitted = undefined;
-        this.#runtime.servingYieldObserver = undefined;
         this.#runtime.storageManager.loadRecoveryObserver = undefined;
         // The shadow-flip wake dies with the tenure (a late flip on a
         // disposing replica must not poke a parked loop's stale wait).
@@ -8341,10 +8413,11 @@ export class SpaceServer implements TransactionSealDestination {
     this.#runtime = undefined;
     this.#disposeRuntime = undefined;
     try {
-      this.#lease?.release();
+      await this.#lease?.release();
     } catch (error) {
-      // The row expires by TTL either way; what the park owes the host
-      // is its completion below, which a throw here must not skip.
+      // A release fails only where the port to the server's thread closed, on
+      // which that thread releases the lease itself; what the park owes the
+      // host is its completion below, which a throw here must not skip.
       logger.warn("park-release-failed", () => [
         `space ${this.#options.space}: releasing the lease during park ` +
         `(${reason}) failed`,

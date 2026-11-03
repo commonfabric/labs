@@ -1,6 +1,6 @@
 /**
  * The handler a memory server runs `served` requests through
- * (04-protocol.md §4.3.12; docs/plans/serving-loop-owner-routing.md): the
+ * (04-protocol.md §4.3.12; serving-loop.md §2): the
  * crossings a serving loop elsewhere in the deployment sends the process
  * that owns the target space. The memory package sits below the runner and
  * cannot build the handler itself, so the process that runs the serving loop

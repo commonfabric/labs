@@ -64,6 +64,7 @@ import type {
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
@@ -170,20 +171,8 @@ export class ReplicaLoadFailureError extends Error {
     readonly failure: ReplicaLoadFailure,
     cause: unknown,
   ) {
-    super(loadFailureMessage(cause), { cause });
+    super(describeFailure(cause), { cause });
   }
-}
-
-/**
- * Returns the message a load failure's cause carries. A pull reports its
- * failure as a plain result object rather than an `Error`, so the message is
- * read off any object that has one; a cause without one is stringified.
- */
-function loadFailureMessage(cause: unknown): string {
-  return typeof cause === "object" && cause !== null && "message" in cause &&
-      typeof cause.message === "string"
-    ? cause.message
-    : String(cause);
 }
 
 export const toReplicaLoadFailureError = (
@@ -642,7 +631,41 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**
-   * Observes authoritative access loss synchronously. Transient connection
+   * Whether the memory server has answered for `space`: `true` once it has
+   * admitted this manager's session there or refused it, `false` while it has
+   * not, and `undefined` when no memory server answers for the space, as for
+   * one whose reads a store supplies. A reopen that replaces the session, such
+   * as a remount after a revocation, puts it back to `false` until the server
+   * answers the reopen, unless a refusal stays recorded for the space in the
+   * meantime. Opens nothing.
+   */
+  spaceAnswered?(space: MemorySpace): boolean | undefined;
+
+  /**
+   * Observes the memory server's answer to each open of a space's session,
+   * the first open and every reopen alike: called once the server has
+   * admitted the session or refused it for good, and the answer is what
+   * `spaceAnswered()` and `spaceAccessError()` report. A first answer that is
+   * a refusal also reaches `subscribeSpaceAccessChange()` observers. An open
+   * that ends with no answer, such as one whose connection never completes a
+   * handshake, does not emit.
+   */
+  subscribeSpaceAnswer?(observer: (space: MemorySpace) => void): Cancel;
+
+  /**
+   * Opens `space`'s session if none is open, and resolves once the memory
+   * server has answered for it, admitting it or refusing it, as
+   * `spaceAnswered()` reports. Resolves at once where that is already `true`
+   * or is `undefined`.
+   *
+   * @throws When the session's open ends with no answer, as when its
+   *   connection never completes a handshake.
+   */
+  awaitSpaceAnswer?(space: MemorySpace): Promise<void>;
+
+  /**
+   * Observes authoritative access loss synchronously, and a refusal of a space
+   * already refused that turns out to be its deletion. Transient connection
    * failures and normal closure do not emit; `spaceAccessError()` supplies
    * the current snapshot for subscriptions installed after a loss.
    */
@@ -651,9 +674,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Cancel;
 
   /**
-   * Observes authoritative denial and recovery after an authorized reopen.
-   * Read `spaceAccessError()` for the current verdict. Initial successful
-   * opens and transient connection failures do not emit.
+   * Observes authoritative denial and recovery after an authorized reopen,
+   * and a refusal of a space already refused that turns out to be its
+   * deletion. Read `spaceAccessError()` for the current verdict. Initial
+   * successful opens and transient connection failures do not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -965,8 +989,10 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * it, because the ACL is the only input that decision has. Never widens
    * authority: a genuine de-authorization is refused again at `session.open`.
    * Implemented by the v2 StorageManager; the serving loop's host is its only
-   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
-   * such commit.
+   * caller, for the commits its own memory server admits. The other trigger
+   * is `retrySpaceAccess()`, for a host that sees no such commit. A serving
+   * runtime's grant verdicts on another space's actors do not depend on it:
+   * its replica of that space watches the list over its own session.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 

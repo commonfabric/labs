@@ -3,6 +3,7 @@
 // The offsets here are confirmed by compiling and running verify-structs.c,
 // which reads the headers of the architecture it is built on.
 
+import { LINUX_LIBFUSE_PATHS } from "./library-paths.ts";
 import {
   COMMON_SYMBOLS,
   createFuseArgs,
@@ -14,19 +15,6 @@ import {
   msToTimespec,
   type StatOpts,
 } from "./platform.ts";
-
-//
-// Library paths
-//
-
-const LIBFUSE_PATHS = [
-  "/usr/lib/x86_64-linux-gnu/libfuse3.so", // Debian/Ubuntu x86_64
-  "/usr/lib/aarch64-linux-gnu/libfuse3.so", // Debian/Ubuntu aarch64
-  "/usr/lib/libfuse3.so", // Arch, Fedora
-  "/usr/lib64/libfuse3.so", // RHEL/CentOS
-  "/usr/lib64/libfuse3.so.3", // Fedora
-  "/usr/lib64/libfuse3.so.4", // Fedora
-];
 
 // Linux-specific FFI symbols (FUSE v3)
 //
@@ -236,7 +224,7 @@ const linuxPlatform: FusePlatform = {
     if (fullLib) return fullLib as unknown as FuseLib;
 
     const errors: string[] = [];
-    for (const path of LIBFUSE_PATHS) {
+    for (const path of LINUX_LIBFUSE_PATHS) {
       try {
         fullLib = Deno.dlopen(path, LINUX_SYMBOLS);
         console.log(`Loaded ${path}`);

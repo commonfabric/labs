@@ -28,12 +28,7 @@ import {
   insertExecutionOutboxRows,
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-  liveExecutionLeaseHolder,
-  releaseExecutionLease,
-} from "@commonfabric/memory/v2/execution-lease";
+import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import {
   decodeMemoryBoundary,
   resolveScopeKey,
@@ -232,7 +227,7 @@ describe("stage G SpaceServer recovery seams", () => {
     );
     // The refused activation released the lease (no stranded row).
     expect(
-      liveExecutionLeaseHolder(engine, space),
+      engine.executionLeases.holderOf(space),
     ).toBeUndefined();
   });
 
@@ -242,11 +237,7 @@ describe("stage G SpaceServer recovery seams", () => {
     // activation below takes.
     const rival = executionLeaseHolder("did:key:space-server-rival");
     expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: rival,
-        ttlMs: 600_000,
-      }),
+      engine.executionLeases.acquire(space, rival),
     ).toBe(true);
 
     const parks: string[] = [];
@@ -261,7 +252,7 @@ describe("stage G SpaceServer recovery seams", () => {
     // not build a serving runtime it has no right to commit from — and
     // it leaves the rival's row exactly as it found it.
     expect(servingRuntime).toBeUndefined();
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(rival);
+    expect(engine.executionLeases.holderOf(space)).toBe(rival);
     expect(lastStats.lease.held).toBe(0);
   });
 
@@ -311,14 +302,14 @@ describe("stage G SpaceServer recovery seams", () => {
     // succeeds.
     let failuresLeft = 1;
     const flakyOnce = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "commitDelegatedAppend" && failuresLeft > 0) {
           return () => {
             failuresLeft -= 1;
             return Promise.reject(new Error("transport down"));
           };
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
@@ -723,28 +714,21 @@ describe("stage G SpaceServer recovery seams", () => {
 
   it("discards a REJECTED wave's effects: a terminal engine-side rejection withdraws the claims, so the batch must not egress (round-2 thread 3)", async () => {
     const created = newSpaceServer({
-      // Renewals must not repair the lease mid-test: the rejection is
-      // staged by deleting the engine-side lease row while the
-      // in-process tenure stays valid.
       policy: {
         flushDeadlineMs: 2_000,
         idleParkMs: 600_000,
-        renewIntervalMs: 600_000,
       },
     });
     expect(await created.activate()).toBe(true);
     const runtime = servingRuntime!;
 
-    // Pull the engine-side lease row out from under the ACTIVE server:
-    // the in-process tenure check still passes (no renew ran), so the
-    // wave proceeds to its commit — where the engine's derived-class
-    // admission (holder must hold the LIVE execution_lease) refuses it
-    // with a conflict-less rejection: the accumulator's terminal
+    // Pull the lease out from under the ACTIVE server: the in-process
+    // tenure check still passes, so the wave proceeds to its commit — where
+    // the engine's derived-class admission (holder must hold the lease)
+    // refuses it with a conflict-less rejection: the accumulator's terminal
     // `aborted: "rejected"` arm, exactly the failed-wave shape the
     // admission gate must discard effects for.
-    engine.database.prepare(
-      `DELETE FROM execution_lease WHERE space = :space`,
-    ).run({ space });
+    engine.executionLeases.release(space, created.holder);
 
     let flushed = 0;
     const probe = runtime.getCell<{ n: number }>(
@@ -782,130 +766,10 @@ describe("stage G SpaceServer recovery seams", () => {
     expect(Engine.serverSeq(engine)).toBe(seqBefore);
   });
 
-  it("extends a lease that lapsed with no successor at its next renewal, keeps the tenure, and reports the recovery to the memory server once", async () => {
-    // The row expires under the holder, as it does when synchronous work
-    // holds both renewal drivers past the TTL. Nobody took it, so the next
-    // tick's renewal extends it: no loss, no reacquire, the tenure serves
-    // on, and the memory server hears of the recovery as it hears of a
-    // reacquire, since a push pass inside the lapse judged the loopback
-    // session a former holder.
-    const notices: Array<{ space: string; principal: string }> = [];
-    const noticeArrivals = new ArrivalLog<void>();
-    const spy = new Proxy(server, {
-      get(target, prop, receiver) {
-        if (prop === "noteLeaseReacquired") {
-          return (notice: { space: string; principal: string }) => {
-            notices.push(notice);
-            noticeArrivals.record();
-            return target.noteLeaseReacquired(notice);
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }) as typeof server;
-    const stats = emptyServingLoopStats();
-    const ttlMs = 50;
-    const created = newSpaceServer({
-      serverFacade: spy,
-      stats,
-      policy: {
-        flushDeadlineMs: 2_000,
-        idleParkMs: 600_000,
-        leaseTtlMs: ttlMs,
-        renewIntervalMs: 25,
-      },
-    });
-    expect(await created.activate()).toBe(true);
-    expect(stats.lease.lost).toBe(0);
-
-    // The lapse: the row's expiry is moved into the past, more than a TTL
-    // behind the last renewal the loop recorded.
-    engine.database.prepare(
-      "UPDATE execution_lease SET expires_at = :past WHERE space = :space",
-    ).run({ past: Date.now() - 2 * ttlMs, space });
-    await noticeArrivals.reached(1);
-    expect(stats.lease.lapsesRecovered).toBe(1);
-    expect(stats.lease.lost).toBe(0);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(created.holder);
-    expect(notices).toEqual([{ space, principal: serviceSigner.did() }]);
-    expect(created.active).toBe(true);
-    // The ticks that follow renew a live row and report nothing.
-    await awaitEach(cycles, () => {
-      created.noteDemandChanged();
-      return true;
-    });
-    expect(notices.length).toBe(1);
-  });
-
-  it("reports a survived renewal blip to the memory server: the renew arm's same-process reacquire calls noteLeaseReacquired with the space and the service identity — once per blip, never on a plain renewal, never when the reacquire fails and the space parks (fan-out stage A's finding 1, the re-arm's trigger)", async () => {
-    // A Proxy facade over the real server that records the notice; every
-    // other call passes through (the sx2 facade pattern above).
-    const notices: Array<{ space: string; principal: string }> = [];
-    const noticeArrivals = new ArrivalLog<void>();
-    const spy = new Proxy(server, {
-      get(target, prop, receiver) {
-        if (prop === "noteLeaseReacquired") {
-          return (notice: { space: string; principal: string }) => {
-            notices.push(notice);
-            noticeArrivals.record();
-            return target.noteLeaseReacquired(notice);
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }) as typeof server;
-    const stats = emptyServingLoopStats();
-    const created = newSpaceServer({
-      serverFacade: spy,
-      stats,
-      policy: {
-        flushDeadlineMs: 2_000,
-        idleParkMs: 600_000,
-        renewIntervalMs: 25,
-      },
-    });
-    expect(await created.activate()).toBe(true);
-    // Activation itself reports nothing. Whether a PLAIN renewal reports
-    // is carried by the count assertions after the blip below: the renew
-    // ticks every 25 ms for the rest of this test, so a renewal that
-    // reported would push the count past the one the blip produces.
-    expect(notices).toEqual([]);
-    expect(stats.lease.lost).toBe(0);
-
-    // The blip: the row vanishes with NO rival, so the next tick's
-    // renewal FAILS and the same-process reacquire SUCCEEDS.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    // The notice is the reacquire's own edge; the failed tick and the
-    // restored row are what produced it.
-    await noticeArrivals.reached(1);
-    expect(stats.lease.lost).toBeGreaterThanOrEqual(1);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(created.holder);
-    expect(notices).toEqual([{ space, principal: serviceSigner.did() }]);
-    expect(created.active).toBe(true);
-
-    // A blip the reacquire LOSES (a rival took the row) parks the space
-    // and reports nothing: there is no live lease to re-arm under.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: executionLeaseHolder("did:key:rival-process"),
-        ttlMs: 600_000,
-      }),
-    ).toBe(true);
-    await parks.reached(1);
-    expect(created.active).not.toBe(true);
-    // One notice per blip, over every plain renewal since.
-    expect(notices.length).toBe(1);
-  });
-
   it("resolves a second park only once the first has parked the space", async () => {
-    // A park the renew arm fires without awaiting is still running its
-    // dispose when the host closes; the host's own park must wait for it,
-    // or the engine closes under a tenure that still releases its lease
-    // through it.
+    // A park the loop fires without awaiting is still running its dispose
+    // when the host closes; the host's own park must wait for it, or the
+    // engine closes under a tenure still disposing against it.
     const created = newSpaceServer();
     expect(await created.activate()).toBe(true);
     const first = created.park("first");
@@ -1044,11 +908,11 @@ describe("stage G SpaceServer recovery seams", () => {
     }>,
   ): typeof server =>
     new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "demandForSpace") {
           return () => sessionDemandOf(demandRowsFor(roots));
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as typeof server;

@@ -17,16 +17,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import {
-  resolveScopeKey,
-  type ScopeKeyIdentity,
-} from "@commonfabric/memory/v2";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-  liveExecutionLeaseHolder,
-  releaseExecutionLease,
-} from "@commonfabric/memory/v2/execution-lease";
+import { type ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -950,87 +941,23 @@ describe("engine-read-through", () => {
     }
   });
 
-  it("reads another principal's instance under an expired lease only once the renew arm has recovered the lapse, while a space-scoped read renews nothing", async () => {
+  it("reads another principal's instance under the tenure's lease", async () => {
     await instantiatePiece();
     host = newHost({
       flushDeadlineMs: 5_000,
       idleParkMs: 600_000,
-      renewIntervalMs: 600_000,
       storeReadThrough: true,
     });
     await demandFromClient();
     const engine = await server.engineForSpace(space);
-    const spaceServer = host.spaceServer(space)!;
     const id = await writeUserInstance("read-through-lease-doc", "A");
-    expect(
-      Engine.readState(engine, {
-        id,
-        scopeKey: resolveScopeKey("user", clientIdentity),
-      })?.document,
-    ).toBeDefined();
     const replica = factoryManager!.open(space).replica;
 
-    // The lease row expires under the tenure (an expired row matches
-    // nobody), as a stalled process would find it at its next renewal.
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: spaceServer.holder,
-        now: Date.now() - 60_000,
-        ttlMs: 1,
-      }),
-    ).toBe(true);
-    expect(liveExecutionLeaseHolder(engine, space)).toBeUndefined();
-    // A space-scoped document is delivered to any session, lease or not,
-    // and is read here without consulting the row.
-    replica.get({ id: "of:read-through-space-probe", scope: "space" });
-    expect(host.stats().lease.lost).toBe(0);
-    expect(liveExecutionLeaseHolder(engine, space)).toBeUndefined();
-
-    // Another principal's instance is served only to a live holder: the
-    // read runs the renew arm first — the row still names this holder and
-    // nobody took it, so the renewal recovers the lapse, the same step the
-    // renew timer takes — and is served under the continuing tenure.
     expect(
       replica.getDocument(id, "user", clientIdentity)?.value,
     ).toEqual({ draft: "A" });
-    expect(host.stats().lease.lost).toBe(0);
-    expect(host.stats().lease.lapsesRecovered).toBe(1);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(spaceServer.holder);
-    expect(spaceServer.active).toBe(true);
-    // Held now: later reads of the instance never reach the row again.
-    releaseExecutionLease(engine, { space, holder: spaceServer.holder });
-    expect(
-      replica.getDocument(id, "user", clientIdentity)?.value,
-    ).toEqual({ draft: "A" });
-    expect(host.stats().lease.lapsesRecovered).toBe(1);
-  });
-
-  it("withholds another principal's instance while a rival holds the lease, and parks the space", async () => {
-    await instantiatePiece();
-    host = newHost({
-      flushDeadlineMs: 5_000,
-      idleParkMs: 600_000,
-      renewIntervalMs: 600_000,
-      storeReadThrough: true,
-    });
-    await demandFromClient();
-    const engine = await server.engineForSpace(space);
-    const spaceServer = host.spaceServer(space)!;
-    const id = await writeUserInstance("read-through-rival-doc", "A");
-    const replica = factoryManager!.open(space).replica;
-
-    releaseExecutionLease(engine, { space, holder: spaceServer.holder });
-    const rival = executionLeaseHolder("did:key:rival-process");
-    expect(
-      acquireExecutionLease(engine, { space, holder: rival, ttlMs: 600_000 }),
-    ).toBe(true);
-    // A former holder receives no foreign instance (protocol.md §3): the
-    // read is withheld, and the tenure that cannot reacquire parks.
-    expect(replica.getDocument(id, "user", clientIdentity)).toBeUndefined();
-    expect(host.stats().lease.lost).toBe(1);
-    await waitUntil(() => spaceServer.active === false, "the space to park");
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(rival);
+    expect(engine.executionLeases.holderOf(space))
+      .toBe(host.spaceServer(space)!.holder);
   });
 
   /** One wave commit the decorated sink saw: the wave's basis, and the

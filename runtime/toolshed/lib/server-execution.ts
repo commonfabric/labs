@@ -32,6 +32,7 @@ import {
   ServingWorker,
 } from "@commonfabric/runner/executor/serving-worker-host";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
+import type { CollectedMemory } from "@commonfabric/runner/collected-memory";
 import type { Identity } from "@commonfabric/identity";
 import {
   servedLifecycleRunner,
@@ -45,10 +46,17 @@ import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-
 
 /**
  * The serving loop as the rest of this process reaches it, whichever thread
- * runs it: the lifecycle verbs the route sends, and the loop's counters and
- * close.
+ * runs it: the lifecycle verbs the `pattern.lifecycle` handler sends, and the
+ * loop's counters and close.
  */
-export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle;
+export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
+  /**
+   * Collects the loop's worker, and returns the memory its isolate still
+   * holds; `undefined` where the loop runs on this thread, which the caller
+   * collects itself.
+   */
+  collectedWorkerMemory(): Promise<CollectedMemory | undefined>;
+};
 
 let loop: ServingLoop | undefined;
 
@@ -285,24 +293,25 @@ export function serverExecutionWorkerFromEnv(
 /**
  * Whether the serving loop reaches every space but the ones it serves through
  * that space's owner (`SERVER_EXECUTION_OWNER_ROUTING`,
- * docs/plans/serving-loop-owner-routing.md): the literal `true` turns the
- * route on; `false`, unset or empty leaves every crossing on this process's
- * own memory server. Anything else warns and leaves it off.
+ * serving-loop.md §2): on unless the variable is the
+ * literal `false`, which leaves every crossing on this process's own memory
+ * server. `true`, unset and empty select the default; anything else warns
+ * and selects it too.
  */
 export function ownerRoutingFromEnv(
   envGet: EnvReader,
   warn: (message: string) => void = (message) => console.warn(message),
 ): boolean {
   const raw = envGet("SERVER_EXECUTION_OWNER_ROUTING");
-  if (raw === "true") return true;
-  if (raw !== undefined && raw !== "" && raw !== "false") {
+  if (raw === "false") return false;
+  if (raw !== undefined && raw !== "" && raw !== "true") {
     warn(
       "Server-execution v2: ignoring SERVER_EXECUTION_OWNER_ROUTING=" +
         `${JSON.stringify(raw)} (expected "true" or "false"); crossings ` +
-        "stay on this process's memory server",
+        "reach each space's owner, the default",
     );
   }
-  return false;
+  return true;
 }
 
 /**
@@ -397,19 +406,27 @@ export function startServerExecutionHost(options: {
     );
   }
   const ownerRouting = ownerRoutingFromEnv(envGet);
-  if (ownerRouting && options.memoryUrl === undefined) {
+  if (!ownerRouting) {
+    console.log(
+      "Server-execution v2: owner routing OFF by " +
+        "SERVER_EXECUTION_OWNER_ROUTING=false (crossings stay on this " +
+        "process's memory server; default is ON)",
+    );
+  } else if (options.memoryUrl === undefined) {
     console.warn(
-      "Server-execution v2: SERVER_EXECUTION_OWNER_ROUTING=true with no " +
-        "memory endpoint to route through; crossings stay on this process's " +
-        "memory server",
+      "Server-execution v2: owner routing is on with no memory endpoint to " +
+        "route through; crossings stay on this process's memory server",
     );
   }
   const memoryUrl = ownerRouting ? options.memoryUrl : undefined;
   if (memoryUrl !== undefined) {
     console.log(
-      "Server-execution v2: owner routing ON by " +
-        `SERVER_EXECUTION_OWNER_ROUTING=true (crossings reach each space's ` +
-        `owner through ${memoryUrl.href}; default is OFF)`,
+      "Server-execution v2: owner routing ON " +
+        (envGet("SERVER_EXECUTION_OWNER_ROUTING") === "true"
+          ? "by SERVER_EXECUTION_OWNER_ROUTING=true"
+          : "(the default; SERVER_EXECUTION_OWNER_ROUTING=false keeps " +
+            "every crossing on this process's memory server)") +
+        ` (crossings reach each space's owner through ${memoryUrl.href})`,
     );
     route = new RoutedPlane(
       webSocketRoute(memoryUrl, options.identity, toolshedClientBuild()),
@@ -440,6 +457,7 @@ export function startServerExecutionHost(options: {
       runLifecycleVerb: (space, verb) => worker.runLifecycleVerb(space, verb),
       stats: () => worker.stats(),
       diagnostics: () => worker.diagnostics(),
+      collectedWorkerMemory: () => worker.collectedMemory(),
       host: undefined,
       close: () => worker.close(),
     };
@@ -488,6 +506,7 @@ export function startServerExecutionHost(options: {
           loggerCounts: getLoggerCountsBreakdown(),
           timingStats: getTimingStatsBreakdown(),
         }),
+      collectedWorkerMemory: () => Promise.resolve(undefined),
       host,
       close: () => host.close(),
     };
@@ -500,8 +519,8 @@ export function startServerExecutionHost(options: {
 }
 
 /**
- * The serving loop while it runs, for the routes that hand it work — the
- * pattern-lifecycle verbs among them; `undefined` off the flag.
+ * The serving loop while it runs, for what hands it work — the
+ * `pattern.lifecycle` handler among them; `undefined` off the flag.
  */
 export function serverExecutionHost(): ServingLoop | undefined {
   return loop;

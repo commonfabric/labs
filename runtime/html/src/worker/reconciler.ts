@@ -1741,13 +1741,19 @@ export class WorkerReconciler {
    * itself is the same whatever the retry state, so a placeholder updated in
    * place keeps it and its keyboard focus, and a press while a retry is in
    * flight shares that retry. An admission re-renders the content through the
-   * provider's `subscribe()`.
+   * provider's `subscribe()`. Content of a deleted space reads "Deleted"
+   * instead, marked `data-space-deleted`, with no control, since no retry can
+   * admit anyone.
    */
   #accessPlaceholderVNode(space: string): WorkerVNode {
     const props: WorkerProps = {
       "data-space-access-lost": "true",
       role: "status",
     };
+    if (this.#spaceAccess?.deleted?.(space) === true) {
+      props["data-space-deleted"] = "true";
+      return { type: "vnode", name: "span", props, children: ["Deleted"] };
+    }
     const children: WorkerRenderNode[] = ["Access unavailable"];
     const retries = this.#spaceAccess?.retries;
     if (retries !== undefined) {
@@ -1776,6 +1782,9 @@ export class WorkerReconciler {
    * what the placeholder shows does.
    */
   #accessPlaceholderKey(space: string): string {
+    if (this.#spaceAccess?.deleted?.(space) === true) {
+      return `access:${space}:deleted`;
+    }
     const state = this.#spaceAccess?.retries?.state(space);
     return state === undefined
       ? `access:${space}`

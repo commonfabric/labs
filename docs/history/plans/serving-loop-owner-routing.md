@@ -1,16 +1,24 @@
+---
+status: historical
+created: 2026-11-01
+archived: 2026-11-02
+reason: "Executed plan; a serving loop reaches every other space through its owner, and the lease lives in the memory server's memory. Two removals remain, the flag and the execution_lease table, both under the flag's path to removal in docs/development/EXPERIMENTAL_OPTIONS.md."
+superseded-by: docs/specs/server-side-execution/serving-loop.md
+---
+
 # Serving each space from the process that owns it
 
 A deployment can run several toolshed processes over one memory store. Rapids
 and Estuary run 21 of them, `toolshed-binary@8001` through `@8021`, with one
 `MEMORY_DIR` between them
-([`random-space-identities.md`](../specs/random-space-identities.md),
+([`random-space-identities.md`](../../specs/random-space-identities.md),
 "Deployment mappings"). Their nginx sends each space's memory WebSocket, by its
 `space=<did>` query parameter, to one process, and spreads ordinary API
 requests over five others. This plan calls the process a space's socket reaches
 that space's **owner**.
 
 The serving loop is written as though every space were served by one process.
-[`protocol.md`](../specs/server-side-execution/protocol.md) §2b says so of
+[`protocol.md`](../../specs/server-side-execution/protocol.md) §2b says so of
 provisioning ("Same host, same process — this is store sequencing, not a
 network await") and puts the other case out of v2 scope. Whenever a serving
 loop acts on a space other than its home, it acts through its own process's
@@ -42,15 +50,14 @@ process. So, with 21 processes:
 - A cross-space read is woken only by commits its own process admitted. Commits
   that the owner makes to the space it reads leave its derivations stale.
 
-The `execution_lease` row in each space's SQLite file is the only thing that
-stops two processes from deriving one space. That is why it cannot simply move
-into memory ([the closing stage](#stage-l-the-lease-in-memory) does that, once
-the stages before it hold).
+With every crossing routed, the route is what stops two processes from deriving
+one space, which is what let the lease move into memory
+([the closing stage](#stage-l-the-lease-in-memory)).
 
 The change: a serving loop reaches every space other than its home through
 that space's owner. The toolshed never computes who the owner is; it reaches
 the owner through the route the deployment already keeps, `MEMORY_URL` with
-`?space=<did>` ([`CONFIGURATION.md`](../development/CONFIGURATION.md), the
+`?space=<did>` ([`CONFIGURATION.md`](../../development/CONFIGURATION.md), the
 `MEMORY_URL` row). The toolshed's own runtime already uses that route with one
 socket per space (`RemoteSessionFactory` in
 `runtime/runner/src/storage/v2-remote-session.ts`), and the meeting-rooms route
@@ -75,7 +82,7 @@ today. The outbox already treats that as transient (`serving-loop.md` §5,
 LT4), and the wave treats it as a foreign failure (below).
 
 The memory router's routed mode (`MEMORY_ROUTER_CONFIG_FILE`,
-[`CONFIGURATION.md`](../development/CONFIGURATION.md)) is a separate, private
+[`CONFIGURATION.md`](../../development/CONFIGURATION.md)) is a separate, private
 listener that these deployments do not run. On it, `Server.options.ownsSpace`
 refuses a `session.open` for a space the process does not own, and the routed
 host admits no `actingAs` binding. The routed session of this plan reaches the
@@ -86,7 +93,7 @@ fence that agrees with the route; the route is what picks the owner.
 ## The memory protocol: `served`
 
 A session request, beside `pattern.lifecycle`
-([`04-protocol.md`](../specs/memory-v2/04-protocol.md) §4.3.10):
+([`04-protocol.md`](../../specs/memory-v2/04-protocol.md) §4.3.10):
 
 ```
 { type: "served", requestId, space, sessionId, kind, body }
@@ -221,44 +228,61 @@ moves the lease out of their admission.
 
 ## Reads that name an instance
 
-`protocol.md` §2's read row admits a read naming an `entity_scope_key` from a
-live lease holder on the co-hosted memory server. It checks the full DR1 holder
-minted by that process (`#denyExplicitInstanceReads` and
-`#liveCoHostedLeaseSpaceFor` in `runtime/memory/v2/server.ts`). A routed read
-session reaches the owner from a sibling process, whose holder the owner never
-minted and whose lease it cannot see. So the row changes:
+`protocol.md` §2's read row admitted a read naming an `entity_scope_key` from a
+live lease holder on the co-hosted memory server, checking the full DR1 holder
+minted by that process. A routed read session reaches the owner from a sibling
+process, whose holder the owner never minted and whose lease it cannot see. So
+the row, as R3 restated it (`#denyExplicitInstanceReads` and
+`#isServingSession` in `runtime/memory/v2/server.ts`):
 
-- **Who may name an instance:** a session authenticated as the deployment's
-  service identity, the delegating class, whether or not it holds a lease
+- **Who may name an instance:** the space's own serving session on this server,
+  which is a session from the owner's process whose principal holds the space's
+  live lease, and a session authenticated as the deployment's service identity,
+  the delegating class, from any process, whether or not it holds a lease
   anywhere.
+- **Which process a session is from:** the connection says so.
+  `Server.connect()` takes `inProcess`, which the in-process transport
+  (`MemoryClient.loopback`) and the worker's port set and a socket never does
+  (`Connection.inProcess`). A sibling process's session carries the same
+  service principal over a socket, so the owner tells its own serving session
+  from a routed one by the connection, not by the holder.
 - **Unchanged:** the grant-scoped read rule (a foreign scoped instance is read
   under its actor's own READ grant on the space), the refusal of an unnamed
   scoped read from a serving session, and the wire collapse guard for everyone
   else.
-- **What goes:** the per-process sharpening. It kept a second process sharing
-  the service DID from passing on this process's lease rows. A deployment
-  whose processes hold one key gives that second process the same trust, and
-  this plan is what makes it a peer.
-  [`verification-coverage.md`](../specs/server-side-execution/verification-coverage.md)
-  records a Phase-1 acceptance that waits on that sharpening; the stage that
-  makes the change records its retirement there.
-- **What stays:** the session's keyed delivery (`leaseHolderReads`, and the
+- **Gone:** the per-process sharpening as a rule about lease rows. It kept a
+  second process sharing the service DID from passing on this process's lease
+  rows. A deployment whose processes hold one key gives that second process the
+  same trust, and this plan is what makes it a peer; the holder equality now
+  decides only whether a session from this process is the space's serving
+  session.
+  [`verification-coverage.md`](../../specs/server-side-execution/verification-coverage.md)
+  records the Phase-1 acceptance that waited on that sharpening as closed.
+- **Kept:** the session's keyed delivery (`leaseHolderReads`, and the
   `scopeKey` field it puts on the wire). It is armed by the first admitted
-  named read, and from then on it is a property of the session's principal for
-  the session's life.
-- **Also goes:** the lapse machinery that hangs from the lease:
-  `leaseHolderReadsLapsed`, its re-arm when the lease is lost, and
-  `noteLeaseReacquired` with its port notice.
-- **The unnamed-scope guard:** `#denyForeignServingScopedRead` decides that a
-  serving session is reading a foreign space by finding a live lease it holds
+  named read, and from then on the instances the session named are delivered
+  to it for the session's life.
+- **Also gone:** the lapse machinery that hung from the lease:
+  `leaseHolderReadsLapsed`, its re-arm when the lease was lost, and
+  `noteLeaseReacquired` with its port notice. The renew arm's survived blip
+  reaches tests through `ExecutorHostOptions.onLeaseReacquired`.
+- **The unnamed-scope guard:** `#denyForeignServingScopedRead` decided that a
+  serving session was reading a foreign space by finding a live lease it held
   on some other space of the same server. A routed session holds none there. It
-  decides instead by principal class: a delegating-class session that does not
-  hold the read space's live lease on this server is reading a foreign space,
-  and its unnamed scoped read is refused as now. Home reads stay on the
-  loopback session and keep passing on the holder equality.
+  decides instead by the session's binding: a session opened under
+  `actingAs: "space-owner"`, which the serving runtime's sessions are
+  (`SessionState.servingBinding`), that is not the read space's serving
+  session on this server is reading a foreign space, and its unnamed scoped
+  read is refused. Home reads stay on the loopback session and pass as the
+  serving session.
+- **Demand:** the owner's demand excludes the service principal, so a routed
+  session registers none, as an in-process foreign read never did. The owner
+  derives for its own clients' demand, and a sibling's read sees what the
+  owner's loop last derived for the actor
+  ([`verification-coverage.md`](../../specs/server-side-execution/verification-coverage.md)
+  OW35).
 
-This is the one ruling the plan needs on admission. Once the plan is approved,
-the ruling is recorded where `protocol.md` §2 records the 2026-08-03 ruling it
+The ruling is recorded where `protocol.md` §2 records the 2026-08-03 ruling it
 amends.
 
 ## Activation
@@ -273,7 +297,7 @@ what the memory server admits for a space it does not own is limited to:
 
 Production clients always name the space. `sharedMemoryConnection`, which names
 none, stays off in these deployments until a router terminates client
-connections ([`random-space-identities.md`](../specs/random-space-identities.md)).
+connections ([`random-space-identities.md`](../../specs/random-space-identities.md)).
 `serving-loop.md` §1 states the invariant: a space is served only by its owner,
 because everything that activates it reaches the owner. A serving loop never
 activates a space it reached through the route.
@@ -281,7 +305,7 @@ activates a space it reached through the route.
 ## The flag
 
 `SERVER_EXECUTION_OWNER_ROUTING`, registered in
-[`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md) in the stage
+[`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md) in the stage
 that adds it. Off, every crossing stays in-process as today. On, every crossing
 routes, along with the read-row change.
 
@@ -292,9 +316,12 @@ The stages below are not separately safe:
 - Routing reads without writes stops a process from seeing its own writes into
   another space.
 
-So the flag stays off until all of R1–R3 have landed, and every test of the
-routed arm sets it. R4 turns it on in the toolshed, where `MEMORY_URL` is always
-set, which is correct for a single process and for 21.
+So the flag turns on only with all of R1–R3 landed. It is on by default in the
+toolshed, where `MEMORY_URL` is always set, which is correct for a single
+process and for 21, and `SERVER_EXECUTION_OWNER_ROUTING=false` keeps every
+crossing on the process's own memory server. The runner's harnesses route only
+where a test hands their host a route, so every test of the routed arm sets
+one.
 
 ## Testing
 
@@ -308,18 +335,27 @@ which server admitted what and which host serves what.
 Two details make the two hosts behave as two processes would. The serving
 memory server of the test support
 (`runtime/runner/src/executor/serving-memory-server.deno.ts`) takes a store it
-is handed, so two of them open one file. And the lease holder's process
-component (`adoptProcessInstanceId` in
-`runtime/memory/v2/execution-lease.ts`) is one value per module instance, so
-the hosts of one test process mint one holder until R3. The read row binds a
-serving session's holder to that component, so R1 and R2 leave it shared and
-assert on which server admitted what; from R3 on, each host takes its own
-component, and the two holders differ as two processes' do.
+is handed, so two of them open one file. And a routed session's transport in
+the harness is a loopback connection opened with `inProcess: false`, so the
+owner takes it for a sibling process's, as it would a socket's. The lease
+holder's process component (`adoptProcessInstanceId` in
+`runtime/memory/v2/execution-lease.ts`) stays one value per test process; the
+read row tells the hosts' sessions apart by their connections, so the shared
+component is nothing the harness has to work around.
 
-R4 adds one integration test with two toolshed processes behind a proxy that
-routes `?space=` the way nginx does, and measures the cross-space scenario of
-the server-execution benchmarks (an event from one space into another) with the
-flag on and off.
+`runtime/runner/integration/owner-routing.test.ts` runs two toolshed processes
+from source behind a proxy in the test process that routes `?space=` the way
+nginx does, over one memory directory: a served run on one process sends an
+event into a space owned by the other, and the event is served on its owner
+alone. The crossings a process sends through the route are counted by kind in
+its serving loop's stats (`servingLoop.routed` under `/api/health/stats`,
+serving-loop.md §7), which is how the test tells a routed crossing from one
+that stayed home, and how a deployment does. The cross-space scenario of the
+server-execution benchmarks (`lunch-poll-read-scale` with
+`CF_READ_SCALE_PROFILE_LOCATION=cross-space`) is measured with the flag on and
+off; on one toolshed the two arms differ by less than the spread within each,
+so the route costs nothing the benchmark can see (the R4 pull request records
+the samples).
 
 ## Stages
 
@@ -342,7 +378,7 @@ flag on and off.
    - Test: provisioning into a space owned by B lands on B and warm-activates it
      there; with B unreachable, the foreign batch fails, X's home commit does
      not land, and the event replays once B is back.
-3. [ ] **R3: reads through the owner, and the read row.**
+3. [x] **R3: reads through the owner, and the read row.**
    - Remote sessions for every space but the home.
    - The read-row change, with its ruling recorded in `protocol.md` §2, and
      the Phase-1 acceptance it retires recorded in `verification-coverage.md`.
@@ -350,12 +386,12 @@ flag on and off.
    - Test: X on A derives from Y on B and is woken by B's commits; a named
      scoped read of Y's instance for an actor whom Y grants READ is admitted on
      B, and one for an actor whom Y does not grant is refused.
-4. [ ] **R4: on by default.**
+4. [x] **R4: on by default.**
    - The toolshed passes `MEMORY_URL` and turns the flag on.
    - The two-process integration test, and the cross-space measurement.
    - `serving-loop-worker.md` and `serving-loop.md` §1 drop the in-process
      crossings from their description of the default.
-5. [ ] **L: the lease in memory.** The section below. It lands only after a
+5. [x] **L: the lease in memory.** The section below. It lands only after a
    release with owner routing on has been deployed to every process.
 
 ## Stage L: the lease in memory
@@ -377,7 +413,7 @@ With the lease in memory, nothing stored stops the old owner from serving a
 space its new owner starts to serve. A change to the set of processes behind
 the route drains and restarts them all. The deployment's mapping is a function
 of the space's DID and the process count
-([`random-space-identities.md`](../specs/random-space-identities.md)), so a
+([`random-space-identities.md`](../../specs/random-space-identities.md)), so a
 restart under an unchanged count keeps every space where it was.
 
 **What the lease becomes.**
@@ -412,12 +448,18 @@ them later than it does today, and no space is served by two processes in
 between because none can be. It is the only timer left in the lease:
 
 - The worker posts a heartbeat every 10 s from a timer of its own.
+- The count starts at the worker's first message: until its modules have loaded,
+  a worker has no timer to post from and no lease to release, so a worker that
+  hangs before then is not replaced.
 - The main thread checks every 10 s. When it has had no message of any kind
   from the worker for 60 s, it terminates the worker and releases the worker's
   leases. It then starts a successor under a fresh component, through the
   replacement path that a worker failure already takes (`ServingWorker`'s
   `#onWorkerFailed`).
-- A kill counts in `lease.lost`.
+- Nothing waits for the killed worker's teardown: `terminate()` lets a synchronous
+  stretch finish, and a stalled thread never releases its lifetime lock. A thread
+  spinning forever keeps its core until the process restarts.
+- A kill counts in `lease.lost`, one for each lease it releases.
 - The in-process arrangement has no watchdog: the thread that would watch is
   the thread that stopped.
 
@@ -426,7 +468,8 @@ port keeps its spaces, and systemd never runs two processes on one port. With
 owner routing on in the release before, an old process never activates a space
 it does not own, so an old process that still writes rows and a new one that
 keeps the lease in memory never serve the same space. The `execution_lease`
-table stays in the schema, unused, until a later release drops it.
+table stays in the schema, unused, until a later release drops it. That drop and
+the removal of `SERVER_EXECUTION_OWNER_ROUTING` are what remain of this plan.
 
 **What the spec loses.** These parts are rewritten or dropped:
 

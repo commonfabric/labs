@@ -37,8 +37,8 @@ export interface WrappedRow {
   /** Exclusive display-column end of the source cells drawn on this row. */
   readonly sourceEnd: number;
 
-  /** Cells copied from the logical line's prefix before this row's source. */
-  readonly prefixWidth: number;
+  /** Blank cells before this row's source. */
+  readonly indentWidth: number;
 
   /** Whether source content continues on the following row. */
   readonly continues: boolean;
@@ -101,7 +101,9 @@ export interface WrapPlan {
   readonly wordRows: readonly (WordWrapLine | null)[] | null;
 }
 
-/** Source boundaries and the repeated prefix for one word-wrapped line. */
+/** Source boundaries for one word-wrapped line, and the width of its leading
+ * punctuation and whitespace, by which continuation rows are indented when
+ * they have room. */
 export interface WordWrapLine {
   readonly offsets: Uint32Array;
   readonly prefixWidth: number;
@@ -199,8 +201,8 @@ export function wrappedRowAt(
   const continues = within < lastWithin;
   const available = plan.rowWidth - suffixWidth;
   const wrapMarker = continues && available > 1;
-  const prefixWidth = wordRows
-    ? repeatedPrefixWidth(
+  const indentWidth = wordRows
+    ? continuationIndentWidth(
       wordRows.prefixWidth,
       within,
       offset,
@@ -211,7 +213,7 @@ export function wrappedRowAt(
     : 0;
   const sourceWidth = Math.max(
     0,
-    available - prefixWidth - (wrapMarker ? 1 : 0),
+    available - indentWidth - (wrapMarker ? 1 : 0),
   );
   return {
     row,
@@ -222,7 +224,7 @@ export function wrappedRowAt(
     sourceEnd: wordRows && continues
       ? wordRows.offsets[within + 1]
       : Math.min(plan.lineWidth[lo], offset + sourceWidth),
-    prefixWidth,
+    indentWidth,
     continues,
     wrapMarker,
     suffixWidth,
@@ -391,9 +393,9 @@ export function buildWrapPlan(
   };
 }
 
-/** Lay out one line at word boundaries and copy its leading punctuation and
- * whitespace onto continuation rows. Long words still make forward progress by
- * using the hard-wrap boundary. */
+/** Lay out one line at word boundaries and indent continuation rows by the
+ * width of its leading punctuation and whitespace. Long words still make
+ * forward progress by using the hard-wrap boundary. */
 function buildWordWrapLine(
   line: Line,
   mode: DisplayMode,
@@ -415,7 +417,7 @@ function buildWordWrapLine(
 
   const offsets: number[] = [];
   let offset = 0;
-  let copiedAnyPrefix = false;
+  let indentedAnyRow = false;
 
   do {
     const row = offsets.length;
@@ -426,7 +428,7 @@ function buildWordWrapLine(
       : continuationSuffixWidth;
     const available = rowWidth - suffixWidth;
     const remaining = cells.length - offset;
-    let copiedPrefix = repeatedPrefixWidth(
+    let indent = continuationIndentWidth(
       prefixWidth,
       row,
       offset,
@@ -434,14 +436,14 @@ function buildWordWrapLine(
       0,
       remaining,
     );
-    if (remaining <= available - copiedPrefix) {
-      copiedAnyPrefix ||= copiedPrefix > 0;
+    if (remaining <= available - indent) {
+      indentedAnyRow ||= indent > 0;
       offsets.push(offset);
       break;
     }
 
     const markerWidth = available > 1 ? 1 : 0;
-    copiedPrefix = repeatedPrefixWidth(
+    indent = continuationIndentWidth(
       prefixWidth,
       row,
       offset,
@@ -449,10 +451,10 @@ function buildWordWrapLine(
       markerWidth,
       1,
     );
-    copiedAnyPrefix ||= copiedPrefix > 0;
+    indentedAnyRow ||= indent > 0;
     const sourceWidth = Math.max(
       1,
-      available - copiedPrefix - markerWidth,
+      available - indent - markerWidth,
     );
     const nextOffset = wordBoundary(
       characterClasses,
@@ -465,7 +467,7 @@ function buildWordWrapLine(
   } while (offset < cells.length);
 
   if (
-    !copiedAnyPrefix &&
+    !indentedAnyRow &&
     hasFixedWrapOffsets(
       offsets,
       cells.length,
@@ -553,16 +555,15 @@ function classifyDisplayCells(
     ) {
       displayCol++;
     }
-    if (
-      displayCol < cells.length &&
-      sourceCol >= cells[displayCol].col
+    // Every cell drawn for this code point (a tab can draw several) takes its
+    // classes.
+    for (
+      let d = displayCol;
+      d < cells.length && sourceCol >= cells[d].col;
+      d++
     ) {
-      if (!isPrefixCharacter(codePoint)) {
-        classes[displayCol] &= ~PREFIX_CHARACTER;
-      }
-      if (isBreakWhitespaceCharacter(codePoint)) {
-        classes[displayCol] |= BREAK_WHITESPACE;
-      }
+      if (!isPrefixCharacter(codePoint)) classes[d] &= ~PREFIX_CHARACTER;
+      if (isBreakWhitespaceCharacter(codePoint)) classes[d] |= BREAK_WHITESPACE;
     }
     sourceCol++;
   }
@@ -634,7 +635,7 @@ function wordWrapDiffersFromHard(
     continues = remaining > available;
     const markerWidth = continues && available > 1 ? 1 : 0;
     if (
-      repeatedPrefixWidth(
+      continuationIndentWidth(
         prefixWidth,
         row,
         offset,
@@ -699,7 +700,7 @@ function classifySourceRange(
   return classes;
 }
 
-function repeatedPrefixWidth(
+function continuationIndentWidth(
   prefixWidth: number,
   row: number,
   offset: number,

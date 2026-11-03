@@ -28,9 +28,10 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type {
-  PresenceEvent,
-  PresenceMembership,
+import {
+  isDeletedSpaceError,
+  type PresenceEvent,
+  type PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
@@ -137,6 +138,7 @@ import {
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLogger,
   getLoggerCountsBreakdown,
@@ -325,7 +327,7 @@ import {
   normalizeSpaceHostMap,
   securityContextDifferences,
 } from "@/shared/security-context.ts";
-import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
+import { cellRefToKey } from "@/shared/utils.ts";
 
 /** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
@@ -783,6 +785,8 @@ export function renderSpaceAccessProviderFor(
   const storage = runtime.storageManager;
   return {
     error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    deleted: (space) =>
+      isDeletedSpaceError(storage.spaceAccessError?.(space as MemorySpace)),
     subscribe: (space, onChange) => {
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
@@ -1125,9 +1129,13 @@ export class RuntimeProcessor {
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
-      ?.subscribeSpaceAccessLoss?.((space) => {
+      ?.subscribeSpaceAccessLoss?.((space, error) => {
         for (const client of clients()) {
-          client.post({ type: NotificationType.SpaceAccessLost, space });
+          client.post({
+            type: NotificationType.SpaceAccessLost,
+            space,
+            ...(isDeletedSpaceError(error) && { deleted: true as const }),
+          });
         }
       });
     // An access change is a denial or a recovery, and only a recovery leaves
@@ -2870,12 +2878,21 @@ export class RuntimeProcessor {
    * still being created does not, is left alone, and the response holds no
    * cell. Either way, bringing Home up starts the worker's housekeeping over
    * it, as `#startHomeHousekeeping()` says.
+   *
+   * @throws The error Home's memory session ended with, as when its first
+   *   handshake failed on every attempt the client may make.
    */
   async handleEnsureHomePatternRunning(
     request: EnsureHomePatternRunningRequest,
   ): Promise<HomePatternResponse> {
     const homeSpaceCell = this.#runtime.getHomeSpaceCell();
     await homeSpaceCell.sync();
+    // A Home whose session failed reads as absent, which would be taken for
+    // no Home, or for one to create.
+    const sessionFailure = this.#runtime.storageManager.spaceSessionError?.(
+      this.#runtime.userIdentityDID,
+    );
+    if (sessionFailure !== undefined) throw sessionFailure;
     if (request.existingOnly && !(await this.#homeExists())) return {};
 
     // Always the PiecesController path: ensureDefaultPattern() follows the
@@ -3054,7 +3071,9 @@ export class RuntimeProcessor {
       undefined,
       "space",
     );
-    if (indexSync.error !== undefined) throw indexSync.error;
+    if (indexSync.error !== undefined) {
+      throw new Error(indexSync.error.message, { cause: indexSync.error });
+    }
     if (provider.replica === undefined) {
       throw new Error("storage provider does not expose an attention replica");
     }
@@ -3077,7 +3096,11 @@ export class RuntimeProcessor {
         undefined,
         "space",
       );
-      if (sidecarSync.error !== undefined) throw sidecarSync.error;
+      if (sidecarSync.error !== undefined) {
+        throw new Error(sidecarSync.error.message, {
+          cause: sidecarSync.error,
+        });
+      }
       const sidecar = provider.replica.getDocument(
         sidecarId as never,
         "space",

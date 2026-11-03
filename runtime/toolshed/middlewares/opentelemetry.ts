@@ -8,6 +8,7 @@ import {
 } from "@opentelemetry/api";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { getTracerProvider } from "@/lib/otel.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 // Dynamically resolve the tracer so we don't capture the no-op global tracer
 const obtainTracer = () => {
@@ -76,7 +77,7 @@ export function otelTracing(): MiddlewareHandler {
             span.setAttribute("error", true);
             span.setAttribute(
               "error.message",
-              error instanceof Error ? error.message : String(error),
+              describeFailure(error),
             );
             span.setAttribute(
               "error.type",
@@ -84,7 +85,7 @@ export function otelTracing(): MiddlewareHandler {
             );
             span.setStatus({
               code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
+              message: describeFailure(error),
             });
 
             if (error instanceof Error && error.stack) {
@@ -156,12 +157,12 @@ export async function createSpan<T>(
   } catch (error) {
     span.setStatus({
       code: SpanStatusCode.ERROR,
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
     });
     span.setAttribute("error", true);
     span.setAttribute(
       "error.message",
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
     );
     span.end();
     throw error;

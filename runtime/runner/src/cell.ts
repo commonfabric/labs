@@ -186,6 +186,7 @@ import {
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  singleReadTx,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
@@ -1979,9 +1980,9 @@ export class CellImpl<T extends FabricValue>
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
 
     // Wrap the transaction to make all reads non-reactive. Child cells created
-    // during validateAndTransform will use the original transaction (via
-    // getTransactionForChildCells).
-    const readTx = this.#runtime.readTx(this.#tx);
+    // during validateAndTransform use the cell's own transaction while it is
+    // open, and none otherwise (via getTransactionForChildCells).
+    const readTx = singleReadTx(this.#runtime, this.#tx);
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
@@ -4191,7 +4192,8 @@ export class CellImpl<T extends FabricValue>
     const subPath = path || [];
     return createQueryResultProxy(
       this.#runtime,
-      requireTransaction(tx) ?? this.#tx ?? this.#runtime.edit(),
+      requireTransaction(tx) ?? this.#tx ??
+        singleReadTx(this.#runtime, undefined),
       {
         ...this.#link,
         path: [...this.path, ...subPath.map((p) => p.toString())] as string[],

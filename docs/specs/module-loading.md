@@ -859,6 +859,10 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The replication runs after the run that creates the child, so a served
+  event can reach the child first; it waits for the closure's arrival
+  ([`server-side-execution/events.md`](server-side-execution/events.md)
+  §5).
   The same replication runs for a load the runner's in-memory artifact
   index serves: the index is cross-space, so a space whose loads of an
   identity are all served from it never receives the compiled closure, and
@@ -866,7 +870,11 @@ cell's contents. The cache is designed around this:
   closure into another space in the same session, such a load copies it
   into its own space from there; when it compiled the closure in the same
   session and the write-back was deferred by a preview or failed, the load
-  writes that compile back instead of compiling again.
+  writes that compile back instead of compiling again. On a serving runtime a
+  write-back commits when its wave accepts it, and a write-back the wave
+  withdraws at its commit counts as failed: the runner no longer counts that
+  space as holding the closure, neither as a copy's origin nor as a space
+  that needs no copy, and owes it the write a failed write-back is owed.
   A copy carries the compiled closure under the cache variant it was read
   under. That is the runtime's own variant, unless the runner wrote the
   closure into the origin space in the same session under another variant

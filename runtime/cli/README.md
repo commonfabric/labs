@@ -611,7 +611,7 @@ Printable keys enter text while a filter is active.
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, and `M` file-visibility keys remain
+and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
 active. On a commit row, `f` hides all of that commit's files. Pressing it again
 shows them. Each commit row reports its total added and removed lines under the
 selected count policy. The list's summary reports added and removed lines for
@@ -628,6 +628,24 @@ whose text differs only in whitespace. The third also removes lines containing
 only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
+
+Press `C` in a diff or in its list to hide the files whose changes touch only
+comments, and press it again to show them. `C` compares the complete file before
+and after the change, using the comments that syntax highlighting finds. It
+therefore selects only files in a language whose highlighting marks comments, in
+a diff whose `index` line names both versions of the file (as `git diff` does),
+and only when the versions the viewer rebuilds from the repository or the
+working tree are the ones named. Editing a comment's text, or adding or removing
+a line that holds only comments and whitespace, leaves the code as it was. Where
+such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
+adding or removing it changes the file too. A line that follows code ending with
+a backslash continues that code, and a first line that starts with `#!` names
+the program that runs the file, so both are read exactly as written. Adding or
+removing a comment on a line that holds anything else changes the code, and so
+does a change to blank lines or other whitespace. Each side is read on its own,
+so a comment marker that turns unchanged lines into a comment changes the code.
+`C` never selects a renamed or new file, a file whose mode changes, or a file
+whose byte order mark is added or removed.
 
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
@@ -673,8 +691,20 @@ viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
-continues. Word wrapping breaks at whitespace and repeats the line's leading
-punctuation and whitespace on each continuation row.
+continues. Word wrapping breaks at whitespace and indents each continuation row
+by the width of the line's leading punctuation and whitespace. A row is drawn
+unindented when it could hold the rest of the line only without the indentation,
+or when it is too narrow for the indentation and any text.
+
+Press `c` to cycle how non-printable characters are shown. The first mode draws
+each control character as its control-picture glyph, such as `␉` for a tab, one
+column per character. The ANSI color mode applies color escape sequences to the
+text that follows them instead of showing them. It also advances each tab to the
+next column that is a multiple of 4, counting the columns drawn from the start
+of the line. Other control characters still appear as control pictures. The
+hidden mode drops every complete escape sequence that starts with `ESC [`, and
+shows each run of other control characters, including the escape characters of
+other sequences, as one `…`. Editing always uses the first mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
@@ -1441,38 +1471,35 @@ selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —
 program from disk, pins its fabric imports, and sends it as a
 `pattern.lifecycle` request on the space's memory session, as the identity the
 command connects as. That session reaches the toolshed process serving the
-space, which a plain HTTP request to a multi-process deployment may not. Against
-a memory server that does not take the request, the command posts it to the
-deployment's pattern-lifecycle route instead, signed with the same identity. A
-request takes at most 8 MiB. On the memory session a larger one is refused
-before it is sent, as is one over 4 MiB on a connection through the memory
-router; over the route, the deployment refuses it with a 413. The space's
-serving runtime compiles the program, creates the piece, and answers with the
-receipt the command prints. Where the deployment enforces ACLs, the identity
-must hold WRITE or OWNER on the space; a deployment with enforcement off admits
-any signed caller, as its memory server does. Setup, slug, and creation receipt
-commit together, so a taken name refuses before anything is created.
-Registration then invokes the default pattern's `addPiece` handler and waits for
-its durable consequence and registry readback. A failure names the created piece
-and a retry key; repeat `cf piece new` with `--request-key <key>` to resume that
-creation. The space root is the serving loop's to ensure rather than this
-command's. What stays in this process after the receipt is what opening a piece
-does anyway: the start, which `--no-start` skips; `--no-start` also asks the
-serving loop not to derive the piece until something demands it. The receipt
-returns once the piece is durable and registered, including with `--no-start`;
-the serving loop derives it on demand, so a reader that needs the derived value
-pulls it. Against any other deployment, and under `cf test`, the command
-performs every step itself. `cf piece setsrc` requests the same way against a
-serving deployment: it resolves and pins the program, sends it with the piece's
-id, and prints the receipt of the setup transaction the serving runtime
-committed — directly to the store, since a source update publishes module update
-authority that requires a transaction committing to storage itself. What stays
-in this process is the refresh a client-side update runs after its commit: the
-command starts the piece it holds and reports that outcome beside the receipt,
-exiting non-zero when the refresh fails over a durable commit. A piece addressed
-at a scope keeps the client-side path. `cf piece setsrc --check` performs every
-step in this process on every deployment. The contract, including the refusals
-and their codes, is
+space. Against a memory server that does not take the request, the command fails
+with `lifecycle-unsupported` before anything is sent. A request takes at most 8
+MiB in UTF-8, and at most 4 MiB on a connection through the memory router; a
+larger one is refused before it is sent. The space's serving runtime compiles
+the program, creates the piece, and answers with the receipt the command prints.
+Where the deployment enforces ACLs, the identity must hold WRITE or OWNER on the
+space; a deployment with enforcement off admits any authenticated caller, as its
+memory server does. Setup, slug, and creation receipt commit together, so a
+taken name refuses before anything is created. Registration then invokes the
+default pattern's `addPiece` handler and waits for its durable consequence and
+registry readback. A failure names the created piece and a retry key; repeat
+`cf piece new` with `--request-key <key>` to resume that creation. The space
+root is the serving loop's to ensure rather than this command's. What stays in
+this process after the receipt is what opening a piece does anyway: the start,
+which `--no-start` skips; `--no-start` also asks the serving loop not to derive
+the piece until something demands it. The receipt returns once the piece is
+durable and registered, including with `--no-start`; the serving loop derives it
+on demand, so a reader that needs the derived value pulls it. Against any other
+deployment, and under `cf test`, the command performs every step itself.
+`cf piece setsrc` requests the same way against a serving deployment: it
+resolves and pins the program, sends it with the piece's id, and prints the
+receipt of the setup transaction the serving runtime committed — directly to the
+store, since a source update publishes module update authority that requires a
+transaction committing to storage itself. What stays in this process is the
+refresh a client-side update runs after its commit: the command starts the piece
+it holds and reports that outcome beside the receipt, exiting non-zero when the
+refresh fails over a durable commit. A piece addressed at a scope keeps the
+client-side path. `cf piece setsrc --check` performs every step in this process
+on every deployment. The contract, including the refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -1724,6 +1751,22 @@ echo '{"confidentiality":[]}' \
   | cf cell set-label --cell ID queue --dangerously-allow-lowering-confidentiality
 ```
 
+A link stored at the path carries a label of its own, and its target's labels
+are stored at the target. A lowering at a link that is not a write redirect
+lowers the link's own label and leaves its target's alone. A write redirect is
+followed, as a write follows it, and the lowering lands where it leads. Pass
+`--link-slot` to lower the redirect's own label instead, leaving its target's
+alone. It is needed when the clause to remove is on the redirect itself, such as
+a stamp a write after a labeled read left on the link: without the flag, the
+lowering refuses, naming the clause as the label of a write redirect the path
+follows. `get-label` at the path shows the redirect's own label beside its
+target's, so the refusal is the signal to tell the two apart.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID profile --dangerously-allow-lowering-confidentiality --link-slot
+```
+
 A `*` segment in the path stands for any segment, as it does in the label
 `get-label` shows. Such a path lowers the wildcard label stored there, which
 covers every element or field at that depth, and the label stored at each
@@ -1745,11 +1788,12 @@ place of the DID. A clause with any other alternative refuses the whole
 lowering, and every clause stays in place. So does a clause the path still shows
 afterwards that the input does not name, from a position the lowering does not
 rewrite: an ancestor's label, a wildcard label covering a segment the path names
-concretely, a branch of the stored schema, or the piece's own schema, which a
-change to the pattern lowers. Each lowering commits with a create-only receipt
-in that space, readable by the identity alone, recording the clauses removed,
-the paths they were removed at, and digests of the stored metadata before and
-after. Reads served before the lowering keep the label they were served under.
+concretely, the label of a write redirect the path follows, a branch of the
+stored schema, or the piece's own schema, which a change to the pattern lowers.
+Each lowering commits with a create-only receipt in that space, readable by the
+identity alone, recording the clauses removed, the paths they were removed at,
+and digests of the stored metadata before and after. Reads served before the
+lowering keep the label they were served under.
 
 ## Invocation sessions
 
@@ -1934,7 +1978,8 @@ instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
 browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
-with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n` (narrowed to one
+caller's or one profile's jobs with `caller=` and `profile=`), stops one with
 `POST /jobs/<id>/cancel`, and watches one with
 `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
 after the job's terminal state. A request's `depth` (`quick`, `standard` or
@@ -1951,6 +1996,17 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+The listing also accepts `contextKey` and `contextValue` together: a simple
+identifier naming a top-level context field, and the string it equals or its
+array contains. The value may be empty and is limited to 4,096 UTF-16 code
+units; names and cursor ids are nonempty and limited to 200. Each filter and
+cursor parameter may occur only once. All filters apply before the limit. The
+response's `nextCursor` is the id of the last returned job when more match, and
+null at the end of retained history; otherwise pass it as `before`, keeping the
+same filters, to read the next page. Jobs added between pages do not shift the
+continuation. An unknown cursor is refused. These are read filters on the
+private socket, not grants of authority over a job.
 
 `interactive` is an optional boolean indicating that a person is waiting.
 Interactive queued jobs start ahead of every queued background job, oldest first

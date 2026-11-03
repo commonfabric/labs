@@ -164,6 +164,7 @@ describe("memory v2 flags", () => {
       sessionReadCeiling: true,
       presenceV1: true,
       sessionReportV1: true,
+      instanceNameMark: true,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
@@ -209,6 +210,7 @@ describe("memory v2 flags", () => {
       sessionReadCeiling: true,
       presenceV1: true,
       sessionReportV1: true,
+      instanceNameMark: true,
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
@@ -450,6 +452,7 @@ describe("parseMemoryProtocolFlags", () => {
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      instanceNameMark: false,
       sessionClose: false,
       connectionAuth: false,
       sessionOpenProofs: false,
@@ -488,6 +491,7 @@ describe("parseMemoryProtocolFlags", () => {
       patternLifecycle: false,
       servedRequests: false,
       spaceInvites: false,
+      instanceNameMark: false,
       sessionClose: false,
       connectionAuth: false,
       sessionOpenProofs: false,
@@ -533,6 +537,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -628,6 +633,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -679,6 +685,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -725,6 +732,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -779,6 +787,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -826,6 +835,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -870,6 +880,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -898,6 +909,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -936,6 +948,7 @@ describe("parseMemoryProtocolFlags", () => {
         patternLifecycle: false,
         servedRequests: false,
         spaceInvites: false,
+        instanceNameMark: false,
         sessionClose: false,
         connectionAuth: false,
         sessionOpenProofs: false,
@@ -967,6 +980,15 @@ describe("parseMemoryProtocolFlags", () => {
     );
     assertEquals(parseMemoryProtocolFlags({})?.sessionReportV1, false);
     assertEquals(parseMemoryProtocolFlags({ sessionReportV1: "true" }), null);
+  });
+
+  it("accepts the servedRequests capability key", () => {
+    assertEquals(
+      parseMemoryProtocolFlags({ servedRequests: true })?.servedRequests,
+      true,
+    );
+    assertEquals(parseMemoryProtocolFlags({})?.servedRequests, false);
+    assertEquals(parseMemoryProtocolFlags({ servedRequests: "true" }), null);
   });
 
   it("rejects values that are not a recognizable flags shape", () => {
