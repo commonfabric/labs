@@ -4660,6 +4660,31 @@ describe("v2-server-acl", () => {
       }
     }
 
+    it("revokes every session still open on a space deleted through another connection when an open finds it deleted", async () => {
+      await withSpace(
+        "open-notices",
+        "enforce",
+        async ({ server, store, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          const seq = await deleteElsewhere(store, space, ALICE);
+
+          expect(
+            (await openSession(await connect(server), space, ALICE)).error,
+          ).toEqual(deletedRefusal(space, seq));
+          expect(
+            alice.messages.filter((message) =>
+              message.type === "session/revoked"
+            ),
+          ).toEqual([expect.objectContaining({
+            sessionId: opened.ok.sessionId,
+            reason: "deleted",
+          })]);
+        },
+      );
+    });
+
     /** A transact by `harness`'s session writing `value` as the ACL. */
     const writeAcl = (
       harness: Harness,
