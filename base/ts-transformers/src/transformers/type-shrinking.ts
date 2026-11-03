@@ -2930,6 +2930,9 @@ export function getAuthoredCellValueTypeNode(
 interface CellCapabilityPath {
   readonly path: readonly string[];
   readonly capability: ReactiveCapability;
+
+  /** Whether the function only hands the value on to a pattern. */
+  readonly forwarded?: boolean;
 }
 
 /**
@@ -3252,6 +3255,7 @@ function buildCellCapabilityPaths(
       read: boolean;
       write: boolean;
       opaque: boolean;
+      forwarded: boolean;
     }
   >();
   const ensure = (path: readonly string[]) => {
@@ -3263,6 +3267,7 @@ function buildCellCapabilityPaths(
         read: false,
         write: false,
         opaque: false,
+        forwarded: false,
       };
       byPath.set(key, entry);
     }
@@ -3272,6 +3277,10 @@ function buildCellCapabilityPaths(
   for (const path of paramSummary.opaquePaths ?? []) {
     if (path.length === 0) continue;
     ensure(path).opaque = true;
+  }
+  for (const path of paramSummary.forwardedPaths ?? []) {
+    if (path.length === 0) continue;
+    ensure(path).forwarded = true;
   }
   for (const path of paramSummary.readPaths) {
     if (path.length === 0) continue;
@@ -3290,7 +3299,7 @@ function buildCellCapabilityPaths(
       : entry.write
       ? "writeonly"
       : "opaque";
-    return { path: entry.path, capability };
+    return { path: entry.path, capability, forwarded: entry.forwarded };
   });
 }
 
@@ -3303,7 +3312,7 @@ function groupCellCapabilityPathsByHead(
     const [head, ...tail] = entry.path;
     if (head === undefined) continue;
     const existing = grouped.get(head);
-    const childEntry = { path: tail, capability: entry.capability };
+    const childEntry = { ...entry, path: tail };
     if (existing) {
       existing.push(childEntry);
     } else {
@@ -3444,6 +3453,11 @@ function applyCellCapabilityPathsToTypeNode(
           );
         }
       }
+    } else if (
+      childPaths.length === 1 && childPaths[0]!.path.length === 0 &&
+      childPaths[0]!.forwarded
+    ) {
+      updated = wrapTypeNodeWithCapability(updated, "opaque", factory);
     } else {
       const nested = childPaths.filter((entry) => entry.path.length > 0);
       if (nested.length > 0) {
@@ -4782,7 +4796,9 @@ export function applyShrinkAndWrap(
   );
 
   if (!shouldWrap) {
-    return next;
+    return paramSummary.forwardedPaths?.some((path) => path.length === 0)
+      ? wrapTypeNodeWithCapability(next, "opaque", factory)
+      : next;
   }
   const wrapped = wrapTypeNodeWithCapabilityOrStream(
     next,

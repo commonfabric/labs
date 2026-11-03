@@ -3359,7 +3359,7 @@ export class Runner {
           argumentSchema,
           value,
           resultCell,
-        ),
+        ).links,
       resolvePendingSpaceNamesAndRetry: (frame, tx) =>
         this.#resolvePendingSpaceNamesAndRetry(frame, tx),
       invokeJavaScriptImplementation: (module, fn, argument) =>
@@ -12863,8 +12863,9 @@ export class Runner {
     argumentSchema: JSONSchema | undefined,
     value: unknown,
     resultCell: Cell<any>,
-  ): NormalizedFullLink[] {
+  ): { links: NormalizedFullLink[]; forwarded: number } {
     const links: NormalizedFullLink[] = [];
+    let forwarded = 0;
     const seen = new WeakMap<object, Set<unknown>>();
     // The argument schema at rest can be a `cid:` reference, whose
     // definitions live on the document it names.
@@ -12879,6 +12880,18 @@ export class Runner {
       // bookkeeping resolves them at that pattern's own instantiation) —
       // parsing one here would read it at the wrong nesting level.
       if (isWriteRedirectLink(currentValue)) {
+        // An opaque input is forwarded and never read, so its writers owe the
+        // reader nothing.
+        if (
+          schema !== undefined && ContextualFlowControl.getAsCellValues(
+            schema as JSONSchema,
+          ).some((entry) =>
+            ContextualFlowControl.getAsCellKind(entry) === "opaque"
+          )
+        ) {
+          forwarded += 1;
+          return;
+        }
         const link = parseLink(currentValue, resultCell);
         links.push({
           ...link,
@@ -12963,8 +12976,8 @@ export class Runner {
       }
     };
 
-    visit(argumentSchema, value);
-    return dedupeNormalizedLinks(links);
+    visit(argumentRoot ?? argumentSchema, value);
+    return { links: dedupeNormalizedLinks(links), forwarded };
   }
 
   #resolveJavaScriptFunction(
@@ -14321,12 +14334,13 @@ export class Runner {
       ...(presyncInputs !== undefined && { presyncInputs }),
     });
 
-    const schedulerReads = this.#collectArgumentSchedulerReadLinks(
-      module.argumentSchema,
-      inputs,
-      resultCell,
-    );
-    const declaredSchedulerReads = schedulerReads.length > 0
+    const { links: schedulerReads, forwarded } = this
+      .#collectArgumentSchedulerReadLinks(
+        module.argumentSchema,
+        inputs,
+        resultCell,
+      );
+    const declaredSchedulerReads = schedulerReads.length > 0 || forwarded > 0
       ? schedulerReads
       : reads;
     const populateDependencies = reads.length > 0

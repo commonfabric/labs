@@ -534,6 +534,18 @@ receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
+A value a function only hands on to a pattern it instantiates is forwarded: the
+new piece holds a link to it and does its own reading, so the function has not
+read it. Capability analysis records the position in `forwardedPaths` instead of
+charging a read, whether the value is the call's argument or a member of an
+object literal passed as one, and whether the call sits in the body of a
+`handler`, an `action`, a `lift` or a `computed` or in a callback nested there.
+Its schema takes `asCell: ["opaque"]`, whatever type the value has and whichever
+cell type the pattern's input declares. Any other use at, above or below the
+position, such as a read or an escape, decides its schema instead. A handler's
+event is not forwarded, since an event's values are copied into what they are
+handed to.
+
 A cell's value type is read from the node its author wrote. The wrapper is
 found through parentheses and through references to type aliases that take no
 type parameters (`getAuthoredCellValueTypeNode`, which reads with

@@ -23,6 +23,7 @@ import {
   type UnreadableCellArgument,
 } from "../core/mod.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";
+import { isPatternFactoryCalleeExpression } from "../transformers/structural-reactive-factory.ts";
 import {
   isTransparentWrapper,
   outermostTransparentWrapper,
@@ -93,6 +94,9 @@ interface MutableCapabilityState {
   readonly rawComparablePaths: Set<string>;
   readonly rawComparableCellPaths: Set<string>;
   readonly rawOpaquePaths: Set<string>;
+
+  /** Paths this function hands on to a pattern it instantiates. */
+  readonly rawForwardedPaths: Set<string>;
   passthrough: boolean;
   wildcard: boolean;
 
@@ -137,6 +141,7 @@ interface ObservedCapabilityUsage {
   readonly fullShapePaths: readonly (readonly string[])[];
   readonly writePaths: readonly (readonly string[])[];
   readonly opaquePaths: readonly (readonly string[])[];
+  readonly forwardedPaths: readonly (readonly string[])[];
   readonly escapedPaths: readonly (readonly string[])[];
   readonly passthrough: boolean;
   readonly wildcard: boolean;
@@ -2308,6 +2313,25 @@ function normalizeObservedCapabilityUsage(
     );
   const wildcardPrefixes = Array.from(state.wildcardPaths).map(decodePath);
   const escapedPaths = Array.from(state.escapedPaths).map(decodePath);
+  // A path is forwarded when nothing else touches it, at it, above it or below
+  // it: whatever else the function does with the value decides what it needs.
+  const forwardedPaths = Array.from(state.rawForwardedPaths)
+    .map(decodePath)
+    .filter((forwarded) =>
+      ![
+        ...readPaths,
+        ...fullShapePaths,
+        ...writePaths,
+        ...wildcardPrefixes,
+        ...escapedPaths,
+        ...Array.from(state.rawIdentityPaths).map(decodePath),
+        ...Array.from(state.rawComparablePaths).map(decodePath),
+      ].some((path) =>
+        path.length <= forwarded.length
+          ? path.every((segment, index) => forwarded[index] === segment)
+          : forwarded.every((segment, index) => path[index] === segment)
+      )
+    );
   const identityPaths = Array.from(state.rawIdentityPaths)
     .map(decodePath)
     .filter((identityPath) => {
@@ -2371,6 +2395,7 @@ function normalizeObservedCapabilityUsage(
     fullShapePaths,
     writePaths,
     opaquePaths,
+    forwardedPaths,
     escapedPaths,
     passthrough: state.passthrough,
     wildcard: state.wildcard,
@@ -2482,6 +2507,7 @@ export function analyzeFunctionCapabilities(
           rawComparablePaths: new Set<string>(),
           rawComparableCellPaths: new Set<string>(),
           rawOpaquePaths: new Set<string>(),
+          rawForwardedPaths: new Set<string>(),
           passthrough: false,
           wildcard: false,
           wildcardPaths: new Set<string>(),
@@ -2618,6 +2644,26 @@ export function analyzeFunctionCapabilities(
       if (path.length === 0) {
         state.hasNonIdentityRootUse = true;
       }
+    };
+
+    // Whether `name` is a handler's event. An event's values are copied into
+    // what they are handed to, not linked: the entry holding them is retired
+    // once the event has been handled.
+    const isHandlerEvent = (name: string): boolean =>
+      name === parameterStateKeys[0] && checker !== undefined &&
+      fn.parent !== undefined && ts.isCallExpression(fn.parent) &&
+      (() => {
+        const kind = detectCallKind(fn.parent as ts.CallExpression, checker);
+        return kind?.kind === "builder" && kind.builderName === "handler";
+      })();
+
+    const recordForwardedPath = (
+      name: string,
+      path: readonly string[],
+    ): void => {
+      recordOpaquePath(name, path);
+      if (isSelfReference(name, path) || isHandlerEvent(name)) return;
+      ensureState(name).rawForwardedPaths.add(encodePath(path));
     };
 
     const recordIdentityPath = (
@@ -2929,6 +2975,17 @@ export function analyzeFunctionCapabilities(
             !isCellWrite(destination.call) &&
             !isArrayIsArrayCall(destination.call, checker);
       }
+    };
+
+    // Whether `value` goes into the argument of a pattern this body
+    // instantiates. The new piece holds a link to it, and whatever reads it is
+    // the piece's own derivations, so this body has not read it.
+    const forwardedToPattern = (value: ts.Expression): boolean => {
+      if (!checker) return false;
+      const destination = wholeValueDestination(value);
+      return destination.kind === "argument" &&
+        ts.isCallExpression(destination.call) &&
+        isPatternFactoryCalleeExpression(destination.call.expression, checker);
     };
 
     // True when `value`, put where it is, is handed on by reference: a
@@ -4321,6 +4378,10 @@ export function analyzeFunctionCapabilities(
             : [];
           for (const source of usedRefs) {
             const resolvedSource = materializeSourceRef(source);
+            if (!resolvedSource.dynamic && forwardedToPattern(node)) {
+              recordForwardedPath(resolvedSource.root, resolvedSource.path);
+              continue;
+            }
             const usage = outermostTransparentWrapper(node);
             const parent = usage.parent;
             const identityOnlyArgumentUse = identityArgumentUses.has(node);
@@ -4530,7 +4591,12 @@ export function analyzeFunctionCapabilities(
             if (refs.length > 0) {
               const leavesWhole = !isPrimitiveLikeExpression(node) &&
                 escapesWhole(node);
+              const forwarded = forwardedToPattern(node);
               for (const ref of refs) {
+                if (forwarded && !ref.dynamic) {
+                  recordForwardedPath(ref.root, ref.path);
+                  continue;
+                }
                 trackReadRef(ref);
                 // A member that leaves the analysis whole is read in full
                 // wherever it lands, exactly as an identifier is; the
@@ -4708,6 +4774,12 @@ export function analyzeFunctionCapabilities(
                   ...opaquePath,
                 ]);
               }
+              for (const forwarded of paramSummary.forwardedPaths ?? []) {
+                recordForwardedPath(source.root, [
+                  ...source.path,
+                  ...forwarded,
+                ]);
+              }
               if (
                 paramSummary.capability === "opaque" &&
                 !paramSummary.passthrough &&
@@ -4761,7 +4833,11 @@ export function analyzeFunctionCapabilities(
               }
             }
           }
-        } else if (!identityArgumentCall) {
+        } else if (
+          !identityArgumentCall &&
+          !(checker &&
+            isPatternFactoryCalleeExpression(node.expression, checker))
+        ) {
           for (const index of applySignatureCellCapabilities(node)) {
             capabilityHandledArgs.add(index);
           }

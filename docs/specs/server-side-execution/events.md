@@ -240,8 +240,10 @@ handler fires
   lazy-computed case is literally in the code; CT-1795's staleness park
   is an extra gate on top) — the common case being not rapid-fire but a
   lazy computed nothing has pulled yet, which the handler must and does
-  see fresh. Handlers never read last-wave state: events drain as part
-  of regular execution — the loop is simply not idle until all events
+  see fresh. An input the handler's argument schema declares opaque is one it
+  hands on without reading, so its writer owes the handler nothing and the
+  preflight leaves it alone. Handlers never read last-wave state: events drain
+  as part of regular execution — the loop is simply not idle until all events
   are processed — and the preflight ahead of each dispatch makes the
   inputs a handler reads current. Within that rule the serving
   scheduler's pass takes every ready event behind the head as well, each
