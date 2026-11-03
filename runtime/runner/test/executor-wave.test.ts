@@ -824,7 +824,9 @@ describe("stage D seal-into-wave", () => {
     /** A sink whose access-list hook records each change and returns `verdict`. */
     const accessSink = (
       holder: string,
-      verdict: { refused: string } | { admitted: true; seq?: number },
+      verdict:
+        | { refused: string; deleted?: true }
+        | { admitted: true; seq?: number },
       committed: string[],
     ) =>
       new EngineWaveCommitSink({
@@ -911,6 +913,41 @@ describe("stage D seal-into-wave", () => {
       expect(committed).toEqual(["event-consequence:e-refused"]);
       expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
       expect(outcome.requeuedEventIds).toEqual(["e-refused"]);
+      expect(
+        Engine.read(engine, { id: doc.getAsNormalizedFullLink().id }),
+      ).toBeNull();
+    });
+
+    it("aborts the wave as `space-deleted` when the commit refuses a change to its own space's list for the deletion", async () => {
+      const lease = await liveLease();
+      const wave = newWave({
+        lease,
+        spaceAccessAuthority: () => Promise.resolve({ admitted: true }),
+      });
+      runtime.installSealDestination(wave);
+      const doc = runtime.getCell<{ n: number }>(
+        space,
+        "wave-access-deleted",
+        undefined,
+      );
+      const tx = runtime.edit();
+      stageGrant(tx, "e-deleted");
+      doc.withTx(tx).set({ n: 1 });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      runtime.clearSealDestination();
+      const committed: string[] = [];
+
+      const outcome = await wave.commitWave(
+        accessSink(
+          lease.holder,
+          { refused: `Space ${space} is deleted`, deleted: true },
+          committed,
+        ),
+      );
+      await wave.settled();
+
+      expect(outcome.aborted).toBe("space-deleted");
+      expect(outcome.dispositions).toEqual([{ kind: "requeued" }]);
       expect(
         Engine.read(engine, { id: doc.getAsNormalizedFullLink().id }),
       ).toBeNull();

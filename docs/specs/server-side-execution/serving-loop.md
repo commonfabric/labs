@@ -530,10 +530,11 @@ successor tenure could have it admitted.
   such as a failure notice or a row's retirement, are refused like any other
   commit to the space, and the drain stops there too.
 
-Deletion is not implemented yet. The Memory server refuses a deleted space's
-commits, derived and delegated ones included, with the `ProtocolError` naming
-the deletion, and marks a foreign grant's refusal on one `deleted`; the serving
-loop does none of the above yet.
+The serving loop does all of this except hear of a deletion through a
+cross-space replica's revocation: the memory server does not yet revoke a
+deleted space's sessions with the reason `deleted`. Nor does it yet admit the
+commit that deletes a space, so nothing produces a deletion tombstone, and none
+of this is reached in practice.
 
 ## 3. The loop, normatively
 

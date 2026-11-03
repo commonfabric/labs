@@ -14,11 +14,11 @@ import { yieldToEventLoop } from "@commonfabric/async/sleep";
  * every other space on its thread wait for the compile, and in a serving worker
  * so does the heartbeat its watchdog listens for (serving-loop.md §2).
  *
- * Every other runtime in Deno compiles as a BATCH step — `cf test`, the CLI —
- * with nothing latency-sensitive sharing its loop, so each yield is pure
- * macrotask overhead. Left on, it ~doubles the pattern unit-test wall time. So
- * the default yields in the browser and runs straight through the synchronous
- * driver in Deno.
+ * Every other runtime in Deno compiles as a BATCH step — a `cf test` pattern
+ * test's runtime, the CLI — with nothing latency-sensitive sharing its loop, so
+ * each yield is pure macrotask overhead. Left on, it ~doubles the pattern
+ * unit-test wall time. So the default yields in the browser and runs straight
+ * through the synchronous driver in Deno.
  *
  * Evaluated once at module load; the runtime environment does not change.
  */

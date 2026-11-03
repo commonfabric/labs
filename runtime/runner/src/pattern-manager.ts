@@ -2326,12 +2326,13 @@ export class PatternManager {
     endTurn?: () => void;
   }> {
     const { moduleByteCache: byteCache, compileTurns } = this.#runtime;
-    const held = byteCache?.getCompleteSet(runtimeVersion, identities);
+    if (byteCache === undefined) return { bodies: undefined };
+    const held = byteCache.getCompleteSet(runtimeVersion, identities);
     if (held !== undefined || compileTurns === undefined) {
       return { bodies: held };
     }
     const endTurn = await compileTurns.take();
-    const bodies = byteCache?.getCompleteSet(runtimeVersion, identities);
+    const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
     if (bodies === undefined) return { bodies, endTurn };
     endTurn();
     return { bodies };

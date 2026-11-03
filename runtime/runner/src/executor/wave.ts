@@ -657,10 +657,12 @@ export function isAclDocumentWriteRefusal(
  * terminal for the wave.
  */
 export interface WaveCommitRejection {
+  /** `SpaceDeleted`: the commit's space is deleted (INV-15). */
   name:
     | "WaveCommitRejected"
     | "RowLabelCommitError"
-    | "AclDocumentWriteRefused";
+    | "AclDocumentWriteRefused"
+    | "SpaceDeleted";
   message: string;
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
@@ -940,7 +942,14 @@ export interface WaveCommitOutcome {
    * commit or aborted. */
   seq?: number;
 
-  aborted?: "lease-lost" | "abandoned" | "foreign-commit-failed" | "rejected";
+  /** `space-deleted`: the home commit was refused because the space is
+   * deleted (INV-15), which no successor tenure could have admitted. */
+  aborted?:
+    | "lease-lost"
+    | "abandoned"
+    | "foreign-commit-failed"
+    | "rejected"
+    | "space-deleted";
 
   /** Superseded pure-derivation writes dropped at the per-doc CAS —
    * §7's `supersededWrites` counter feeds from this. */
@@ -2942,6 +2951,13 @@ export class WaveAccumulator
           changes,
         );
         if (result.error === undefined) continue;
+        // A change to this tenure's own list refused for its deletion ends
+        // the tenure, as the home commit's refusal would; one to another
+        // space's list requeues like any other refusal, and the replay's
+        // seal refuses it.
+        if (result.error.name === "SpaceDeleted" && space === this.#space) {
+          return this.#abortForDeletedSpace(outcome);
+        }
         logger.warn("access-list-change-commit-refused", () => [
           `access-list change to ${space} by event ` +
           `${contribution.context.eventId} refused at the wave commit; ` +
@@ -3082,6 +3098,12 @@ export class WaveAccumulator
       // holds the lease (serving-loop.md §2), so a refusal under a tenure a
       // park ended meanwhile is a lease loss, with no conflict to resolve.
       if (this.#tenureEnded) return this.#abortForLostLease(outcome);
+      // The space is deleted, which ends the tenure for good
+      // (serving-loop.md, "A deleted space"): nothing to resolve, and no
+      // successor could commit the wave.
+      if (result.error.name === "SpaceDeleted") {
+        return this.#abortForDeletedSpace(outcome);
+      }
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -4325,19 +4347,46 @@ export class WaveAccumulator
    * home commit landed (serving-loop.md §2's stop-committing MUST).
    */
   #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "lease-lost",
+      "lease lost mid-wave; the in-flight wave aborts (serving-loop.md §2)",
+    );
+  }
+
+  /**
+   * Withdraws every contribution because the home commit was refused for
+   * the space's deletion (serving-loop.md, "A deleted space"). The events
+   * stay unconsequenced, in a store no tenure serves again.
+   */
+  #abortForDeletedSpace(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "space-deleted",
+      "the space is deleted; the wave aborts and the tenure ends " +
+        '(serving-loop.md, "A deleted space")',
+    );
+  }
+
+  /**
+   * Helper for {@link #abortForLostLease} and {@link #abortForDeletedSpace},
+   * which withdraws every contribution for `reason`, requeueing each event
+   * handler's and dropping every other, and marks `outcome` `aborted`.
+   */
+  #abortWithdrawingAll(
+    outcome: WaveCommitOutcome,
+    aborted: "lease-lost" | "space-deleted",
+    reason: string,
+  ): WaveCommitOutcome {
     for (const contribution of this.#contributions) {
-      this.#withdraw(
-        contribution,
-        "lease lost mid-wave; the in-flight wave aborts " +
-          "(serving-loop.md §2)",
-      );
+      this.#withdraw(contribution, reason);
       outcome.dispositions[contribution.index] =
         contribution.context.kind === "event-handler"
           ? { kind: "requeued" }
           : { kind: "dropped" };
     }
     this.#reportRequeuedEvents(outcome, () => true);
-    outcome.aborted = "lease-lost";
+    outcome.aborted = aborted;
     return outcome;
   }
 

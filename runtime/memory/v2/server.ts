@@ -1129,9 +1129,13 @@ export type ServedAclChange = {
   change: (stored: unknown) => ACL;
 };
 
-/** What {@link Server.checkServedAclChange} and its commit decide. */
+/**
+ * What {@link Server.checkServedAclChange} and its commit decide. A refusal
+ * carries `deleted` when the space whose list the change names is deleted
+ * (INV-15).
+ */
 export type ServedAclChangeVerdict =
-  | { readonly refused: string }
+  | { readonly refused: string; readonly deleted?: true }
   | { readonly admitted: true; readonly seq?: number };
 
 /**
@@ -3291,6 +3295,13 @@ export class Server {
 
   #engines = new Map<string, Promise<Engine.Engine>>();
 
+  /**
+   * Whether `close()` has reached this server's engines. From then on,
+   * `#openEngineInner()` refuses, since `close()` would never close an engine
+   * opened later.
+   */
+  #closed = false;
+
   /** What `executionLeases` returns, shared with every engine this opens. */
   readonly #executionLeases = new ExecutionLeases();
 
@@ -4940,6 +4951,13 @@ export class Server {
     }
   }
 
+  /**
+   * Closes this server's connections and engines, after which its store is the
+   * caller's to remove. This waits for running `pattern.lifecycle` and `served`
+   * requests, but for no frame still being handled, whose connection may have
+   * closed before this was called. A frame that goes on to need an engine is
+   * answered with an error.
+   */
   async close(): Promise<void> {
     // Withdraw this server's health-route providers so a closed server is
     // neither reported nor kept alive by the route; synchronous, ahead of
@@ -4966,6 +4984,7 @@ export class Server {
     await Promise.all(this.#lifecycleRuns);
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
+    this.#closed = true;
     for (const engine of this.#engines.values()) {
       Engine.close(await engine);
     }
@@ -5749,7 +5768,11 @@ export class Server {
       const sourceEngine = await this.#openEngine(request.sourceEvent.space);
       const outcome = Engine.runAtomicCommit(
         engine,
-        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+        (
+          apply,
+        ):
+          | { refused: string; deleted?: true }
+          | { applied?: Engine.AppliedCommit } => {
           const prepared = this.#prepareServedAclChange(
             engine,
             sourceEngine,
@@ -5806,7 +5829,9 @@ export class Server {
     sourceEngine: Engine.Engine,
     request: ServedAclChange,
     localSeq: number,
-  ): { refused: string } | { commit: ClientCommit | undefined } {
+  ):
+    | { refused: string; deleted?: true }
+    | { commit: ClientCommit | undefined } {
     const { space, actingPrincipal, sourceEvent } = request;
     if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
       return {
@@ -5849,7 +5874,10 @@ export class Server {
     const committer = { principal: actingPrincipal };
     const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
       this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
-    return invalid === null ? { commit } : { refused: invalid.message };
+    return invalid === null ? { commit } : {
+      refused: invalid.message,
+      ...(invalid.deleted === true ? { deleted: true as const } : {}),
+    };
   }
 
   async sqliteQuery(
@@ -12297,9 +12325,15 @@ export class Server {
    * Helper for `#openEngine()`, which does the opening: an engine already
    * open or opening is handed back; otherwise one is opened at the space's
    * store URL, its directory created first when the store is a file, and
-   * indexed while it opens.
+   * indexed while it opens. A closed server refuses instead.
    */
   #openEngineInner(space: string): Promise<Engine.Engine> {
+    if (this.#closed) {
+      return Promise.reject(
+        new Error(`This memory server is closed: no engine for \`${space}\``),
+      );
+    }
+
     const existing = this.#engines.get(space);
     if (existing !== undefined) {
       return existing;
