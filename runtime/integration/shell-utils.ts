@@ -568,12 +568,15 @@ export class ShellIntegration {
   };
 
   #afterAll = async () => {
-    if (this.#page) {
-      await getPresentationSession()?.close(this.#page);
+    try {
+      if (this.#page) {
+        await getPresentationSession()?.close(this.#page);
+      }
+      await this.disposeRuntime();
+      await this.#page?.close();
+    } finally {
+      await this.#browser?.close();
     }
-    await this.disposeRuntime();
-    await this.#page?.close();
-    await this.#browser?.close();
   };
 
   #checkIsOk() {
