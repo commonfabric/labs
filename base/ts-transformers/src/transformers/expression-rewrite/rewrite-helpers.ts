@@ -15,7 +15,7 @@ import {
 } from "../../ast/erased-syntax.ts";
 import { isModuleScopedDeclaration } from "../../ast/scope-analysis.ts";
 import { unwrapTransparentWrapperOnce } from "../../utils/expression.ts";
-import { TransformationContext } from "../../core/mod.ts";
+import type { TransformationContext } from "../../core/mod.ts";
 import { createLiftAppliedCall } from "../builtins/lift-applied.ts";
 
 /**

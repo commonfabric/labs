@@ -1,6 +1,6 @@
 import { DIR_MODE } from "./platform.ts";
 import { nodeMode } from "./stat.ts";
-import { FsTree } from "./tree.ts";
+import type { FsTree } from "./tree.ts";
 
 /** Minimal bridge surface needed to prepare a dynamic directory. */
 export interface DirectoryPreparer {

@@ -7,7 +7,7 @@ import {
   resolveStoredCfcMetadata,
   UnresolvableCfcLabelDocumentError,
 } from "../src/cfc/metadata.ts";
-import { wholeValueLabel } from "../src/cfc/prepare.ts";
+import { wholeValueLabel } from "../src/cfc/consumed-label.ts";
 import type { CfcMetadata, LabelMapEntry } from "../src/cfc/types.ts";
 
 /** An atom saying `subject` wrote what it labels. */

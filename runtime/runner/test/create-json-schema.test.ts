@@ -6,7 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isInternedSchema } from "@commonfabric/data-model-schema";
 
 import { createJsonSchema } from "../src/builder/create-json-schema.ts";
-import { type JSONSchema, type JSONSchemaObj } from "../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("test operator");

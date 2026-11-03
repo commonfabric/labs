@@ -1,4 +1,4 @@
-import { type BuiltInLLMMessage } from "@commonfabric/api";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type LLMGenerateObjectRequest,

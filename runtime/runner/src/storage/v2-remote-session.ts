@@ -1,7 +1,7 @@
 import { debugStr, hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { delegationCid } from "@commonfabric/identity";
-import { type MemorySpace, type Signer } from "@commonfabric/memory/interface";
+import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   encodeMemoryBoundary,
@@ -45,7 +45,7 @@ import {
 } from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/logger";
 import { utf8ByteLength } from "@commonfabric/text/utf8";
-import { namesInstancesByDefault } from "../builder/instance-name.ts";
+import { namesInstancesByDefault } from "../builder/instance-naming.ts";
 import { AsyncSemaphoreQueue } from "../queue.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";

@@ -1,6 +1,6 @@
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { IMemorySpaceAddress } from "../storage/interface.ts";
-import { type SchedulerWriteIndex } from "./scheduling-writes.ts";
+import type { SchedulerWriteIndex } from "./scheduling-writes.ts";
 import type { Action, ReactivityLog } from "./types.ts";
 
 export interface DependencyUpdateState {

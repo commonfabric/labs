@@ -105,11 +105,11 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
-import {
-  type HarnessChatError,
-  type HarnessChatEventEnvelope,
-  type HarnessChatPolicy,
-  type HarnessChatResponse,
+import type {
+  HarnessChatError,
+  HarnessChatEventEnvelope,
+  HarnessChatPolicy,
+  HarnessChatResponse,
 } from "../src/contracts/interactive-chat.ts";
 import { HARNESS_CREDENTIAL_OWNER_REF_TYPE } from "../src/contracts/run-manifest.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";

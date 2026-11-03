@@ -53,6 +53,7 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
+  type SessionViewHandle,
   STREAM_ENTRIES_DOC_PREFIX,
   type StreamEventEntry,
   type StreamEventsDocValue,
@@ -73,7 +74,7 @@ import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
-import { ViewPlanPublisher } from "./view-plan-publisher.ts";
+import { viewLifetimeKey, ViewPlanPublisher } from "./view-plan-publisher.ts";
 
 /** The deferral backstop cadence: with NO input arriving at all, a
  * deferred event retries once per tick and hardens into the DROP
@@ -179,7 +180,8 @@ import {
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
-import { readWatermarkSeq, watermarkDocLink } from "./watermark.ts";
+import { watermarkDocLink } from "./watermark.ts";
+import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
   bumpDerivedCommits,
   type ServingLoopStats,
@@ -772,6 +774,13 @@ export type LifecycleVerb<T> = {
 export const LIFECYCLE_VERB_SPACE_PARKED =
   "the space parked before the lifecycle verb ran";
 
+/**
+ * The park reason of a tenure ended because its space is deleted
+ * (serving-loop.md, "A deleted space"). The host starts no tenure for the
+ * space again.
+ */
+export const SPACE_DELETED_PARK = "space-deleted";
+
 /** The reason carried by a seal a tenure refuses once it has parked. */
 export const SEAL_AFTER_PARK_REFUSED = "seal-after-park-refused";
 
@@ -961,6 +970,8 @@ export class SpaceServer implements TransactionSealDestination {
   #active = false;
   #loopRunning = false;
   #parkRequested = false;
+  /** Set by a park for the space's deletion; see `endedForDeletion`. */
+  #endedForDeletion = false;
   readonly #parked = Promise.withResolvers<void>();
   #idleSince: number | undefined;
   #demandedRoots = new Set<string>();
@@ -1115,6 +1126,12 @@ export class SpaceServer implements TransactionSealDestination {
   #demandNoteGeneration = 0;
 
   #passDemandNoteGen = 0;
+
+  /** The `read` views the last demand pass's rows include. */
+  #demandedReadViews: ReadonlySet<string> = new Set();
+
+  /** Whether the last publish left a `read` view without its answer. */
+  #readViewUnanswered = false;
 
   /** The demand wake's grace timer (see noteDemandChanged). */
   #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1604,6 +1621,12 @@ export class SpaceServer implements TransactionSealDestination {
 
   get watermark(): number {
     return this.#watermark;
+  }
+
+  /** Whether this tenure ended because its space is deleted, which no
+   * successor serves (serving-loop.md, "A deleted space"). */
+  get endedForDeletion(): boolean {
+    return this.#endedForDeletion;
   }
 
   /** Resolves when this SpaceServer has fully parked: its runtime
@@ -2114,6 +2137,16 @@ export class SpaceServer implements TransactionSealDestination {
    */
   noteSpaceAclChanged(space: MemorySpace): void {
     this.#runtime?.storageManager.noteSpaceAclChanged?.(space);
+    // For this tenure's own space, the notice is also how it hears of a
+    // deletion: it holds no session there for a revocation to reach
+    // (serving-loop.md, "A deleted space"). A deleted space ends the
+    // tenure for good.
+    if (
+      space === this.#options.space && this.#active &&
+      Engine.findSpaceDeletion(this.#options.engine, space) !== undefined
+    ) {
+      void this.park(SPACE_DELETED_PARK);
+    }
   }
 
   /** The host's in-process feed (plane (d)): every admitted commit for
@@ -2261,7 +2294,9 @@ export class SpaceServer implements TransactionSealDestination {
    * therefore lead to multiple passes. Input-driven cycles reconcile demand
    * independently of the timer; the grace is a coalescing interval, not a
    * minimum wait for every new demand. */
-  noteDemandChanged(reason: "watch" | "push-growth" | "warm" = "watch"): void {
+  noteDemandChanged(
+    reason: "watch" | "push-growth" | "warm" | "read-view" = "watch",
+  ): void {
     // MINOR-1: a fresh demand note — bump the generation so a pass that
     // already snapshotted its rows re-latches on completion.
     this.#demandNoteGeneration += 1;
@@ -2277,7 +2312,7 @@ export class SpaceServer implements TransactionSealDestination {
       this.#noteGrowthWakeForSettle();
     } else if (reason === "warm") {
       this.#options.stats.demand.warmWakes += 1;
-    } else {
+    } else if (reason === "watch") {
       this.#options.stats.demand.watchWakes += 1;
     }
     if (this.#demandWakeTimer !== undefined) return;
@@ -3478,7 +3513,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#options.onWaveCycle?.();
         }
         if (!this.#active || this.#parkRequested) break;
-        if (!this.#hasWork()) {
+        if (!this.#hasWork() && !this.#readViewAnswerDue()) {
           // The next input starts a burst, whose first consequence the base
           // deadline bounds, however long the settles before the quiet grew.
           this.#grownFlushDeadlineMs = undefined;
@@ -5604,6 +5639,11 @@ export class SpaceServer implements TransactionSealDestination {
     // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
     this.#passDemandNoteGen = this.#demandNoteGeneration;
+    // Listed ahead of the rows: the server publishes a view and the demand it
+    // holds together, so the rows include every view this list holds.
+    const views = await this.#options.server.viewInterestsForSpace(
+      this.#options.space,
+    );
     const demand = await this.#options.server.demandForSpace(
       this.#options.space,
       // The serving session's own watches are its graph's reads, not
@@ -5613,6 +5653,11 @@ export class SpaceServer implements TransactionSealDestination {
     // A park while the request was out cleared the registry this pass
     // reconciles into and disposed the runtime whose writers it marks.
     if (!this.#active || this.#runtime !== runtime) return;
+    this.#demandedReadViews = new Set(
+      views.filter(({ view }) => view.mode === "read").map(({ handle }) =>
+        viewLifetimeKey(handle)
+      ),
+    );
     const changed = this.#demandMirror.update(demand);
     // WARM DEMAND KEYS (the explicit warm request's demand half — see
     // #warmDemandKeys): the staged instances enter the key set
@@ -8013,6 +8058,17 @@ export class SpaceServer implements TransactionSealDestination {
       await this.park("lease-lost-abort");
       return;
     }
+    if (outcome.aborted === "space-deleted") {
+      // The engine refused the home commit for the space's deletion, the
+      // backstop for a deletion committed through another process, whose
+      // commit the host never announces (serving-loop.md, "A deleted
+      // space"). The tenure ends for good, as on the host's notice.
+      logger.warn("wave-aborted", () => [
+        "wave aborted: the space is deleted; ending the tenure",
+      ]);
+      await this.park(SPACE_DELETED_PARK);
+      return;
+    }
     if (outcome.seq !== undefined) {
       bumpDerivedCommits(stats, String(this.#options.space));
       this.#wavesCommitted += 1;
@@ -8139,13 +8195,50 @@ export class SpaceServer implements TransactionSealDestination {
    * walks an invalidated UI again or plans over its last walk. */
   async #publishViewPlan(runtime: Runtime, quiescent: boolean): Promise<void> {
     const publishStart = performance.now();
-    await this.#viewPlanPublisher.publish(
+    this.#readViewUnanswered = await this.#viewPlanPublisher.publish(
       runtime,
       this.#options.server,
       this.#options.space,
-      { quiescent },
+      {
+        quiescent,
+        settled: (handle) => quiescent && this.#readViewSettled(handle),
+      },
     );
     timing.time(publishStart, "executor", "wave", "publish");
+  }
+
+  /**
+   * Whether the `read` view `handle` names has its answer: the last demand pass
+   * included it, and the loop owes nothing since. A view that pass did not list
+   * registered after it, so it asks for a pass that will.
+   */
+  #readViewSettled(handle: SessionViewHandle): boolean {
+    if (!this.#nothingOwed()) return false;
+    if (this.#demandedReadViews.has(viewLifetimeKey(handle))) return true;
+    this.noteDemandChanged("read-view");
+    return false;
+  }
+
+  /**
+   * Whether a cycle run now can answer a `read` view the last publish could
+   * not. Whatever is still owed wakes the loop when it arrives; once nothing
+   * is, only a settlement the flush deadline cut stood in the way, and no input
+   * follows one of those to wake the loop.
+   */
+  #readViewAnswerDue(): boolean {
+    return this.#readViewUnanswered && this.#nothingOwed();
+  }
+
+  /**
+   * Whether the settlement that just ended leaves this loop owing nothing it
+   * knows of: its demand pass saw every demand note, including the one a view
+   * registering sends, and no commit, load or input is outstanding.
+   */
+  #nothingOwed(): boolean {
+    return this.#demandNoteGeneration === this.#passDemandNoteGen &&
+      !this.#pendingDemandWake && !this.#pendingStructureRetryWake &&
+      this.#structureLoadPass === undefined &&
+      this.#commitInFlight === undefined && !this.#hasWorkBesidesOwnEchoes();
   }
 
   /** Dispose the serving runtime under a DEADLINE (park liveness — the
@@ -8211,7 +8304,8 @@ export class SpaceServer implements TransactionSealDestination {
    * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
    * it — or dispose it, as every other park does. Once the park
    * completes, the host re-activates a space that still meets the ACTIVE
-   * criteria, unless a rival's lease caused the park. */
+   * criteria, unless a rival's lease caused the park or the park is
+   * `SPACE_DELETED_PARK`, which ends the space's tenures for good. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the loop's idle park runs unawaited — is
     // what a second caller waits for: the host's close must not return while
@@ -8225,6 +8319,7 @@ export class SpaceServer implements TransactionSealDestination {
 
   async #parkResources(reason: string): Promise<void> {
     const wasActive = this.#active;
+    if (reason === SPACE_DELETED_PARK) this.#endedForDeletion = true;
     // Only an idle park offers the runtime on (serving-loop.md §1,
     // "Parking"): the loop settled, nothing was queued, and no session
     // demanded anything, so the runtime holds a served state a successor

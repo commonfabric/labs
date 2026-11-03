@@ -137,7 +137,7 @@ describe("topics command", () => {
           },
         },
       });
-      return { topic: { $link: "/of:fid1:topic-piece-3" }, name: "3" };
+      return { topic: { $link: "/of:fid1:topic-piece-3" } };
     }
     expect(piece).toBe("of:fid1:topic-alias-1");
     if (verb === "addComment") {
@@ -278,6 +278,7 @@ describe("topics command", () => {
       expect(program).toBe("/labs/runtime/cli/launcher.ts");
       return cf(args, env, stdin);
     },
+    serverExecutes: () => Promise.resolve(false),
     get stdin() {
       return {
         isTerminal: () => stdin === undefined,
@@ -979,9 +980,7 @@ describe("topics command", () => {
         "-",
         "--",
         "--schema",
-        JSON.stringify({
-          properties: { topic: { $link: true }, name: { type: "string" } },
-        }),
+        JSON.stringify({ properties: { topic: { $link: true } } }),
       ]);
     });
   });
@@ -1059,6 +1058,22 @@ describe("topics command", () => {
   });
 
   describe("newAction()", () => {
+    it("files the Topic and runs no `piece step` on a deployment that runs its pieces itself", async () => {
+      stdin = "The body.";
+      await newAction(
+        { agentName: "Sol" },
+        "A new Topic",
+        undefined,
+        { ...deps, serverExecutes: () => Promise.resolve(true) },
+      );
+
+      expect(calls.map(({ verb }) => verb)).toEqual(["addTopic"]);
+      expect(stepped).toEqual([]);
+      expect(printed()).toBe(
+        "Created top/3 (/of:fid1:topic-piece-3).\ntop/3  -           A new Topic",
+      );
+    });
+
     it("files the Topic, steps it, and prints its number and address", async () => {
       stdin = "The body.";
       await newAction({ agentName: "Sol" }, "A new Topic", undefined, deps);

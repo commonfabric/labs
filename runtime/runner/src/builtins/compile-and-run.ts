@@ -2,10 +2,10 @@ import type { JSONSchema } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { CompilerError } from "@commonfabric/js-compiler/errors";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
-import { type BuiltInCompileAndRunParams } from "commonfabric";
+import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import type { CellScope } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
   effectTargetKey,
@@ -14,9 +14,9 @@ import {
 import { waveSettlementOf } from "../executor/wave.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import { narrowestScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,

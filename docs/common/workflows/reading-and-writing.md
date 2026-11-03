@@ -115,6 +115,14 @@ number wrong" the rest of the tour produces. A read can carry the same step
 inline with `cf cell get --step`, which recomputes, commits, and answers in one
 session.
 
+This tour describes a deployment with server execution off. Under server
+execution the server runs the piece, and `cf cell get` asks it for the value and
+waits for the answer, so a derived field read after a write is already current,
+`cf piece step` is only that same pull, and `cf cell get --no-run` is the read
+that shows what the store holds without asking for anything.
+[The CLI's README](../../../runtime/cli/README.md#what-a-read-and-a-call-do-under-server-execution)
+has the detail.
+
 ## The session, act by act
 
 Nine acts against a space that starts empty. Every command below is one the

@@ -5,7 +5,7 @@ import {
   schemaWithProperties,
 } from "@commonfabric/data-model-schema";
 import type { JSONSchema, JSONValue } from "./types.ts";
-import { Runtime } from "../runtime.ts";
+import type { Runtime } from "../runtime.ts";
 import { isCellLink, parseLink } from "../link-utils.ts";
 
 /**

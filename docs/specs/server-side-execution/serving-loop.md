@@ -470,6 +470,16 @@ the lease:
   process that was suspended, fires it once on waking.
 - The count starts at the worker's first message. Until its modules have loaded
   a worker has no timer to post from and no lease to release.
+- A long stretch of work on the worker's thread silences the heartbeat too, since
+  the heartbeat is a timer on that thread. So a serving runtime compiles through
+  the interleaved driver and yields between the modules of a graph it evaluates
+  (`EngineOptions.interleaveCompile`), as its settle loop yields between actions.
+  The longest stretch a pattern load holds the thread is then one module's compile
+  step, one module's evaluation, or one write of the compile cache, and a thread
+  that does that work is not silent for the length of a whole program. The
+  runtimes of one worker take turns at a cold compile (`CompileTurns`), so one
+  program compiles once per worker however many of its spaces load it at the same
+  time.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when
   its thread next reaches its event loop, which a stalled thread may never do, and
   such a thread keeps whatever core it was spinning on until the process restarts.
@@ -524,10 +534,8 @@ successor tenure could have it admitted.
   such as a failure notice or a row's retirement, are refused like any other
   commit to the space, and the drain stops there too.
 
-Deletion is not implemented yet. The Memory server refuses a deleted space's
-commits, derived and delegated ones included, with the `ProtocolError` naming
-the deletion, and marks a foreign grant's refusal on one `deleted`; the serving
-loop does none of the above yet.
+The serving loop does all of this. A cross-space replica's session is revoked
+with the reason `deleted` as every session on the space is.
 
 ## 3. The loop, normatively
 

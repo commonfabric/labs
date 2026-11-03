@@ -2,7 +2,7 @@
  * Types and constants for the visitor engine.
  */
 
-import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
+import type { FabricContainerValueTag, FabricValuePlusTag } from "@/types";
 
 import type {
   FabricArrayPlus,

@@ -1,11 +1,11 @@
-import {
-  type HFunction,
-  type JSXElement,
-  type RenderNode,
-  type UiActionProps,
-  type UiDisclosureProps,
-  type UiPromptSlotProps,
-  type VNode,
+import type {
+  HFunction,
+  JSXElement,
+  RenderNode,
+  UiActionProps,
+  UiDisclosureProps,
+  UiPromptSlotProps,
+  VNode,
 } from "@commonfabric/api";
 import { isPlainObject } from "@commonfabric/js-values/types";
 

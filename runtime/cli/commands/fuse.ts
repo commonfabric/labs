@@ -1,6 +1,6 @@
 import { basename, resolve } from "@std/path";
 
-import { Command } from "@cliffy/command";
+import { Command, ValidationError } from "@cliffy/command";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import ports from "@commonfabric/ports" with { type: "json" };
 
@@ -24,6 +24,7 @@ import {
   removeMountStateFile,
   writeMountState,
 } from "../lib/fuse.ts";
+import { hasJsonArgument } from "../lib/json-output.ts";
 
 export function isFuseProcessCommand(command: string): boolean {
   return command.includes("runtime/fuse/mod.ts") ||
@@ -813,3 +814,64 @@ export async function runUnmount(
       `${absMountpoint} is still mounted. Try: sudo umount -f ${absMountpoint}`,
   };
 }
+
+export const fuseDaemon = new Command()
+  .description(
+    "Internal: run the FUSE daemon directly (used by compiled binary).",
+  )
+  .usage("<mountpoint> [options]")
+  .useRawArgs()
+  .action(async function (_options: unknown, ...rawArgs: unknown[]) {
+    const daemonArgs = rawArgs.map((arg) => String(arg));
+    if (hasJsonArgument(daemonArgs)) {
+      throw new ValidationError('Unknown option "--json".');
+    }
+    if (
+      daemonArgs.length === 1 &&
+      (daemonArgs[0] === "--help" || daemonArgs[0] === "-h")
+    ) {
+      this.showHelp();
+      return;
+    }
+    // The FUSE module graph is large and only the mount subcommands
+    // reach it, so every other `cf` invocation skips loading it.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const { main } = await import("@commonfabric/fuse");
+    await main(daemonArgs);
+  });
+
+export const fuseSupervisor = new Command()
+  .description(
+    "Internal: supervise a background FUSE child process.",
+  )
+  .usage("<mountpoint> [options]")
+  // The supervisor argv is parsed once, by the same parser the deno
+  // entrypoint uses, so the compiled binary and `deno run` accept exactly
+  // the same flags.
+  .useRawArgs()
+  .action(async (_options: unknown, ...rawArgs: unknown[]) => {
+    const supervisorArgs = rawArgs.map((arg) => String(arg));
+    // The flag parser sits in the FUSE module graph, which the other
+    // subcommands do not load.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const { parseSupervisorArgs, supervisorHelp } = await import(
+      "../lib/fuse-mount-flags.ts"
+    );
+    let parsed;
+    try {
+      parsed = parseSupervisorArgs(supervisorArgs);
+    } catch (error) {
+      throw new ValidationError(describeFailure(error));
+    }
+    if (parsed.help) {
+      console.log(supervisorHelp());
+      return;
+    }
+    // The supervisor sits in the FUSE module graph, which the other
+    // subcommands do not load.
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    const { runFuseSupervisor } = await import(
+      "../lib/fuse-supervisor.ts"
+    );
+    await runFuseSupervisor(parsed.options);
+  });

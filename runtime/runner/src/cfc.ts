@@ -1,7 +1,7 @@
-import {
+import type {
   JSONSchemaObj,
-  type JSONSchemaTypes,
-  type JSONValue,
+  JSONSchemaTypes,
+  JSONValue,
 } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";

@@ -59,7 +59,11 @@ import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { resolveLink } from "../src/link-resolution.ts";
-import { deriveEventKey } from "../src/scheduler/event-identity.ts";
+import {
+  deriveEventKey,
+  scopeCallerEventId,
+  servedReceiptCause,
+} from "../src/scheduler/event-identity.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
 import { sourceDocKey } from "../src/compilation-cache/cell-cache.ts";
 import {
@@ -67,7 +71,7 @@ import {
   type EnsurePieceVerdict,
 } from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import { readWatermarkSeq } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import type {
   WaveCommitRejection,
   WaveCommitSink,
@@ -3283,13 +3287,10 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    // The pre-created receipt, minted through the CLIENT-ERA writer: an
-    // explicit-OFF probe runtime (commitPreconditions on, the pre-flip
-    // client posture — a mixed-fleet OFF client against this ON server)
-    // dispatches the SAME invocation id locally and commits the receipt
-    // as an ordinary authored write. Explicit `false` does NOT un-claim
-    // the process-global serving flag while the harness's ON enablers
-    // are live (runtime.ts's enabler-count guard).
+    // The receipt the event will name, taken ahead of it as an ordinary
+    // authored write by a runtime that is not serving. Explicit `false` does
+    // NOT un-claim the process-global serving flag while the harness's ON
+    // enablers are live (runtime.ts's enabler-count guard).
     const probeManager = EmulatedStorageManager.connectTo(server, {
       as: aliceSigner,
     });
@@ -3300,36 +3301,24 @@ describe("Phase 3 events-down (serving side)", () => {
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
-    const { result: probeResult } = await standUp(
-      probeRuntime,
-      DECLARED_RESULT_PATTERN,
-      names,
-    );
-    const cancelProbeDemand = probeResult.sink(() => {});
-    await probeRuntime.idle();
-    const probeFired = fireVerb(
-      probeResult,
-      "probe",
-      { n: 99 },
+    const durableId = scopeCallerEventId(
       "cas-loss-1",
+      "receipt-pin-session",
+      result.key("probe").resolveAsCell().getAsNormalizedFullLink(),
     );
-    await probeRuntime.idle();
+    const taken = probeRuntime.getCell(space, servedReceiptCause(durableId));
+    await probeRuntime.editWithRetry((tx) =>
+      taken.withTx(tx).set({ token: "tok-99" })
+    );
     await probeRuntime.storageManager.synced();
-    await probeFired.reached(1);
-    expect(probeFired.entries[0].status).not.toBe("error");
-    const probeLink = probeFired.entries[0].tx.handlingReceiptLink;
-    expect(probeLink).toBeDefined();
+    const takenId = taken.getAsNormalizedFullLink().id;
     await awaitAdmitted(
       server,
-      () => Engine.read(engine, { id: probeLink!.id })?.value !== undefined,
+      () => Engine.read(engine, { id: takenId })?.value !== undefined,
     );
-    expect(Engine.read(engine, { id: probeLink!.id })?.value).toEqual({
-      token: "tok-99",
-    });
-    cancelProbeDemand();
 
-    // Now the ON client fires the SAME id; the serving run's write finds
-    // the cell taken and must lose the CAS loudly — and harmlessly.
+    // Now the ON client fires; the serving run's write finds the cell taken
+    // and must lose the CAS loudly — and harmlessly.
     host = newHost();
     const fired = fireVerb(result, "probe", { n: 7 }, "cas-loss-1");
     await clientRuntime.idle();
@@ -3343,17 +3332,18 @@ describe("Phase 3 events-down (serving side)", () => {
       return entry?.consequenced === true &&
         value?.eventWatermark === entry?.seq;
     });
-    const durableId = (Engine.read(engine, { id: sidecarId })
-      ?.value as StreamEventsDocValue).entries![0].eventId;
+    expect(
+      (Engine.read(engine, { id: sidecarId })
+        ?.value as StreamEventsDocValue).entries![0].eventId,
+    ).toBe(durableId);
     await fired.reached(1);
     expect(fired.entries[0].status).not.toBe("error");
 
-    // Cross-arm address agreement: the ON echo published the SAME
-    // cause-derived address the OFF-arm writer used — the no-migration
-    // property, witnessed through the real machinery on both sides.
+    // The echo published the address the serving run wrote to, which derives
+    // from the event alone.
     const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
-    expect(link!.id).toBe(probeLink!.id);
+    expect(link!.id).toBe(takenId);
 
     // Single write: the standing value won — the served handler's value
     // (tok-7) never landed. The whole write history stays the ONE

@@ -12,7 +12,7 @@ import {
   createFormFieldController,
   FormFieldController,
 } from "./form-field-controller.ts";
-import { type FormContext } from "../components/form/form-context.ts";
+import type { FormContext } from "../components/form/form-context.ts";
 
 // Mock ReactiveControllerHost
 class MockHost {

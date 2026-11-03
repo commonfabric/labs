@@ -1,5 +1,5 @@
 import { join } from "@std/path/join";
-import { type TsconfigRaw } from "esbuild";
+import type { TsconfigRaw } from "esbuild";
 
 export interface EntryPoint {
   // JS entry from root

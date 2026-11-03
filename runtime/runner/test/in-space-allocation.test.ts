@@ -12,7 +12,7 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import { readSpaceKind } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
-import { type Cell } from "../src/cell.ts";
+import type { Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { delegationsCause, Runtime } from "../src/runtime.ts";
 import { InSpaceTargetUnresolved } from "../src/scheduler/retry-immediately.ts";

@@ -30,6 +30,7 @@ describe("linkSqliteDiskSource handle seeding", () => {
   let originalWarn: typeof console.warn;
   let linkCalls: unknown[][];
   let registered: Array<[string, string]>;
+  let deps0: () => Promise<Record<string, unknown>>;
   let deps: { loadPieces: () => Promise<unknown> };
 
   const handleCell = (): Cell<unknown> =>
@@ -71,7 +72,8 @@ describe("linkSqliteDiskSource handle seeding", () => {
       },
       synced: () => Promise.resolve(),
     };
-    deps = { loadPieces: () => Promise.resolve(pieces) };
+    deps0 = () => Promise.resolve(pieces);
+    deps = { loadPieces: deps0 };
   });
 
   afterEach(async () => {
@@ -99,6 +101,26 @@ describe("linkSqliteDiskSource handle seeding", () => {
           Promise.resolve(token),
       } as never,
     );
+
+  it("asks the link to start nothing under server execution", async () => {
+    const served = new Proxy(runtime, {
+      get: (target, property) => {
+        if (property === "experimental") {
+          return { ...target.experimental, serverExecution: true };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    deps = {
+      loadPieces: async () => ({ ...await deps0(), runtime: served }),
+    };
+
+    await link();
+
+    expect(linkCalls.length).toBe(1);
+    expect((linkCalls[0][4] as { start?: boolean }).start).toBe(false);
+  });
 
   it("seeds an empty contract on a first link", async () => {
     await link();
