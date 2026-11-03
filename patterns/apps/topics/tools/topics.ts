@@ -14,12 +14,15 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { dirname, fromFileUrl, join, resolve } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+import { resolve } from "@std/path/resolve";
 import { debugStr } from "@commonfabric/data-model";
 import {
   defaultDisplayFit,
   type LabelDisplayFit,
-} from "@commonfabric/html/worker";
+} from "@commonfabric/html/display-fit-atoms";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { urlToAppView } from "@commonfabric/navigation";
@@ -55,7 +58,6 @@ import {
   saveMirror,
   spaceDid,
 } from "./sync.ts";
-import { browseBoard, runQuietly, systemPrograms } from "./browse.ts";
 import { redact } from "./labels.ts";
 import type { Opening, WriteOutcome, WriteRequest } from "./browser.ts";
 import { similarTopics } from "./similar.ts";
@@ -160,8 +162,12 @@ export interface TopicsDeps {
   identityDid: (path: string) => Promise<string>;
 }
 
-/** The programs that open a web browser and fill the clipboard here. */
-const PROGRAMS = systemPrograms(Deno.build.os);
+/**
+ * The terminal browser and what it runs, which only the command that draws it
+ * reads, since every other command starts without its modules.
+ */
+// deno-lint-ignore cf-imports/no-inline-module-import -- every other command starts without the terminal browser's modules
+const loadBrowser = () => import("./browse.ts");
 
 const defaultDeps: TopicsDeps = {
   openDocSource,
@@ -176,8 +182,14 @@ const defaultDeps: TopicsDeps = {
   write: console.log,
   warn: console.error,
   env: Deno.env.get,
-  openUrl: (url) => runQuietly([...PROGRAMS.open, url]),
-  copyText: (text) => runQuietly(PROGRAMS.copy, text),
+  openUrl: async (url) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly([...systemPrograms(Deno.build.os).open, url]);
+  },
+  copyText: async (text) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly(systemPrograms(Deno.build.os).copy, text);
+  },
   identityDid,
 };
 
@@ -841,7 +853,7 @@ async function confirm(
   board: Board,
   reference: string,
   wrote: (topic: Topic) => boolean | Promise<boolean>,
-  done: string,
+  done: (topic: Topic) => string,
 ): Promise<void> {
   const topic = findTopic(await readTopics(deps, board), reference);
   if (!await wrote(topic)) {
@@ -850,7 +862,7 @@ async function confirm(
     );
   }
   const [shown] = redact([topic], await displayFit(deps, board));
-  deps.write(`${done}\n${formatTopicLine(shown, nowFor(deps))}`);
+  deps.write(`${done(shown)}\n${formatTopicLine(shown, nowFor(deps))}`);
 }
 
 /**
@@ -882,7 +894,7 @@ async function writeTopic(
         board,
         target.number,
         (after) => wrote(target, after, repeated),
-        `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
+        () => `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
       );
     },
   );
@@ -1080,8 +1092,11 @@ export async function newAction(
       target: board.board,
       verb: "addTopic",
       payload: { title, body: text, agentName },
+      // Only the address: a selection of nothing but addresses is answered
+      // from the stored links, without the pattern graph any other selection
+      // runs. The Topic's number comes back with the copy refreshed below.
       resultSchema: JSON.stringify({
-        properties: { topic: { $link: true }, name: { type: "string" } },
+        properties: { topic: { $link: true } },
       }),
     },
     async (written) => {
@@ -1089,8 +1104,7 @@ export async function newAction(
       const topic = isObjectNotArray(result) && isObjectNotArray(result.topic)
         ? result.topic.$link
         : undefined;
-      const name = isObjectNotArray(result) ? result.name : undefined;
-      if (typeof topic !== "string" || typeof name !== "string") {
+      if (typeof topic !== "string") {
         throw new Error(
           "`addTopic` settled without naming the Topic it created.",
         );
@@ -1099,9 +1113,12 @@ export async function newAction(
       await confirm(
         deps,
         board,
-        name,
+        topic,
         (created) => created.title === title.trim(),
-        `Created top/${name} (${topic})${repeated ? REPEATED : ""}.`,
+        (created) =>
+          `Created top/${created.number} (${topic})${
+            repeated ? REPEATED : ""
+          }.`,
       );
     },
   );
@@ -1256,7 +1273,8 @@ export async function mentionAction(
         board,
         from.number,
         async (after) => await mentions(after) === (verb === "mention"),
-        `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
+        () =>
+          `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
           `mentions top/${to.number}${repeated ? REPEATED : ""}.`,
       );
     },
@@ -1532,6 +1550,7 @@ export async function main(
       const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))
         ?.trim();
       const viewer = await deps.identityDid(board.identity);
+      const { browseBoard } = await loadBrowser();
       return await browseBoard(
         {
           ...board,

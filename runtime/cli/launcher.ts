@@ -249,6 +249,9 @@ export const buildCfLauncherCommand = (
     // download progress) — they print ANSI to stderr on every invocation and
     // are noise for CLI consumers. CLI/runtime output is unaffected.
     "--quiet",
+    // A run loads only the command it addresses, through `import()`s Deno
+    // otherwise walks as it starts, which is most of what starting `cf` costs.
+    "--unstable-lazy-dynamic-imports",
     "--config",
     options.configPath,
     ...CF_PERMISSION_FLAGS,

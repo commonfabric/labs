@@ -18,6 +18,9 @@
     "./mock-doc": "./src/mock-doc.ts",
     "./in-process": "./src/in-process.ts",
     "./worker": "./src/worker/mod.ts",
+    // What a display decides from the labels alone. Narrow on purpose: `./worker`
+    // would bring the reconciler and the runtime with it.
+    "./display-fit-atoms": "./src/worker/display-fit-atoms.ts",
     "./vdom-ops": "./src/vdom-ops.ts",
     // The DOM-event shapes, which the worker protocol re-exports rather than
     // re-declaring. Narrow on purpose: `main/mod.ts` would bring the applicator

@@ -1,11 +1,11 @@
-import ts from "typescript";
+import type ts from "typescript";
 
 import type {
   DataFlowAnalysis,
   NormalizedDataFlow,
   ReactiveContextKind,
 } from "../../ast/mod.ts";
-import { TransformationContext } from "../../core/mod.ts";
+import type { TransformationContext } from "../../core/mod.ts";
 import type { ExpressionContainerKind } from "../expression-site-types.ts";
 
 export type ReactiveHelperName =

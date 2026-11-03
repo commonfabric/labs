@@ -16,7 +16,7 @@ import { createBuilder } from "../src/builder/factory.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test operator");

@@ -11,7 +11,7 @@ import {
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { closureCaptureErrorMessage } from "./closure-capture-diagnostic.ts";
 import { traverseValue, visitValue } from "./traverse-utils.ts";
-import { type FactoryInput, type JSONSchema, type NodeRef } from "./types.ts";
+import type { FactoryInput, JSONSchema, NodeRef } from "./types.ts";
 
 export function connectInputAndOutputs(node: NodeRef) {
   function connect(value: any): any {

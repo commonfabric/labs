@@ -137,8 +137,9 @@ follow its update procedure in `runtime/cf-harness/docs/system-map/README.md`.
 
 For a change under `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, the
 CFC tests under `runtime/runner/test/`, the render boundaries in
-`runtime/html/src/worker/reconciler.ts` and `display-fit.ts`, the harness's CFC
-enforcement in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
+`runtime/html/src/worker/reconciler.ts`, `display-fit.ts` and
+`display-fit-atoms.ts`, the harness's CFC enforcement in
+`runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), or a `docs/specs/cfc-*.md` document, classify it
 yourself by `docs/development/cfc-spec-correspondence.md` before reading the
 author's classification: host arrangement, conforming implementation, or

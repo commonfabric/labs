@@ -4,8 +4,8 @@ import {
 } from "@commonfabric/memory/v2";
 import { type Cell, createCell } from "../cell.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
-import { type RawBuiltinResult } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
+import type { RawBuiltinResult } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,

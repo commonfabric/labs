@@ -71,7 +71,7 @@ import {
   type EnsurePieceVerdict,
 } from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import { readWatermarkSeq } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import type {
   WaveCommitRejection,
   WaveCommitSink,

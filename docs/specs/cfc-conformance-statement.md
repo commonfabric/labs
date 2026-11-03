@@ -303,7 +303,7 @@ statement.
   display, which `cellLabelRefusal` fits on its root's integrity, is not
   resolved location by location: a root stamp's evidence can release a clause
   a child entry carries, an under-taint.
-- Within one location, `labelForEntriesAtPath` in `cfc/prepare.ts` unions
+- Within one location, `labelForEntriesAtPath` in `cfc/consumed-label.ts` unions
   integrity across the label components resolving there, where §8.12.8 asks
   for the class-aware join of §3.1.6.2. Where two components carry integrity
   that over-claims, an under-taint. Read with every applicable component an

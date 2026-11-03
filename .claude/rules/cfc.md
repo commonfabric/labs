@@ -6,6 +6,7 @@ paths:
   - "runtime/runner/test/cfc/**"
   - "runtime/html/src/worker/reconciler.ts"
   - "runtime/html/src/worker/display-fit.ts"
+  - "runtime/html/src/worker/display-fit-atoms.ts"
   - "runtime/cf-harness/src/cfc-*.ts"
   - "runtime/cf-harness/src/contracts/cfc-*.ts"
   - "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts"
@@ -38,7 +39,7 @@ inside the kernel); a critical pseudocode function in the snapshot that no manif
 companion entry in `runtime/runner/src/cfc/kernel/manifest.ts` covers, or a
 row the snapshot or the kernel contradicts; and more than forty `SPEC-PENDING`
 markers in the governed source files (the runner CFC sources and tests, the
-two html worker modules, the harness's CFC sources), or one naming no specs
+three html worker modules, the harness's CFC sources), or one naming no specs
 pull request. Citations in documents are not checked. `deno task
 cfc-spec-snapshot` regenerates the snapshot from a specs checkout, and the
 manifest row is what you update when a critical function moves into the
