@@ -43,9 +43,11 @@ export type ReapPlan = {
   removed: Record<string, number>;
 
   /**
-   * The start of the file names of the space's cell databases, which live
-   * beside the live store rather than in it, so the install step removes
-   * them there.
+   * The start of the file names of the space's cell databases, which are
+   * files beside the live store rather than rows in it, so a reap of a copy
+   * cannot reach them: the install that puts the result in place of the live
+   * store moves them out of the live directory, beside the live store it
+   * moves aside.
    */
   cellDatabaseFilePrefix: string;
 };
@@ -278,8 +280,8 @@ export const formatReapPlan = (plan: ReapPlan): string => {
           .join(", ")
       }`,
     `cells      the space's cell databases are the files beside the live ` +
-    `store named ${plan.cellDatabaseFilePrefix}*.sqlite; the install removes ` +
-    "them",
+    `store named ${plan.cellDatabaseFilePrefix}*.sqlite; the install moves ` +
+    "them out of the live directory, beside the live store it moves aside",
   ].join("\n");
 };
 

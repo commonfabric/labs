@@ -297,10 +297,12 @@ reads a reaped store as a deleted space, not as a corrupt one.
   invitation's admission records and receipts, and the outbox. Rows the
   engine's schema itself needs to open a store, such as the default branch's,
   stay.
-- The space's cell databases are files beside the live store, not rows in it,
-  so a reap, which runs against a copy of the backup, cannot reach them. The
-  reap names them, and the install that puts its result in place of the live
-  store removes them there.
+- The space's cell databases are not in the store. They are files beside the
+  live store, `cell-<hash>-*.sqlite`, where `<hash>` is the token the Memory
+  server derives from the space's DID, so a reap, which runs against a copy of
+  the backup, cannot reach them. Its report names them by that pattern, and
+  the install that puts the result in place of the live store moves them out
+  of the live directory, beside the live store it moves aside.
 
 ### Deleting a space from the command line
 

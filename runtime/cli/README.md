@@ -1448,9 +1448,10 @@ document a deletion tombstone at the server sequence; and, for every table, the
 kept rows byte-identical and no other row. A result that fails a check is
 removed and the command exits nonzero. `--dry-run` reports what would be kept
 and removed, and writes nothing. The space's cell databases are files beside the
-live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, for the
-install step to remove there. `cf inspect summary` reads a reaped store as the
-deleted space it is.
+live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, and the
+install that puts the result in place of the live store moves them out of the
+live directory, beside the live store it moves aside. `cf inspect summary` reads
+a reaped store as the deleted space it is.
 
 ## Creating a space
 
