@@ -3,9 +3,11 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CSI, stripAnsi } from "@commonfabric/cli/view/ansi";
 import { urlToAppView } from "@commonfabric/navigation";
+import { taggedHashStringOf } from "@commonfabric/data-model";
 
 import {
   BOARD,
+  BOARD_DOCS,
   type BoardServer,
   boardServer,
   INPUT_1,
@@ -21,11 +23,14 @@ import {
   saveMirror,
 } from "./sync.ts";
 import {
+  type BoardView,
   type Clock,
   consoleTerminal,
+  showBoard,
   systemClock,
   type Terminal,
   topicLinks,
+  type ViewControl,
   watchBoard,
 } from "./watch.ts";
 
@@ -90,6 +95,24 @@ class FakeTerminal implements Terminal {
 
   input(): ReadableStream<Uint8Array> {
     return this.#input;
+  }
+
+  /** Says `text` on the console as the process would, while it is held. */
+  say?: (text: string, error: boolean) => void;
+
+  /** Whether what was held has been said after all. */
+  released = false;
+
+  /** Whether the screen was given back before what was held was said. */
+  givenBackFirst = false;
+
+  hold(said: (text: string, error: boolean) => void): () => void {
+    this.say = said;
+    return () => {
+      this.say = undefined;
+      this.released = true;
+      this.givenBackFirst = this.writes.join("").includes(LEAVE);
+    };
   }
 
   on(signal: Deno.Signal, act: () => void): () => void {
@@ -187,9 +210,10 @@ describe("watch", () => {
       return { space: SPACE, session, close: () => client.close() };
     }
 
-    /** Watches the board, connecting through `opens`. */
+    /** Watches the board as `viewer`, connecting through `opens`. */
     function watch(
       opens: () => Promise<OpenedSession> = connect,
+      viewer?: string,
     ): Promise<void> {
       return watchBoard(
         {
@@ -197,6 +221,7 @@ describe("watch", () => {
           board: BOARD,
           space: "topics space",
           mirror,
+          viewer,
         },
         { terminal, clock, connect: opens },
       );
@@ -277,6 +302,40 @@ describe("watch", () => {
       expect(Object.keys((await loadMirror(mirror)).docs)).toContain(
         "of:fid1:comment-2",
       );
+    });
+
+    it("withholds a comment its labels do not admit to the viewer", async () => {
+      await board.write({
+        "of:fid1:comment-1": {
+          value: BOARD_DOCS["of:fid1:comment-1"].value,
+          cfc: {
+            version: 2,
+            schemaHash: taggedHashStringOf(true),
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                origin: "declared",
+                label: {
+                  confidentiality: [{
+                    type: "https://commonfabric.org/cfc/atom/User",
+                    subject: "did:key:zSomeoneElse",
+                  }],
+                },
+              }],
+            },
+          },
+        },
+        [`cid:${taggedHashStringOf(true)}`]: { value: true },
+      });
+      const live = terminal.showing("● LIVE");
+      const watching = watch(connect, "did:key:zViewer");
+      const going = await live;
+      terminal.type("q");
+      await watching;
+
+      expect(going).toContain("Donut glaze");
+      expect(going).not.toContain("Reproduced with cold oil.");
     });
 
     it("rewrites only the rows that changed, and every row once the terminal is resized", async () => {
@@ -477,7 +536,274 @@ describe("watch", () => {
     });
   });
 
+  describe("showBoard()", () => {
+    let board: BoardServer;
+    let dir: string;
+    let terminal: FakeTerminal;
+
+    beforeEach(async () => {
+      board = await boardServer();
+      dir = await Deno.makeTempDir();
+      terminal = new FakeTerminal();
+    });
+
+    afterEach(async () => {
+      await board.close();
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    /** Shows the board in the view `make` makes. */
+    function show(make: (control: ViewControl) => BoardView) {
+      return showBoard(
+        {
+          apiUrl: "https://fabric.example",
+          board: BOARD,
+          space: "topics space",
+          mirror: join(dir, "copy.json"),
+        },
+        {
+          terminal,
+          clock: new FakeClock(),
+          connect: async () => {
+            const { client, session } = await board.mount();
+            return { space: SPACE, session, close: () => client.close() };
+          },
+        },
+        make,
+      );
+    }
+
+    it("lets a view finish while the screen is its own, draws nothing once it is given back, and sets the view's modes and unsets them", async () => {
+      const updates: boolean[] = [];
+      const wentLive = Promise.withResolvers<void>();
+      const finished = Promise.withResolvers<void>();
+      let control!: ViewControl;
+      let shown = "waiting";
+      const showing = show((given) => {
+        control = given;
+        return {
+          modes: { take: "<take>", give: "<give>" },
+          update(_topics, _now, live) {
+            updates.push(live);
+            if (live) wentLive.resolve();
+          },
+          input: (bytes) => bytes[0] === 0x71,
+          frame: (_columns, rows) =>
+            Array.from(
+              { length: rows },
+              (_, row) => `${CSI}${row + 1};1H${row === 0 ? shown : ""}`,
+            ),
+          nextFrame: () => undefined,
+          async close() {
+            shown = "finishing";
+            control.redraw();
+            await finished.promise;
+          },
+        };
+      });
+      await wentLive.promise;
+      terminal.type("q");
+      await terminal.showing("finishing");
+      finished.resolve();
+      await showing;
+      shown = "after";
+      control.redraw();
+      const written = terminal.writes.join("");
+
+      expect(updates).toEqual([false, true]);
+      expect(written.indexOf("<take>")).toBeLessThan(
+        written.indexOf("waiting"),
+      );
+      expect(written.indexOf("finishing")).toBeLessThan(written.indexOf(LEAVE));
+      expect(written.indexOf("<give>")).toBeLessThan(written.indexOf(LEAVE));
+      expect(written).not.toContain("after");
+      expect(terminal.raw).toEqual([true, false]);
+    });
+
+    it("abandons what a finishing view waits for when asked to end again", async () => {
+      const wentLive = Promise.withResolvers<void>();
+      const closing = Promise.withResolvers<void>();
+      let control!: ViewControl;
+      let shown = "waiting";
+      let abandoned = false;
+      const showing = show((given) => {
+        control = given;
+        return {
+          update(_topics, _now, live) {
+            if (live) wentLive.resolve();
+          },
+          input: (bytes) => bytes[0] === 0x71,
+          frame: (_columns, rows) =>
+            Array.from(
+              { length: rows },
+              (_, row) => `${CSI}${row + 1};1H${row === 0 ? shown : ""}`,
+            ),
+          nextFrame: () => undefined,
+          async close(abandon) {
+            shown = "finishing";
+            control.redraw();
+            closing.resolve();
+            await abandon;
+            abandoned = true;
+          },
+        };
+      });
+      await wentLive.promise;
+      terminal.type("q");
+      await closing.promise;
+
+      expect(abandoned).toBe(false);
+
+      terminal.type("q");
+      await showing;
+
+      expect(abandoned).toBe(true);
+      expect(terminal.writes.at(-1)).toContain(LEAVE);
+    });
+
+    it("tells the view what the process says while the screen is its own, and says it once the screen is given back", async () => {
+      const wentLive = Promise.withResolvers<void>();
+      const said: [string, boolean][] = [];
+      let shown = "waiting";
+      const showing = show(() => ({
+        update(_topics, _now, live) {
+          if (live) wentLive.resolve();
+        },
+        input: (bytes) => bytes[0] === 0x71,
+        frame: (_columns, rows) =>
+          Array.from(
+            { length: rows },
+            (_, row) => `${CSI}${row + 1};1H${row === 0 ? shown : ""}`,
+          ),
+        nextFrame: () => undefined,
+        said(text, error) {
+          said.push([text, error]);
+          shown = text;
+        },
+      }));
+      await wentLive.promise;
+      terminal.say?.("Reconnecting.", true);
+      await terminal.showing("Reconnecting.");
+      terminal.type("q");
+      await showing;
+
+      expect(said).toEqual([["Reconnecting.", true]]);
+      expect(terminal.released).toBe(true);
+      expect(terminal.givenBackFirst).toBe(true);
+    });
+
+    it("restores the terminal when the input fails, and throws what failed", async () => {
+      const failing = new ReadableStream<Uint8Array>({
+        pull: (controller) => controller.error(new Error("Hung up.")),
+      });
+      terminal.input = () => failing;
+
+      await expect(show(() => ({
+        update: () => {},
+        input: () => false,
+        frame: () => [],
+        nextFrame: () => undefined,
+      }))).rejects.toThrow("Hung up.");
+      expect(terminal.writes.at(-1)).toContain(LEAVE);
+      expect(terminal.raw).toEqual([true, false]);
+    });
+  });
+
   describe("consoleTerminal()", () => {
+    it("holds what is said on the console or standard error as one line, and says it once undone", () => {
+      const printed: unknown[][] = [];
+      const errors: number[] = [];
+      const out = {
+        ...console,
+        warn: (...args: unknown[]) => void printed.push(args),
+        log: (..._args: unknown[]) => {},
+        assert: (..._args: unknown[]) => {},
+      };
+      const io = {
+        ...Deno,
+        stderr: { writeSync: (bytes: Uint8Array) => errors.push(bytes.length) },
+      };
+      const terminal = consoleTerminal(io, out);
+      const said: [string, boolean][] = [];
+      const undo = terminal.hold((text, error) => said.push([text, error]));
+      out.warn("%c[WARN]%c %s closed\n", "color: red", "", "memory", {
+        open: 1,
+      });
+      out.log("plain");
+      out.assert(true, "fine");
+      io.stderr.writeSync(new TextEncoder().encode("[WARN] direct\n"));
+
+      expect(printed).toEqual([]);
+      expect(errors).toEqual([]);
+      expect(said).toEqual([
+        ["[WARN] memory closed { open: 1 }", true],
+        ["plain", false],
+        ["[WARN] direct", true],
+      ]);
+
+      undo();
+
+      expect(printed).toEqual([[
+        "%c[WARN]%c %s closed\n",
+        "color: red",
+        "",
+        "memory",
+        { open: 1 },
+      ]]);
+      expect(errors).toEqual([14]);
+    });
+
+    it("says a count or a timer as it stood when asked, across holds, and clears nothing once undone", () => {
+      const printed: [string, unknown[]][] = [];
+      const record = (as: string) => (...args: unknown[]) =>
+        void printed.push([as, args]);
+      const out = {
+        ...console,
+        info: record("info"),
+        warn: record("warn"),
+        clear: record("clear"),
+        count: record("count"),
+        timeEnd: record("timeEnd"),
+      };
+      const terminal = consoleTerminal(Deno, out);
+      const said: string[] = [];
+      const undo = terminal.hold((text) => said.push(text));
+      out.count("x");
+      out.count("x");
+      out.countReset("x");
+      out.count("x");
+      out.count();
+      out.clear();
+      out.time("t");
+      out.timeLog("t", "half", 2);
+      out.timeEnd("t");
+      out.timeEnd("t");
+      // A value with nothing to make it a string is said as it is.
+      out.info(Object.create(null));
+      undo();
+
+      expect(said.slice(0, 4)).toEqual(["x: 1", "x: 2", "x: 1", "default: 1"]);
+      expect(said[4]).toMatch(/^t: \d+\.\d{3}ms half 2$/);
+      expect(said[5]).toMatch(/^t: \d+\.\d{3}ms$/);
+      expect(said[6]).toBe("Timer 't' does not exist");
+      expect(printed.map(([as, [line]]) => [as, line])).toEqual([
+        ["info", "x: 1"],
+        ["info", "x: 2"],
+        ["info", "x: 1"],
+        ["info", "default: 1"],
+        ["info", said[4].replace(/ half 2$/, "")],
+        ["info", said[5]],
+        ["warn", "Timer 't' does not exist"],
+        ["info", Object.create(null)],
+      ]);
+
+      // A count outlasts the hold it was made in.
+      const again = terminal.hold((text) => said.push(text));
+      out.count("x");
+      again();
+      expect(said.at(-1)).toBe("x: 2");
+    });
+
     it("writes all of a text however little each write takes, and hands on size, raw mode, input, and resizes", () => {
       const written: number[] = [];
       const raw: boolean[] = [];
@@ -491,6 +817,7 @@ describe("watch", () => {
             return 1;
           },
         },
+        stderr: { writeSync: (bytes) => bytes.length },
         consoleSize: () => ({ columns: 80, rows: 24 }),
         addSignalListener: (signal, handler) =>
           void listening.add([signal, handler]),

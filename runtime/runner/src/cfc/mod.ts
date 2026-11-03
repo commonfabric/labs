@@ -274,6 +274,7 @@ export {
   prepareBoundaryCommit,
   releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
+  wholeValueLabel,
 } from "./prepare.ts";
 export type {
   CfcPrefixBoundSource,
@@ -293,8 +294,11 @@ export {
   resetCfcDenialAnnouncements,
 } from "./denial-report.ts";
 export {
+  type CfcLabelDocumentReader,
   cfcMetadataPresent,
+  interpretStoredEnvelope,
   readStoredCfcMetadata,
+  resolveStoredCfcMetadata,
   StoredCfcMetadataError,
   UnknownCfcMetadataVersionError,
   UnreadableCfcMetadataError,
