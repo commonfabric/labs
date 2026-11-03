@@ -2284,6 +2284,25 @@ have changed things. Its recorded checkpoint can seed a new follow-up, whether
 the message waited through the restart or arrived afterward. The new run retains
 completed work and marks the prior request as interrupted.
 
+## What a run loads
+
+A run of `cf` loads only the command it addresses. `commands/root.ts` names
+every top-level command with its description and a function that loads it, so
+`cf --help` loads no command and `cf piece call` loads `piece` alone. The root's
+help prints those descriptions, and a test holds them equal to what each command
+declares, so a change to a top-level command's description or positionals is
+made in both places. A new top-level command is a new entry in that table.
+`commands/main.ts` is the whole tree, loaded, for the tools that walk it.
+
+Most of what starting `cf` costs is Deno reading the modules a run can reach
+([`docs/development/imports.md`](../../docs/development/imports.md#what-starting-a-program-reads)),
+so a command that only talks to a running piece reads neither the compiler nor
+the memory engine. `test/start-graph.test.ts` holds those limits. A path in
+`piece` or `cell` that needs the compiler loads it where it needs it, with
+`await import(...)`. The launcher starts `cf` with
+`--unstable-lazy-dynamic-imports`, without which Deno reads what those imports
+name anyway. A compiled binary embeds them all and loads the same subset.
+
 ## One deployment per process
 
 A `cf` process talks to one deployment. Opening a connection writes settings

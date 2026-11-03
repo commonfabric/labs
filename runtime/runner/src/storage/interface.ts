@@ -6,23 +6,23 @@ import type {
   TextChange,
 } from "@commonfabric/api";
 import type { DIDKey } from "@commonfabric/identity/did";
-import {
-  type ACL,
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type DID,
-  type MemorySpace,
-  type QueryError as IQueryError,
-  type Result,
-  type Revision,
-  type Signer,
-  type State,
-  type The as MediaType,
-  type TransactionError,
-  type Unit,
-  type URI,
-  type Variant,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  DID,
+  MemorySpace,
+  QueryError as IQueryError,
+  Result,
+  Revision,
+  Signer,
+  State,
+  The as MediaType,
+  TransactionError,
+  Unit,
+  URI,
+  Variant,
 } from "@commonfabric/memory/interface";
 import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
@@ -68,7 +68,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
-import { Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
   CfcConfidentialityReleaseInput,
@@ -103,7 +103,7 @@ import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
-import { BaseMemoryAddress } from "../traverse.ts";
+import type { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 import type {
   PendingCommitContext,

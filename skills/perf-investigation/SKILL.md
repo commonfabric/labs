@@ -101,6 +101,26 @@ was found receiving 25 MB, and
 `docs/history/development/performance/2026-09-cf-cli-topics-board-cost.md` is
 the worked case.
 
+**Starting the process.** `profile-cf.ts` imports the CLI before its profiler
+starts, so nothing above sees what starting a command costs, which on a thin
+command is most of its time. To see it, compare the module graph rather than a
+clock: `deno info --json <entry>` lists what a run reads, and following only
+edges without `isDynamic` gives the static part. A CPU profile of an
+`await
+import()` of the entry shows the same thing as `(idle)`, because Deno
+reads the modules off the JavaScript thread: when the idle share dwarfs every
+frame, the fix is fewer modules, not cheaper ones.
+`docs/development/imports.md`, "What starting a program reads", says what
+decides that set.
+
+V8's code cache makes these numbers bimodal. `npm:typescript` takes 0.15 s of
+CPU with a cache hit and 1.6 s with `--no-code-cache`, and a checkout's first
+run after an edit misses too. A process run with `--jitless` disturbs the
+entries of the npm packages every checkout shares, so the next plain run costs
+more; `--max-old-space-size` does not. Throw away the first run of each arm, and
+read a pair that disagrees about `user` time as a cache miss before reading it
+as a change.
+
 **The deployed thing.** Every rung above is a rig you built, and a rig can
 measure itself (see "What your harness holds live"). The board the team actually
 uses is one `cf` command away — `skills/topics/SKILL.md` names it — and a single

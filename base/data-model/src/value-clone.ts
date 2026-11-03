@@ -22,7 +22,7 @@ import {
 } from "@commonfabric/js-values/types";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 
-import {
+import type {
   FabricArray,
   FabricInstance,
   FabricPlainObject,

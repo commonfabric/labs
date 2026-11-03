@@ -8,7 +8,7 @@ import {
   ED25519_ALG,
   ed25519RawToPkcs8,
 } from "./utils.ts";
-import {
+import type {
   AsBytes,
   DIDKey,
   Result,

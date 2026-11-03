@@ -262,7 +262,7 @@ export const MANIFEST: readonly ManifestRow[] = [
       "defines `Label.join` and `Label.joinIntegrity` outside the matrix",
     relation: "missing",
     decidedToday: [
-      { file: PREPARE, symbol: "joinLabels" },
+      { file: "cfc/consumed-label.ts", symbol: "joinLabels" },
       { file: PREPARE, symbol: "mergeLabels" },
       { file: "cfc/label-view-core.ts", symbol: "mergeLabel" },
       {

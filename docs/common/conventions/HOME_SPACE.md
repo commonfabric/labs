@@ -154,8 +154,8 @@ most-recently-used (MRU) ordering:
   gives for `markDeleted`. The picker lists a deleted profile apart, by its
   link and marked deleted, with no Restore. It shows no name, since a
   profile's name is kept in its own space, which is gone. `restoreProfile`
-  refuses a deleted profile. Deleting a space is not implemented yet, and
-  neither is this.
+  refuses a deleted profile. Retiring a deleted profile, and the picker's
+  handling of one, are not implemented yet.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
@@ -466,9 +466,9 @@ Archive puts a space away and restore saves it again; both compare the revision
 the rendered control showed and leave space access unchanged. A space recorded
 as deleted
 ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces))
-appears under **Deleted**, with neither control, once deleting a space is
-implemented. Unfamiliar states remain visible in **Other states**. An
-unavailable collection has an explicit notice rather than an empty list.
+appears under **Deleted**, with neither control. Unfamiliar states remain
+visible in **Other states**. An unavailable collection has an explicit notice
+rather than an empty list.
 Ordinary space navigation opens a listed space using the runtime's configured
 routing.
 

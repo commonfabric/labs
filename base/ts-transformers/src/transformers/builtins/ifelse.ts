@@ -1,5 +1,5 @@
-import ts from "typescript";
-import { CFHelpers } from "../../core/mod.ts";
+import type ts from "typescript";
+import type { CFHelpers } from "../../core/mod.ts";
 import { unwrapParentheses } from "../../utils/expression.ts";
 
 export interface IfElseParams {

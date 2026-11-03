@@ -135,7 +135,7 @@ describe("fabric import snapshot semantics", () => {
     const compiled = await engine.compileToRecordGraph(program, {
       fabricImports: { space },
     });
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,

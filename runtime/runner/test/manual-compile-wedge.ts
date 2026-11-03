@@ -69,7 +69,7 @@ const compileMaxLag = maxLag;
 maxLag = 0;
 
 const evalStart = performance.now();
-engine.evaluateRecordGraph(
+await engine.evaluateRecordGraph(
   compiled.id,
   compiled.graph,
   compiled.mainSpecifier,

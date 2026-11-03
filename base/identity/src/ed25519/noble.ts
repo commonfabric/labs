@@ -4,7 +4,7 @@ import {
 } from "@commonfabric/data-model/fabric-primitives";
 import * as ed25519 from "@noble/ed25519";
 
-import {
+import type {
   AsBytes,
   DIDKey,
   Result,

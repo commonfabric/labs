@@ -24,17 +24,18 @@ import {
 } from "@commonfabric/identity";
 import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type { ACL, Entity } from "@commonfabric/memory/interface";
-import {
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type MemorySpace,
-  type MIME,
-  type Revision,
-  type Signer,
-  type TransactionError,
-  type URI,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  Entity,
+  MemorySpace,
+  MIME,
+  Revision,
+  Signer,
+  TransactionError,
+  URI,
 } from "@commonfabric/memory/interface";
 import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {

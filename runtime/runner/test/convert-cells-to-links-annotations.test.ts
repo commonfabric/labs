@@ -13,7 +13,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { toCell } from "../src/back-to-cell.ts";
 import { type CellLinkInput, convertCellsToLinks } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

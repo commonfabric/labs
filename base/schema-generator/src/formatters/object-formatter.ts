@@ -1,6 +1,6 @@
-import {
-  type MutableJSONSchema,
-  type MutableJSONSchemaObj,
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";

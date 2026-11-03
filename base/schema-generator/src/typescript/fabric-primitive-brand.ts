@@ -1,4 +1,4 @@
-import ts from "typescript";
+import type ts from "typescript";
 
 /**
  * The prefix TypeScript gives a property keyed by a unique symbol declared as

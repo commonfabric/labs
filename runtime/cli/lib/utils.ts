@@ -1,4 +1,5 @@
-import { isAbsolute, join } from "@std/path";
+import { isAbsolute } from "@std/path/is-absolute";
+import { join } from "@std/path/join";
 import type { MemorySpace } from "@commonfabric/runner";
 
 export function absPath(relpath: string, cwd = Deno.cwd()): string {

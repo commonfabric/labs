@@ -41,7 +41,7 @@
 // malformed nodes) is owner-independent — and the read side re-resolves the
 // owner from the handle cell, never from a writer's claim.
 
-import { Database } from "@db/sqlite";
+import type { Database } from "@db/sqlite";
 import { type SqliteOperation, tableDeclaresRowLabel } from "../../v2.ts";
 import {
   evaluateRowLabel,

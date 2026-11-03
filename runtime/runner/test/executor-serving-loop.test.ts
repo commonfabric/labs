@@ -42,11 +42,8 @@ import {
   settleServing,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import {
-  readWatermarkSeq,
-  watermarkCell,
-  watermarkDocLink,
-} from "../src/executor/watermark.ts";
+import { watermarkCell, watermarkDocLink } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import {
   newSharedServer,
   writeDeletionTombstone,

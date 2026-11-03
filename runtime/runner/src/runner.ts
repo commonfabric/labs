@@ -315,7 +315,7 @@ import {
   normalizeCellScope,
   scopeRank,
 } from "./scope.ts";
-import { SigilLink } from "./sigil-types.ts";
+import type { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
   asPatternIdentityRef,
