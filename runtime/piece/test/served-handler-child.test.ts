@@ -253,7 +253,7 @@ describe("served-handler-child", () => {
 
   it("indexes no pattern per event once the transaction commits", async () => {
     const pieces = await clientPieces();
-    const child = await addChildOnServer(pieces, "first");
+    await addChildOnServer(pieces, "first");
     const indexedModules = () =>
       host.runLifecycleVerb(space, {
         name: "count modules",
