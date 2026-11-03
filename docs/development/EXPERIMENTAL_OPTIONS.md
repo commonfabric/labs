@@ -1141,8 +1141,13 @@ holds the measurements and the conditions for revisiting.
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
   The memory server's half is built: it records the mark, enforces INV-16,
   advertises `instanceNameMark`, and takes its posture from this flag's
-  deployment value, which toolshed gives it from `experimentalPosture()`. The
-  client's half is not: no runtime declares its mode yet.
+  deployment value, which toolshed gives it from `experimentalPosture()`. A
+  loopback server (`newLoopbackServer()`) given no posture takes the one a
+  toolshed of the same build would (`namesInstancesByDefault()`). A
+  `StandaloneMemoryServer` takes a posture only from its caller, and the ones
+  `cf test`, the serving memory servers and this repository's tests start
+  pass the mode their runtimes' flags resolve to. The client's half is not
+  built: no runtime declares its mode yet.
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   it, the env mapping, the tests that assume the flag's default, and the flip.
 - **Status on 2026-10-29.** The transformer's off arm is held to `main`'s

@@ -27,6 +27,7 @@ import {
   readDelegationChainFile,
 } from "../lib/delegation.ts";
 import { argv, cf, stripAnsi } from "./utils.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 // The key of a space that owns itself, the identity it delegated to when it
 // was created, and the key that identity delegates to.
@@ -568,6 +569,7 @@ describe("delegation", () => {
 
     beforeEach(async () => {
       server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
         acl: { mode: "enforce", delegations: true },
       });
       dir = await Deno.makeTempDir({ prefix: "cf-delegation-server-" });

@@ -15,6 +15,7 @@ import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { principalOf } from "../src/builder/principal-of.ts";
 import { getEntityId } from "../src/create-ref.ts";
@@ -48,6 +49,7 @@ describe("profile-space-access", () => {
 
   beforeEach(() => {
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://profile-space-access-${++serverCount}`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-profile-space-access" },

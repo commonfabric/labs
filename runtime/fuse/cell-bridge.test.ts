@@ -32,6 +32,7 @@ import {
 } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
+  namesInstancesByDefault,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
@@ -5805,6 +5806,7 @@ describe("cell-bridge", () => {
         );
         const audience = "did:key:z6Mk-fuse-entity-list-test-audience";
         const server = new MemoryV2Server.Server({
+          namesInstances: namesInstancesByDefault,
           authorizeSessionOpen: () => signer.did(),
           sessionOpenAuth: { audience },
           store: new URL(`memory://fuse-entity-list-${crypto.randomUUID()}`),

@@ -21,6 +21,7 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { type SessionFactory, StorageManager } from "../src/storage/v2.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const user = await Identity.fromPassphrase("first-handshake user");
 const SPACE = "did:key:z6Mk-first-handshake-space" as MemorySpace;
@@ -81,7 +82,10 @@ describe("storage-first-handshake", () => {
     for (const shared of [false, true]) {
       describe(`with shared connections=${shared}`, () => {
         it("mounts a space whose dials are refused fewer times than it may dial, on the dial after the last refusal", async () => {
-          const server = StandaloneMemoryServer.start({ connectionAuth: true });
+          const server = StandaloneMemoryServer.start({
+            namesInstances: namesInstancesByDefault,
+            connectionAuth: true,
+          });
           cleanups.push(() => server.close());
           const refusals = MEMORY_FIRST_HANDSHAKE_ATTEMPTS - 1;
           const { factory, dialed } = refusingFactory(

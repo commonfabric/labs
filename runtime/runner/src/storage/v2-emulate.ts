@@ -4,6 +4,7 @@ import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import { servingContextLoopback } from "../executor/serving-context.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
@@ -17,7 +18,12 @@ const emulatedMemoryAudience = "did:key:z6Mk-runner-emulated-memory";
  * audience, and optionally a fan-out cadence — `"manual"` disables
  * timer-driven fan-out entirely: either explicit synchronization point
  * (`flushSessions()`, or `idle()`, which drains held fan-out to keep its
- * quiescence contract) delivers it. The controlled-staleness shape.
+ * quiescence contract) delivers it. The controlled-staleness shape. Its
+ * posture (INV-16) names instances when `namesInstances` returns `true`, and
+ * by default when a runtime of this build names them by default
+ * (`namesInstancesByDefault()`): a toolshed publishes its runtime's resolved
+ * flags as its posture, so that is the posture a toolshed of this build
+ * serves with when its deployment sets none.
  */
 export const newLoopbackServer = (options?: {
   audience?: string;
@@ -36,9 +42,17 @@ export const newLoopbackServer = (options?: {
    * runtime's sessions carry, as a toolshed running server execution lists
    * its own process identity. Access lists stay off. */
   delegatingDids?: readonly string[];
+
+  /**
+   * The server's posture (INV-16), asked at each open of an unmarked space
+   * that declares `instanceNames: true`, as the memory server's own option
+   * of that name is.
+   */
+  namesInstances?: () => boolean;
 }): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
+    namesInstances: options?.namesInstances ?? namesInstancesByDefault,
     sessionOpenAuth: {
       audience: options?.audience ?? emulatedMemoryAudience,
     },

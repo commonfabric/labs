@@ -21,6 +21,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -117,6 +118,7 @@ class TestStorageManager extends StorageManager {
 
 const createServer = (label: string): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
+    namesInstances: namesInstancesByDefault,
     store: new URL(`memory://${label}`),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },

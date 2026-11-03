@@ -14,6 +14,7 @@ import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
 import { leaveAcl } from "../lib/acl.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 import { captureStderr } from "./utils.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 const AUDIENCE = "did:key:z6Mk-cli-acl-memory-server-audience";
 
@@ -60,6 +61,7 @@ describe("acl, against an `enforce` memory server", () => {
   beforeEach(() => {
     cleanups = [];
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://cli-acl-memory-server-${++serverCount}`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: AUDIENCE },

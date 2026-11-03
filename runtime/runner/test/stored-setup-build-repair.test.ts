@@ -21,7 +21,10 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../src/storage/v2.ts";
-import { instanceNameOfPartialCause } from "../src/builder/instance-name.ts";
+import {
+  instanceNameOfPartialCause,
+  namesInstancesByDefault,
+} from "../src/builder/instance-name.ts";
 import type {
   DerivedInternalCellDescriptor,
   Pattern,
@@ -1283,6 +1286,7 @@ describe("stored-setup-build-repair", () => {
 
     beforeEach(() => {
       enforcing = new MemoryV2Server.Server({
+        namesInstances: namesInstancesByDefault,
         store: new URL(
           `memory://stored-setup-build-repair-${crypto.randomUUID()}`,
         ),

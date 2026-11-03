@@ -2,6 +2,7 @@ export * from "@commonfabric/memory/interface";
 import * as V2Storage from "./v2.ts";
 import { EmulatedStorageManager } from "./v2-emulate.ts";
 
+export { namesInstancesByDefault } from "../builder/instance-name.ts";
 export { EmulatedStorageManager, newLoopbackServer } from "./v2-emulate.ts";
 export { EmulatedStorageManager as StorageManagerEmulator } from "./v2-emulate.ts";
 export { SelectorTracker } from "./selector-tracker.ts";
