@@ -79,6 +79,25 @@ const forwardRef = handler<any, any>(label as any, {
   state.made.push(Child({ rows: state.rows, label: event.label }));
 });
 
+/** States an input through a reference that leads back to itself. */
+const forwardLoop = handler<any, any>(label as any, {
+  type: "object",
+  properties: {
+    rows: { $ref: "#/$defs/Loop" },
+    made: { type: "array", items: true, asCell: ["cell"] },
+  },
+  $defs: {
+    Loop: {
+      anyOf: [
+        { $ref: "#/$defs/Loop" },
+        { type: "array", items: { type: "string" }, asCell: ["opaque"] },
+      ],
+    },
+  },
+} as any, (event: any, state: any) => {
+  state.made.push(Child({ rows: state.rows, label: event.label }));
+});
+
 export default pattern<{ items: Writable<string[]> }>(({ items }) => {
   const rows = computed(() => items.get().map((item) => item.toUpperCase()));
   const made = new Writable<unknown[]>([]).for("made");
@@ -99,6 +118,7 @@ export default pattern<{ items: Writable<string[]> }>(({ items }) => {
     spawn,
     forwardUnion: forwardUnion({ rows, made }),
     forwardRef: forwardRef({ rows, made }),
+    forwardLoop: forwardLoop({ rows, made }),
     made,
     rows,
     log,
@@ -191,6 +211,15 @@ describe("handler-forwarded-input", () => {
     expect(preflights.some((marker) => marker.hasDirtyDependencies)).toBe(
       false,
     );
+  });
+
+  it("treats an input stated through a reference to itself as read", async () => {
+    // Reading a value through this schema overflows the stack on its own, which
+    // logs an error from the verb. What is pinned is that the preflight's check
+    // of it returns, and calls it a read.
+    await send("forwardLoop");
+
+    expect(preflights.some((marker) => marker.hasDirtyDependencies)).toBe(true);
   });
 
   it("lets the new piece write through a cell the verb only hands on", async () => {

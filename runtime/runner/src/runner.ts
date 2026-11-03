@@ -12877,9 +12877,18 @@ export class Runner {
 
     // Whether `schema` declares its position opaque, itself, through a
     // reference, or in every arm of a union a present value can take. A shape
-    // this does not recognize reads as not opaque, which only reads more.
-    const declaredOpaque = (schema: unknown): boolean => {
+    // this does not recognize reads as not opaque, which only reads more, and
+    // that includes a reference leading back to one it is following.
+    const declaredOpaque = (
+      schema: unknown,
+      following: ReadonlySet<string> = new Set(),
+    ): boolean => {
       if (!isObjectNotArray(schema)) return false;
+      const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
+      if (ref !== undefined && following.has(ref)) return false;
+      const followed = ref === undefined
+        ? following
+        : new Set([...following, ref]);
       const inherited = cfcSchemaWithInheritedDefs(
         schema as JSONSchema,
         rootDefinitions,
@@ -12900,7 +12909,8 @@ export class Runner {
         !isObjectNotArray(arm) ||
         (arm.type !== "undefined" && arm.type !== "null")
       );
-      return present.length > 0 && present.every(declaredOpaque);
+      return present.length > 0 &&
+        present.every((arm) => declaredOpaque(arm, followed));
     };
 
     const visit = (schema: unknown, currentValue: unknown): void => {
