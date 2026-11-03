@@ -5,7 +5,7 @@
  */
 
 import { UI } from "@commonfabric/runner/shared";
-import { CellHandle } from "./cell-handle.ts";
+import type { CellHandle } from "./cell-handle.ts";
 
 export type Props = {
   [key: string]:

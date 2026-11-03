@@ -492,16 +492,21 @@ export async function dumperConfig(
  * Each build is then compiled under its own revision's defaults. An inherited
  * flag would set both builds alike, and so hide a change to its default from
  * the comparison.
+ *
+ * `DENO_COVERAGE_DIR` goes too. The dumper runs under a configuration of its
+ * own, so a profile it wrote could not be converted, and a tracked file that
+ * will not convert fails the lane (docs/development/COVERAGE.md).
  */
 export function dumperEnvironment(
   env: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  const flagVariables = new Set<string>(
-    Object.values(EXPERIMENTAL_ENV_VARS).filter((name) => name !== null),
-  );
+  const leftOut = new Set<string>([
+    "DENO_COVERAGE_DIR",
+    ...Object.values(EXPERIMENTAL_ENV_VARS).filter((name) => name !== null),
+  ]);
   return {
     ...Object.fromEntries(
-      Object.entries(env).filter(([name]) => !flagVariables.has(name)),
+      Object.entries(env).filter(([name]) => !leftOut.has(name)),
     ),
     LOG_LEVEL: "error",
   };

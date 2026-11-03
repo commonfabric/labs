@@ -39,7 +39,7 @@ import {
   waveSettlementOf,
 } from "../executor/wave.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import { getCellOrThrow } from "../query-result-proxy.ts";
 import {
   type Runtime,

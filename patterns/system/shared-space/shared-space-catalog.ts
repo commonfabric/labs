@@ -1,7 +1,8 @@
 /**
  * Home's shared-space collection. Registration retains the first accepted
  * route; explicit membership choices compare the revision the user observed,
- * and so does a removal. A retitle refreshes an entry's display title and
+ * and so does a removal, and a deletion mark, which records that a space is
+ * gone for everyone. A retitle refreshes an entry's display title and
  * nothing else. Registration also records which of the person's profiles
  * acts in the space, once, beside the catalog. Handler results describe the
  * action, while the catalog and those records carry membership.
@@ -14,6 +15,7 @@ import {
   isWellFormedDID,
   profileOwnerOf,
   resultOwnerOf,
+  spaceDeleted,
   spaceOf,
   toSchema,
   type Writable,
@@ -145,6 +147,29 @@ export interface SharedSpaceRemoval {
 export type SharedSpaceRemovalResult =
   | { status: "removed"; space: string }
   | { status: "conflict"; reason: "missing" | "revision" | "offer" };
+
+/** Names one listed space to record as deleted, at the revision its caller observed. */
+export interface SharedSpaceDeletionMark {
+  space: string;
+  expectedRevision: string;
+}
+
+/**
+ * A deletion mark's outcome, carried by its normal handler receipt.
+ * `not-deleted` says the memory server this handler asked does not say the
+ * space is deleted, so the mark, forged or mistaken, changed nothing.
+ */
+export type SharedSpaceDeletionResult =
+  | { status: "deleted"; space: string }
+  | {
+    status: "conflict";
+    reason:
+      | "missing"
+      | "revision"
+      | "unsupported-state"
+      | "not-deleted"
+      | "unsupported-revision";
+  };
 
 /** Names one entry whose display title its space's root now gives. */
 export interface SharedSpaceRetitle {
@@ -679,6 +704,69 @@ export const changeSharedSpaceMembership = handler<
   eventSchema,
   toSchema<SharedSpaceCatalogState>(),
   (change, { catalog }) => changeSharedSpaceMembershipIn(catalog, change),
+);
+
+/**
+ * Records in `catalog` that `mark.space` is deleted, moving its entry to the
+ * `deleted` state, staging its writes in the transaction of the handler that
+ * calls it. It writes only when the entry is still at the revision its caller
+ * observed, is saved or archived, and the memory server this runtime asks
+ * says the space is deleted (`spaceDeleted()`), so a mark naming a space that
+ * is not deleted, forged or mistaken, changes nothing. Returns `conflict`
+ * without writing when the space has no entry, the observed revision is not
+ * the current one, the entry is in another state, the server does not say the
+ * space is deleted, or the next revision would not fit. The entry keeps its
+ * title, sender, admission time and every offer receipt naming the space, and
+ * `deleted` is terminal: no later command restores or saves the entry. Call
+ * it only from a handler, since a new revision names the handler's event and
+ * the deletion is asked of the server there. On a runtime that has not opened
+ * the space, the handler is run again once the server has answered for it.
+ *
+ * @throws When `mark` names no well-formed space or revision, or `catalog`
+ *   holds something other than a valid catalog.
+ */
+export function markSharedSpaceDeletedIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  mark: SharedSpaceDeletionMark,
+): SharedSpaceDeletionResult {
+  if (
+    !plainObject(mark) || !isWellFormedDID(mark.space) ||
+    !boundedString(mark.expectedRevision, 320)
+  ) {
+    throw new TypeError("Invalid shared-space deletion mark.");
+  }
+  const current = readSharedSpaceCatalog(catalog).entries[mark.space];
+  if (!current) return { status: "conflict", reason: "missing" };
+  if (current.revision !== mark.expectedRevision) {
+    return { status: "conflict", reason: "revision" };
+  }
+  if (!membership(current.state)) {
+    return { status: "conflict", reason: "unsupported-state" };
+  }
+  if (spaceDeleted(mark.space) !== true) {
+    return { status: "conflict", reason: "not-deleted" };
+  }
+  const revision = nextRevision(current.revision);
+  if (revision === undefined) {
+    return { status: "conflict", reason: "unsupported-revision" };
+  }
+  catalog.key("entries", mark.space, "state").set("deleted");
+  catalog.key("entries", mark.space, "revision").set(revision);
+  return { status: "deleted", space: mark.space };
+}
+
+/**
+ * Records that a listed space is deleted, at the revision its caller
+ * observed, as {@link markSharedSpaceDeletedIn} does.
+ */
+export const markSharedSpaceDeleted = handler<
+  SharedSpaceDeletionMark,
+  SharedSpaceCatalogState,
+  SharedSpaceDeletionResult
+>(
+  eventSchema,
+  toSchema<SharedSpaceCatalogState>(),
+  (mark, { catalog }) => markSharedSpaceDeletedIn(catalog, mark),
 );
 
 /**

@@ -1,8 +1,8 @@
-import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 
-import { AsBytes, DIDKey, Signer, Verifier } from "../interface.ts";
+import type { AsBytes, DIDKey, Signer, Verifier } from "../interface.ts";
 import { NativeEd25519Signer, NativeEd25519Verifier } from "./native.ts";
 import { NobleEd25519Signer, NobleEd25519Verifier } from "./noble.ts";
 import {

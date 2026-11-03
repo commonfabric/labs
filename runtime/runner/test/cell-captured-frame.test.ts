@@ -15,8 +15,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getTopFrame } from "../src/builder/pattern.ts";
 import { type Cell, CellImpl, exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator captured frame");
 const space = signer.did();

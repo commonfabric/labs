@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { preserveSourceMapRange } from "../ast/utils.ts";
-import { TransformationContext } from "./mod.ts";
+import type { TransformationContext } from "./mod.ts";
 
 export const CF_HELPERS_IDENTIFIER = "__cfHelpers";
 

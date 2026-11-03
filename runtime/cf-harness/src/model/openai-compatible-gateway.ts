@@ -10,16 +10,16 @@ import type {
   HarnessToolCall,
   HarnessTranscriptMessage,
 } from "../contracts/transcript.ts";
-import {
-  type OpenAIChatCompletionAttemptDiagnostic,
-  type OpenAIChatCompletionMessage,
-  type OpenAIChatCompletionRequest,
-  type OpenAIChatCompletionRequestTool,
-  type OpenAIChatCompletionResponse,
-  type OpenAIChatCompletionTool,
-  type OpenAIChatMessageContent,
+import type {
+  OpenAIChatCompletionAttemptDiagnostic,
+  OpenAIChatCompletionMessage,
+  OpenAIChatCompletionRequest,
+  OpenAIChatCompletionRequestTool,
+  OpenAIChatCompletionResponse,
+  OpenAIChatCompletionTool,
+  OpenAIChatMessageContent,
   OpenAICompatibleGatewayClient,
-  type OpenAIResponsesRequest,
+  OpenAIResponsesRequest,
 } from "../gateway/openai-client.ts";
 import {
   addFirstUserPromptCacheBreakpoint,

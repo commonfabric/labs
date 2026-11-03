@@ -79,7 +79,6 @@ import {
   normalizeLLMFriendlyRef,
   splitArgumentSuffix,
 } from "../lib/llm-friendly-ref.ts";
-import { renderPiece } from "../lib/piece-render.ts";
 import type {
   PieceDescription,
   PieceFieldDescription,
@@ -2946,6 +2945,10 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
     const pieceConfig = parsePieceOptions(options);
 
     try {
+      // Rendering is the one thing here that needs the HTML renderer and its
+      // worker protocol, and every other `piece` command should not pay for them.
+      // deno-lint-ignore cf-imports/no-inline-module-import
+      const { renderPiece } = await import("../lib/piece-render.ts");
       if (options.watch) {
         writePieceRenderStatus(
           "Watching for changes... Press Ctrl+C to exit.\n",

@@ -5,6 +5,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
+import {
+  addressedCommand,
+  fullRootCommand,
+  rootCommandFor,
+} from "../commands/root.ts";
 import { test as testCommand } from "../commands/test-command.ts";
 import { argv, cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
 
@@ -50,6 +55,40 @@ async function withCapturedErrors(
 
   return errors;
 }
+
+describe("root command", () => {
+  it("prints the same help without loading a command as with all of them", async () => {
+    const [unloaded, loaded] = await Promise.all([
+      rootCommandFor([]),
+      fullRootCommand(),
+    ]);
+    expect(unloaded.getHelp()).toBe(loaded.getHelp());
+  });
+
+  it("loads the command a run addresses, and only that one", async () => {
+    const root = await rootCommandFor(["cell", "get"]);
+    const declaresSubcommands = (name: string) =>
+      (root.getCommand(name)?.getBaseCommands(true).length ?? 0) > 0;
+    expect(declaresSubcommands("cell")).toBe(true);
+    expect(declaresSubcommands("piece")).toBe(false);
+  });
+
+  it("names what a command line addresses", () => {
+    expect(addressedCommand(["piece", "call", "verb"])).toBe("piece");
+    expect(addressedCommand(["--help", "piece"])).toBe("piece");
+    expect(addressedCommand(["help", "cell"])).toBe("cell");
+    expect(addressedCommand(["help"])).toBeUndefined();
+    expect(addressedCommand(["--version"])).toBeUndefined();
+    expect(addressedCommand([])).toBeUndefined();
+  });
+
+  it("fails a stand-in rather than do nothing if one is ever reached", async () => {
+    const root = await rootCommandFor([]);
+    await expect(root.parse(["piece"])).rejects.toThrow(
+      "The `piece` command was not loaded for this run.",
+    );
+  });
+});
 
 describe("main command", () => {
   it("mounts the interactive shell at `sh`, and at no name spelling `shell`", async () => {

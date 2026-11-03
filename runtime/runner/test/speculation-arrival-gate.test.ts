@@ -72,7 +72,7 @@ import {
   SpeculationOverlayDestination,
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
-import { readWatermarkSeq as readWatermark } from "../src/executor/watermark.ts";
+import { readWatermarkSeq as readWatermark } from "../src/executor/watermark-engine.ts";
 
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 

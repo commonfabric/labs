@@ -991,6 +991,10 @@ export class RuntimeProcessor {
   #privateInboxEnsured: Promise<void> | undefined;
   #profileRootsRepaired: Promise<void> | undefined;
   #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  // The marks of deleted spaces on their way to Home's catalog, which
+  // `handleIdle()` takes in: a reload before a mark is sent would leave the
+  // space listed as saved.
+  #deletionMarks = new Set<Promise<void>>();
   // Aborted as disposal begins, so an inbox ensure still in flight sends
   // nothing after it, a profile root repair starts no commit after it, and
   // the share intake stops.
@@ -1130,13 +1134,15 @@ export class RuntimeProcessor {
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
       ?.subscribeSpaceAccessLoss?.((space, error) => {
+        const deleted = isDeletedSpaceError(error);
         for (const client of clients()) {
           client.post({
             type: NotificationType.SpaceAccessLost,
             space,
-            ...(isDeletedSpaceError(error) && { deleted: true as const }),
+            ...(deleted && { deleted: true as const }),
           });
         }
+        if (deleted) this.#markDeletedSpace(space);
       });
     // An access change is a denial or a recovery, and only a recovery leaves
     // the space with no access error. A storage manager that cannot say what
@@ -3017,6 +3023,31 @@ export class RuntimeProcessor {
     return new PiecesController(homeSession, this.#runtime);
   }
 
+  /**
+   * Records in the user's Home catalog that `space` is deleted, as the
+   * runtime that hears of a deletion does (`docs/features/shared-space-catalog.md`,
+   * "Deleted spaces"), without creating a Home the user has none of. Home's
+   * handler asks the server itself before it writes, and a mark that loses
+   * the race to another runtime's is an expected conflict, so nothing here
+   * waits for the handling; `handleIdle()` waits for the send, and for the
+   * handling as for any scheduler work. A failure to send is reported and not
+   * retried: the storage manager gives one notice per space for its deletion,
+   * so the mark is sent again only by a later worker, or once the space's
+   * access record is reset and the deleted refusal met again.
+   */
+  #markDeletedSpace(space: MemorySpace): void {
+    const mark: Promise<void> = this.#homeController().markDeletedSpace(space)
+      .then(() => {}, (error) => {
+        if (this.#isDisposed) return;
+        console.warn(
+          `[RuntimeProcessor] Marking the deleted space ${space} in Home:`,
+          error,
+        );
+      })
+      .finally(() => this.#deletionMarks.delete(mark));
+    this.#deletionMarks.add(mark);
+  }
+
   async handleIdle(): Promise<void> {
     // The client reads "idle" as a safe point to navigate or reload, so it
     // must include durability of just-issued writes: idleWithPendingCommits()
@@ -3027,14 +3058,16 @@ export class RuntimeProcessor {
     // reactive quiescence use runtime.idle() and are unaffected.
     //
     // It also takes in the housekeeping a bring-up of Home has started, which
-    // goes on loading and sending to Home after the bring-up has answered.
-    // That work issues scheduler work, and scheduler work can hand the share
+    // goes on loading and sending to Home after the bring-up has answered,
+    // and the marks of deleted spaces on their way to Home's catalog. That
+    // work issues scheduler work, and scheduler work can hand the share
     // intake more to take up, so the two are awaited until both hold at once.
     for (;;) {
       const intake = await this.#homeHousekeepingIdle();
       await this.#runtime.scheduler.idleWithPendingCommits();
       if (
         (intake === undefined || intake.isIdle()) &&
+        this.#deletionMarks.size === 0 &&
         this.#runtime.scheduler.isIdleWithPendingCommits()
       ) {
         return;
@@ -3047,7 +3080,8 @@ export class RuntimeProcessor {
    * `#startHomeHousekeeping()` has started in this worker: the adoption of the
    * Home space list's name-only entries, the private inbox ensure, the profile
    * root repair, the start of the share intake, and the intake taking up every
-   * change it has been told of. Returns the intake, when one is running. Never
+   * change it has been told of, and for the marks of deleted spaces on their
+   * way to Home's catalog. Returns the intake, when one is running. Never
    * rejects: each step is held as a promise that does not, and a failure of
    * the intake's own wait is reported rather than passed on.
    */
@@ -3055,6 +3089,7 @@ export class RuntimeProcessor {
     await this.#legacySpacesAdopted;
     await this.#privateInboxEnsured;
     await this.#profileRootsRepaired;
+    await Promise.all(this.#deletionMarks);
     const intake = await this.#shareIntake;
     await intake?.idle().catch((error) => {
       console.warn("[RuntimeProcessor] Waiting for the share intake:", error);

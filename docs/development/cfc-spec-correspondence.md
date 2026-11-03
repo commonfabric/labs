@@ -84,8 +84,9 @@ The vocabulary:
 1. **Read the specification before the code.** A change under
    `runtime/runner/src/cfc/` or `runtime/runner/src/cfc.ts`, to the CFC
    tests under `runtime/runner/test/`, to the render boundaries in
-   `runtime/html/src/worker/reconciler.ts` and
-   `runtime/html/src/worker/display-fit.ts`, to the harness's CFC enforcement
+   `runtime/html/src/worker/reconciler.ts`,
+   `runtime/html/src/worker/display-fit.ts` and
+   `runtime/html/src/worker/display-fit-atoms.ts`, to the harness's CFC enforcement
    in `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
    `sandbox/runsc-cfc-result.ts`), to the harness console's display ceiling in
    `runtime/cf-harness/console/display-ceiling.ts`, or to a
@@ -303,8 +304,8 @@ on four things, each read against the committed snapshot:
   range written without its own `§` is not read.
 - More than forty `SPEC-PENDING` markers across the files the CFC rule
   governs, which `GOVERNED_SOURCE` in the task lists: the runner's CFC
-  sources and their tests, the render boundaries `reconciler.ts` and
-  `display-fit.ts` in `runtime/html`, the harness's `cfc-*.ts`,
+  sources and their tests, the render boundaries `reconciler.ts`,
+  `display-fit.ts` and `display-fit-atoms.ts` in `runtime/html`, the harness's `cfc-*.ts`,
   `contracts/cfc-*.ts` and `sandbox/runsc-cfc-result.ts`, and the harness
   console's `display-ceiling.ts`; or one on a line
   naming no `https://github.com/commonfabric/specs/pull/<n>`. A marker

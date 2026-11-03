@@ -8,12 +8,12 @@ import {
   tool,
 } from "ai";
 import { trace } from "@opentelemetry/api";
-import {
-  type LLMNativeModelToolId,
-  type LLMNativeModelToolResult,
-  type LLMRequest,
+import type {
+  LLMNativeModelToolId,
+  LLMNativeModelToolResult,
+  LLMRequest,
 } from "@commonfabric/llm/types";
-import { type BuiltInLLMMessage } from "@commonfabric/api";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {

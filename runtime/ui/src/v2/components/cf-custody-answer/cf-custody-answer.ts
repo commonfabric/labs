@@ -1,10 +1,10 @@
 /** Host publication and display of a custody room's answer, once per instance. */
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import {
-  type CellHandle,
-  type JSONValue,
-  type RuntimeClient,
+import type {
+  CellHandle,
+  JSONValue,
+  RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues } from "lit";

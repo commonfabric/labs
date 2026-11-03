@@ -148,6 +148,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       "runtime/cf-harness/src/contracts/",
       "runtime/cf-harness/src/sandbox/runsc-cfc-result.ts",
       "runtime/html/src/worker/display-fit.ts",
+      "runtime/html/src/worker/display-fit-atoms.ts",
       "runtime/html/src/worker/reconciler.ts",
       "runtime/runner/src/cfc.ts",
       "runtime/runner/src/cfc/",

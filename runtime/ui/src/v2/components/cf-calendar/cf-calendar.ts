@@ -1,4 +1,4 @@
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html, PropertyValues } from "lit";
 
 import { BaseElement } from "../../core/base-element.ts";

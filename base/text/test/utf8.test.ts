@@ -161,6 +161,15 @@ describe("utf8SortedKeysOf()", () => {
     const sorted2 = utf8SortedKeysOf(obj);
     expect(sorted1).toBe(sorted2);
   });
+
+  it("returns a new value on each call, given a frozen object whose keys arrive already in order", () => {
+    const obj = Object.freeze({ alive: true, be: null, feeling: [4] });
+    const sorted1 = utf8SortedKeysOf(obj);
+    const sorted2 = utf8SortedKeysOf(obj);
+    expect(sorted1).toEqual(["alive", "be", "feeling"]);
+    expect(sorted2).toEqual(sorted1);
+    expect(sorted2).not.toBe(sorted1);
+  });
 });
 
 describe("utf8ByteLength()", () => {

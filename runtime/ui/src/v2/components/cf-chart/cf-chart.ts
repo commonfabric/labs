@@ -22,7 +22,7 @@
  */
 
 import { html, svg, PropertyValues } from "lit";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { BaseElement } from "../../core/base-element.ts";
 import { createCellController } from "../../core/cell-controller.ts";
 import { chartStyles } from "./styles.ts";

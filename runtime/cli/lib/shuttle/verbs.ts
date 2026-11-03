@@ -79,7 +79,7 @@ import {
   warmPiece,
 } from "../piece.ts";
 import { projectWishValue, readWish } from "../wish.ts";
-import { type Announce } from "./announce.ts";
+import type { Announce } from "./announce.ts";
 import { connectionEntries, type HeldConnection } from "./connection.ts";
 import { resolveHandle } from "./handles.ts";
 import { renderVerbList, renderVerbPage, type VerbHelp } from "./help.ts";
@@ -123,7 +123,7 @@ import {
   scopeMoveHint,
 } from "./place.ts";
 import { renderRecord } from "./record.ts";
-import { ShuttleSession } from "./session.ts";
+import type { ShuttleSession } from "./session.ts";
 import { classOf, renderValue } from "./value.ts";
 import { ArmedWatch, watchEntries } from "./watch.ts";
 import {

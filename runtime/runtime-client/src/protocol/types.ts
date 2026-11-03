@@ -10,7 +10,7 @@ import type {
   FabricKeyPair,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { DID } from "@commonfabric/identity";
-import { type Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import type {
   ApplyOpResolution,

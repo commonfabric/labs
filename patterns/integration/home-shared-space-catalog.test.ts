@@ -46,6 +46,7 @@ import { defer } from "@commonfabric/async/defer";
 
 import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
 import { interceptTransaction } from "../../runtime/runner/test/support/intercept-transaction.ts";
+import { refusingServer } from "../../runtime/runner/test/support/refusing-server.ts";
 import {
   ArrivalLog,
   awaitAdmitted,
@@ -257,7 +258,11 @@ function watchHandlingCommits(runtime: Runtime) {
   return { outcomes, verdicts, [Symbol.dispose]: () => wrapped.restore() };
 }
 
-/** Independent replicas against an ACL-enforcing memory server. */
+/**
+ * Independent replicas against an ACL-enforcing memory server. `connect`
+ * wraps the server once, and every runtime connects through what it returns,
+ * the serving runtimes `ExecutorHost` creates included.
+ */
 async function withHome(
   serverExecution: boolean,
   body: (
@@ -269,6 +274,7 @@ async function withHome(
     server: Server,
   ) => Promise<void>,
   decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
+  connect: (server: Server) => Server = (server) => server,
 ) {
   const server = new Server({
     namesInstances: namesInstancesByDefault,
@@ -277,6 +283,7 @@ async function withHome(
     sessionOpenAuth: { audience: "did:key:home-catalog-memory" },
     subscriptionRefreshDelayMs: 0,
   });
+  const reachable = connect(server);
   const clients: {
     runtime: Runtime;
     storage: EmulatedStorageManager;
@@ -284,7 +291,9 @@ async function withHome(
   }[] = [];
   let executor: ExecutorHost | undefined;
   const fresh = (executeOnServer = serverExecution) => {
-    const storage = EmulatedStorageManager.connectTo(server, { as: owner });
+    const storage = EmulatedStorageManager.connectTo(reachable, {
+      as: owner,
+    });
     const runtime = new Runtime({
       moduleByteCache,
       apiUrl: new URL("https://home.example"),
@@ -311,7 +320,7 @@ async function withHome(
         decorateWaveCommitSink,
         serviceIdentity: service.did(),
         createRuntime: (space) => {
-          const storage = EmulatedStorageManager.connectTo(server, {
+          const storage = EmulatedStorageManager.connectTo(reachable, {
             as: service,
             servingHomeSpace: space,
           });
@@ -1975,4 +1984,85 @@ describe("Home shared-space catalog", () => {
       });
     }
   });
+});
+
+describe("Home catalog deletion marks", () => {
+  for (const serving of [false, true]) {
+    it(`records a space the memory server refuses as deleted, and leaves a live one and a deleted one as they are with serving ${serving}`, async () => {
+      let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+      await withHome(
+        serving,
+        async (runtime, home) => {
+          const gone = "did:key:catalog-gone";
+          const live = "did:key:catalog-live";
+          const commands = home.key("sharedSpaces").key("commands")
+            .asSchema(sharedSpaceCommandsSchema);
+          const view = home.key("sharedSpaces").key("view")
+            .asSchema(sharedSpaceCollectionViewSchema);
+          const entries = () =>
+            home.key("sharedSpaceCatalog").pull().then((catalog) =>
+              catalog.entries
+            );
+          for (const space of [gone, live]) {
+            await invoke(runtime, commands.key("register"), {
+              space,
+              host: "https://room.example",
+              kind: "loom",
+            }, `register ${space}`);
+          }
+          const first = await entries();
+          // Neither space has been opened by Home's runtime yet, so each mark
+          // waits for the server's answer and runs again with it.
+          refuse!(gone, "deleted");
+          const mark = async (space: string, expectedRevision: string) => {
+            sendEvent(commands.key("markDeleted"), { space, expectedRevision });
+            await runtime.idle();
+            await runtime.storageManager.synced();
+          };
+          await mark(gone, first[gone].revision);
+          await mark(live, first[live].revision);
+          const marked = await waitForCellValue<
+            Record<string, { state: string }>
+          >(
+            runtime,
+            home.key("sharedSpaceCatalog").key("entries"),
+            (value) => value?.[gone]?.state === "deleted",
+            { stuckLabel: "the deleted space's entry marked deleted" },
+          );
+          expect(marked[gone].state).toBe("deleted");
+          expect(marked[live]).toMatchObject({
+            state: "saved",
+            revision: first[live].revision,
+          });
+          const after = await entries();
+          expect(after[gone].revision).not.toBe(first[gone].revision);
+          // A deleted entry is terminal: a later mark at its new revision, and a
+          // membership choice, both leave it as it is.
+          await mark(gone, after[gone].revision);
+          await invoke(runtime, commands.key("changeMembership"), {
+            space: gone,
+            id: "restore gone",
+            expectedRevision: after[gone].revision,
+            state: "saved",
+          }, "restore gone");
+          expect((await entries())[gone]).toMatchObject({
+            state: "deleted",
+            revision: after[gone].revision,
+          });
+          expect(await view.pull()).toMatchObject({
+            status: "ready",
+            saved: [{ space: live }],
+            deleted: [{ space: gone }],
+            byKind: { loom: { deleted: [{ space: gone }] } },
+          });
+        },
+        undefined,
+        (server) => {
+          const refusing = refusingServer(server);
+          refuse = refusing.refuse;
+          return refusing.server as Server;
+        },
+      );
+    });
+  }
 });
