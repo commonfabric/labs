@@ -136,6 +136,9 @@
  * |                            | toolshed ExecutorHost wiring and the executor    |
  * |                            | test harnesses) marks the serving posture, and   |
  * |                            | it hand-rolls its options deliberately           |
+ * | compileTurns               | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory builds runtimes that      |
+ * |                            | yield while they compile and share a byte cache  |
  *
  * One named departure a caller can opt into: `cfcPosture: "max-enforcement"`
  * (a `CoreParams` field) lays the {@link MAX_ENFORCEMENT_CFC_OPTIONS} bundle
@@ -233,6 +236,7 @@ export const RUNTIME_OPTION_KEYS = [
   "onPatternInstantiated",
   "fetch",
   "servingPosture",
+  "compileTurns",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 
 export type RuntimeOptionKey = (typeof RUNTIME_OPTION_KEYS)[number];

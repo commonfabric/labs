@@ -120,6 +120,7 @@ import {
 } from "./executor/wave.ts";
 import type { OwningRootAddress } from "./ensure-piece-running.ts";
 import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
+import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -1006,6 +1007,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile this runtime takes with the other runtimes that
+   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
+   * yields does not leave them to read a miss and compile the same modules.
+   * When unset, this runtime compiles without waiting for any other.
+   */
+  compileTurns?: CompileTurns;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1451,6 +1460,7 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
+  readonly #compileTurns: CompileTurns | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1653,6 +1663,11 @@ export class Runtime {
   /** The ids of the derived internal cells this runtime's pieces own. */
   get derivedInternalCellIds(): DerivedInternalCellIds {
     return this.#derivedInternalCellIds;
+  }
+
+  /** See `RuntimeOptions.compileTurns`. */
+  get compileTurns(): CompileTurns | undefined {
+    return this.#compileTurns;
   }
 
   /**
@@ -2145,6 +2160,7 @@ export class Runtime {
       // Create harness first (no dependencies on other services)
       this.harness = new Engine(this, {
         hideInternalStackFrames: options.hideInternalStackFrames,
+        interleaveCompile: this.servingPosture ? true : undefined,
       });
 
       this.storageManager = options.storageManager;
@@ -2169,6 +2185,7 @@ export class Runtime {
         namesInstances(this.experimental),
       );
       this.moduleByteCache = options.moduleByteCache;
+      this.#compileTurns = options.compileTurns;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
