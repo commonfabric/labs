@@ -17,6 +17,12 @@ space, and they are partitioned by a **scope** — `space`, `user`, or `session`
 so that per-user and per-session cells are isolated physically rather than by
 convention.
 
+A document's payload is a `FabricValue`, which crosses this package's boundary
+as `fvj1:` text
+([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)):
+`encodeMemoryBoundary()` in `v2.ts` writes one through `jsonFromFabricValue()`,
+and `decodeMemoryBoundary()` reads one back with a memory `LiveEnvironment`.
+
 A write is expressed as an **operation**: `set` replaces a document, `patch`
 applies a list of edits to one, `delete` writes a tombstone, and `sqlite` folds
 a SQLite statement into the same transaction as the cell writes. The patch

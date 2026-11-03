@@ -95,3 +95,133 @@ Each is generated from its cases, in `src/fvj1-conformance.ts` and
 `src/hash-conformance.ts`, by `deno task regenerate-fvj1-conformance` and
 `deno task regenerate-hash-conformance`, and a test fails whenever a fixture and
 the code disagree.
+
+## Module layout
+
+Paths here are under `src/`. Where each part of the model is declared:
+
+- `api.ts` declares the `FabricValue` union and the types beside it, together
+  with the pattern-visible declarations of the special-object classes
+  (`FabricInstance`, `FabricPrimitive`) and their union `FabricSpecialObject`,
+  each as an `interface` plus a `declare const`. `base/api/index.ts` re-exports
+  it as part of the `commonfabric` surface.
+- `interface.ts` declares the classes themselves, the layer types, and the
+  conversion-layer types, and re-exports every type `api.ts` declares.
+- The in-process lifecycle symbols (`DEEP_FREEZE`, `IS_DEEP_FROZEN`) live in
+  `fabric-bases/`, on `BaseFabricInstance` alongside the abstract base that
+  carries them.
+- The codec vocabulary (the `CODEC` symbol, `FabricCodec`, `LiveEnvironment`)
+  lives in `codec-interface/`, and the machinery that acts on it in
+  `codec-common/` -- including `BaseEncodeAct` and `BaseDecodeAct`, which are
+  classes the walk carries rather than contracts a caller implements.
+- The conversion functions are in `convertible-js.ts`.
+- `codecs.ts` pairs the JSON format with the set of fabric classes this package
+  defines, and holds the storage-boundary functions (`jsonFromFabricValue()` and
+  its siblings). It creates a single stateless `JsonCodecEngine` at module load
+  time and reuses it for every encode and decode. The format itself, and the
+  recognizer for text in it, live one layer down in `codec-json/`.
+- Each `FabricInstance` and `FabricPrimitive` class lives in its own file: the
+  `FabricInstance` subclasses `FabricError`, `FabricLink`, `FabricMap`,
+  `FabricSet` and `FabricNativeWrapper` under `fabric-instances/`, with
+  `UnknownValue` and `ProblematicValue` under `codec-common/`; the
+  `FabricPrimitive` subclasses (`FabricEpochNsec`, `FabricEpochDay`,
+  `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
+  `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) under
+  `fabric-primitives/`.
+
+**Where a thing is declared is not where it is imported from**, and the modules
+named here divide on that point. The whole `FabricValue` vocabulary comes from
+`@commonfabric/data-model`, the package's main entry point: the declarations in
+`api.ts` and `interface.ts`, the conversions in `convertible-js.ts`, the clone
+helpers in `value-clone.ts`, and the operations a value of any class is subject
+to -- `deep-freeze.ts`, the hashing in `value-hash/`, the debug renderers in
+`value-debug/`, the comparisons in `comparison/`, and the tag vocabulary in
+`types/`. Of those, one is also an exported subpath: `api.ts` as
+`@commonfabric/data-model/api`, which is how `@commonfabric/api` reaches it.
+`codec-interface/` is internal in the same way, reached through
+`@commonfabric/data-model/codec-common`, which re-exports it. `codec-common/`,
+`fabric-bases/` and `fabric-instances/` are exported subpaths in their own right
+and are imported directly under those names; the main entry point does _not_
+re-export the codec vocabulary, so `LiveEnvironment` and its siblings come from
+`@commonfabric/data-model/codec-common`. Cite a module to say where something is
+defined; consult the package's `exports` map to know where to import it from.
+
+The declarations in `api.ts` must agree with the implementations they mirror,
+and the agreement is asserted at compile time: `api-agreement.ts`, a module
+nothing imports, asserts that each of the three base classes and its declaration
+are mutually assignable, and each concrete class asserts beside its own
+definition that it satisfies its declaration. `runtime/runner/` wires concrete
+implementations into builder exports.
+
+The files and directories, in more detail:
+
+- `index.ts`: Public surface, and the package's main entry point: re-exports the
+  conversion functions (from `convertible-js.ts`), the type declarations (from
+  `interface.ts`), the clone helpers (from `value-clone.ts`), the deep freeze
+  (from `deep-freeze.ts`), the hash (from `value-hash/`), the debug renderers
+  (from `value-debug/`), the tag vocabulary, narrowings, and validators (from
+  `types/`), and the comparisons `valueEqual()`, `valueEqualByWalk()`, and
+  `fabricAwareEqual()` (from `comparison/`).
+- `api.ts`: The pattern-visible declarations: the `FabricValue` union and the
+  types beside it, the three base classes and every concrete class as an
+  `interface` plus a `declare const`, and the debug-rendering option types. It
+  has no imports, so that the type module the sandbox is served can inline it;
+  it is also the `./api` export subpath, which `@commonfabric/api` re-exports.
+- `interface.ts`: The three abstract base classes as classes, the layer types,
+  and the conversion-layer types (`FabricConvertibleJsObject`,
+  `FabricConvertibleJsValue`); re-exports every type `api.ts` declares. Free of
+  runtime imports, so that any module can import it.
+- `api-agreement.ts`: Asserts that each of the three base classes and its
+  `api.ts` declaration are mutually assignable. Nothing imports it; it exists to
+  be type-checked, and everything in it erases at compile time.
+- `convertible-js.ts`: Conversion: `fabricFromConvertibleJsValue`,
+  `shallowFabricFromConvertibleJsValue`, `convertibleJsFromFabricValue`,
+  `isValidFabricConvertibleJsValue`.
+- `fabric-bases/`: The abstract bases a concrete `FabricValue` extends, one per
+  branch of the type hierarchy: `BaseFabricInstance.ts`,
+  `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the
+  implementer's half of the hierarchy; `interface.ts` is the client's, and
+  reaching it does not reach these.
+- `fabric-instances/`: Concrete `FabricInstance` subclasses, each in its own
+  file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`,
+  `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes
+  and what derives from it, `codecClasses()` among them, and `index.ts` is the
+  barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and
+  members of that set, but live in `codec-common/`, existing only as products of
+  a decode fault.
+- `fabric-primitives/`: Concrete `FabricPrimitive` subclasses, each in its own
+  file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`,
+  `FabricEpochDay.ts`, `FabricDurationNsec.ts`, `FabricDurationDay.ts`,
+  `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts`
+  holds the tag vocabularies that range over those classes and imports nothing,
+  the classes being its importers; `impl.ts` holds the set of classes and what
+  derives from it, `codecClasses()` and the schema `type` names among them; and
+  `index.ts` is the barrel.
+- `for-testing-only.ts`: What the package offers to tests alone, under an
+  export-map entry of its own and in no barrel: makers of examples of every
+  concrete `FabricPrimitive` and `FabricInstance` class, each table typed so
+  that a class with no entry stops the build, and one shared instance per
+  primitive maker. The makers keep a stated contract: a new object per call,
+  equal objects from one maker, and unequal objects from two makers of one
+  class, of which every class has at least two. A test that ranges over the
+  classes takes its values from here and holds no table of its own. It also
+  offers internal steps of the package that a test of the public surface cannot
+  reach dependably, each under a name ending `ForTestingOnly`:
+  `float64BytesOfForTestingOnly()` is `value-hash/`'s number-to-bytes step,
+  whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps
+  a `NaN`'s payload, `getFrozenObjectHashCacheHitsForTestingOnly()` counts the
+  hashes `value-hash/`'s deep-frozen-object cache serves, which the public
+  surface cannot tell from hashes computed afresh, and
+  `getContainersHashedForTestingOnly()` counts the arrays and plain objects
+  `value-hash/` feeds a hasher, which is how a test tells a whole-value hash
+  from a small one. Loading it also loads `value-debug/`, which is how a unit
+  test that imports a module by its path gets the debug renderers installed.
+- `value-debug-internal.ts`: The debug renderers as the package's own modules
+  reach them, and what the import-map key `@/value-debug` names: one forwarder
+  per renderer, each calling the renderer of the same name which `value-debug/`
+  installs as it loads. It imports nothing at run time, so any module may import
+  it without a circular load-time dependency, the root class in `fabric-bases/`
+  included. A forwarder throws until `value-debug/` has loaded. Every export-map
+  entry which loads a module that renders loads `value-debug/` too, by way of
+  the `fabric-bases/` barrel, so a program which imports the package has the
+  renderers; `index.ts` re-exports them from `value-debug/` itself.
