@@ -29,16 +29,17 @@ import { getLogger } from "@commonfabric/logger";
 
 import { namesInstances } from "../builder/instance-name.ts";
 import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";
-import { popFrame, pushFrame } from "../builder/pattern.ts";
+import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
 import type { PatternCoverageCollector } from "../pattern-coverage.ts";
-import { type MemorySpace, Runtime } from "../runtime.ts";
+import type { MemorySpace, Runtime } from "../runtime.ts";
 import {
   createModuleCompartmentGlobals,
   createSafeConsoleGlobal,
 } from "../sandbox/compartment-globals.ts";
 import {
-  loadModuleGraph,
+  openModuleGraph,
+  resolveRecordImport,
   runtimeModuleRecords,
   type VirtualModuleRecord,
 } from "../sandbox/esm-module-loader.ts";
@@ -93,15 +94,15 @@ import {
   pretransformProgramForModules,
   transformInjectHelperModule,
 } from "./pretransform.ts";
-import {
-  type CacheableModule,
-  type CompiledModuleArtifact,
-  type EvaluateResult,
-  type Exports,
-  type HarnessedFunction,
-  type ResolvedFabricPin,
-  type RuntimeProgram,
-  type TypeScriptHarnessProcessOptions,
+import type {
+  CacheableModule,
+  CompiledModuleArtifact,
+  EvaluateResult,
+  Exports,
+  HarnessedFunction,
+  ResolvedFabricPin,
+  RuntimeProgram,
+  TypeScriptHarnessProcessOptions,
 } from "./types.ts";
 import {
   attachDeclaredDataFiles,
@@ -246,13 +247,7 @@ function reachableModuleSpecifiers(
     const record = records.get(specifier);
     if (record === undefined) continue;
     for (const importSpecifier of record.imports) {
-      const resolutions = record.resolutions;
-      pending.push(
-        resolutions !== undefined &&
-          Object.hasOwn(resolutions, importSpecifier)
-          ? resolutions[importSpecifier]
-          : importSpecifier,
-      );
+      pending.push(resolveRecordImport(record, importSpecifier));
     }
   }
   return reachable;
@@ -384,7 +379,8 @@ export interface EngineOptions {
 
   /**
    * Drive cold compiles through the per-module interleaved compiler driver,
-   * yielding a macrotask turn between pipeline steps. Defaults to
+   * yielding a macrotask turn between pipeline steps and between the modules a
+   * graph evaluates. Defaults to
    * {@link COMPILE_INTERLEAVES_EVENT_LOOP}: on in the browser runtime worker,
    * where a synchronous compile stalls every queued IPC delivery for its whole
    * duration, off in Deno batch compiles, where the turns are pure overhead. A
@@ -1533,7 +1529,7 @@ export class Engine extends EventTarget {
     graph: CompiledModuleGraph,
     mainSpecifier: string,
     program: Pick<RuntimeProgram, "files" | "dataFiles">,
-  ): EvaluateResult {
+  ): Promise<EvaluateResult> {
     const prefix = `/${id}`;
     return this.#evaluateGraph(graph, mainSpecifier, {
       evalIdPrefix: id,
@@ -1553,12 +1549,14 @@ export class Engine extends EventTarget {
    * that differs between them (prefixed authored paths vs prefix-free cached
    * identities). The graph is assumed already security-verified.
    *
-   * The graph loads synchronously via `importNow` in a locked-down compartment
-   * whose globals are the hardened runtime globals (runtime-module records,
-   * already in the graph, supply the trusted host APIs). The entry namespace
-   * comes back as `main`, alongside the per-module export map.
+   * The graph loads via `importNow` in a locked-down compartment whose globals
+   * are the hardened runtime globals (runtime-module records, already in the
+   * graph, supply the trusted host APIs), one module at a time with a yield ahead
+   * of each ({@link yieldBetweenCompileSteps}), and each module is one synchronous
+   * stretch. The entry namespace comes back as `main`, alongside the per-module
+   * export map.
    */
-  #evaluateGraph(
+  async #evaluateGraph(
     graph: CompiledModuleGraph,
     mainSpecifier: string,
     ctx: {
@@ -1567,8 +1565,9 @@ export class Engine extends EventTarget {
       filesForExports: Source[];
       dataFilesForExports?: string[];
     },
-  ): EvaluateResult {
-    logger.timeStart("evaluateRecordGraph");
+  ): Promise<EvaluateResult> {
+    // Evaluations of this engine can overlap, so this is not a named timer.
+    const evaluationStart = performance.now();
     try {
       // Per-evaluation id, used ONLY to key this evaluation's synthetic
       // source-map names (`${evalId}.js`). The former "verified load id" —
@@ -1654,29 +1653,46 @@ export class Engine extends EventTarget {
         });
       }
 
-      const frame = pushFrame({
+      const MODULE_SPECIFIER_PREFIX = "cf:module/";
+      // One frame for the whole graph: a cell holds the frame it was made under,
+      // and a module's cells reach the modules that import it. The frame goes on
+      // the stack only while a module runs, because other runtimes read that
+      // stack during a yield and would take this frame's runtime for their own.
+      const frame = makeFrame({
         runtime: this.#ctRuntime,
         moduleEvaluation: true,
       });
 
-      let loaded: ReturnType<typeof loadModuleGraph>;
+      let importNow: (specifier: string) => Record<string, unknown>;
       try {
-        loaded = loadModuleGraph(mainSpecifier, {
+        const opened = openModuleGraph(mainSpecifier, {
           records: graph.records,
           globals,
           verify: false, // already verified at compile time
         });
+        for (const specifier of opened.evaluationOrder) {
+          // A runtime module's record only copies a namespace.
+          if (specifier.startsWith(MODULE_SPECIFIER_PREFIX)) {
+            await this.yieldBetweenCompileSteps();
+          }
+          const moduleStart = performance.now();
+          runInFrame(frame, () => opened.importNow(specifier));
+          logger.timeDetailed(
+            () => sourceNameBySpecifier.get(specifier) ?? specifier,
+            moduleStart,
+            "evaluate-module",
+          );
+        }
+        importNow = opened.importNow;
       } catch (error) {
         // Module evaluation runs outside an `exec` call, so errors thrown
         // at module scope would otherwise surface with a censored (empty) or
         // raw-coordinate stack. Materialize + source-map it here (once),
         // matching how invoked-function errors are mapped.
         throw this.#getSESRuntime().mapThrownError(error);
-      } finally {
-        popFrame(frame);
       }
 
-      const main = loaded.namespace as Exports;
+      const main = importNow(mainSpecifier) as Exports;
 
       // Build the per-module export map (keyed by normalized source path) from
       // the SAME load, and map each exported value back to its RuntimeProgram
@@ -1691,14 +1707,13 @@ export class Engine extends EventTarget {
       // its source location is unrecoverable at the point of use — the
       // information exists right here and was simply not written down.
       const sourcePathByIdentity = new Map<string, string>();
-      const MODULE_SPECIFIER_PREFIX = "cf:module/";
       const reachableSpecifiers = reachableModuleSpecifiers(
         graph.records,
         mainSpecifier,
       );
       for (const [path, specifier] of graph.specifierByPath) {
         if (!reachableSpecifiers.has(specifier)) continue;
-        const namespace = loaded.importNow(specifier) as Exports;
+        const namespace = importNow(specifier) as Exports;
         const fileName = ctx.fileNameForPath(path);
         exportMap[fileName] = namespace;
         if (specifier.startsWith(MODULE_SPECIFIER_PREFIX)) {
@@ -1746,7 +1761,7 @@ export class Engine extends EventTarget {
       );
 
       // `graph.registrationSink` was populated by each module's `__cfReg` during
-      // the `importNow` loop above (committed only for modules that evaluated
+      // the evaluation loop above (committed only for modules that evaluated
       // cleanly).
       return {
         main,
@@ -1756,7 +1771,7 @@ export class Engine extends EventTarget {
         registrationsByIdentity: graph.registrationSink,
       };
     } finally {
-      logger.timeEnd("evaluateRecordGraph");
+      logger.time(evaluationStart, "evaluateRecordGraph");
     }
   }
 
@@ -1968,11 +1983,6 @@ export class Engine extends EventTarget {
       );
     }
     verifyModuleGraph(graph.records, mainSpecifier);
-
-    // The SES evaluation below is a single synchronous stretch (~100ms+ for a
-    // system pattern); where compiles interleave, yield first so IPC queued
-    // behind the load runs before it rather than after.
-    await this.yieldBetweenCompileSteps();
 
     return this.#evaluateGraph(graph, mainSpecifier, {
       evalIdPrefix: entryIdentity,

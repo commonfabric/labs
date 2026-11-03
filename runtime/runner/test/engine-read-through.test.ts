@@ -17,7 +17,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { type ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -36,7 +36,8 @@ import {
   STORE_REFRESH_ATTEMPTS,
 } from "../src/executor/space-server.ts";
 import type { WaveCommitSink } from "../src/executor/wave.ts";
-import { readWatermarkSeq, waitForSettled } from "../src/executor/watermark.ts";
+import { waitForSettled } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,

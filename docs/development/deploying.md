@@ -167,6 +167,20 @@ That playbook is `ansible/playbooks/toolshed_binary_deploy.yml` in the
 `/opt/cf/deploy.sh` wrapper described above. Making the download replace what
 it finds, rather than skip it, is a change in that repository.
 
+## The toolshed's heap limit
+
+The toolshed binary is built with `--v8-flags=--max-old-space-size=8192`
+(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
+`dev` and `production` tasks run with the same flag. V8 applies the limit to each
+isolate rather than to the process, so the main thread and the serving worker
+can each reach 8 GiB, and a host's memory has to cover both for every instance
+it runs.
+
+A serving worker keeps each piece a handler started until its space parks, which
+costs about 3.5 MB per Topic on a Topics board. A worker that reaches the limit
+takes its process down. Events still queued survive that, and the restarted
+process handles them.
+
 ## A deploy states when it happened
 
 A toolshed orders the releases of the system patterns it serves by

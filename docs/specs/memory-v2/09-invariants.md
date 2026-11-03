@@ -492,10 +492,10 @@ carrying a distinct message (so a message identifies the clause):
 | whole-document `set` on `of:<space>`, scope space-or-absent | `ACL mutations must replace the space-scoped ACL document` |
 | result is a valid ACL with a concrete OWNER | `ACL must be valid and retain at least one concrete OWNER` |
 
-The last clause admits a deleted space's deletion tombstone too, once the server
-implements INV-15; until then it refuses one with that clause's message, since a
-deletion tombstone is not an access list. None of these clauses is reached for a
-space that is already deleted: INV-15 refuses every commit to one first.
+A commit whose ACL document's value claims to be a deletion tombstone, a value
+with a `deleted` field, is held to INV-15's clauses in place of the last one.
+None of these clauses is reached for a space that is already deleted: INV-15
+refuses every commit to one first.
 
 It holds in **both** `observe` and `enforce`, and is skipped only when
 `MEMORY_ACL_MODE` is `off`, except for a commit that writes a deletion tombstone
@@ -920,9 +920,14 @@ the foreign grant; and on a fresh commit inside the engine's write transaction,
 with an exact replay still answered. The same file's served-change cases cover
 a served change to a deleted space's access list, and
 `runtime/toolshed/test/space-invites.test.ts` the invitation route's
-`space-deleted`. Admitting the commit that writes a deletion tombstone is not
-implemented yet: the server refuses one under INV-12's validity clause, so no
-deletion is committed through it.
+`space-deleted`. The same "a deleted space" cases cover admitting a deletion:
+the sole OWNER's in every mode, answered before every session on the space is
+revoked as `deleted`; the deletion tombstone's shape; another member; a Home;
+a service identity; a patch in `off` mode; and an operator's direct write.
+`runtime/memory/test/v2-server-session-open-proofs.test.ts` covers the chain
+clause, and the Home clause through a chain. The clauses are decided again
+inside the transact's write transaction, which no test reaches with a member
+added in between.
 
 ### INV-16 — Instance-naming admission
 

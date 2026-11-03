@@ -1,4 +1,4 @@
-import { type Config } from "@commonfabric/felt";
+import type { Config } from "@commonfabric/felt";
 
 import ports from "@commonfabric/ports" with { type: "json" };
 

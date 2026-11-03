@@ -1302,8 +1302,10 @@ landed since.
 `cf piece render --cell <reference>` starts the piece in the command's own
 process, renders its UI against an in-process document, and prints the HTML.
 `--no-start` renders the piece's stored state instead of starting it, and
-`--json` prints the HTML inside a JSON record. The references it accepts are
-described under [Cell references](#cell-references).
+`--json` prints the HTML inside a JSON record. Under server execution the
+command starts nothing either way, and renders the view it pulled from the
+server. The references it accepts are described under
+[Cell references](#cell-references).
 
 Without `--watch` the command prints once and exits. It prints when three things
 hold at once: the piece has nothing left to compute, nothing it asked storage
@@ -2282,6 +2284,25 @@ have changed things. Its recorded checkpoint can seed a new follow-up, whether
 the message waited through the restart or arrived afterward. The new run retains
 completed work and marks the prior request as interrupted.
 
+## What a run loads
+
+A run of `cf` loads only the command it addresses. `commands/root.ts` names
+every top-level command with its description and a function that loads it, so
+`cf --help` loads no command and `cf piece call` loads `piece` alone. The root's
+help prints those descriptions, and a test holds them equal to what each command
+declares, so a change to a top-level command's description or positionals is
+made in both places. A new top-level command is a new entry in that table.
+`commands/main.ts` is the whole tree, loaded, for the tools that walk it.
+
+Most of what starting `cf` costs is Deno reading the modules a run can reach
+([`docs/development/imports.md`](../../docs/development/imports.md#what-starting-a-program-reads)),
+so a command that only talks to a running piece reads neither the compiler nor
+the memory engine. `test/start-graph.test.ts` holds those limits. A path in
+`piece` or `cell` that needs the compiler loads it where it needs it, with
+`await import(...)`. The launcher starts `cf` with
+`--unstable-lazy-dynamic-imports`, without which Deno reads what those imports
+name anyway. A compiled binary embeds them all and loads the same subset.
+
 ## One deployment per process
 
 A `cf` process talks to one deployment. Opening a connection writes settings
@@ -2333,16 +2354,48 @@ memo, which names a space once for the life of the process.
 - The launcher spawns the child CLI with `deno run --quiet` so Deno's own
   warnings (npm "Ignored build scripts" banner) never reach users.
 
-### What a read waits for under server execution
+### What a read and a call do under server execution
 
-With server execution on, a read first waits until the serving runtime has
-reacted to every authored commit at or below the server's head as it stands when
-the read begins. The serving runtime runs the handlers and derives what a read
-returns. A `cf cell set` that sends an event returns with the event committed
-and that run still ahead, and a `cf piece call` returns that way under
-`--no-wait`, so the wait is what makes a `cf cell get` that follows one, from
-the same process or another, read what the run stored. With server execution
-off, this runtime runs what it reads, and no such wait occurs.
+With server execution on, the serving runtime runs the handlers and derives what
+a read returns, and `cf` runs no piece. `cf piece call` sends the event, waits
+for the server to confirm the handling, and reads the result off the handling's
+receipt, without loading the pattern unless a payload needs its event contract.
+A tool is the exception: it runs to completion in the command's own process, and
+so does the wish behind `cf wish`.
+
+`cf piece new`, `cf piece setsrc`, and `cf piece link` start nothing either.
+`--no-start` on `cf piece new` still asks the serving loop not to derive the
+piece until something demands it, and on `cf piece link` it changes nothing.
+`--select`, `--schema`, and `--filter` shape what a read returned, with no
+pattern graph and no commit.
+
+`cf cell get`, `cf piece inspect`, `cf piece view`, `cf piece step`, and
+`cf piece
+render` pull what they read from the server. A pull first waits until
+the serving runtime has reacted to every authored commit at or below the
+server's head as it stands when the read begins. A `cf cell set` that sends an
+event returns with the event committed and that run still ahead, and a
+`cf piece call` returns that way under `--no-wait`, so this is what makes a read
+that follows one, from the same process or another, see what the run stored. A
+server that does not report which commits are authored gets no such wait, and
+the command says so on stderr, since the read may not show a run a send just
+started.
+
+A pull then asks the server for the value, as a client rendering it would, and
+waits until the serving loop has settled with that demand included
+(`pullFromServer()`, `docs/features/view-scoped-client-replication.md`), so a
+derived value nothing else was demanding is current when it is read. A server
+with no view protocol, or one that predates `read` views, gets no such request:
+the command says so on stderr and reads what the server has stored.
+
+`cf piece step` is therefore only a pull, and writes nothing, and `--step` on
+`cf
+cell get` adds nothing to the read. `cf cell get --no-run` skips both waits
+and returns what the store holds now, which for a derived value nothing has
+demanded yet is nothing, reported as `null`.
+
+With server execution off, this runtime runs what it reads, and none of this
+applies.
 
 ### What a call refuses before it dispatches
 
@@ -2437,10 +2490,11 @@ cf cell get --cell ID items \
 
 A path read first resolves the piece's canonical result and metadata, then pulls
 the selected path. It does not first synchronize the producer's entire result
-schema. Reading the root still requests the whole result. `--step` also starts
-the piece and waits for asynchronous work, including session-scoped store
-queries and their reactive updates, to settle before reading. Its execution can
-demand inputs beyond the selected output. Missing-path diagnostics can require a
+schema. Reading the root still requests the whole result. With server execution
+off, `--step` also starts the piece and waits for asynchronous work, including
+session-scoped store queries and their reactive updates, to settle before
+reading, and its execution can demand inputs beyond the selected output. Under
+server execution it starts nothing. Missing-path diagnostics can require a
 broader root read.
 
 `cf piece call` writes them **past the `--` that closes the callable's

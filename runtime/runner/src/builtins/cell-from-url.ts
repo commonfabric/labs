@@ -1,11 +1,11 @@
 import { isDID } from "@commonfabric/identity/did";
 
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { type FabricUrlTarget, parseFabricUrl } from "../fabric-url.ts";
 import { getMetaLink } from "../link-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { RawBuiltinResult } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
+import type { Action } from "../scheduler.ts";
 import type { URI } from "../sigil-types.ts";
 import { slugIdForSpace } from "../slugs.ts";
 import {

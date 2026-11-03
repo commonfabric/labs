@@ -7,7 +7,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type LanguageModel } from "ai";
+import type { LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 
 import { CACHE_DIR, requestsCaching } from "./cache.ts";

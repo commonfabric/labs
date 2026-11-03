@@ -53,6 +53,7 @@ import {
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
+  type SessionViewHandle,
   STREAM_ENTRIES_DOC_PREFIX,
   type StreamEventEntry,
   type StreamEventsDocValue,
@@ -73,7 +74,7 @@ import type {
   ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
-import { ViewPlanPublisher } from "./view-plan-publisher.ts";
+import { viewLifetimeKey, ViewPlanPublisher } from "./view-plan-publisher.ts";
 
 /** The deferral backstop cadence: with NO input arriving at all, a
  * deferred event retries once per tick and hardens into the DROP
@@ -179,7 +180,8 @@ import {
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
-import { readWatermarkSeq, watermarkDocLink } from "./watermark.ts";
+import { watermarkDocLink } from "./watermark.ts";
+import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
   bumpDerivedCommits,
   type ServingLoopStats,
@@ -1124,6 +1126,12 @@ export class SpaceServer implements TransactionSealDestination {
   #demandNoteGeneration = 0;
 
   #passDemandNoteGen = 0;
+
+  /** The `read` views the last demand pass's rows include. */
+  #demandedReadViews: ReadonlySet<string> = new Set();
+
+  /** Whether the last publish left a `read` view without its answer. */
+  #readViewUnanswered = false;
 
   /** The demand wake's grace timer (see noteDemandChanged). */
   #demandWakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2286,7 +2294,9 @@ export class SpaceServer implements TransactionSealDestination {
    * therefore lead to multiple passes. Input-driven cycles reconcile demand
    * independently of the timer; the grace is a coalescing interval, not a
    * minimum wait for every new demand. */
-  noteDemandChanged(reason: "watch" | "push-growth" | "warm" = "watch"): void {
+  noteDemandChanged(
+    reason: "watch" | "push-growth" | "warm" | "read-view" = "watch",
+  ): void {
     // MINOR-1: a fresh demand note — bump the generation so a pass that
     // already snapshotted its rows re-latches on completion.
     this.#demandNoteGeneration += 1;
@@ -2302,7 +2312,7 @@ export class SpaceServer implements TransactionSealDestination {
       this.#noteGrowthWakeForSettle();
     } else if (reason === "warm") {
       this.#options.stats.demand.warmWakes += 1;
-    } else {
+    } else if (reason === "watch") {
       this.#options.stats.demand.watchWakes += 1;
     }
     if (this.#demandWakeTimer !== undefined) return;
@@ -3503,7 +3513,7 @@ export class SpaceServer implements TransactionSealDestination {
           this.#options.onWaveCycle?.();
         }
         if (!this.#active || this.#parkRequested) break;
-        if (!this.#hasWork()) {
+        if (!this.#hasWork() && !this.#readViewAnswerDue()) {
           // The next input starts a burst, whose first consequence the base
           // deadline bounds, however long the settles before the quiet grew.
           this.#grownFlushDeadlineMs = undefined;
@@ -5629,6 +5639,11 @@ export class SpaceServer implements TransactionSealDestination {
     // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
     this.#passDemandNoteGen = this.#demandNoteGeneration;
+    // Listed ahead of the rows: the server publishes a view and the demand it
+    // holds together, so the rows include every view this list holds.
+    const views = await this.#options.server.viewInterestsForSpace(
+      this.#options.space,
+    );
     const demand = await this.#options.server.demandForSpace(
       this.#options.space,
       // The serving session's own watches are its graph's reads, not
@@ -5638,6 +5653,11 @@ export class SpaceServer implements TransactionSealDestination {
     // A park while the request was out cleared the registry this pass
     // reconciles into and disposed the runtime whose writers it marks.
     if (!this.#active || this.#runtime !== runtime) return;
+    this.#demandedReadViews = new Set(
+      views.filter(({ view }) => view.mode === "read").map(({ handle }) =>
+        viewLifetimeKey(handle)
+      ),
+    );
     const changed = this.#demandMirror.update(demand);
     // WARM DEMAND KEYS (the explicit warm request's demand half — see
     // #warmDemandKeys): the staged instances enter the key set
@@ -8175,13 +8195,50 @@ export class SpaceServer implements TransactionSealDestination {
    * walks an invalidated UI again or plans over its last walk. */
   async #publishViewPlan(runtime: Runtime, quiescent: boolean): Promise<void> {
     const publishStart = performance.now();
-    await this.#viewPlanPublisher.publish(
+    this.#readViewUnanswered = await this.#viewPlanPublisher.publish(
       runtime,
       this.#options.server,
       this.#options.space,
-      { quiescent },
+      {
+        quiescent,
+        settled: (handle) => quiescent && this.#readViewSettled(handle),
+      },
     );
     timing.time(publishStart, "executor", "wave", "publish");
+  }
+
+  /**
+   * Whether the `read` view `handle` names has its answer: the last demand pass
+   * included it, and the loop owes nothing since. A view that pass did not list
+   * registered after it, so it asks for a pass that will.
+   */
+  #readViewSettled(handle: SessionViewHandle): boolean {
+    if (!this.#nothingOwed()) return false;
+    if (this.#demandedReadViews.has(viewLifetimeKey(handle))) return true;
+    this.noteDemandChanged("read-view");
+    return false;
+  }
+
+  /**
+   * Whether a cycle run now can answer a `read` view the last publish could
+   * not. Whatever is still owed wakes the loop when it arrives; once nothing
+   * is, only a settlement the flush deadline cut stood in the way, and no input
+   * follows one of those to wake the loop.
+   */
+  #readViewAnswerDue(): boolean {
+    return this.#readViewUnanswered && this.#nothingOwed();
+  }
+
+  /**
+   * Whether the settlement that just ended leaves this loop owing nothing it
+   * knows of: its demand pass saw every demand note, including the one a view
+   * registering sends, and no commit, load or input is outstanding.
+   */
+  #nothingOwed(): boolean {
+    return this.#demandNoteGeneration === this.#passDemandNoteGen &&
+      !this.#pendingDemandWake && !this.#pendingStructureRetryWake &&
+      this.#structureLoadPass === undefined &&
+      this.#commitInFlight === undefined && !this.#hasWorkBesidesOwnEchoes();
   }
 
   /** Dispose the serving runtime under a DEADLINE (park liveness — the
@@ -8439,6 +8496,7 @@ export class SpaceServer implements TransactionSealDestination {
       !(offerRuntime && detached && wave === undefined && effectsSettled &&
         inFlight === undefined && this.#offerRuntime())
     ) {
+      this.#refuseWritesWhileDisposing();
       try {
         await this.#disposeRuntimeTimeboxed(reason, inFlight);
       } catch (error) {
@@ -8498,6 +8556,32 @@ export class SpaceServer implements TransactionSealDestination {
       return false;
     }
     return this.#retainedAs !== undefined;
+  }
+
+  /**
+   * Helper for `#parkResources()`, which has the runtime it is about to
+   * dispose close its transactions into this tenure's own destination, whose
+   * `seal()` refuses each one now that the tenure has parked. The dispose runs
+   * the runtime's scheduler to idle, and a transaction opened with no
+   * destination installed would commit straight to the store, outside any wave
+   * and under no lease (serving-loop.md §2's stop-committing MUST). A runtime
+   * that still has a destination installed already refuses: this tenure's,
+   * where the park could not detach it, or the fence of a kept instance whose
+   * keeping then failed.
+   */
+  #refuseWritesWhileDisposing(): void {
+    const runtime = this.#runtime;
+    if (runtime === undefined || runtime.sealDestinationInstalled) return;
+    try {
+      runtime.installSealDestination(this);
+    } catch (error) {
+      logger.warn("park-refusal-install-failed", () => [
+        `space ${this.#options.space}: installing the refusing seal ` +
+        "destination for the park's dispose failed; the runtime is disposed " +
+        "without it",
+        error,
+      ]);
+    }
   }
 
   /**

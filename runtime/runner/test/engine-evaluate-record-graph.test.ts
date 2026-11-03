@@ -111,7 +111,7 @@ describe("Engine.evaluateRecordGraph()", () => {
     }(runtime);
 
     try {
-      const result = evaluateOnlyEngine.evaluateRecordGraph(
+      const result = await evaluateOnlyEngine.evaluateRecordGraph(
         id,
         graph,
         mainSpecifier,
@@ -191,7 +191,7 @@ describe("Engine.evaluateRecordGraph()", () => {
       ),
     ).toBe(true);
 
-    const result = engine.evaluateRecordGraph(
+    const result = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -257,7 +257,7 @@ describe("Engine.evaluateRecordGraph()", () => {
       ),
     ).toEqual(["cf:data-file/data/cities.json", "cf:data-file/data/notes.txt"]);
 
-    const result = engine.evaluateRecordGraph(
+    const result = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -293,7 +293,7 @@ describe("Engine.evaluateRecordGraph()", () => {
     const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
       program,
     );
-    const result = engine.evaluateRecordGraph(
+    const result = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -1057,7 +1057,7 @@ describe("Engine.evaluateRecordGraph()", () => {
     );
     expect(joinedBodies(graph)).toContain("__cfHelpers.__cf_data(");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -1101,7 +1101,7 @@ describe("Engine.evaluateRecordGraph()", () => {
     );
     expect(joinedBodies(graph)).toContain("__cfHelpers.__cf_data(");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,

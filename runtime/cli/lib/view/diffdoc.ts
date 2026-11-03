@@ -24,7 +24,7 @@ import { spawnSync } from "@node/child_process";
 import { spliceAll } from "@commonfabric/collections/splice";
 
 import { cpLen } from "./ansi.ts";
-import { type DiffFile, type DiffHunk, type DiffModel } from "./diff.ts";
+import type { DiffFile, DiffHunk, DiffModel } from "./diff.ts";
 import type { Language } from "./languages/language.ts";
 import {
   canRenderDiffLines,

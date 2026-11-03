@@ -55,9 +55,9 @@ import {
 } from "../query-result-proxy.ts";
 import { inSpaceRootCause } from "../in-space-root-cause.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
-import { Runtime } from "../runtime.ts";
+import type { Runtime } from "../runtime.ts";
 import { hardenVerifiedFunction } from "../sandbox/function-hardening.ts";
-import {
+import type {
   IExtendedStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
@@ -1406,19 +1406,19 @@ function anonymousSpaceName(frame: Frame): string {
 }
 
 /**
- * Pushes a frame that inherits the runtime, transaction, space and
- * implementation identity of the frame beneath it, unless it is a
+ * Builds a frame that inherits the runtime, transaction, space and
+ * implementation identity of the frame now on top of the stack, unless it is a
  * module-evaluation frame. A module is evaluated whenever it is first needed,
  * which can be while an action awaits with its own frame still on the stack; a
  * module-evaluation frame inherits nothing from that frame, so the cells a
  * pattern body mints are not bound to the waiting action's space or
- * transaction.
+ * transaction. The frame is on no stack until something puts it there.
  */
-export function pushFrame(frame: Partial<Frame> = {}): Frame {
+export function makeFrame(frame: Partial<Frame> = {}): Frame {
   const parent = getTopFrame();
   const inherited = frame.moduleEvaluation ? undefined : parent;
 
-  const result = {
+  return {
     parent,
     reactives: new Set(),
     generatedIdCounter: 0,
@@ -1431,9 +1431,28 @@ export function pushFrame(frame: Partial<Frame> = {}): Frame {
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...frame,
   };
+}
 
+/** Pushes a frame built as {@link makeFrame} builds it, and returns it. */
+export function pushFrame(frame: Partial<Frame> = {}): Frame {
+  const result = makeFrame(frame);
   pushOntoFrameStack(result);
   return result;
+}
+
+/**
+ * Runs `fn` with `frame` on top of the current frame context's stack, and takes
+ * it off again before returning. Work that runs under one frame in several
+ * synchronous stretches uses this, so that between its stretches the frame is on
+ * no stack where other code would read it.
+ */
+export function runInFrame<R>(frame: Frame, fn: () => R): R {
+  pushOntoFrameStack(frame);
+  try {
+    return fn();
+  } finally {
+    popFrame(frame);
+  }
 }
 
 /**

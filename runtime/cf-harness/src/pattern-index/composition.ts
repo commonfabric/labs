@@ -31,7 +31,7 @@ import {
 } from "@commonfabric/runner";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { type HarnessPatternIndexClientFactory } from "./factory.ts";
+import type { HarnessPatternIndexClientFactory } from "./factory.ts";
 
 /**
  * The `RuntimeProgram` a published program compiles as. Every field the index

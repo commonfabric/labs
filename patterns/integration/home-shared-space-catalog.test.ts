@@ -595,8 +595,10 @@ describe("Home catalog revisions across execution modes", () => {
         .revision;
       expect(restored).not.toBe(oldRevision);
 
-      // Serving execution can admit an ID first handled on a client. Its
-      // receipt stays first-writer-wins, but the handler's writes still commit.
+      // Serving execution can admit an ID first handled on a client. A served
+      // receipt derives from the event alone and a client's from the handler's
+      // bindings too, so this handling writes a receipt of its own, and its
+      // writes commit.
       const servedMembership = home.key("changeSharedSpaceMembership");
       expect(
         await invoke(runtime, servedMembership, {
@@ -607,7 +609,7 @@ describe("Home catalog revisions across execution modes", () => {
       ).toEqual({
         status: "applied",
         space: registration.space,
-        id: archive.id,
+        id: "new-archive",
       });
       const archived = (await home.key("sharedSpaceCatalog").pull())
         .entries[registration.space];

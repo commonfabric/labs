@@ -102,6 +102,7 @@ import {
   type SessionSync,
   type SessionViewHandle,
   type SessionViewInterest,
+  type SetOperation,
   type SpaceInviteRequest,
   type SqliteDbRef,
   type SqliteNamedParamsWire,
@@ -793,6 +794,74 @@ const commitTouchesAclDoc = (
   return operations.some((operation) =>
     "id" in operation && operation.id === id
   );
+};
+
+/**
+ * A transact refused inside its write transaction, which rolls the
+ * transaction back; `refusal` is the error the transact answers with.
+ */
+class CommitRefusal extends Error {
+  readonly #refusal: V2Error;
+
+  /** Constructs an instance answering with `refusal`. */
+  constructor(refusal: V2Error) {
+    super(refusal.message);
+    this.#refusal = refusal;
+  }
+
+  /** The error the transact answers with. */
+  get refusal(): V2Error {
+    return this.#refusal;
+  }
+}
+
+/**
+ * Whether `commit` sets `space`'s ACL document to a value that claims to be
+ * a deletion tombstone, a plain object with a `deleted` field, which INV-15's
+ * rule decides rather than the list's validity.
+ */
+const isDeletionAttempt = (space: string, commit: ClientCommit): boolean => {
+  const id = aclDocId(space);
+  return commit.operations.some((operation) => {
+    if (operation.op !== "set" || operation.id !== id) return false;
+    const value = operation.value?.value;
+    return isFabricPlainObject(value) && Object.hasOwn(value, "deleted");
+  });
+};
+
+/**
+ * The refusal of `commit`, which touches `space`'s ACL document, under
+ * INV-12's shape clauses, or `null` when it is a single whole-document,
+ * space-scoped `set` of that document on the default branch.
+ */
+const aclCommitShapeRefusal = (
+  space: string,
+  commit: ClientCommit,
+): V2Error | null => {
+  if (commit.branch !== undefined && commit.branch !== "") {
+    return toError(
+      "ProtocolError",
+      "ACL mutations are only valid on the default branch",
+    );
+  }
+  if (commit.operations.length !== 1) {
+    return toError(
+      "ProtocolError",
+      "ACL mutations must be an ACL-only commit",
+    );
+  }
+  const operation = commit.operations[0];
+  if (
+    operation.op !== "set" ||
+    operation.id !== aclDocId(space) ||
+    (operation.scope !== undefined && operation.scope !== "space")
+  ) {
+    return toError(
+      "ProtocolError",
+      "ACL mutations must replace the space-scoped ACL document",
+    );
+  }
+  return null;
 };
 
 /**
@@ -2109,6 +2178,7 @@ class Connection {
     const deleted = await this.#server.deletedSpaceRefusal(space);
     if (deleted !== null) {
       this.#send({ type: "response", requestId, error: deleted });
+      this.#server.noticeDeletedSpace(space);
       return false;
     }
     return this.#requireSessionStanding(requestId, space, sessionId, handle);
@@ -2129,6 +2199,7 @@ class Connection {
     const deleted = this.#server.deletedSpaceRefusalNow(space);
     if (deleted !== null) {
       this.#send({ type: "response", requestId, error: deleted });
+      this.#server.noticeDeletedSpace(space);
       return false;
     }
     return this.#requireSessionStanding(requestId, space, sessionId, handle);
@@ -2455,7 +2526,9 @@ class Connection {
         }
         // Publishing inside the per-space transaction lock makes the verdict
         // visible before any fan-out for the same space can acquire that lock.
+        let refusedDeleted = false;
         await this.#server.transact(parsed, (verdict) => {
+          refusedDeleted = verdict.error?.deleted === true;
           this.#send(verdict);
         });
         // A self-deauthorizing ACL commit defers the writer's terminal
@@ -2464,6 +2537,9 @@ class Connection {
           parsed.space,
           parsed.sessionId,
         );
+        // A deletion that landed after this command's own check, and that
+        // the transact found instead, is noticed as that check's is.
+        if (refusedDeleted) this.#server.noticeDeletedSpace(parsed.space);
         return;
       }
       case "graph.query":
@@ -4304,7 +4380,10 @@ export class Server {
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    committer: Pick<SessionState, "principal" | "genesisRoot" | "spaceKind">,
+    committer: Pick<
+      SessionState,
+      "principal" | "capabilityPrincipal" | "genesisRoot" | "spaceKind"
+    >,
     commit: ClientCommit,
   ): V2Error | null {
     // A deleted space is refused ahead of the shape and genesis checks, in
@@ -4339,6 +4418,12 @@ export class Server {
         );
       }
     }
+    // A commit that writes a deletion tombstone is held to INV-12's shape
+    // and INV-15's clauses in every mode, `off` included, and to nothing
+    // else of the list's validity.
+    if (isDeletionAttempt(space, commit)) {
+      return this.#deletionCommitRefusal(engine, space, committer, commit);
+    }
     if (this.#aclMode() === "off") return null;
 
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
@@ -4357,29 +4442,9 @@ export class Server {
       return null;
     }
 
-    if (commit.branch !== undefined && commit.branch !== "") {
-      return toError(
-        "ProtocolError",
-        "ACL mutations are only valid on the default branch",
-      );
-    }
-    if (commit.operations.length !== 1) {
-      return toError(
-        "ProtocolError",
-        "ACL mutations must be an ACL-only commit",
-      );
-    }
-    const operation = commit.operations[0];
-    if (
-      operation.op !== "set" ||
-      operation.id !== aclDocId(space) ||
-      (operation.scope !== undefined && operation.scope !== "space")
-    ) {
-      return toError(
-        "ProtocolError",
-        "ACL mutations must replace the space-scoped ACL document",
-      );
-    }
+    const shape = aclCommitShapeRefusal(space, commit);
+    if (shape !== null) return shape;
+    const operation = commit.operations[0] as SetOperation;
     const acl = operation.value?.value;
     if (!isACL(acl) || !hasConcreteOwner(acl)) {
       return toError(
@@ -4395,6 +4460,60 @@ export class Server {
       return toError(
         "AuthorizationError",
         `Only the space identity or a service DID may initialize ${space}`,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Helper for {@link #validateAclCommit} and the transact's write
+   * transaction, which decides `commit`, writing a deletion tombstone to
+   * `space`'s ACL document, against INV-15: `null` to admit it, or the
+   * refusal. After INV-12's shape clauses, it is refused unless its deletion
+   * tombstone names `committer` and nothing else, the space is not a Home
+   * (its stored list granting its own DID OWNER while it declares no kind),
+   * and the stored list is valid with one entry, at OWNER, naming
+   * `committer` or the principal its capability resolves to through a proof
+   * chain. A service DID's implicit OWNER does not count: the stored list
+   * has to name the principal.
+   */
+  #deletionCommitRefusal(
+    engine: Engine.Engine,
+    space: string,
+    committer: Pick<SessionState, "principal" | "capabilityPrincipal">,
+    commit: ClientCommit,
+  ): V2Error | null {
+    const shape = aclCommitShapeRefusal(space, commit);
+    if (shape !== null) return shape;
+    const tombstone = (commit.operations[0] as SetOperation).value?.value;
+    if (
+      !isDeletionTombstone(tombstone) ||
+      committer.principal === undefined ||
+      tombstone.deleted.by !== committer.principal
+    ) {
+      return toError(
+        "ProtocolError",
+        "A deletion tombstone must name the deleting principal and nothing " +
+          "else",
+      );
+    }
+    const state = this.#aclState(engine, space);
+    if (
+      state.kind === "valid" && state.acl[space] === "OWNER" &&
+      this.#spaceKindOf(engine) === undefined
+    ) {
+      return toError("AuthorizationError", "A Home space cannot be deleted");
+    }
+    const entries = state.kind === "valid" ? Object.entries(state.acl) : [];
+    const [member, capability] = entries[0] ?? [];
+    if (
+      entries.length !== 1 || capability !== "OWNER" ||
+      (member !== committer.principal &&
+        member !== committer.capabilityPrincipal)
+    ) {
+      return toError(
+        "AuthorizationError",
+        `Only the sole member of ${space} may delete it`,
       );
     }
     return null;
@@ -4464,23 +4583,30 @@ export class Server {
   }
 
   /**
-   * Writer sessions that de-authorized themselves in a commit: their
-   * `session/revoked` is held until after the transact verdict goes out.
+   * Writer sessions that de-authorized themselves in a commit, a deletion
+   * among them: their `session/revoked`, for its connection and with its
+   * reason, is held until after the transact verdict goes out.
    */
-  #deferredSelfRevocations = new Map<string, string | null>();
+  #deferredSelfRevocations = new Map<
+    string,
+    {
+      connectionId: string | null;
+      reason: SessionRevokedMessage["reason"];
+    }
+  >();
 
   deliverDeferredSelfRevocation(space: string, sessionId: string): void {
     const key = `${space}\0${sessionId}`;
-    const connectionId = this.#deferredSelfRevocations.get(key);
-    if (connectionId === undefined) {
+    const deferred = this.#deferredSelfRevocations.get(key);
+    if (deferred === undefined) {
       return;
     }
     this.#deferredSelfRevocations.delete(key);
-    if (connectionId !== null) {
-      this.#connections.get(connectionId)?.revokeSession(
+    if (deferred.connectionId !== null) {
+      this.#connections.get(deferred.connectionId)?.revokeSession(
         space,
         sessionId,
-        "unauthorized",
+        deferred.reason,
       );
     }
   }
@@ -4502,6 +4628,11 @@ export class Server {
     space: string,
     writerSessionId?: string,
   ): void {
+    // A deleted space leaves no session open, in any mode.
+    if (this.#aclState(engine, space).kind === "deleted") {
+      this.#revokeDeletedSpaceSessions(space, writerSessionId);
+      return;
+    }
     if (this.#aclMode() !== "enforce") return;
     for (const session of this.#sessions.sessionsForSpace(space)) {
       // A delegated READ binding (OW31) is judged as its acting user,
@@ -4552,10 +4683,10 @@ export class Server {
         // after the verdict: the session is detached, so no marker frame
         // can ever reach it, and the revocation is what releases the
         // client's parked accept (consumer-teardown application).
-        this.#deferredSelfRevocations.set(
-          `${space}\0${session.id}`,
-          session.ownerConnectionId,
-        );
+        this.#deferredSelfRevocations.set(`${space}\0${session.id}`, {
+          connectionId: session.ownerConnectionId,
+          reason: "unauthorized",
+        });
         continue;
       }
       if (session.ownerConnectionId !== null) {
@@ -4566,6 +4697,45 @@ export class Server {
         );
       }
     }
+  }
+
+  /**
+   * Revokes every session open on `space`, which is deleted, with the
+   * `session/revoked` reason `deleted`, in every mode, and records no
+   * admission wait for any of them, since none comes (INV-15). The session
+   * that committed the deletion (`writerSessionId`) is dropped from the
+   * registry at once and gets its revocation after its transact response,
+   * as a member's session does when it removes its own entry.
+   */
+  #revokeDeletedSpaceSessions(space: string, writerSessionId?: string): void {
+    for (const session of this.#sessions.sessionsForSpace(space)) {
+      this.#sessions.remove(space, session.id);
+      if (session.id === writerSessionId) {
+        this.#deferredSelfRevocations.set(`${space}\0${session.id}`, {
+          connectionId: session.ownerConnectionId,
+          reason: "deleted",
+        });
+        continue;
+      }
+      if (session.ownerConnectionId !== null) {
+        this.#connections.get(session.ownerConnectionId)?.revokeSession(
+          space,
+          session.id,
+          "deleted",
+        );
+      }
+    }
+  }
+
+  /**
+   * Revokes every session still open on `space`, which a command has just
+   * found deleted, with the reason `deleted`. A deletion committed through
+   * another connection reaches this server no other way: no commit of its
+   * own announces it. A connection calls this once it has sent the refusal,
+   * so a session's command is answered before its revocation (INV-15).
+   */
+  noticeDeletedSpace(space: string): void {
+    this.#revokeDeletedSpaceSessions(space);
   }
 
   /**
@@ -5102,6 +5272,17 @@ export class Server {
   ): Promise<Engine.AppliedCommit> {
     return await this.#withSpacePublicationLock(space, async () => {
       const engine = await this.#openEngine(space);
+      // Only a session's commit, by the space's sole member, deletes a
+      // space, so no direct write writes a deletion tombstone, in any mode
+      // (INV-15).
+      if (
+        id === aclDocId(space) && isFabricPlainObject(value) &&
+        Object.hasOwn(value, "deleted")
+      ) {
+        throw new Engine.ProtocolError(
+          "direct writes may not delete a space",
+        );
+      }
       if (this.#aclMode() !== "off") {
         if (id === aclDocId(space)) {
           throw new Engine.ProtocolError(
@@ -6210,6 +6391,8 @@ export class Server {
       // every mode, an invitation it carries included (INV-15).
       const deleted = await this.deletedSpaceRefusal(message.space);
       if (deleted !== null) {
+        // Any session still open on the space learns of the deletion too.
+        this.noticeDeletedSpace(message.space);
         return respondTypedError<SessionOpenResult>(message.requestId, deleted);
       }
       // An open naming a principal rests on the connection's authentication
@@ -7503,6 +7686,25 @@ export class Server {
                 try {
                   engineDecided = true;
                   return Engine.runAtomicCommit(engine, (apply) => {
+                    // A deletion is decided again inside the write
+                    // transaction, against the list as stored there, so a
+                    // member added through another connection since the
+                    // check above is never deleted with the space (INV-15).
+                    const deleting = isDeletionAttempt(
+                      message.space,
+                      message.commit,
+                    );
+                    if (deleting) {
+                      const refusal = this.#deletionCommitRefusal(
+                        engine,
+                        message.space,
+                        session,
+                        message.commit,
+                      );
+                      if (refusal !== null) throw new CommitRefusal(refusal);
+                    }
+                    const live = !deleting &&
+                      this.#aclState(engine, message.space).kind !== "deleted";
                     const applied = apply({
                       sessionId: message.sessionId,
                       space: message.space,
@@ -7518,6 +7720,20 @@ export class Server {
                       // (protocol.md §1).
                       commitClass: "authored",
                     });
+                    // No commit other than an admitted deletion leaves a
+                    // deletion tombstone, a patch in `off` mode included.
+                    if (
+                      live &&
+                      this.#aclState(engine, message.space).kind === "deleted"
+                    ) {
+                      throw new CommitRefusal(
+                        toError(
+                          "ProtocolError",
+                          "ACL mutations must replace the space-scoped ACL " +
+                            "document",
+                        ),
+                      );
+                    }
                     if (marks) {
                       markedNow = Engine.recordInstanceNameMark(
                         engine,
@@ -7680,6 +7896,12 @@ export class Server {
             ok: commit,
           };
         } catch (error) {
+          if (error instanceof CommitRefusal) {
+            return respondTypedError<Engine.AppliedCommit>(
+              message.requestId,
+              error.refusal,
+            );
+          }
           // The engine's own check, inside the write transaction, found a
           // deletion committed after the server's: the transact gets the
           // refusal the server's check would have given (INV-15).
@@ -8105,6 +8327,7 @@ export class Server {
   /** Installs delivery roots for a still-current view under its READ authority. */
   async setViewSelection(space: string, handle: SessionViewHandle, selection: {
     generation: number;
+    settled?: true;
     delivery: readonly ViewQuery[];
     eligibleActions?: readonly string[];
     pieces?: ViewPlan["pieces"];
@@ -8240,6 +8463,7 @@ export class Server {
         id: view.id,
         revision: view.revision,
         generation: selection?.generation ?? 0,
+        ...(selection?.settled === true ? { settled: true as const } : {}),
         eligibleActions: [...(selection?.eligibleActions ?? [])],
         pieces: [...(selection?.pieces ?? [])],
         inputs: [...(selection?.inputs ?? [])],

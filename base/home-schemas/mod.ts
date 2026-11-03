@@ -14,8 +14,8 @@
  * safely import schemas from here.
  */
 
-import { JSONSchema } from "@commonfabric/api";
-import { Schema } from "@commonfabric/api/schema";
+import type { JSONSchema } from "@commonfabric/api";
+import type { Schema } from "@commonfabric/api/schema";
 
 export {
   type FavoriteAddress,

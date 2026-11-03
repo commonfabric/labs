@@ -3,7 +3,7 @@ import { BaseCodecEngine } from "@/codec-common";
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { RealmDecodeAct } from "./RealmDecodeAct.ts";
 import { RealmEncodeAct } from "./RealmEncodeAct.ts";
-import { type RealmCodecValue, type RealmEncodedValue } from "./interface.ts";
+import type { RealmCodecValue, RealmEncodedValue } from "./interface.ts";
 
 /**
  * Whole-value codec engine for the realm-crossing wire format: the form a

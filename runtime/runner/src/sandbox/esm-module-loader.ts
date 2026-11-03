@@ -12,9 +12,11 @@ import { verifyModuleGraph } from "./module-record-verifier.ts";
  *
  * This version uses SES "virtual" (third-party) module records — `{ imports,
  * exports, execute }` — because this build of `ses` does not expose a
- * `ModuleSource`/`StaticModuleRecord` constructor. Records load synchronously,
- * preserving the scheduler's synchronous execution contract, and import cycles
- * resolve through lazy `compartment.importNow` inside `execute`.
+ * `ModuleSource`/`StaticModuleRecord` constructor. Each record evaluates
+ * synchronously, preserving the scheduler's synchronous execution contract, and
+ * import cycles resolve through lazy `compartment.importNow` inside `execute`.
+ * A caller that must not hold its thread for a whole graph evaluates it a module
+ * at a time ({@link openModuleGraph}).
  */
 
 /** A SES third-party (virtual) module record. */
@@ -99,13 +101,106 @@ export function importModuleGraphNow(
  * Like {@link importModuleGraphNow} but returns the loaded entry namespace plus
  * an `importNow` bound to the SAME compartment, so additional already-loaded
  * module specifiers can be retrieved (as singletons) without re-instantiating
- * the graph. Used by the Engine to build the per-module export map from one load.
+ * the graph.
  */
 export function loadModuleGraph(
   entrySpecifier: string,
   options: SesModuleLoaderOptions,
 ): {
   namespace: Record<string, unknown>;
+  importNow: (specifier: string) => Record<string, unknown>;
+} {
+  const { evaluationOrder, importNow } = openModuleGraph(
+    entrySpecifier,
+    options,
+  );
+  for (const specifier of evaluationOrder) importNow(specifier);
+  return { namespace: importNow(entrySpecifier), importNow };
+}
+
+/**
+ * Returns the specifier that `importSpecifier` resolves to for `record`: its
+ * entry in the record's `resolutions`, and otherwise the specifier itself.
+ */
+export function resolveRecordImport(
+  record: VirtualModuleRecord,
+  importSpecifier: string,
+): string {
+  const { resolutions } = record;
+  return resolutions !== undefined &&
+      Object.hasOwn(resolutions, importSpecifier)
+    ? resolutions[importSpecifier]
+    : importSpecifier;
+}
+
+/**
+ * Helper for {@link openModuleGraph}: returns the specifiers to import, in
+ * order, so that each import evaluates as little as it can.
+ *
+ * A compiled body evaluates each import as it reaches that import's `require`,
+ * nested inside its own evaluation, and `imports` lists those in the order the
+ * body reaches them. So a depth-first walk of `imports`, listing each module
+ * after its imports, finishes modules in the order that importing the entry
+ * alone finishes them, and each body then finds its imports already evaluated.
+ * Only code a body runs ahead of an `import` statement moves: it runs after that
+ * import rather than before it, which is the order ES modules give it.
+ *
+ * A cycle is listed by the one module the walk entered it through, and everything
+ * the walk first reached through that module evaluates nested inside it. A cycle
+ * decides which of its modules sees another's exports half-populated, and that
+ * depends on which one evaluates first and on when each `require` is reached.
+ * Throws if the graph is missing a record, so that nothing of an incomplete graph
+ * evaluates.
+ */
+function moduleEvaluationOrder(
+  records: ReadonlyMap<string, VirtualModuleRecord>,
+  entrySpecifier: string,
+): string[] {
+  const order: string[] = [];
+  // Where the walk entered each module, or `Infinity` once its cycle is closed.
+  const enteredAt = new Map<string, number>();
+  const unclosed: string[] = [];
+
+  // Returns the earliest entry point still unclosed that `specifier` reaches.
+  const visit = (specifier: string): number => {
+    const record = records.get(specifier);
+    if (record === undefined) {
+      throw new Error(`Unknown module specifier: ${specifier}`);
+    }
+    const entry = enteredAt.size;
+    const orderOnEntry = order.length;
+    enteredAt.set(specifier, entry);
+    unclosed.push(specifier);
+    let earliest = entry;
+    for (const importSpecifier of record.imports) {
+      const target = resolveRecordImport(record, importSpecifier);
+      earliest = Math.min(earliest, enteredAt.get(target) ?? visit(target));
+    }
+    if (earliest === entry) {
+      const closed = unclosed.splice(unclosed.lastIndexOf(specifier));
+      for (const member of closed) enteredAt.set(member, Infinity);
+      if (closed.length > 1) order.length = orderOnEntry;
+      order.push(specifier);
+    }
+    return earliest;
+  };
+
+  visit(entrySpecifier);
+  return order;
+}
+
+/**
+ * Sets up a compartment for the graph at `entrySpecifier` and evaluates none of
+ * it. Importing each of `evaluationOrder` in turn evaluates the graph in the same
+ * order as importing the entry alone does (see {@link moduleEvaluationOrder}),
+ * so a caller can give up its thread between those imports; a module's own
+ * evaluation stays one synchronous stretch.
+ */
+export function openModuleGraph(
+  entrySpecifier: string,
+  options: SesModuleLoaderOptions,
+): {
+  evaluationOrder: readonly string[];
   importNow: (specifier: string) => Record<string, unknown>;
 } {
   ensureSESLockdown();
@@ -144,7 +239,7 @@ export function loadModuleGraph(
   Object.freeze(compartment.globalThis);
 
   return {
-    namespace: compartment.importNow(entrySpecifier),
+    evaluationOrder: moduleEvaluationOrder(records, entrySpecifier),
     importNow: (specifier: string) => compartment.importNow(specifier),
   };
 }

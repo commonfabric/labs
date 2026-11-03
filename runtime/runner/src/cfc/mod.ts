@@ -274,8 +274,8 @@ export {
   prepareBoundaryCommit,
   releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
-  wholeValueLabel,
 } from "./prepare.ts";
+export { wholeValueLabel } from "./consumed-label.ts";
 export type {
   CfcPrefixBoundSource,
   CfcPrefixProvenanceSummary,
