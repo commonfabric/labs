@@ -157,3 +157,38 @@ export const spaceFromStoreFilename = (
     return null;
   }
 };
+
+/** Deterministic, collision-resistant-enough token for a filename component
+ *  (FNV-1a 32-bit + length). Used to derive cell-db file names from (space,id). */
+function hashToken(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${(h >>> 0).toString(16).padStart(8, "0")}${s.length.toString(16)}`;
+}
+
+/**
+ * The start every cell database file name of `space` shares, which no other
+ * space's begins with: the space's cell databases are the files beside its
+ * store whose names start with it.
+ */
+export const cellDatabaseFilePrefix = (space: string): string =>
+  `cell-${hashToken(space)}-`;
+
+/**
+ * The file name of the cell database `id` of `space` holds for `scopeKey`,
+ * the resolved scope key: `space` for the default scope, which is left out of
+ * the name, or `user:<did>` / `session:<did>:<sid>` for a scoped one, hashed
+ * in so each user or session has its own file. The space and id are hashed in
+ * so distinct pairs never collide.
+ */
+export const cellDatabaseFileName = (
+  space: string,
+  id: string,
+  scopeKey: string = "space",
+): string => {
+  const scopeTag = scopeKey === "space" ? "" : `-${hashToken(scopeKey)}`;
+  return `${cellDatabaseFilePrefix(space)}${hashToken(id)}${scopeTag}.sqlite`;
+};

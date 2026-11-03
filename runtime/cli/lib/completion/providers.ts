@@ -1237,8 +1237,10 @@ const ARGUMENT_PROVIDERS: Readonly<
   // candidates.
   "space clone:space": () => spaceCandidates(),
   "space fingerprint:space": () => spaceCandidates(),
-  // `compact` takes a store file by path, never a space name.
+  // `compact` and `reap` take a store file by path, never a space name.
   "space compact:store": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
+  "space reap:store": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.sqlite" })),
   // `verify`/`reset` take a clone directory built by `space clone`.
   "space verify:dir": () => Promise.resolve(directive({ kind: "dirs" })),

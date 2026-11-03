@@ -11,7 +11,7 @@ import { ACLManager, Runtime } from "@commonfabric/runner";
 import type { SessionFactory } from "@commonfabric/runner/storage/v2";
 
 import { TestStorageManager } from "../../runner/test/memory-v2-test-utils.ts";
-import { leaveAcl } from "../lib/acl.ts";
+import { deleteSpace, leaveAcl } from "../lib/acl.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 import { captureStderr } from "./utils.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
@@ -193,6 +193,90 @@ describe("acl, against an `enforce` memory server", () => {
       });
 
       expect(await leaveAs(bob, space)).toBe("left");
+
+      expect((await server.readDocument(space, `of:${space}`))?.value)
+        .toEqual({ [alice.did()]: "OWNER" });
+    });
+  });
+  /**
+   * Runs `deleteSpace()` for `space` as `user`, confirming `confirm`.
+   * `beforeWrite`, when given, runs once after the list was read and before
+   * the deletion's write, as another client's concurrent change would.
+   */
+  async function deleteAs(
+    user: Identity,
+    space: MemorySpace,
+    confirm: string,
+    beforeWrite?: () => Promise<void>,
+  ): Promise<void> {
+    const runtime = runtimeAs(user);
+    if (beforeWrite !== undefined) {
+      const editWithRetry = runtime.editWithRetry.bind(runtime);
+      let pending: (() => Promise<void>) | undefined = beforeWrite;
+      (runtime as { editWithRetry: typeof editWithRetry }).editWithRetry =
+        async (...args) => {
+          const before = pending;
+          pending = undefined;
+          await before?.();
+          return await editWithRetry(...args);
+        };
+    }
+    await captureStderr(async () => {
+      await deleteSpace(
+        { apiUrl: "http://unused.test", space, identity: "/unused/key" },
+        confirm,
+        {
+          loadPieces: () =>
+            Promise.resolve({ runtime, getSpace: () => space } as never),
+        },
+      );
+    });
+  }
+
+  describe("deleteSpace()", () => {
+    it("deletes a space whose list names only the identity, which the server then holds as a deletion tombstone", async () => {
+      const space = await createSpace({ [alice.did()]: "OWNER" });
+
+      await deleteAs(alice, space, space);
+
+      expect((await server.readDocument(space, `of:${space}`))?.value)
+        .toEqual({ deleted: { by: alice.did() } });
+    });
+
+    it("refuses, naming each other member, while the list names anyone else, and deletes nothing", async () => {
+      const space = await createSpace({
+        [alice.did()]: "OWNER",
+        [bob.did()]: "WRITE",
+      });
+
+      await expect(deleteAs(alice, space, space)).rejects.toThrow(
+        `names ${bob.did()}`,
+      );
+
+      expect((await server.readDocument(space, `of:${space}`))?.value)
+        .toEqual({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+    });
+
+    it("refuses when a member is added after the list was read, deciding against the list it writes over", async () => {
+      const space = await createSpace({ [alice.did()]: "OWNER" });
+      const owner = runtimeAs(alice);
+
+      await expect(
+        deleteAs(alice, space, space, async () => {
+          await new ACLManager(owner, space).set(bob.did(), "READ");
+        }),
+      ).rejects.toThrow(`names ${bob.did()}`);
+
+      expect((await server.readDocument(space, `of:${space}`))?.value)
+        .toEqual({ [alice.did()]: "OWNER", [bob.did()]: "READ" });
+    });
+
+    it("refuses a `--confirm` that is not the space's own DID, and deletes nothing", async () => {
+      const space = await createSpace({ [alice.did()]: "OWNER" });
+
+      await expect(deleteAs(alice, space, bob.did())).rejects.toThrow(
+        "is not the DID of the space",
+      );
 
       expect((await server.readDocument(space, `of:${space}`))?.value)
         .toEqual({ [alice.did()]: "OWNER" });

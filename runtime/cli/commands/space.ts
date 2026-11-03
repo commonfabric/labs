@@ -38,6 +38,13 @@ import {
   planCompaction,
   storeSchemaRefusals,
 } from "@commonfabric/memory/v2/compact";
+import {
+  formatReapPlan,
+  formatReapRun,
+  planReap,
+  ReapRefused,
+  reapStore,
+} from "@commonfabric/memory/v2/reap";
 import type { CellScope } from "@commonfabric/memory/v2";
 import {
   clonePaths,
@@ -49,13 +56,18 @@ import {
   resolveSpace,
   verifyClone,
   verifyCompaction,
+  verifyReap,
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
 import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { shellQuote } from "../lib/shell-quote.ts";
-import { buildCreateSpaceCommand, buildRecreateRootCommand } from "./piece.ts";
+import {
+  buildCreateSpaceCommand,
+  buildDeleteSpaceCommand,
+  buildRecreateRootCommand,
+} from "./piece.ts";
 
 function out(json: boolean, data: unknown, render: () => void): void {
   if (json) console.log(JSON.stringify(data, null, 2));
@@ -342,7 +354,7 @@ export const space = new Command()
   .name("space")
   .description(
     "Commands that act on a space: its root and home patterns, access " +
-      "invitations, and rehearsal clones of its store.",
+      "invitations, rehearsal clones of its store, and its deletion.",
   )
   .default("help")
   .error((error, command) => {
@@ -783,8 +795,82 @@ export const space = new Command()
       throw error;
     }
   })
+  /* space reap */
+  .command(
+    "reap <store:string>",
+    "Reap a deleted space's store: keep the deletion commit and what it " +
+      "needs to stand, remove everything else, and write the result fresh " +
+      "with VACUUM INTO, checked against the store before it is reported. " +
+      "The store, a copy of the space's backup, is only read. --dry-run " +
+      "reports without writing (docs/specs/random-space-identities.md, " +
+      '"Reaping a deleted space").',
+  )
+  .option("--dry-run", "Report what would be kept and removed; write nothing.")
+  .option(
+    "--out <path:string>",
+    "Where the result is written; <store>.reaped.sqlite beside the source " +
+      "by default. Never overwritten.",
+  )
+  .action(async (options, store) => {
+    try {
+      Deno.statSync(store);
+    } catch {
+      throw new ValidationError(`no store at ${store}`);
+    }
+    if (options.dryRun) {
+      const space = openSpace(store);
+      try {
+        let plan;
+        try {
+          plan = planReap(space.db);
+        } catch (error) {
+          if (error instanceof ReapRefused) {
+            throw new ValidationError(error.message);
+          }
+          throw error;
+        }
+        const schema = await storeSchemaRefusals(space.db);
+        const schemaLine = schema.length === 0
+          ? "schema     current; a run would read this store as it is"
+          : `schema     REFUSED: ${schema.join("; ")}`;
+        out(!!options.json, { ...plan, schema }, () => {
+          console.log(formatReapPlan(plan));
+          console.log(schemaLine);
+        });
+      } finally {
+        space.close();
+      }
+      return;
+    }
+    const result = options.out ?? `${store}.reaped.sqlite`;
+    assertNotLiveStore(store, "store");
+    assertNotLiveStore(result, "result");
+    let run;
+    try {
+      run = await reapStore({ store, out: result });
+    } catch (error) {
+      if (error instanceof ReapRefused) {
+        throw new ValidationError(error.message);
+      }
+      throw error;
+    }
+    const verification = verifyReap({ result: run.out, against: store });
+    out(!!options.json, { ...run, verification }, () => {
+      console.log(formatReapRun(run));
+      console.log("");
+      console.log(formatCompactionVerification(verification));
+    });
+    if (!verification.ok) {
+      // A result that failed its check is not one to install, so none is
+      // left to install by mistake.
+      Deno.removeSync(run.out);
+      Deno.exit(1);
+    }
+  })
   /* space create */
   .command("create", buildCreateSpaceCommand("space create"))
+  /* space delete */
+  .command("delete", buildDeleteSpaceCommand("space delete"))
   /* space recreate-root */
   .command(
     "recreate-root",

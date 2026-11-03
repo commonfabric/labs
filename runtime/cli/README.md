@@ -1427,6 +1427,31 @@ commit would take, and the preconditions a run checks, foreign-key integrity
 among them. The payload accounting reads every commit's payload and is the slow
 part of the plan. `--json` emits the same report as JSON.
 
+## Reaping a deleted space's store
+
+`cf space reap <store.sqlite> [--out <path>]` reclaims a deleted space's storage
+([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
+It takes only a store whose access-control document holds a deletion tombstone,
+and refuses any other, a store with a commit after the deletion, a store held
+open, one the server would migrate on opening it, and a result path that exists
+or sits in a served directory. It reads the store, a copy of the space's backup,
+without writing it, and writes the result fresh, `<store>.reaped.sqlite` beside
+it by default. The result keeps the deletion commit's row, the invocation and
+authorization rows it references, the deletion tombstone's revision and head
+rows, and the default branch's row; every other row of every table goes. So the
+space goes on refusing every principal as deleted, under the same `aclRevision`,
+and its server sequence stays the deletion commit's.
+
+Before it reports, the command checks the result against the store it was reaped
+from, read-only on both: integrity and foreign keys; the store's access-control
+document a deletion tombstone at the server sequence; and, for every table, the
+kept rows byte-identical and no other row. A result that fails a check is
+removed and the command exits nonzero. `--dry-run` reports what would be kept
+and removed, and writes nothing. The space's cell databases are files beside the
+live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, for the
+install step to remove there. `cf inspect summary` reads a reaped store as the
+deleted space it is.
+
 ## Creating a space
 
 `cf space create [--label <label>]` creates a space and prints its DID. The DID
@@ -1450,6 +1475,19 @@ A Home's source is changed in place, with
 installs or replaces a Home root.
 [Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern)
 walks through it.
+
+## Deleting a space
+
+`cf space delete --space <space> --confirm <space-DID>` deletes a space as its
+sole member, for everyone and for good
+([deleting a space](../../docs/specs/random-space-identities.md#deleting-a-space)).
+It refuses while the access list names any principal besides the identity the
+command connects as, `"*"` included, and names those principals, so that each
+one's removal is a `cf acl remove` of its own. It runs only when `--confirm` is
+the space's own DID, which a mistyped `--space` never resolves to. The memory
+server decides the deletion again, refusing a Home and a list that changed
+since, and revokes every session on the space. Deleting a self-owned space
+through a delegation chain is not part of this command.
 
 ## Where a piece is created
 

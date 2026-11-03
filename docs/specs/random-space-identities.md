@@ -251,8 +251,8 @@ says which spaces this covers):
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
 [the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
-The Memory server and the serving loop implement deleting a space; nothing in
-this repository sends the deletion commit yet, which `cf space delete` will.
+`cf space delete` sends the deletion commit, and the Memory server and the
+serving loop implement what follows it.
 
 ### Reaping a deleted space
 
@@ -264,10 +264,9 @@ that restates the access-control document's value, which it does only over a
 value that is an access list, so it refuses a store whose access-control
 document is a `set` of anything else, a deletion tombstone included. Its outcome
 for an access-control document that a document `delete` removed is a different
-case, one INV-12 forbids, and not a deleted space. When deletion is implemented,
-compaction's refusal of a deletion tombstone names reaping, so that an operator
-who reaches for `cf space compact` on a deleted space is sent to
-`cf space reap`.
+case, one INV-12 forbids, and not a deleted space. Compaction's refusal of a
+deletion tombstone names reaping, so that an operator who reaches for
+`cf space compact` on a deleted space is sent to `cf space reap`.
 
 Reaping follows the compaction plan's safety rails rather than rules of its own.
 It runs offline against the space's store file and never against a file a server
@@ -295,11 +294,13 @@ reads a reaped store as a deleted space, not as a corrupt one.
 - It removes everything else the store holds for the space: every earlier
   commit, every other document and its history, the earlier revisions of the
   access-control document, the genesis receipt, the private tables such as an
-  invitation's admission records and receipts, the outbox, and the cell
-  databases beside the store. Rows the engine's schema itself needs to open a
-  store, such as the default branch's, stay.
-
-Reaping is not implemented yet.
+  invitation's admission records and receipts, and the outbox. Rows the
+  engine's schema itself needs to open a store, such as the default branch's,
+  stay.
+- The space's cell databases are files beside the live store, not rows in it,
+  so a reap, which runs against a copy of the backup, cannot reach them. The
+  reap names them, and the install that puts its result in place of the live
+  store removes them there.
 
 ### Deleting a space from the command line
 
@@ -312,9 +313,8 @@ that a mistyped `--space` deletes nothing. It deletes only a space whose list
 names the connecting principal; deleting a self-owned space through a
 delegation chain is not part of this command.
 
-`cf space delete` is not implemented yet. Once it is, the CLI's own
-documentation describes it beside `cf space create`, and `cf space reap` beside
-`cf space compact`.
+The CLI's own documentation describes `cf space delete` beside
+`cf space create`, and `cf space reap` beside `cf space compact`.
 
 ## Routing across provider processes
 

@@ -29,6 +29,11 @@ import {
   readRevision,
 } from "./engine.ts";
 import { isACL, isDeletionTombstone } from "../acl.ts";
+import {
+  checkRewrittenStore,
+  fileSize,
+  preflightOfflineStore,
+} from "./offline-store.ts";
 
 /**
  * Which instances a compaction selects. Prefixes match `id` (the namespaces
@@ -786,34 +791,6 @@ const HOLLOW_BATCH = 10_000;
 const storable = (value: unknown): FabricValue =>
   JSON.parse(JSON.stringify(value)) as FabricValue;
 
-/** The file's stat, or undefined for a file that is not there. Any other
- * failure — a permission refused, an I/O error — is not absence and is
- * rethrown: a companion the run cannot read is not a companion it may
- * treat as empty. */
-const statIfPresent = (path: string): Deno.FileInfo | undefined => {
-  try {
-    return Deno.statSync(path);
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
-    throw error;
-  }
-};
-
-const fileSize = (path: string): number => statIfPresent(path)?.size ?? 0;
-
-/** Whether any directory entry is at `path` — a file, a directory, or a
- * symlink whether or not its target exists. The result is written through
- * whatever is there, so nothing may be. */
-const entryExists = (path: string): boolean => {
-  try {
-    Deno.lstatSync(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
-};
-
 type SchemaObject = { type: string; name: string; tbl_name: string };
 type SchemaColumn = {
   name: string;
@@ -1015,26 +992,11 @@ export const compactStore = async (
   const runId = options.runId ?? new Date().toISOString();
   const sessionId = `${COMPACTION_SESSION_PREFIX}${runId}`;
 
-  // Preflight on the file: a store some process holds open in WAL mode has
-  // a log beside it, and a stale log left beside a replaced database is
-  // recovered onto the replacement.
-  try {
-    Deno.statSync(store);
-  } catch {
-    throw new CompactionRefused(`no store at ${store}`);
-  }
-  for (const companion of ["-wal", "-journal"]) {
-    if (fileSize(`${store}${companion}`) > 0) {
-      throw new CompactionRefused(
-        `${store}${companion} is not empty: a process holds the store open, or a log was left beside it; the run writes only a store nothing has open`,
-      );
-    }
-  }
-  if (entryExists(out)) {
-    throw new CompactionRefused(
-      `${out} exists; the result is never overwritten`,
-    );
-  }
+  preflightOfflineStore(
+    store,
+    out,
+    (reason) => new CompactionRefused(reason),
+  );
 
   // Plan read-only, on a connection that cannot write, before anything opens
   // the store for writing.
@@ -1377,23 +1339,7 @@ export const compactStore = async (
     });
 
     // 5. The checks the plan ends a run with, then the fresh file.
-    const violations = db.prepare(`PRAGMA foreign_key_check`).all();
-    if (violations.length > 0) {
-      throw new Error(
-        `PRAGMA foreign_key_check reports ${violations.length} violation(s) after the run; the store is left as it is`,
-      );
-    }
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    const integrity = db.prepare(`PRAGMA integrity_check`).all<
-      { integrity_check: string }
-    >();
-    if (integrity.length !== 1 || integrity[0].integrity_check !== "ok") {
-      throw new Error(
-        `PRAGMA integrity_check: ${
-          integrity.map((row) => row.integrity_check).join("; ")
-        }`,
-      );
-    }
+    checkRewrittenStore(db);
     options.onProgress?.({ phase: "vacuum", out });
     db.prepare(`VACUUM main INTO ?`).run(out);
 
