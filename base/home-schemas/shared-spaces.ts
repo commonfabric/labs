@@ -22,6 +22,7 @@ export const sharedSpaceEntrySchema = {
 } as const satisfies JSONSchema;
 
 const entries = { type: "array", items: sharedSpaceEntrySchema } as const;
+// `deleted` is absent from a view a Home older than the list produced.
 const kindView = {
   type: "object",
   properties: {
@@ -30,7 +31,7 @@ const kindView = {
     deleted: entries,
     other: entries,
   },
-  required: ["saved", "archived", "deleted", "other"],
+  required: ["saved", "archived", "other"],
 } as const;
 const unavailable = {
   type: "object",
@@ -59,15 +60,7 @@ export const sharedSpaceCollectionViewSchema = {
         other: entries,
         byKind: { type: "object", additionalProperties: kindView },
       },
-      required: [
-        "status",
-        "entries",
-        "saved",
-        "archived",
-        "deleted",
-        "other",
-        "byKind",
-      ],
+      required: ["status", "entries", "saved", "archived", "other", "byKind"],
     },
   ],
 } as const satisfies JSONSchema;

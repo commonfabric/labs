@@ -47,12 +47,13 @@ export interface SharedSpaceImportCommands {
 /**
  * Membership partitions for one kind: the saved and archived entries, those
  * whose space is deleted, and those in a stored state this reader does not
- * know.
+ * know. `deleted` is absent from a view a Home older than the list produced,
+ * so a reader takes its absence as empty.
  */
 export interface SharedSpaceKindView {
   saved: SharedSpaceEntry[];
   archived: SharedSpaceEntry[];
-  deleted: SharedSpaceEntry[];
+  deleted?: SharedSpaceEntry[];
   other: SharedSpaceEntry[];
 }
 
@@ -72,7 +73,7 @@ export type SharedSpaceCollectionView = SharedSpaceUnavailable | {
   entries: Record<string, SharedSpaceEntry>;
   saved: SharedSpaceEntry[];
   archived: SharedSpaceEntry[];
-  deleted: SharedSpaceEntry[];
+  deleted?: SharedSpaceEntry[];
   other: SharedSpaceEntry[];
   byKind: Record<string, SharedSpaceKindView>;
 };
@@ -145,7 +146,8 @@ function partition(entries: SharedSpaceEntry[]): SharedSpaceKindView {
 function byKind(
   entries: SharedSpaceEntry[],
 ): Record<string, SharedSpaceKindView> {
-  const groups = new Map<string, SharedSpaceKindView>();
+  // Every group this reader makes has all four lists.
+  const groups = new Map<string, Required<SharedSpaceKindView>>();
   for (const entry of entries) {
     const group = groups.get(entry.kind) ??
       { saved: [], archived: [], deleted: [], other: [] };

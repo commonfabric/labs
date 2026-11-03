@@ -230,8 +230,8 @@ export default pattern(() => {
     browser.kind.set("");
   });
   const assert_deleted_ui = assert(() =>
-    view.status === "ready" && view.deleted[0]?.space === GONE &&
-    view.byKind.loom.deleted[0]?.space === GONE &&
+    view.status === "ready" && view.deleted?.[0]?.space === GONE &&
+    view.byKind.loom.deleted?.[0]?.space === GONE &&
     view.other[0]?.space === FUTURE && view.other.length === 1 &&
     view.saved.length === 2 &&
     hasText(browser[UI], "Gone loom") && !hasText(browser[UI], "Team loom") &&
