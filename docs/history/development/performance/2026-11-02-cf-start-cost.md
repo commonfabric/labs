@@ -101,7 +101,7 @@ Third run, load median 41, board 115 to 147 Topics:
 | `cf piece call` | 6.73        | 4.51       | 3.92       | 2.24      |
 | `topics new`    | 8.60        | 4.94       | 5.82       | 2.59      |
 
-## The rest of the time is on the server, and it grows with the board
+## Part of the rest is on the server, and it grows with the board
 
 After the third run, at load 28-44, the same server held the 147-Topic board and a
 new one:
@@ -111,11 +111,16 @@ new one:
 | New        | 2.45-3.10 s        | 228-234 ms                |
 | 147 Topics | 5.74-8.88 s        | 2,052-3,351 ms            |
 
-`handled` is the client waiting for the server to run `addTopic`. So `topics new`
-takes the few seconds it was meant to on a new board, and on a grown board most of
-its time is that wait. This is two boards rather than a sweep, and the server had
-been running for hours, so it says that the handling got slower as the board grew
-and not how it scales or why.
+The `topics new` column leaves out the new board's first Topic, which took 4.70 s.
+`handled` is the client waiting for the server to run `addTopic`, and was traced in
+separate `cf piece call` runs, not inside these `topics new` runs.
+
+So `topics new` takes the few seconds it was meant to on a new board. Between the
+two boards it gains 3-6 s and the handling gains 1.8-3.1 s, which makes the handling
+the largest phase traced on the grown board, and leaves the rest of that gap
+untraced. This is two boards rather than a sweep, and the server had been running
+for hours, so it says that the handling got slower as the board grew and not how it
+scales or why.
 
 One `topics new` at load 90 on a small board, in milliseconds since its process started: modules
 loaded at 220-370, `cf` spawned straight after and finished at 2,080-2,230, the
