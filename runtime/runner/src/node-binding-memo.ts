@@ -62,12 +62,21 @@ export type NodeBindingSubject = {
  *
  * The memo holds at most `capacity` entries, and at most `maxWeight` of key
  * length plus whatever `weigh` reports for a binding, dropping the least
- * recently used. A dropped entry costs a second computation and nothing
- * else. Every holder of a binding treats it as immutable, since the memo
- * hands the same one to each.
+ * recently used. The bindings held for a result document are dropped when
+ * the piece running there stops ({@link release}). A dropped entry costs a
+ * second computation and nothing else. Every holder of a binding treats it as
+ * immutable, since the memo hands the same one to each.
  */
 export class NodeBindingMemo<Binding> {
   #entries: LRUCache<string, Binding>;
+
+  /**
+   * The keys of the bindings held for each result document, by its address,
+   * so {@link release} finds them. A key whose binding the cache has since
+   * dropped may linger here until its result is released.
+   */
+  #keysByResult = new Map<string, Set<string>>();
+
   #epoch = schemaRegistryEpoch();
   #subjectIds = new WeakMap<object, number>();
   #nextSubjectId = 0;
@@ -103,12 +112,34 @@ export class NodeBindingMemo<Binding> {
     if (held !== undefined) return held;
     const binding = bind();
     this.#entries.put(key, binding);
+    const result = addressKey(subject.resultLink);
+    let keys = this.#keysByResult.get(result);
+    if (keys === undefined) {
+      keys = new Set();
+      this.#keysByResult.set(result, keys);
+    }
+    keys.add(key);
     return binding;
   }
 
   /** Drops every binding held. */
   clear(): void {
     this.#entries.clear();
+    this.#keysByResult.clear();
+  }
+
+  /**
+   * Drops every binding held for a node bound on the result document
+   * `resultLink` addresses, which a piece that stops no longer needs. The
+   * next plan of such a node, a restart's among them, computes its binding
+   * again.
+   */
+  release(resultLink: NormalizedFullLink): void {
+    const result = addressKey(resultLink);
+    const keys = this.#keysByResult.get(result);
+    if (keys === undefined) return;
+    this.#keysByResult.delete(result);
+    for (const key of keys) this.#entries.delete(key);
   }
 
   /**
@@ -118,7 +149,7 @@ export class NodeBindingMemo<Binding> {
   #currentKey(subject: NodeBindingSubject): string {
     const epoch = schemaRegistryEpoch();
     if (epoch !== this.#epoch) {
-      this.#entries.clear();
+      this.clear();
       this.#epoch = epoch;
     }
     return this.#key(subject);

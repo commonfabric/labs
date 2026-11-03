@@ -261,6 +261,33 @@ describe("node-binding-memo", () => {
     });
   });
 
+  describe("release()", () => {
+    it("drops the bindings held for one result document and keeps the others", () => {
+      const bindings = memo();
+      const stopped = subject({ resultLink: linkTo("stopped") });
+      const alsoStopped = subject({ resultLink: linkTo("stopped") });
+      const running = subject({ resultLink: linkTo("running") });
+      bindings.bindingFor(stopped, () => ({ n: 1 }));
+      bindings.bindingFor(alsoStopped, () => ({ n: 2 }));
+      const held = bindings.bindingFor(running, () => ({ n: 3 }));
+
+      bindings.release(linkTo("stopped"));
+
+      expect(bindings.size).toBe(1);
+      expect(bindings.bindingFor(running, () => ({ n: 4 }))).toBe(held);
+      expect(bindings.bindingFor(stopped, () => ({ n: 5 }))).toEqual({ n: 5 });
+    });
+
+    it("does nothing for a result document it holds no binding for", () => {
+      const bindings = memo();
+      bindings.bindingFor(subject(), () => ({ n: 1 }));
+
+      bindings.release(linkTo("unbound"));
+
+      expect(bindings.size).toBe(1);
+    });
+  });
+
   describe("clear()", () => {
     it("drops every binding held", () => {
       const bindings = memo();
