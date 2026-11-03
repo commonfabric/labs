@@ -10,6 +10,7 @@ import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
 import { patternLiteralForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type JSONSchema,
   type Module,
@@ -109,6 +110,7 @@ async function openRemoteSession(
     throw new Error("the receipt fixture needs an emulated storage manager");
   }
   const client = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(candidate.server()),
   });
   const session = await client.mount(space, {}, testSessionOpenAuthFactory);

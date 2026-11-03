@@ -566,6 +566,36 @@ describe("followBoard()", () => {
     ).rejects.toThrow(/closed/);
   });
 
+  it("does not read the board again when only a piece moves", async () => {
+    const seen: string[][] = [];
+    await follow(async ({ topics }, count) => {
+      seen.push(comments(topics));
+      if (count === 1) {
+        // The piece moves first, then the input.
+        await board.write({
+          "of:fid1:topic-piece-1": {
+            ...BOARD_DOCS["of:fid1:topic-piece-1"],
+            value: { $NAME: "Fryer, run again" },
+          },
+        });
+        await board.write({
+          "of:fid1:comment-2": {
+            value: { author: { name: "Bo" }, body: "After.", sentAt: 9000 },
+          },
+          "of:fid1:input-1": {
+            value: {
+              ...INPUT_1,
+              comments: [link("of:fid1:comment-1"), link("of:fid1:comment-2")],
+            },
+          },
+        });
+      }
+      return count === 2;
+    });
+
+    expect(seen[1]).toEqual(["Reproduced with cold oil.", "After."]);
+  });
+
   it("leaves the copy holding what it followed", async () => {
     const data = await follow(() => true);
 

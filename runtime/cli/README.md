@@ -2360,7 +2360,14 @@ With server execution on, the serving runtime runs the handlers and derives what
 a read returns, and `cf` runs no piece. `cf piece call` sends the event, waits
 for the server to confirm the handling, and reads the result off the handling's
 receipt, without loading the pattern unless a payload needs its event contract.
-A tool is the exception: it runs to completion in the command's own process.
+A tool is the exception: it runs to completion in the command's own process, and
+so does the wish behind `cf wish`.
+
+`cf piece new`, `cf piece setsrc`, and `cf piece link` start nothing either.
+`--no-start` on `cf piece new` still asks the serving loop not to derive the
+piece until something demands it, and on `cf piece link` it changes nothing.
+`--select`, `--schema`, and `--filter` shape what a read returned, with no
+pattern graph and no commit.
 
 `cf cell get`, `cf piece inspect`, `cf piece view`, `cf piece step`, and
 `cf piece

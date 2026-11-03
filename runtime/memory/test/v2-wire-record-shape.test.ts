@@ -19,7 +19,7 @@ import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 
-import { isACL, sameAcl } from "../acl.ts";
+import { isACL, isDeletionTombstone, sameAcl } from "../acl.ts";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -266,6 +266,35 @@ describe("wire record shape", () => {
       // nothing to reject and would otherwise call it an ACL.
       it(`returns \`false\` for ${label}`, () => {
         expect(isACL(value)).toBe(false);
+      });
+    }
+  });
+
+  describe("isDeletionTombstone()", () => {
+    const by = "did:key:z6Mk-deleter";
+
+    it("returns `true` for `{ deleted: { by } }` naming a DID", () => {
+      expect(isDeletionTombstone({ deleted: { by } })).toBe(true);
+    });
+
+    it("returns `false` for a tombstone holding anything else, at either level", () => {
+      expect(isDeletionTombstone({ deleted: { by }, note: "x" })).toBe(false);
+      expect(isDeletionTombstone({ deleted: { by, at: 1 } })).toBe(false);
+    });
+
+    it("returns `false` for a tombstone whose `by` is not a DID, or missing", () => {
+      expect(isDeletionTombstone({ deleted: { by: "someone" } })).toBe(false);
+      expect(isDeletionTombstone({ deleted: {} })).toBe(false);
+      expect(isDeletionTombstone({ deleted: true })).toBe(false);
+    });
+
+    it("returns `false` for an access list", () => {
+      expect(isDeletionTombstone({ [by]: "OWNER" })).toBe(false);
+    });
+
+    for (const [label, value] of hostileValues) {
+      it(`returns \`false\` for ${label}`, () => {
+        expect(isDeletionTombstone(value)).toBe(false);
       });
     }
   });

@@ -18,6 +18,7 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { StorageManager } from "../src/storage/v2.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const owner = await Identity.fromPassphrase("delegation-chain owner");
 const guest = await Identity.fromPassphrase("delegation-chain guest");
@@ -38,6 +39,7 @@ describe("storage-delegation-chain", () => {
     options: { delegations: boolean; connectionAuth: boolean },
   ) => {
     const server = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
       acl: { mode: "enforce", delegations: options.delegations },
       connectionAuth: options.connectionAuth,
     });
@@ -220,6 +222,7 @@ describe("storage-delegation-chain", () => {
       guestFields: { exp?: number | null; nbf?: number } = {},
     ) => {
       const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
         acl: { mode: "enforce", delegations: true },
       });
       cleanups.push(() => server.close());

@@ -45,6 +45,7 @@ import {
 } from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/logger";
 import { utf8ByteLength } from "@commonfabric/text/utf8";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import { AsyncSemaphoreQueue } from "../queue.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
@@ -226,6 +227,15 @@ export interface SessionFactory {
    * per host and one per space.
    */
   setSharedConnections?(enabled: boolean): void;
+
+  /**
+   * Chooses whether the sessions created from here on declare that their
+   * runtime names instances (`ConnectOptions.instanceNames` of the memory
+   * client). Until it is called, a factory's sessions run this build's
+   * default. A factory without the method declares nothing, so its sessions
+   * are positional whatever their runtime's mode.
+   */
+  setInstanceNames?(enabled: boolean): void;
 
   /** Closes every connection the factory keeps open between sessions. */
   close?(): Promise<void>;
@@ -1347,6 +1357,13 @@ export class RemoteSessionFactory implements SessionFactory {
   #transports = new Set<WebSocketTransport>();
   #sharedConnections = false;
 
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
+
   /** Transports closed so far. */
   #closedTransports = 0;
 
@@ -1437,6 +1454,11 @@ export class RemoteSessionFactory implements SessionFactory {
   /** @inheritDoc */
   setSharedConnections(enabled: boolean): void {
     this.#sharedConnections = enabled;
+  }
+
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
   }
 
   /** @inheritDoc */
@@ -1626,6 +1648,7 @@ export class RemoteSessionFactory implements SessionFactory {
       client: MemoryClient.connect({
         transport,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       }).then((client) => {
@@ -1666,6 +1689,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
       });
       return client.serverFlags;
     } finally {
@@ -1687,6 +1711,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
@@ -1760,6 +1785,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });

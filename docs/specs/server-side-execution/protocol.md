@@ -162,7 +162,8 @@ whether it triggers a recompute is governed by serving-loop.md §3d's
 dependency-only rule (RULED 2026-08-05) — a derivation that reads
 the intruded-on doc recomputes through the ordinary dependency path;
 one that only writes it (a blind writer) is NOT re-armed, and the
-derived output waits for the next input change. v2 adds no
+derived output waits for the next input change, unless the write left
+the doc with no value (§3d, RULED 2026-11-03). v2 adds no
 security guarantees beyond today's unless trivial (owner,
 2026-08-02); tightening is future work.
 

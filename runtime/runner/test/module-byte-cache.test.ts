@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { servingRuntimeFactory } from "../src/executor/serving-runtime.ts";
 import { Runtime } from "../src/runtime.ts";
+import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 import type {
   CompiledModuleArtifact,
@@ -127,6 +130,59 @@ describe("ModuleByteCache cross-runtime reuse", () => {
     } finally {
       restoreRuntimeVersion();
       await rt.dispose();
+    }
+  });
+
+  it("compiles a program once across serving runtimes that load it at the same time", async () => {
+    // A serving runtime yields while it compiles, so each of these reads the
+    // byte cache while another's compile is under way, and only the turns they
+    // share keep that read from being a miss.
+    const server = newLoopbackServer({
+      store: new URL(`memory://byte-cache-turns-${crypto.randomUUID()}`),
+    });
+    const emitsDuringLoads = async (spaceNames: string[]) => {
+      const createRuntime = servingRuntimeFactory({
+        server,
+        identity: signer,
+        apiUrl: new URL(import.meta.url),
+        moduleByteCache: new FakeByteCache(),
+      });
+      const spaces = await Promise.all(
+        spaceNames.map(async (name) =>
+          (await Identity.fromPassphrase(`byte-cache ${name}`)).did()
+        ),
+      );
+      const built = await Promise.all(
+        spaces.map((space) => createRuntime(space, {})),
+      );
+      const emits = () =>
+        getTimingStatsBreakdown()["js-compiler"]?.["phase/emitFile"]?.count ??
+          0;
+      const before = emits();
+      try {
+        await Promise.all(built.map(async ({ runtime }, index) => {
+          const tx = runtime.edit();
+          try {
+            await runtime.patternManager.compilePattern(PROGRAM, {
+              space: spaces[index],
+              tx,
+            });
+          } finally {
+            tx.abort();
+          }
+        }));
+        return emits() - before;
+      } finally {
+        await Promise.all(built.map(({ dispose }) => dispose()));
+      }
+    };
+    try {
+      const oneLoad = await emitsDuringLoads(["alone"]);
+      expect(oneLoad).toBeGreaterThan(0);
+
+      expect(await emitsDuringLoads(["one", "two", "three"])).toBe(oneLoad);
+    } finally {
+      await server.close();
     }
   });
 

@@ -12,6 +12,7 @@ import { tokenizeLine } from "../lib/completion/mod.ts";
 import { resolveCompletionLine } from "../lib/completion/line.ts";
 import { liveCandidates } from "../lib/completion/providers.ts";
 import { claimProcessDeployment } from "../lib/process-deployment.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 describe("agent inspection connections", () => {
   it("reads and cancels a run on a second server while retaining the home deployment", async () => {
@@ -19,8 +20,12 @@ describe("agent inspection connections", () => {
     const identityPath = join(directory, "identity.key");
     await Deno.writeFile(identityPath, await Identity.generatePkcs8());
     const identity = await loadIdentity(identityPath);
-    const homeServer = StandaloneMemoryServer.start();
-    const recordServer = StandaloneMemoryServer.start();
+    const homeServer = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+    });
+    const recordServer = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+    });
     const home = await openAgentStorageHost(
       identityPath,
       homeServer.url.origin,

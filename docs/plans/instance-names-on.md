@@ -1,8 +1,7 @@
 # Turning instance names on
 
-Stages 3 and 4 of this plan are done, and so is stage 1 apart from the
-client's declaration of its mode and its capability check; nothing else is.
-The plan is the sequence that takes the `instanceNames` experimental flag
+Stages 1, 3 and 4 of this plan are done; nothing else is. The plan is the
+sequence that takes the `instanceNames` experimental flag
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#instancenames))
 from off everywhere to on everywhere, and then deletes it. Naming an instance
 bound to a `const` is specified in
@@ -23,9 +22,9 @@ and its wire form is in [`04-protocol.md`](../specs/memory-v2/04-protocol.md)
 
 A positional runtime binds a parent's children by position, and a naming
 runtime binds the parent's named instances by name. Two such runtimes on one
-space bind the same parent to different documents, and neither refuses.
-`runtime/runner/test/instance-naming-modes.test.ts` pins what a positional
-runtime does to a parent a naming runtime set up or carried over:
+space would bind the same parent to different documents, and neither would
+refuse. Without the boundary, a positional runtime does this to a parent a
+naming runtime set up or carried over:
 
 - after a naming runtime updates a parent to a source that inserts a sibling
   ahead of a named instance, a positional runtime runs the sibling on the
@@ -38,12 +37,17 @@ runtime does to a parent a naming runtime set up or carried over:
 - once a positional runtime starts such a parent, every runtime viewing it
   sees the fresh children.
 
+With the boundary, `runtime/runner/test/instance-naming-modes.test.ts` holds
+that the positional runtime is refused each of these spaces instead, and that
+a naming runtime then finds each child where it bound it.
+
 A runtime of the other mode reaches a space by ordinary means, in either
 direction: a browser tab loaded before a deployment changed its posture, a
 `cf` binary older than the flag, a `cf` run with `CF_ADOPT_SERVER_FLAGS=false`
 and its own value for the flag, a client that cannot read `/api/meta` and
 keeps its own default, or a toolshed process of the previous release during a
-rolling deploy. Nothing excludes any of them today.
+rolling deploy. The boundary excludes each of them that carries the
+declaration; D3 says which one it cannot see.
 
 ## Decisions
 
@@ -215,7 +219,7 @@ deployment.
 
 ## Stages
 
-### 1. The boundary, with the posture off
+### 1. The boundary, with the posture off — **landed**
 
 The memory server records the mark, enforces INV-16, and advertises
 `instanceNameMark`, which is built: the mark is the one row of the
@@ -232,22 +236,46 @@ The shell's card gets the guidance D5 gives it. The flag stays unreachable from
 the environment, so every runtime is positional, and D8 refuses a naming one
 anywhere.
 
-Of the client's half, its handling of the `instance-names` revocation and the
-shell's card are built: the client ends the session with the
-`clientUpdateRequired` refusal D5 gives, and the client and storage manager
-keep it. What remains of this stage is the client's declaration of its mode
-and its capability check, and the hazards below becoming refusals.
+The client's half is built. A `Runtime` declares its mode to its storage
+manager (`IStorageManager.setInstanceNames()`), which tells its session
+factories, and each memory client a factory connects declares
+`instanceNames: true` in every open of a naming runtime, resumes included
+(`ConnectOptions.instanceNames`), and fails its connection permanently, at
+the handshake, against a server that does not advertise `instanceNameMark`.
+A storage manager's sessions serve every runtime on it, so a manager refuses
+a runtime of the other mode from the one it was given, and a manager no
+runtime has declared a mode to runs the mode this build's runtimes run by
+default (`namesInstancesByDefault()`). A serving host's routed plane, whose
+sessions commit the serving runtimes' writes to the spaces they reach through
+their owners, declares that default too, since no environment sets the flag.
+The client ends a
+session revoked with `instance-names` with the `clientUpdateRequired` refusal
+D5 gives, and the client and storage manager keep it.
 
-The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
-refusals: the positional runtime is refused the space, the test asserts the
-refusal, and the `TODO(danfuzz)` in
-`runtime/runner/src/experimental-defaults.ts` that names the boundary goes.
-The memory package tests INV-16's clauses directly: a naming commit records
-the mark in its own transaction, a positional commit to a marked space is
-refused, the space's positional sessions are revoked, a marked space refuses a
-positional open and resume, an unmarked space admits both modes while the
-posture names instances, and refuses a naming open while it names none. Tools
-that copy a space's store, among them
+A memory server in the same process as the runtimes it serves takes a posture
+as a toolshed would. The one an emulated storage manager holds serves that
+manager alone, so its posture is the mode of the manager's runtime. A
+loopback server (`newLoopbackServer()`) given no posture takes the runtime's
+default for the flag, which is what a toolshed of the same build publishes.
+`StandaloneMemoryServer`, like the memory server, takes a posture only from
+its caller and otherwise names none. The servers `cf test` and the serving
+memory servers start pass it the mode their runtimes' flags resolve to. A test
+that builds a memory server or a memory client of its own gives it the same
+default, so a test whose runtimes run that default is never refused for its
+posture or its mode, with the default on or off. A test that runs runtimes of both modes against one server gives it a
+posture that names instances.
+
+`instance-naming-modes.test.ts` asserts the refusal where a positional
+runtime meets a parent a naming runtime wrote: its reopen, its update, its
+cold start and its load of the naming runtime's compiled code are each
+refused the space, and a naming runtime that opens the parent afterwards
+finds each child where it bound it. The memory package tests INV-16's
+clauses directly: a naming commit records the mark in its own transaction, a
+positional commit to a marked space is refused, the space's positional
+sessions are revoked, a marked space refuses a positional open and resume,
+and an unmarked space admits both modes while the posture names instances,
+and refuses a naming open while it names none. Tools that copy a space's
+store, among them
 [space-clone rehearsal](../development/space-clone-rehearsal.md), carry the
 mark's row with it.
 
@@ -260,9 +288,11 @@ and the shell adopt what the server publishes. The same mapping lets a client
 that does not adopt the server's flags set its own value, and D8 is what makes
 that safe: a naming client is refused every unmarked space of a deployment
 whose posture is off, and a positional client is refused every marked space. A
-deployment turns the posture on only once every toolshed it runs carries stage
-1, since one without it admits any runtime and records no mark, and once each
-router has restarted after that: a router's public offer is fixed for its
+serving host's routed plane then declares the mode of the host's serving
+runtimes rather than this build's default. A deployment turns the posture on
+only once every toolshed it runs carries stage 1, since one without it admits
+any runtime and records no mark, and once each router has restarted after
+that: a router's public offer is fixed for its
 process's lifetime, so one taken while an endpoint lacked `instanceNameMark`
 omits it, and every routed naming client then fails its connection.
 

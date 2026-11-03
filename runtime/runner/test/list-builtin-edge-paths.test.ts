@@ -7,6 +7,7 @@ import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
   type Options,
@@ -502,6 +503,7 @@ class LoopbackSessionFactory implements SessionFactory {
   }
   async create(spaceId: string, sgnr?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: plainLoopback(this.#getServer()),
     });
     const session = await client.mount(

@@ -394,6 +394,21 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   setSharedMemoryConnection?(enabled: boolean): void;
 
   /**
+   * Declares whether the runtime this manager serves names instances, so
+   * that every session it opens declares that mode in its signed
+   * `session.open` descriptor, and a server that does not record the
+   * instance-naming mark is refused (INV-16, 04-protocol.md §4.1.2). A
+   * `Runtime` calls this at construction. A manager no runtime has declared
+   * a mode to runs this build's default, and a manager without the method
+   * declares nothing, so its sessions are positional.
+   *
+   * @throws If another mode is already declared, or if a session is
+   * already open and the mode would change: the manager's sessions are its
+   * runtimes' alike, so they cannot serve two modes.
+   */
+  setInstanceNames?(enabled: boolean): void;
+
+  /**
    * Keeps session-scoped documents in the local replica when enabled.
    * Repeated configuration must agree across runtimes sharing this manager.
    * @throws If a different policy has already been configured.

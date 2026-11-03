@@ -283,9 +283,9 @@ A value that a codec claims is encoded as a three-element array:
 [marker, tag, state]
 ```
 
-`tag` is the wire type tag (`3-json-encoding.md` Section 2 defines the
-`<Type>@<Version>` syntax, which is shared). `state` is the codec's encoded
-state — final for a terminal codec, and itself walked for a nonterminal one.
+`tag` is the wire type tag, of the syntax every interchange format shares
+(`1-fabric-values.md` Section 2.5). `state` is the codec's encoded state —
+final for a terminal codec, and itself walked for a nonterminal one.
 
 **A terminal state is opaque, and that bounds every other rule here.** The walk
 hands it to its codec without descending, so nothing inside one is traversed
@@ -430,7 +430,7 @@ mutable values. Which containers a caller sees returned by identity therefore
 varies with what needed decoding; whether any of them is mutable does not.
 
 An engine constructed with `mutable` as `true` (`1-fabric-values.md` Section
-2.9) freezes none of them instead, and copies a container that needed no
+2.10) freezes none of them instead, and copies a container that needed no
 decoding when it arrived frozen, that being the one way to hand it back
 mutable. A frozen container can arrive only from a decode in the realm that
 built the tree, since cloning produces none.
@@ -482,9 +482,9 @@ leniency:
   it is legitimate only as the state under a byte-carrying tag.
 - A key this runtime reserves, per Section 3.2, in a plain container it
   traverses.
-- A tag that is not syntactically a tag, per Section 9 of
-  [3-json-encoding.md](./3-json-encoding.md), whose tag syntax this format
-  shares.
+- A tag that is not syntactically a tag, per Section 2.5 of
+  [1-fabric-values.md](./1-fabric-values.md), whose tag syntax this format
+  shares with every other.
 - A cycle, per Section 4, among the values it traverses.
 
 A tag that is *syntactically* a tag but that no codec claims is not a refusal:

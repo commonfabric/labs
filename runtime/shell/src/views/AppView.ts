@@ -1373,23 +1373,13 @@ export class XAppView extends BaseView {
     `;
 
     const pieceId = this.#getActivePatternId();
-    const spaceName = this.app && "spaceName" in this.app.view
-      ? this.app.view.spaceName
-      : this.app && "builtin" in this.app.view &&
-          this.app.view.builtin === "home"
-      ? "<home>"
-      : undefined;
-    const spaceDid = this.app && "spaceDid" in this.app.view
-      ? this.app.view.spaceDid
-      : undefined;
     const content = this.app?.identity ? authenticated : unauthenticated;
     return html`
       <div class="shell-container">
         ${embedded ? nothing : html`
           <x-header-view
             .isLoggedIn="${!!this.app.identity}"
-            .spaceName="${spaceName}"
-            .spaceDid="${spaceDid}"
+            .view="${this.app.view}"
             .rt="${this.rt}"
             .space="${this.space}"
             .keyStore="${this.keyStore}"

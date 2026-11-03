@@ -170,9 +170,10 @@ the engine's replay keying, which keys on the holder and the counter.
 
 **The runtime's other needs are already remote.** Pattern sources come from
 `/api/patterns` over HTTP, which the main thread answers; the compiled-module
-byte cache is per worker; external effects (`fetch`, LLM calls, the outbox)
-run where the runtime runs. A Worker started without a permission descriptor
-inherits the process's permissions, FFI for SQLite included.
+byte cache is per worker, and that worker's runtimes take turns at a cold compile
+so that a program compiles once; external effects (`fetch`, LLM calls, the
+outbox) run where the runtime runs. A Worker started without a permission
+descriptor inherits the process's permissions, FFI for SQLite included.
 
 ## Ordering and failure
 

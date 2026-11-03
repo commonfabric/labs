@@ -8,6 +8,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { getLogger } from "@commonfabric/logger";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -39,6 +40,7 @@ class LoopbackSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -121,6 +123,7 @@ describe("pattern-manager", () => {
 
   beforeEach(() => {
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(
         `memory://load-by-identity-read-only-${crypto.randomUUID()}`,
       ),

@@ -73,6 +73,7 @@ import {
   isModule,
   isPattern,
   type JSONSchema,
+  type JSONSchemaObj,
   JSONValue,
   type Module,
   NAME,
@@ -1691,6 +1692,14 @@ const pieceOwnedStores = (
  * deferred start is stamped here, before its first read, so none is stamped
  * without that trust. A start no serving loop stamps takes its trust from the
  * runtime it runs in, as its parent did.
+ *
+ * A start whose transaction carries a scope-key identity reads that
+ * principal's instances, and the stamp carries the same identity unless
+ * `info` names one, so that the wave seal addresses the start's scoped writes,
+ * the defaults setup seeds in the start's own transaction among them, to the
+ * instances the start read rather than to the serving runtime's own. The
+ * identity is addressing alone: a bookkeeping run acts as no principal
+ * (serving-loop.md §3d).
  */
 const stampDeferredStart = (
   runtime: Runtime,
@@ -1698,7 +1707,13 @@ const stampDeferredStart = (
   start: IExtendedStorageTransaction,
   info: Parameters<Runtime["stampServerRun"]>[1],
 ): void => {
-  runtime.stampServerRun(start, info);
+  const identity = start.tx.scopeKeyIdentity;
+  runtime.stampServerRun(
+    start,
+    identity === undefined || info.scopeKeyIdentity !== undefined
+      ? info
+      : { ...info, scopeKeyIdentity: identity },
+  );
   const trustSnapshot = from.getCfcState().trustSnapshot;
   if (waveRunContextOf(start) !== undefined && trustSnapshot !== undefined) {
     setCfcTrustSnapshot(start, trustSnapshot);
@@ -3359,7 +3374,7 @@ export class Runner {
           argumentSchema,
           value,
           resultCell,
-        ),
+        ).links,
       resolvePendingSpaceNamesAndRetry: (frame, tx) =>
         this.#resolvePendingSpaceNamesAndRetry(frame, tx),
       invokeJavaScriptImplementation: (module, fn, argument) =>
@@ -12863,8 +12878,9 @@ export class Runner {
     argumentSchema: JSONSchema | undefined,
     value: unknown,
     resultCell: Cell<any>,
-  ): NormalizedFullLink[] {
+  ): { links: NormalizedFullLink[]; forwarded: NormalizedFullLink[] } {
     const links: NormalizedFullLink[] = [];
+    const forwarded: NormalizedFullLink[] = [];
     const seen = new WeakMap<object, Set<unknown>>();
     // The argument schema at rest can be a `cid:` reference, whose
     // definitions live on the document it names.
@@ -12873,6 +12889,44 @@ export class Runner {
       : undefined;
     const rootDefinitions = argumentRoot?.$defs;
 
+    // Whether `schema` declares its position opaque, itself, through a
+    // reference, or in every arm of a union a present value can take. A shape
+    // this does not recognize reads as not opaque, which only reads more, and
+    // that includes a reference leading back to one it is following.
+    const declaredOpaque = (
+      schema: unknown,
+      following: ReadonlySet<string> = new Set(),
+    ): boolean => {
+      if (!isObjectNotArray(schema)) return false;
+      const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
+      if (ref !== undefined && following.has(ref)) return false;
+      const followed = ref === undefined
+        ? following
+        : new Set([...following, ref]);
+      const inherited = cfcSchemaWithInheritedDefs(
+        schema as JSONSchema,
+        rootDefinitions,
+      );
+      const resolved = isObjectNotArray(inherited)
+        ? ContextualFlowControl.resolveSchemaRefs(inherited as JSONSchemaObj) ??
+          inherited
+        : inherited;
+      if (!isObjectNotArray(resolved)) return false;
+      const isOpaque = (candidate: JSONSchema) =>
+        ContextualFlowControl.getAsCellValues(candidate).some((entry) =>
+          ContextualFlowControl.getAsCellKind(entry) === "opaque"
+        );
+      if (isOpaque(schema as JSONSchema) || isOpaque(resolved)) return true;
+      const arms = resolved.anyOf ?? resolved.oneOf;
+      if (!Array.isArray(arms)) return false;
+      const present = arms.filter((arm) =>
+        !isObjectNotArray(arm) ||
+        (arm.type !== "undefined" && arm.type !== "null")
+      );
+      return present.length > 0 &&
+        present.every((arm) => declaredOpaque(arm, followed));
+    };
+
     const visit = (schema: unknown, currentValue: unknown): void => {
       // Sigil-only: the value is post-unwrap, where the only `$alias`
       // records left belong to embedded Pattern values (their `defer`
@@ -12880,6 +12934,12 @@ export class Runner {
       // parsing one here would read it at the wrong nesting level.
       if (isWriteRedirectLink(currentValue)) {
         const link = parseLink(currentValue, resultCell);
+        // An opaque input is forwarded and never read, so its writers owe the
+        // reader nothing.
+        if (declaredOpaque(schema)) {
+          forwarded.push(link);
+          return;
+        }
         links.push({
           ...link,
           schema: combineOptionalSchema(
@@ -12963,8 +13023,8 @@ export class Runner {
       }
     };
 
-    visit(argumentSchema, value);
-    return dedupeNormalizedLinks(links);
+    visit(argumentRoot ?? argumentSchema, value);
+    return { links: dedupeNormalizedLinks(links), forwarded };
   }
 
   #resolveJavaScriptFunction(
@@ -14321,14 +14381,17 @@ export class Runner {
       ...(presyncInputs !== undefined && { presyncInputs }),
     });
 
-    const schedulerReads = this.#collectArgumentSchedulerReadLinks(
-      module.argumentSchema,
-      inputs,
-      resultCell,
-    );
+    const { links: schedulerReads, forwarded } = this
+      .#collectArgumentSchedulerReadLinks(
+        module.argumentSchema,
+        inputs,
+        resultCell,
+      );
     const declaredSchedulerReads = schedulerReads.length > 0
       ? schedulerReads
-      : reads;
+      : reads.filter((read) =>
+        !forwarded.some((link) => areNormalizedLinksSame(link, read))
+      );
     const populateDependencies = reads.length > 0
       ? (depTx: IExtendedStorageTransaction, event: any) => {
         this.#populateDeclaredSchedulerReads(declaredSchedulerReads, depTx);

@@ -12,9 +12,9 @@ import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
 import { ProblematicValue } from "@/codec-common";
 
 /**
- * Codec for `bigint`. Encodes to the `BigInt@1` tag with an unpadded base64
+ * Codec for `bigint`. Encodes to the `BigInt@1` tag with an unpadded base64url
  * string encoding the bigint's two's-complement big-endian byte representation.
- * Wire format: `{ "/BigInt@1": "<base64>" }`.
+ * Wire format: `{ "/BigInt@1": "<base64url>" }`.
  *
  * The byte encoding is the same one used by the hash (`2-hash-byte-format.md`
  * Section 4.5): minimal two's-complement big-endian, with sign extension as

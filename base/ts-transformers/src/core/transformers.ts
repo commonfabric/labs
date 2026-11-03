@@ -86,6 +86,13 @@ export type CapabilityParamSummary = {
   readonly opaquePaths?: readonly (readonly string[])[];
 
   /**
+   * Paths whose value the function only hands on to a pattern it instantiates.
+   * The new piece holds a link and does its own reading, so the function needs
+   * an opaque handle there, whatever type the value has.
+   */
+  readonly forwardedPaths?: readonly (readonly string[])[];
+
+  /**
    * Paths whose whole value left the function: returned to a caller, put in a
    * collection, or handed to a callee with no summary. Whatever received it
    * may read anything beneath, so no path at or below one is identity-only,

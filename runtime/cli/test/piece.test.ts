@@ -1186,11 +1186,10 @@ describe("cli piece parsing", () => {
     ).toThrow();
   });
 
-  it("newPiece() asks a serving deployment to create the piece and keeps only the start", async () => {
+  it("newPiece() asks a serving deployment to create the piece and starts nothing", async () => {
     // The connection carries the deployment's flag posture; under it the
     // client resolves the program, sends it with the name and the registry
-    // request, leaves the space root to the serving loop, and starts the
-    // piece it is handed back unless told not to.
+    // request, and leaves the space root and the piece to the serving loop.
     const program = { main: "/main.tsx", files: [] };
     const cell = { name: "the new piece's cell" };
     const seen: {
@@ -1241,7 +1240,7 @@ describe("cli piece parsing", () => {
       register: true,
       requestKey: "retry-key",
     });
-    expect(seen.started).toEqual([cell]);
+    expect(seen.started).toEqual([]);
 
     const unstarted = await newPiece(
       config,
@@ -1259,7 +1258,7 @@ describe("cli piece parsing", () => {
       requestKey: "retry-key",
       start: false,
     });
-    expect(seen.started).toEqual([cell]);
+    expect(seen.started).toEqual([]);
     expect(seen.ensured).toBeUndefined();
   });
 
@@ -1361,7 +1360,7 @@ describe("cli piece parsing", () => {
         start: false,
         requestKey: "unstarted-retry",
       });
-      expect(run.opened).toEqual([PIECE]);
+      expect(run.opened).toEqual([]);
       expect(run.started).toEqual([]);
     });
 
@@ -1384,8 +1383,8 @@ describe("cli piece parsing", () => {
         retryKey,
         retryKey,
       ]);
-      expect(run.opened).toEqual([PIECE]);
-      expect(run.started).toEqual([run.cell]);
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
     });
 
     it("preserves a deterministic serving refusal without reporting an uncertain creation", async () => {
@@ -1438,30 +1437,32 @@ describe("cli piece parsing", () => {
   it("setPiecePattern() asks a serving deployment to replace the source and refreshes the piece here", async () => {
     // Under the deployment's flag posture the client resolves the program
     // and sends it; the serving runtime commits the update. What stays here
-    // is the refresh of the piece this connection holds, whose outcome the
-    // receipt reports the way a client-side update's does.
+    // is asking the server for the piece's result, whose outcome the receipt
+    // reports the way a client-side update's does.
     const program = { main: "/main.tsx", files: [] };
     const cell = { name: "the piece's cell" };
-    const seen: { requests: unknown[]; started: unknown[][] } = {
+    const result = { name: "the piece's result" };
+    const seen: { requests: unknown[]; pulled: unknown[] } = {
       requests: [],
-      started: [],
+      pulled: [],
     };
     let refreshFails = false;
     const controller = {
       runtime: { experimental: { serverExecution: true } },
       getSpace: () => SPACE_DID,
       getPieceCell: () => Promise.resolve(cell),
-      startPiece: (...args: unknown[]) => {
-        seen.started.push(args);
-        return refreshFails
-          ? Promise.reject(new Error("the piece never settled"))
-          : Promise.resolve();
-      },
+      getResult: () => result,
     };
     const deps = {
       loadPieces: () => Promise.resolve(controller as any),
       resolvePieceAddress: () => Promise.resolve(PIECE),
       getPinnedProgramFromFile: () => Promise.resolve(program as any),
+      pullServed: (_pieces: unknown, pulled: unknown) => {
+        seen.pulled.push(pulled);
+        return refreshFails
+          ? Promise.reject(new Error("the piece never settled"))
+          : Promise.resolve();
+      },
       setPieceSourceOnServer: (_config: unknown, input: unknown) => {
         seen.requests.push(input);
         return Promise.resolve({
@@ -1497,11 +1498,7 @@ describe("cli piece parsing", () => {
       program,
       repository: "repo",
     });
-    // The start answers for its own setup commit, which a plain start would
-    // report only to the log.
-    expect(seen.started).toEqual([
-      [cell, undefined, { awaitSetupCommit: true }],
-    ]);
+    expect(seen.pulled).toEqual([result]);
 
     refreshFails = true;
     const unrefreshed = await setPiecePattern(

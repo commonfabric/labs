@@ -49,7 +49,6 @@ import {
 } from "./compilation-cache/cell-cache.ts";
 import { createRef } from "./create-ref.ts";
 import { waveSettlementOf } from "./executor/wave.ts";
-import { interleaveCompileYield } from "./harness/compile-interleave.ts";
 import {
   deterministicCompileError,
   isDeterministicCompileFailure,
@@ -2311,6 +2310,34 @@ export class PatternManager {
     }
   }
 
+  /**
+   * Helper for the compiles that consult the process byte cache, which returns
+   * what it holds for `identities`. On a miss, and where this runtime shares
+   * turns at a cold compile, it also holds this runtime's turn, and reads again
+   * once the turn comes, since the compile that held it may have put those
+   * modules. `endTurn` ends a turn it holds; the caller calls it once it has
+   * compiled and put the modules, or failed to.
+   */
+  async #byteCacheBodiesOrTurn(
+    runtimeVersion: string,
+    identities: readonly string[],
+  ): Promise<{
+    bodies: Map<string, CompiledModuleArtifact> | undefined;
+    endTurn?: () => void;
+  }> {
+    const { moduleByteCache: byteCache, compileTurns } = this.#runtime;
+    if (byteCache === undefined) return { bodies: undefined };
+    const held = byteCache.getCompleteSet(runtimeVersion, identities);
+    if (held !== undefined || compileTurns === undefined) {
+      return { bodies: held };
+    }
+    const endTurn = await compileTurns.take();
+    const bodies = byteCache.getCompleteSet(runtimeVersion, identities);
+    if (bodies === undefined) return { bodies, endTurn };
+    endTurn();
+    return { bodies };
+  }
+
   async compilePattern(
     input: string | RuntimeProgram,
     cacheCtx?: {
@@ -2354,10 +2381,10 @@ export class PatternManager {
         },
       );
     cacheCtx?.onEntryIdentity?.(entryIdentity);
-    // evaluateRecordGraph is a single synchronous SES stretch; in the browser
-    // worker, yield first so event-loop work queued behind the compile runs
-    // before it, not after. No-op in Deno, where it would be batch overhead.
-    await interleaveCompileYield();
+    // evaluateRecordGraph is a single synchronous SES stretch; where compiles
+    // interleave, yield first so event-loop work queued behind the compile runs
+    // before it, not after. A no-op in a Deno batch compile.
+    await this.#runtime.harness.yieldBetweenCompileSteps();
     const result = this.#runtime.harness.evaluateRecordGraph(
       id,
       graph,
@@ -2443,21 +2470,31 @@ export class PatternManager {
       return result;
     }
 
-    const { id, graph, mainSpecifier, entryIdentity, modules } = await this
-      .#runtime.harness.compileToRecordGraph(program, {
+    let endCompileTurn: (() => void) | undefined;
+    let compiled;
+    try {
+      compiled = await this.#runtime.harness.compileToRecordGraph(program, {
         ...effectiveOptions,
         ...(byteCache === undefined || runtimeVersion === undefined ? {} : {
-          precompiledModulesFor: ({ identities }) =>
-            Promise.resolve(
-              byteCache.getCompleteSet(runtimeVersion, identities),
-            ),
+          precompiledModulesFor: async ({ identities }) => {
+            const { bodies, endTurn } = await this.#byteCacheBodiesOrTurn(
+              runtimeVersion,
+              identities,
+            );
+            endCompileTurn = endTurn;
+            return bodies;
+          },
         }),
       });
-    if (byteCache !== undefined && runtimeVersion !== undefined) {
-      byteCache.putAll(runtimeVersion, modules);
+      if (byteCache !== undefined && runtimeVersion !== undefined) {
+        byteCache.putAll(runtimeVersion, compiled.modules);
+      }
+    } finally {
+      endCompileTurn?.();
     }
+    const { id, graph, mainSpecifier, entryIdentity, modules } = compiled;
     // Yield ahead of the synchronous SES evaluation (see compilePattern).
-    await interleaveCompileYield();
+    await this.#runtime.harness.yieldBetweenCompileSteps();
     const result = this.#runtime.harness.evaluateRecordGraph(
       id,
       graph,
@@ -2538,7 +2575,7 @@ export class PatternManager {
       );
       cacheCtx.onEntryIdentity?.(entryIdentity);
       // Yield ahead of the synchronous SES evaluation (see compilePattern).
-      await interleaveCompileYield();
+      await harness.yieldBetweenCompileSteps();
       const result = harness.evaluateRecordGraph(
         id,
         graph,
@@ -2585,6 +2622,7 @@ export class PatternManager {
     // repair. Either skips the transform-and-emit step but still triggers a
     // write-back.
     let compiledBodiesServed = false;
+    let endCompileTurn: (() => void) | undefined;
     let compiled;
     try {
       compiled = await harness.compileToRecordGraph(program, {
@@ -2679,10 +2717,9 @@ export class PatternManager {
           // process compiled were SES-verified then; bytes a test seeded from a
           // CI disk file are trusted via the workflow cache key, which
           // fingerprints every compile input.
-          const processBodies = byteCache?.getCompleteSet(
-            cacheOpts.runtimeVersion,
-            identities,
-          );
+          const { bodies: processBodies, endTurn } = await this
+            .#byteCacheBodiesOrTurn(cacheOpts.runtimeVersion, identities);
+          endCompileTurn = endTurn;
           if (
             processBodies &&
             (!patternCoverage ||
@@ -2694,7 +2731,14 @@ export class PatternManager {
           return undefined;
         },
       });
+
+      // Populate the process byte cache with this program's module bytes
+      // (freshly compiled, or reused from storage). Idempotent and
+      // content-addressed, so a redundant put is harmless. A later runtime or
+      // space then reuses these modules instead of re-transforming them.
+      byteCache?.putAll(cacheOpts.runtimeVersion, compiled.modules);
     } finally {
+      endCompileTurn?.();
       // Release the read-only cache transaction (no commit needed) so repeated
       // compiles don't accumulate open transactions.
       readTx.abort?.("compile-cache read complete");
@@ -2702,14 +2746,8 @@ export class PatternManager {
     const { id, graph, mainSpecifier, entryIdentity, modules } = compiled;
     cacheCtx.onEntryIdentity?.(entryIdentity);
 
-    // Populate the process byte cache with this program's module bytes (freshly
-    // compiled, or reused from storage). Idempotent and content-addressed, so a
-    // redundant put is harmless. A later runtime or space then reuses these
-    // modules instead of re-transforming them.
-    byteCache?.putAll(cacheOpts.runtimeVersion, modules);
-
     // Yield ahead of the synchronous SES evaluation (see compilePattern).
-    await interleaveCompileYield();
+    await harness.yieldBetweenCompileSteps();
     const evalStart = performance.now();
     const result = harness.evaluateRecordGraph(
       id,
@@ -2736,7 +2774,9 @@ export class PatternManager {
       // cache may be empty (e.g. a fresh space), and the by-identity reload
       // path needs the closure here. A failed write fails the compile:
       // persisted refs-only pattern JSON would otherwise point at a closure
-      // that is not durable in `space`.
+      // that is not durable in `space`. The evaluation above and this write
+      // each hold the thread for seconds under load, so yield between them.
+      await harness.yieldBetweenCompileSteps();
       await this.#persistCompileCacheTracked(
         space,
         modules,

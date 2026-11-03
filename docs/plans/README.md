@@ -19,6 +19,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   and correspondence manifest checked in CI and a §18.6.4 conformance
   statement, to a kernel of same-named pure functions the pseudocode is the
   source of.
+- [Anchors on collaborative fields](collaborative-field-anchors.md) carries
+  what is left to build on Memory's anchors, ranges of a collaborative field
+  mapped through every integrated operation: the runner's `addAnchor()`,
+  `removeAnchor()` and `anchorsOf()`, the editor drawing highlights at the
+  field's anchors as a view, and the shared-note comments on top.
 - [Unify Weaver Ask and CF harness](weaver-ask-console.md) sequences typed
   callbacks, a cohesive handles module, one session UI for both command aliases,
   and hands-on demo validation across labs, Weaver, and Loom.
@@ -318,8 +323,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   before the `instanceNames` flag turns on: a one-way mark on each space,
   recorded at the first commit from a naming runtime and only where the
   deployment names instances, after which the memory server admits no
-  positional runtime to it; then the flag's env mapping, the tests that assume
-  its default, the flip, and the flag's removal.
+  positional runtime to it, which is built; then the flag's env mapping, the
+  flip, and the flag's removal.
 - [Handler-callable egress](handler-callable-egress.md) records the capability
   a pattern does not have: a network request a handler can issue and await,
   which the runtime records and gates the way it records and gates a node

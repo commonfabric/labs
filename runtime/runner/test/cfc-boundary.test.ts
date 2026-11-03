@@ -12,6 +12,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema, Pattern } from "../src/builder/types.ts";
 import { cellTx, createCell } from "../src/cell.ts";
 import {
@@ -107,6 +108,7 @@ class SharedV2SessionFactory implements V2Storage.SessionFactory {
 
   async create(space: MemorySpace) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(space, {}, testSessionOpenAuthFactory);

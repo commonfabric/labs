@@ -547,6 +547,9 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
     error: unknown,
   ) => void;
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** Asks the server for a cell's value, in place of {@link pullServed}. */
+  pullServed?: typeof pullServed;
 }
 
 interface DisposableRuntime {
@@ -1796,7 +1799,7 @@ async function createWithReceipt(
   } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
-): Promise<{ id: string; getCell: () => Cell<unknown> }> {
+): Promise<string> {
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
@@ -1871,19 +1874,20 @@ async function createWithReceipt(
         (receipt.registration?.error ?? ""),
     );
   }
-  const cell = await timeCliPhase(
-    "newPiece.create.getPieceCell",
-    () => pieces.getPieceCell(receipt.pieceId, false),
-    trace,
-  );
-  if (options?.start !== false) {
+  // Under server execution the serving loop runs what the verb created.
+  if (options?.start !== false && !servesLifecycleVerbs(pieces)) {
+    const cell = await timeCliPhase(
+      "newPiece.create.getPieceCell",
+      () => pieces.getPieceCell(receipt.pieceId, false),
+      trace,
+    );
     await timeCliPhase(
       "newPiece.create.start",
       () => boundStart(pieces.startPiece(cell)),
       trace,
     );
   }
-  return { id: receipt.pieceId, getCell: () => cell };
+  return receipt.pieceId;
 }
 
 /**
@@ -1998,12 +2002,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
-  const receipted = served || options?.requestKey !== undefined;
-  const piece = await timeCliPhase(
-    "newPiece.create",
-    () =>
-      receipted
-        ? createWithReceipt(
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (served || options?.requestKey !== undefined) {
+    const id = await timeCliPhase(
+      "newPiece.create",
+      () =>
+        createWithReceipt(
           config,
           pieces,
           program,
@@ -2011,19 +2015,24 @@ export async function newPiece(
           options,
           deps,
           boundStart,
-        )
-        : boundStart(pieces.create(program, {
-          repository: entry.repository,
-          start: options?.start,
-          ...(options?.input === undefined ? {} : { input: options.input }),
-        })),
+        ),
+    );
+    noteWroteTo(config.space);
+    return id;
+  }
+  const piece = await timeCliPhase(
+    "newPiece.create",
+    () =>
+      boundStart(pieces.create(program, {
+        repository: entry.repository,
+        start: options?.start,
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // Receipt-backed creation returns after both setup and registration commit.
-  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {
@@ -2176,13 +2185,10 @@ async function resolveSlugSourceCell(
 
 /**
  * The served half of `setPiecePattern`: the serving runtime replaces the
- * source and commits the update, and this connection then refreshes the
- * piece it holds the way a client-side update does after its own commit —
- * starting it, which under the flag runs the graph as speculation while
- * the serving loop serves the derived values — and reports that outcome in
- * the receipt's `refresh`, since the commit is durable whatever the refresh
- * did. A start whose own setup commit fails leaves the piece stopped, so
- * that is a failed refresh too.
+ * source and commits the update, and this connection then asks the server for
+ * the piece's result, which is what makes the new source run, and reports that
+ * outcome in the receipt's `refresh`, since the commit is durable whatever the
+ * refresh did.
  */
 async function updateOnServer(
   config: PieceConfig,
@@ -2209,7 +2215,7 @@ async function updateOnServer(
   let refresh: PatternUpdateReceipt["refresh"];
   try {
     const cell = await pieces.getPieceCell(receipt.pieceId, false);
-    await pieces.startPiece(cell, undefined, { awaitSetupCommit: true });
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
     refresh = {
@@ -4283,6 +4289,8 @@ export async function linkPieces(
           resolvedTargetPath,
           {
             ...options,
+            // The serving loop runs the pieces a link joins.
+            ...(servedPieces(pieces) ? { start: false } : {}),
             ...(resolvedSourceScope === undefined
               ? {}
               : { sourceScope: resolvedSourceScope }),
@@ -4406,7 +4414,8 @@ export async function linkSqliteDiskSource(
     deps,
   );
   await pieces.link(id, [], resolvedTarget.piece, resolvedTarget.pathAfter, {
-    start: options?.start,
+    // The serving loop runs the piece a link reaches.
+    start: servedPieces(pieces) ? false : options?.start,
     targetScope: resolvedTarget.scope ?? options?.targetScope,
   });
   await pieces.synced();
@@ -5639,7 +5648,10 @@ export async function warmPiece(
   // the resolution's answer: a walk into a collection holder reaches a member,
   // and the caller's memo is over pieces rather than over the paths that
   // reach them.
-  if (deps.alreadyRunning?.(resolvedConfig.piece) !== true) {
+  if (
+    !servedPieces(pieces) &&
+    deps.alreadyRunning?.(resolvedConfig.piece) !== true
+  ) {
     await timeCliPhase(
       "warmPiece.getPiece",
       () =>

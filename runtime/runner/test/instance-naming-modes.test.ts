@@ -1,14 +1,16 @@
 /**
  * Runtimes that differ in their `instanceNames` experimental flag, over one
  * store. The first block holds that compiled code is never shared between the
- * two naming modes. The second reproduces what a runtime with naming off does
- * to a parent a runtime with naming on carried over: it is the regression
- * coverage for the boundary that has to be in place before the flag turns on
- * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`). The third holds
- * that a cold start in either naming mode starts a parent the other set up,
- * since both modes stamp the same setup record. Each runtime sits on a
- * storage manager of its own over one memory server, so it starts from what
- * it syncs, as a runtime in another process does.
+ * two naming modes. The second holds that a runtime with naming off is refused
+ * a parent a runtime with naming on carried over, and that the parent's
+ * children stay where the runtime with naming on bound them: it is the
+ * coverage of the boundary that has to be in place before the flag turns on
+ * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`, INV-16). The
+ * third holds that a cold start with naming on starts a parent a runtime with
+ * naming off set up, since both modes stamp the same setup record, and that a
+ * runtime with naming off is refused a parent one with naming on set up. Each
+ * runtime sits on a storage manager of its own over one memory server, so it
+ * starts from what it syncs, as a runtime in another process does.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -19,8 +21,12 @@ import { Identity } from "@commonfabric/identity";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
+  StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
-import { instancePartialCause } from "../src/builder/instance-name.ts";
+import {
+  instancePartialCause,
+  namesInstancesByDefault,
+} from "../src/builder/instance-name.ts";
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -109,7 +115,13 @@ describe("instance-naming-modes", () => {
   let live: { runtime: Runtime; manager: EmulatedStorageManager }[];
 
   beforeEach(() => {
-    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    // The server's posture names instances, as a deployment's does once it
+    // runs runtimes of either mode, so a space is marked at the first commit
+    // a runtime with naming on makes to it (INV-16).
+    server = newLoopbackServer({
+      subscriptionRefreshDelayMs: 0,
+      namesInstances: () => true,
+    });
     live = [];
   });
   afterEach(async () => {
@@ -145,6 +157,22 @@ describe("instance-naming-modes", () => {
     await manager.close();
   };
 
+  // The refusal INV-16 gives a runtime with naming off on `space`, once a
+  // runtime with naming on has written to it.
+  const markedSpaceRefusal = `Space ${space} holds data written with ` +
+    "instance names, which this runtime does not use";
+
+  // What `runtime` holds of the cell `name` once it has synced it, and the
+  // update-required refusal its storage manager keeps.
+  const syncedWithRefusal = async (runtime: Runtime, name: string) => {
+    const cell = runtime.getCell(space, name);
+    await cell.sync();
+    return {
+      raw: cell.getRaw(),
+      refusal: runtime.storageManager.clientUpdateRequired?.(),
+    };
+  };
+
   // Whether `pattern` gives any sub-pattern instance an instance name.
   const namesAnInstance = (pattern: Pattern): boolean =>
     (pattern.derivedInternalCells ?? []).some((descriptor) =>
@@ -152,7 +180,10 @@ describe("instance-naming-modes", () => {
     );
 
   describe("compiled code", () => {
-    it("is not shared from a runtime that names instances with one that does not", async () => {
+    it("is not shared from a runtime that names instances with one that does not, which is refused the space it is cached in", async () => {
+      // Writing the compiled code back marks the space, so the runtime with
+      // naming off cannot read it there at all.
+
       const naming = runtimeNaming(true);
       const named = await naming.patternManager.compilePattern(WITH_SIBLING, {
         space,
@@ -162,15 +193,17 @@ describe("instance-naming-modes", () => {
       await retire(naming);
 
       const positional = runtimeNaming(false);
-      const loaded = await positional.patternManager.compilePattern(
-        WITH_SIBLING,
-        { space, knownEntryIdentity: identity },
-      );
+      await expect(
+        positional.patternManager.compilePattern(
+          WITH_SIBLING,
+          { space, knownEntryIdentity: identity },
+        ),
+      ).rejects.toThrow(markedSpaceRefusal);
 
       expect({
         named: namesAnInstance(named),
-        loaded: namesAnInstance(loaded),
-      }).toEqual({ named: true, loaded: false });
+        refusal: positional.storageManager.clientUpdateRequired?.()?.message,
+      }).toEqual({ named: true, refusal: markedSpaceRefusal });
     });
 
     it("is not shared from a runtime that does not name instances with one that does", async () => {
@@ -405,46 +438,25 @@ describe("instance-naming-modes", () => {
       });
     });
 
-    it("binds the inserted sibling to the carried child's document, and a fresh child to the named instance, when a runtime with naming off reopens it", async () => {
-      // TODO(danfuzz): This pins the hazard the activation boundary exists to
-      // exclude. Once a runtime whose naming mode differs from the parent's is
-      // kept away from it, this case becomes a refusal, and the expectation
-      // here changes with it.
+    it("is refused the parent's space, and reads nothing of the parent, when a runtime with naming off reopens it", async () => {
+      // The runtime with naming on marked the space at its first write, so
+      // the memory server admits no runtime with naming off to it, and the
+      // parent's children are never bound by position.
 
-      const before = await carriedOver();
+      await carriedOver();
 
       const positional = runtimeNaming(false);
-      await reopen(positional);
-      await bump(positional, "aBump", 300);
-      await bump(positional, "sBump", 4000);
-      const after = await children(positional);
 
-      expect({
-        shown: await shown(positional),
-        A: { label: after.A.label },
-        O: { setUp: after.O.setUp, label: after.O.label },
-      }).toEqual({
-        // The parent's manifest names its children by instance name, which
-        // the positional build lacks, so the start re-stages the projection
-        // by position: what the parent shows as `s` is `A`, holding `a`'s
-        // count, and what it shows as `a` is the fresh child `O`.
-        shown: {
-          a: { countDoc: after.O.countDoc, count: 300, owner: "a" },
-          s: { countDoc: before.A.countDoc, count: 4008, owner: "s" },
-        },
-        // `s` runs on `A` and has written its arguments there, and `a` runs
-        // on `O`.
-        A: { label: "s" },
-        O: { setUp: true, label: "a" },
+      expect(await syncedWithRefusal(positional, PARENT)).toEqual({
+        raw: undefined,
+        refusal: { message: markedSpaceRefusal, unconfirmedWrites: false },
       });
     });
 
-    it("binds each child back to its own document, when a runtime with naming on reopens it after one with naming off", async () => {
+    it("binds each child to its own document, when a runtime with naming on reopens it after one with naming off was refused it", async () => {
       const before = await carriedOver();
       const positional = runtimeNaming(false);
-      await reopen(positional);
-      await bump(positional, "aBump", 300);
-      await retire(positional);
+      const attempt = await syncedWithRefusal(positional, PARENT);
 
       const naming = runtimeNaming(true);
       await reopen(naming);
@@ -453,11 +465,11 @@ describe("instance-naming-modes", () => {
       const after = await children(naming);
 
       expect({
+        refusal: attempt.refusal?.message,
         shown: await shown(naming),
         A: { label: after.A.label },
       }).toEqual({
-        // `A` lacks the 300 the runtime with naming off wrote to `a`, which
-        // landed on the fresh child `O` that runtime ran `a` on.
+        refusal: markedSpaceRefusal,
         shown: {
           a: { countDoc: before.A.countDoc, count: 50008, owner: "a" },
           s: { countDoc: before.S.countDoc, count: 600020, owner: "s" },
@@ -466,21 +478,25 @@ describe("instance-naming-modes", () => {
       });
     });
 
-    it("shows the carried child's state under the inserted sibling, and a fresh one under the named instance, when a runtime with naming off updates it", async () => {
-      // TODO(danfuzz): As above, this pins what the activation boundary has
-      // to exclude: the update applies, with no refusal.
-
+    it("is refused the parent's space, and leaves the parent as it was, when a runtime with naming off updates it", async () => {
       const before = await carriedOver();
 
       const positional = runtimeNaming(false);
-      await update(positional, WITH_SIBLING_EDITED);
-      await bump(positional, "aBump", 300);
-      await bump(positional, "sBump", 4000);
-      const after = await children(positional);
+      await expect(update(positional, WITH_SIBLING_EDITED)).rejects.toThrow(
+        markedSpaceRefusal,
+      );
+      const naming = runtimeNaming(true);
+      await reopen(naming);
 
-      expect(await shown(positional)).toEqual({
-        a: { countDoc: after.O.countDoc, count: 300, owner: "a" },
-        s: { countDoc: before.A.countDoc, count: 4008, owner: "s" },
+      expect({
+        refusal: positional.storageManager.clientUpdateRequired?.()?.message,
+        shown: await shown(naming),
+      }).toEqual({
+        refusal: markedSpaceRefusal,
+        shown: {
+          a: { countDoc: before.A.countDoc, count: 8, owner: "a" },
+          s: { countDoc: before.S.countDoc, count: 20, owner: "s" },
+        },
       });
     });
   });
@@ -488,9 +504,11 @@ describe("instance-naming-modes", () => {
   describe("a parent with two children of one pattern, started cold", () => {
     // The setup record a start holds the stored setup against describes a
     // named instance at its legacy number, so the record one naming mode
-    // stamps is the record the other builds. A start in either mode, of a
-    // parent the other mode set up, therefore never takes the change of mode
-    // for a move of the children's state, and starts the parent.
+    // stamps is the record the other builds. A start with naming on, of a
+    // parent a runtime with naming off set up, therefore never takes the
+    // change of mode for a move of the children's state, and starts the
+    // parent. A runtime with naming off is refused a parent one with naming
+    // on set up, since that setup marked the space.
 
     const PARENT = "parent";
 
@@ -502,13 +520,8 @@ describe("instance-naming-modes", () => {
     };
 
     // Sets the parent up as `WITH_SIBLING` in a runtime with naming
-    // `setUpNaming`, with a count of 7 written to `a` and 20 to `s`, then
-    // starts it cold in a runtime with naming `startNaming`. Returns what the
-    // start resolved to and the counts the parent then shows.
-    const setUpThenStart = async (
-      setUpNaming: boolean,
-      startNaming: boolean,
-    ) => {
+    // `setUpNaming`, with a count of 7 written to `a` and 20 to `s`.
+    const setUp = async (setUpNaming: boolean) => {
       const first = runtimeNaming(setUpNaming);
       const pattern = await first.patternManager.compilePattern(
         WITH_SIBLING,
@@ -527,6 +540,16 @@ describe("instance-naming-modes", () => {
       await bump(first, "aBump", 7);
       await bump(first, "sBump", 20);
       await retire(first);
+    };
+
+    // Sets the parent up as `setUp()` does, then starts it cold in a runtime
+    // with naming `startNaming`. Returns what the start resolved to and the
+    // counts the parent then shows.
+    const setUpThenStart = async (
+      setUpNaming: boolean,
+      startNaming: boolean,
+    ) => {
+      await setUp(setUpNaming);
 
       const second = runtimeNaming(startNaming);
       const parent = second.getCell<Record<string, unknown>>(space, PARENT);
@@ -549,18 +572,14 @@ describe("instance-naming-modes", () => {
       });
     });
 
-    it("starts it, with fresh children, when a runtime with naming off reopens a parent one with naming on set up", async () => {
-      // TODO(danfuzz): This pins the hazard the activation boundary exists to
-      // exclude. The parent's manifest names its children by instance name,
-      // which the positional build lacks, so the start re-stages the result
-      // projection onto children at positional spots, which the setup never
-      // ran. Once a runtime whose naming mode differs from the parent's is
-      // kept away from it, this case becomes a refusal.
+    it("is refused the parent's space, when a runtime with naming off reopens a parent one with naming on set up", async () => {
+      await setUp(true);
 
-      expect(await setUpThenStart(true, false)).toEqual({
-        started: true,
-        aCount: 0,
-        sCount: 0,
+      const second = runtimeNaming(false);
+
+      expect(await syncedWithRefusal(second, PARENT)).toEqual({
+        raw: undefined,
+        refusal: { message: markedSpaceRefusal, unconfirmedWrites: false },
       });
     });
 
@@ -578,6 +597,106 @@ describe("instance-naming-modes", () => {
         aCount: 7,
         sCount: 20,
       });
+    });
+  });
+  describe("storage", () => {
+    // Each case here makes its own storage, apart from the server the
+    // enclosing hooks make.
+
+    // Commits a write to the cell `name` in `runtime`, and returns the
+    // commit's error, if any, and the update-required refusal its storage
+    // manager keeps.
+    const write = async (runtime: Runtime, name: string) => {
+      const tx = runtime.edit();
+      runtime.getCell<number>(space, name, undefined, tx).set(1);
+      const { error } = await tx.commit().settled;
+      return {
+        error: error?.message,
+        refusal: runtime.storageManager.clientUpdateRequired?.()?.message,
+      };
+    };
+
+    it("refuses a runtime of the other naming mode on a storage manager a runtime has declared its mode to", async () => {
+      // One manager's sessions are its runtimes' alike, so they cannot serve
+      // both modes.
+
+      const manager = StorageManager.emulate({ as: signer });
+      const naming = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { instanceNames: true },
+      });
+      try {
+        expect(() =>
+          new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: manager,
+            experimental: { instanceNames: false },
+          })
+        ).toThrow("already declared the other naming mode");
+      } finally {
+        await naming.dispose();
+      }
+    });
+
+    it("refuses to change the naming mode of a storage manager with a session open", async () => {
+      // A manager no runtime has declared a mode to opens its sessions in
+      // this build's default mode.
+
+      const manager = StorageManager.emulate({ as: signer });
+      try {
+        await manager.open(space).sync(`of:${space}`);
+
+        expect(() => manager.setInstanceNames(!namesInstancesByDefault()))
+          .toThrow("a session is already open");
+      } finally {
+        await manager.close();
+      }
+    });
+
+    it("admits a runtime that names instances to the server an emulated storage manager holds", async () => {
+      // The server serves that manager alone, so its posture follows the
+      // runtime's naming mode.
+
+      const manager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { instanceNames: true },
+      });
+      try {
+        expect(await write(runtime, "emulated")).toEqual({
+          error: undefined,
+          refusal: undefined,
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("gives a loopback server given no posture the naming mode a runtime given no flag runs", async () => {
+      // A toolshed publishes its runtime's resolved flags as its posture, so
+      // a loopback server stands in for a toolshed of this build.
+
+      const loopback = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      const manager = EmulatedStorageManager.connectTo(loopback, {
+        as: signer,
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { instanceNames: true },
+      });
+      try {
+        const refusal = `The server of space ${space} does not name ` +
+          "instances, and this runtime does";
+        expect((await write(runtime, "loopback")).refusal).toBe(
+          namesInstancesByDefault() ? undefined : refusal,
+        );
+      } finally {
+        await runtime.dispose();
+        await loopback.close();
+      }
     });
   });
 });

@@ -13,6 +13,7 @@ import type {
   SessionDemand,
 } from "@commonfabric/memory/v2/server";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -471,6 +472,7 @@ describe("SpaceServer", () => {
           },
         });
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(server),
         });
         try {

@@ -11,6 +11,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -107,6 +108,7 @@ describe("wish-reconnect-recovery", () => {
       storageManager,
     });
     const writerClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     const cancels: (() => void)[] = [];

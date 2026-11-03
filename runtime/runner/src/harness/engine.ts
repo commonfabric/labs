@@ -387,8 +387,8 @@ export interface EngineOptions {
    * yielding a macrotask turn between pipeline steps. Defaults to
    * {@link COMPILE_INTERLEAVES_EVENT_LOOP}: on in the browser runtime worker,
    * where a synchronous compile stalls every queued IPC delivery for its whole
-   * duration, off in Deno batch compiles, where the turns are pure overhead.
-   * A test sets it to pin either arm from Deno.
+   * duration, off in Deno batch compiles, where the turns are pure overhead. A
+   * serving runtime sets it, and a test sets it to pin either arm from Deno.
    */
   interleaveCompile?: boolean;
 }
@@ -442,6 +442,15 @@ export class Engine extends EventTarget {
         return outerThis.#sesRuntime;
       },
     };
+  }
+
+  /**
+   * One seam between the CPU-bound steps of loading a program: a macrotask turn
+   * where this engine interleaves its compiles, and a microtask completion where
+   * it does not ({@link EngineOptions.interleaveCompile}).
+   */
+  yieldBetweenCompileSteps(): Promise<void> {
+    return interleaveCompileYield(this.#interleaveCompile);
   }
 
   async initializeRuntime(): Promise<RuntimeInternals> {
@@ -752,9 +761,10 @@ export class Engine extends EventTarget {
         // A cold compile is a seconds-long CPU-bound pipeline. In the browser
         // runtime worker a synchronous run wedges the event loop and stalls
         // every queued IPC delivery until it finishes (measured as
-        // runner.loop/workerLag ≈ the whole compile), so there we drive the
-        // per-module interleaved variant to bound the stall to the longest
-        // single module step. In Deno batch compiles (cf test, server, CLI)
+        // runner.loop/workerLag ≈ the whole compile), and on a serving runtime
+        // it stalls every other space and the worker's heartbeat, so there we
+        // drive the per-module interleaved variant to bound the stall to the
+        // longest single module step. In Deno batch compiles (cf test, CLI)
         // nothing latency-sensitive shares the loop, so the yields would be
         // pure overhead (~2x wall) — run the synchronous driver instead.
         // Both drain the same generator, so the emitted output is identical.
@@ -888,16 +898,16 @@ export class Engine extends EventTarget {
       if (!trustBodies) {
         // Verify, and record which modules the verifier approved for hoist
         // registration — only those get the real `__cfReg` registrar (the rest
-        // get a throwing one, so a smuggled call fails closed). In the browser
-        // worker, yield between modules: per-body SES verification is CPU-bound
-        // and shares the event loop with IPC traffic there (no-op in Deno).
+        // get a throwing one, so a smuggled call fails closed). Where compiles
+        // interleave, yield between modules: per-body SES verification is
+        // CPU-bound and shares the event loop with IPC traffic and other spaces.
         for (const [specifier, body] of graph.compiledBodies) {
           const { hasHoistRegistration } = verifyCompiledModuleBody(
             body,
             specifier,
           );
           if (hasHoistRegistration) graph.registrationApproved.add(specifier);
-          await interleaveCompileYield();
+          await this.yieldBetweenCompileSteps();
         }
       } else {
         // Trusted integrity-gated bytes: SES verification — and its registration
@@ -1934,15 +1944,15 @@ export class Engine extends EventTarget {
       // Verify, and record which modules the verifier approved for hoist
       // registration — only those get the real `__cfReg` registrar. Yield
       // between modules so queued event-loop work (worker IPC) interleaves
-      // with the CPU-bound per-body verification (browser worker only; a no-op
-      // in Deno, where the yield would be pure batch overhead).
+      // with the CPU-bound per-body verification (a no-op in a Deno batch
+      // compile, where the yield would be pure overhead).
       for (const [specifier, body] of graph.compiledBodies) {
         const { hasHoistRegistration } = verifyCompiledModuleBody(
           body,
           specifier,
         );
         if (hasHoistRegistration) graph.registrationApproved.add(specifier);
-        await interleaveCompileYield();
+        await this.yieldBetweenCompileSteps();
       }
     } else {
       // Trusted integrity-gated bytes: registration approval was sealed at
@@ -1960,9 +1970,9 @@ export class Engine extends EventTarget {
     verifyModuleGraph(graph.records, mainSpecifier);
 
     // The SES evaluation below is a single synchronous stretch (~100ms+ for a
-    // system pattern); in the browser worker, yield first so IPC queued behind
-    // the load runs before it rather than after (no-op in Deno).
-    await interleaveCompileYield();
+    // system pattern); where compiles interleave, yield first so IPC queued
+    // behind the load runs before it rather than after.
+    await this.yieldBetweenCompileSteps();
 
     return this.#evaluateGraph(graph, mainSpecifier, {
       evalIdPrefix: entryIdentity,

@@ -138,6 +138,42 @@ one ordered commit. Reopening the field creates a new epoch.
 The current implementation supports only the default branch. Collaborative
 queries, applies, and releases on child branches fail explicitly.
 
+## Anchors
+
+A collaborative field carries **anchors**: ranges of its value, each under a
+client-chosen id, that Memory moves with the text. Whenever an edit integrates,
+the codec maps every anchor of the field through it in the same transaction,
+so the stored set is always the set at the field head. Text inserted at either
+end of a range stays outside it, text inserted inside grows it, a replacement
+of the covered text keeps the range over the replacement, and a deletion that
+covers it leaves a point (`from === to`) where the text was. Anchors survive
+history pruning, since they ride the field head and every checkpoint rather
+than the operation log.
+
+A client adds or removes anchors on the `apply-op` that writes the field
+([`../specs/memory-v2/07-op-views-and-annotations.md`](../specs/memory-v2/07-op-views-and-annotations.md),
+§7.7.4). The ranges it adds are stated against the document the client holds,
+the field at the operation's base with the operation's own edits applied, so
+an editor anchors text its user has just typed in the edit that inserts it,
+and Memory maps the ranges through the operations integrated since before
+storing them: a stale base is merged the way a stale edit is. An operation
+whose payload changes nothing is how a client changes anchors alone; it
+advances no version, and an anchor is not an operation: the submitted and
+integrated projections hold nothing for it.
+
+Anchors reach readers two ways. Every operation snapshot an editor receives
+carries the field's current set, which can change at a cursor the editor has
+already applied. And Memory writes an **anchors document**, an ordinary entity
+at an id derived from the field's address (`of:op-anchors:` plus a hash of the
+entity id, scope and path) in the field's own scope, holding
+`{ epoch, version, anchors }`, in the transaction that changes the set; graph
+queries, watches, point-in-time reads and server-executed handlers read
+anchors from it as plain state. The document is deleted with the field's
+release or its entity, and a client cannot write it.
+
+An annotation on the field, a comment, a highlight or a bookmark, is an
+ordinary entity that names an anchor id and stores no position of its own.
+
 ## Checkpoints, reconnect, and reset
 
 The operation cursor is `{ epoch, version }`. Memory creates storage-owned

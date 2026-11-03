@@ -50,7 +50,6 @@ describe("newPiece()", () => {
         "newPiece.create.instantiate",
         "newPiece.create.server.instantiate.queue",
         "newPiece.create.server.registration.delivery",
-        "newPiece.create.getPieceCell",
       ]);
     expect(lines).toContain(
       "[cf-phase] 1500ms :: newPiece.create.server.instantiate.queue",

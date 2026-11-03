@@ -96,6 +96,47 @@ export interface TreeSitterGrammar {
   /** The node types a structure entry can be found inside. When given, the
    * walk does not descend into nodes of any other type. */
   readonly structureParents?: ReadonlySet<string>;
+
+  /** The rule for comments that end before the point the parser reads them
+   * to. */
+  readonly shortComments?: ShortComments;
+}
+
+/** A stretch of source, as offsets. */
+export interface SourceRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** A place in the source: an offset, and the row and column it falls on. */
+export interface SourcePoint {
+  readonly index: number;
+  readonly row: number;
+  readonly column: number;
+}
+
+/**
+ * Comments that end before the point the grammar's parser reads them to. The
+ * adapter asks the rule for the first such comment, reads it as blank space,
+ * parses again, and asks for the next one after it. So each comment is judged
+ * from a parse that reads every comment before it as the language does, and
+ * none is judged again. The comments read as blank space are colored as
+ * comments.
+ *
+ * The work this takes is bounded by a multiple of the plain parse's and a
+ * fixed amount more, after which the comments that remain run to where the
+ * parser reads them. An edit to a source with such comments or with errors
+ * parses it afresh, as a complete highlight does, so that the two agree.
+ */
+export interface ShortComments {
+  /** The first comment starting at or after `from` that ends sooner than the
+   * parser reads it, with the offset where it ends. Undefined when there is
+   * none, or when the parse cannot show whether the next comment does. */
+  next(
+    root: SyntaxNode,
+    source: string,
+    from: SourcePoint,
+  ): SourceRange | undefined;
 }
 
 interface LoadedGrammar {
@@ -219,13 +260,159 @@ function parserText(grammar: TreeSitterGrammar, text: string): string {
     : text.replaceAll(spans, (span) => span.replace(/[\r\n]/g, " "));
 }
 
-function parseWith(ready: LoadedGrammar, text: string, from?: Tree): Tree {
-  const tree = ready.parser.parse(text, from);
+function parseWith(
+  ready: LoadedGrammar,
+  text: string,
+  from?: Tree,
+  onProgress?: () => void,
+): Tree {
+  const tree = ready.parser.parse(text, from, { progressCallback: onProgress });
   // deno-coverage-ignore-start -- a parse returns no tree only when it is
   // cancelled or given a deadline, and this one is given neither
   if (tree === null) throw new Error("cf view: Tree-sitter returned no tree.");
   // deno-coverage-ignore-stop
   return tree;
+}
+
+/** A parse of `source` from `tree` with `edit` applied to a copy of it,
+ * leaving `tree` unchanged. */
+function reparse(
+  ready: LoadedGrammar,
+  tree: Tree,
+  edit: InstanceType<TreeSitterModule["Edit"]>,
+  source: string,
+): Tree {
+  const edited = tree.copy();
+  edited.edit(edit);
+  try {
+    return parseWith(ready, source, edited);
+  } finally {
+    edited.delete();
+  }
+}
+
+/** A parse of a grammar's parser text, and of that text with the comments
+ * the grammar's {@link ShortComments} rule finds read as blank space. Blank
+ * space keeps every line start where it was. */
+interface Parse {
+  /** The grammar's parser text. */
+  readonly plain: string;
+
+  /** Where each line of {@link plain} starts. */
+  readonly lineStarts: number[];
+
+  /** The parse of {@link plain}. */
+  readonly plainTree: Tree;
+
+  /** The comments read as blank space, in source order. */
+  readonly comments: readonly SourceRange[];
+
+  /** The parse of {@link plain} with {@link comments} read as blank space. */
+  readonly tree: Tree;
+}
+
+/**
+ * The work the adapter may spend finding short comments, counted in the
+ * parser's progress reports: this many times the reports of the plain parse,
+ * and {@link SHORT_COMMENT_FLOOR} more. Each round finds one comment and
+ * parses the source again with it read as blank space. Its walk to the
+ * comment costs a sixteenth of the plain parse's reports, and one more, and
+ * its parse costs what it reports.
+ */
+const SHORT_COMMENT_WORK = 4;
+
+/** See {@link SHORT_COMMENT_WORK}. */
+const SHORT_COMMENT_FLOOR = 4096;
+
+/**
+ * Parse `text` through its grammar, reusing `previous` when given, and read as
+ * blank space the comments that the grammar's {@link ShortComments} rule
+ * finds. The caller deletes the returned parse; `previous` is left as it was.
+ */
+function parseSource(
+  grammar: TreeSitterGrammar,
+  ready: LoadedGrammar,
+  text: string,
+  previous?: Parse,
+): Parse {
+  const plain = parserText(grammar, text);
+  const lineStarts = computeLineStarts(plain);
+  const at = (index: number): SourcePoint => ({
+    index,
+    ...point(lineStarts, index),
+  });
+  let plainWork = 0;
+  const countWork = () => {
+    plainWork++;
+  };
+  let plainTree = previous === undefined
+    ? parseWith(ready, plain, undefined, countWork)
+    : reparse(
+      ready,
+      previous.plainTree,
+      treeEdit(
+        textEdit(previous.plain, plain),
+        previous.lineStarts,
+        lineStarts,
+      ),
+      plain,
+    );
+  const rule = grammar.shortComments;
+  // A parse reused across edits can differ from a fresh one where the source
+  // has errors. Short comments are worked out from a fresh parse, as a
+  // complete highlight's are, so that the two agree.
+  if (
+    rule !== undefined && previous !== undefined &&
+    (previous.comments.length > 0 || plainTree.rootNode.hasError ||
+      rule.next(plainTree.rootNode, plain, at(0)) !== undefined)
+  ) {
+    plainTree.delete();
+    plainTree = parseWith(ready, plain, undefined, countWork);
+  }
+  const comments: SourceRange[] = [];
+  let source = plain;
+  let tree = plainTree.copy();
+  const round = 1 + plainWork / 16;
+  let work = SHORT_COMMENT_WORK * plainWork + SHORT_COMMENT_FLOOR;
+  for (let from = 0; rule !== undefined && (work -= round) >= 0;) {
+    const comment = rule.next(tree.rootNode, source, at(from));
+    if (comment === undefined) break;
+    if (comment.start < from || comment.end <= comment.start) {
+      throw new Error(
+        `cf view: the ${grammar.id} grammar gave a short comment from ` +
+          `${comment.start} to ${comment.end}, which does not follow ${from}.`,
+      );
+    }
+    const { start, end } = comment;
+    const blanked = source.slice(0, start) +
+      source.slice(start, end).replace(/[^\r\n]/g, " ") + source.slice(end);
+    const edited = tree.copy();
+    edited.edit(
+      treeEdit({ start, oldEnd: end, newEnd: end }, lineStarts, lineStarts),
+    );
+    const nextTree = ready.parser.parse(blanked, edited, {
+      progressCallback: () => --work < 0,
+    });
+    edited.delete();
+    if (nextTree === null) {
+      // A cancelled parse resumes on the parser's next call unless it is
+      // reset.
+      ready.parser.reset();
+      break;
+    }
+    tree.delete();
+    tree = nextTree;
+    source = blanked;
+    comments.push(comment);
+    from = end;
+  }
+  return { plain, lineStarts, plainTree, comments, tree };
+}
+
+/** Release the parse trees `parse` holds. */
+function deleteParse(parse: Parse): void {
+  parse.tree.delete();
+  parse.plainTree.delete();
 }
 
 /**
@@ -254,11 +441,11 @@ export function tokenClasses(
 ): (TokenClass | undefined)[] | undefined {
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return undefined;
-  const tree = parseWith(ready, parserText(grammar, text));
+  const parse = parseSource(grammar, ready, text);
   try {
-    return classify(ready, tree, text.length);
+    return classify(ready, parse, text.length);
   } finally {
-    tree.delete();
+    deleteParse(parse);
   }
 }
 
@@ -272,26 +459,29 @@ export function parseDocument(
 ): Document {
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return plainTextDocument(text);
-  const tree = parseWith(ready, parserText(grammar, text));
+  const parse = parseSource(grammar, ready, text);
   try {
     const source = structureSource(text);
-    const structure = structureNodes(grammar, tree.rootNode, source, 0);
+    const structure = structureNodes(grammar, parse.tree.rootNode, source, 0);
     return {
       text,
-      lines: colorLines(ready, tree, text, source.lineStarts),
+      lines: colorLines(ready, parse, text),
       structure,
       flatStructure: flattenStructure(structure),
       definitions: source.definitions,
     };
   } finally {
-    tree.delete();
+    deleteParse(parse);
   }
 }
 
 /**
  * An incremental highlighter, or a plain one while the grammar loads. Each
  * update edits the warm tree and re-parses from it, so the parse costs the
- * size of the edit, and then colors the whole document from that parse.
+ * size of the edit, and then colors the whole document from that parse. A
+ * grammar with a {@link ShortComments} rule parses afresh instead after an
+ * edit to a source with errors or short comments, as
+ * {@link ShortComments} describes.
  *
  * The coloring is not narrowed to the lines the edit touched. An edit can move
  * a token's class anywhere in the document — closing a bracket completes an
@@ -309,29 +499,19 @@ export function createHighlighter(
   const ready = loadedGrammar(grammar);
   if (ready === undefined) return createPlainTextHighlighter(initial);
   let text = initial;
-  let source = parserText(grammar, text);
-  let sourceStarts = computeLineStarts(source);
-  const held = { tree: parseWith(ready, source) };
-  let lines = colorLines(ready, held.tree, text, computeLineStarts(text));
+  const held = { parse: parseSource(grammar, ready, text) };
+  let lines = colorLines(ready, held.parse, text);
   const highlighter: Highlighter = {
     get lines() {
       return lines;
     },
     update(next: string): readonly Line[] {
       if (next === text) return lines;
-      const nextSource = parserText(grammar, next);
-      const nextStarts = computeLineStarts(nextSource);
-      const previous = held.tree;
-      previous.edit(
-        treeEdit(textEdit(source, nextSource), sourceStarts, nextStarts),
-      );
-      held.tree = parseWith(ready, nextSource, previous);
-      previous.delete();
+      const previous = held.parse;
+      held.parse = parseSource(grammar, ready, next, previous);
+      deleteParse(previous);
       text = next;
-      source = nextSource;
-      sourceStarts = nextStarts;
-      const lineStarts = source === text ? nextStarts : computeLineStarts(text);
-      lines = colorLines(ready, held.tree, text, lineStarts);
+      lines = colorLines(ready, held.parse, text);
       return lines;
     },
   };
@@ -342,8 +522,8 @@ export function createHighlighter(
 /** A parse tree lives in the parser's own memory, which collecting the object
  * that wraps it does not release, so a highlighter's current tree is released
  * when the pager drops the highlighter. */
-const abandonedTrees = new FinalizationRegistry((held: { tree: Tree }) => {
-  held.tree.delete();
+const abandonedTrees = new FinalizationRegistry((held: { parse: Parse }) => {
+  deleteParse(held.parse);
 });
 
 /** A single replaced range, from the text on either side of it. */
@@ -392,27 +572,30 @@ function point(lineStarts: number[], offset: number) {
 }
 
 /** Color every line of `text` from a parse of it. */
-function colorLines(
-  ready: LoadedGrammar,
-  tree: Tree,
-  text: string,
-  lineStarts: number[],
-): Line[] {
-  return linesFromClasses(text, classify(ready, tree, text.length), lineStarts);
+function colorLines(ready: LoadedGrammar, parse: Parse, text: string): Line[] {
+  const lineStarts = parse.plain === text
+    ? parse.lineStarts
+    : computeLineStarts(text);
+  return linesFromClasses(
+    text,
+    classify(ready, parse, text.length),
+    lineStarts,
+  );
 }
 
 /**
  * The token class of every character in the source, left undefined where the
  * query claims nothing. A narrower capture colors over the one containing it,
- * and the earliest pattern wins between captures of identical extent.
+ * and the earliest pattern wins between captures of identical extent. A
+ * comment the parse read as blank space is a comment.
  */
 function classify(
   ready: LoadedGrammar,
-  tree: Tree,
+  parse: Parse,
   length: number,
 ): (TokenClass | undefined)[] {
   const classes = new Array<TokenClass | undefined>(length);
-  const captures = ready.query.captures(tree.rootNode);
+  const captures = ready.query.captures(parse.tree.rootNode);
   captures.sort((left, right) =>
     left.node.startIndex - right.node.startIndex ||
     right.node.endIndex - left.node.endIndex ||
@@ -428,6 +611,9 @@ function classify(
     // Every capture name was checked against the token classes when the
     // grammar loaded.
     classes.fill(capture.name as TokenClass, startIndex, endIndex);
+  }
+  for (const { start, end } of parse.comments) {
+    classes.fill("comment", start, end);
   }
   return classes;
 }
