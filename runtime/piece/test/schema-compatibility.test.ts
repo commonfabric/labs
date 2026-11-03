@@ -2727,6 +2727,21 @@ describe("piece schema compatibility", () => {
       }]);
     });
 
+    it("refuses dropping an optional verb a union wraps", () => {
+      expect(
+        patternSchemaIncompatibilities(
+          verbs({
+            doubled: { type: "number" },
+            tick: { anyOf: [tick, { type: "undefined" }] },
+          }, ["doubled"]),
+          verbs({ doubled: { type: "number" } }, ["doubled"]),
+        ),
+      ).toEqual([{
+        path: "result.tick",
+        reason: "existing result field was removed",
+      }]);
+    });
+
     it("refuses dropping an optional list whose items reach a verb by reference", () => {
       const withRows = (properties: Record<string, JSONSchema>): Pattern =>
         pattern(oldPattern.argumentSchema, {
