@@ -4278,12 +4278,8 @@ There are two directions:
 - **`FabricValue` -> JS wild west:** `convertibleJsFromFabricValue()` (deep,
   recursive).
 
-They are used at the `Cell` read/write boundary:
-
-- **Read path:** `Cell.getRaw()` calls `convertibleJsFromFabricValue(value)` to
-  unwrap fabric wrappers before returning values to the JS wild west.
-- **Write path:** `Cell.setRaw()` calls `fabricFromConvertibleJsValue(value)` to
-  wrap JS types into fabric form before storing.
+`Cell.getRaw()` and `Cell.setRaw()` do not call them: both traffic in
+`FabricValue`s directly (see Appendix A).
 
 ### 8.2 `shallowFabricFromConvertibleJsValue()` and `fabricFromConvertibleJsValue()`
 
@@ -4728,17 +4724,19 @@ spec from being implementable.
   indirection through an interface (rather than depending on `Runtime` directly)
   makes this straightforward.
 
-- **`getRaw()` / `setRaw()` middle-layer contract**: The leaning is that
-  `Cell.getRaw()` and `Cell.setRaw()` should traffic in `FabricValue` (middle
-  layer), not arbitrary convertible JS values (wild west). No caller stores or retrieves a
-  JS type like `Error`, `Date`, `RegExp`, `Map`, `Set`, or `Uint8Array` through
-  these methods, so formalizing this contract (e.g., refining the type parameter
-  `T` of `IAnyCell` to `extends FabricValue`) would make the implicit
-  expectation explicit without breaking a caller. The
-  `convertibleJsFromFabricValue()` / `fabricFromConvertibleJsValue()`
-  conversion in these methods (Section 8.1) is correct but forward-looking: it
-  will become load-bearing when user-facing patterns start storing rich types
-  through the schema-aware `set()` path.
+- **`getRaw()` / `setRaw()` middle-layer contract**: `Cell.getRaw()` and
+  `Cell.setRaw()` traffic in `FabricValue` (middle layer), not arbitrary
+  convertible JS values (wild west): `setRaw()` takes `T & FabricValue`, and
+  `getRaw()` returns the stored value, frozen or as a mutable copy, without
+  unwrapping it. Whether to state that contract in the type parameter itself,
+  refining `T` of `IAnyCell` to `extends FabricValue`, is open, and so is
+  whether any caller would break if it were.
+
+- **Early conversion points**: Some code still converts values to
+  JSON-compatible shapes before they reach a boundary, rather than leaving that
+  to a codec engine at the boundary (Section 5.1) as late serialization
+  (Section 1.1) has it. One is `convertCellsToLinks()`, which the `html`
+  reconciler calls, among others. The intent is to remove these conversions.
 
 - **`FabricFactory`**: A proposed, deliberately narrow exception to the
   exclusion of functions (Section 1.2) adds a `FabricFactory` arm for
