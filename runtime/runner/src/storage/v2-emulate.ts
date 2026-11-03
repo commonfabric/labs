@@ -257,10 +257,16 @@ export class EmulatedStorageManager extends StorageManager {
     return { accepted: false, reason: "no-remote-resolution" };
   }
 
+  /**
+   * Closes this manager, and its server if it owns one. A closed server stays
+   * closed, so a manager used again after this gets a new server, and with it
+   * a new in-memory store.
+   */
   override async close(): Promise<void> {
     await super.close();
     if (this.#server && this.#ownsServer) {
       await this.#server.close();
+      this.#server = undefined;
     }
   }
 
