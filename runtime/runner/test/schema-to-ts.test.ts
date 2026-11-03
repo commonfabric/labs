@@ -26,7 +26,7 @@ import {
   type Reactive,
   Schema,
 } from "../src/builder/types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 // This file primarily tests Schema<> & co from commonfabric/api/index.ts, which

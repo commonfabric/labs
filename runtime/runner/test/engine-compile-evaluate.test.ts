@@ -68,7 +68,7 @@ describe("Engine compile + evaluate", () => {
     expect(graph.compiledBodies.size).toBeGreaterThan(0);
 
     // evaluateRecordGraph() should execute them
-    const result = engine.evaluateRecordGraph(
+    const result = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -105,7 +105,7 @@ describe("Engine compile + evaluate", () => {
     expect(bodies).toContain("function __cfHelpersShim(");
     expect(bodies).not.toContain("function h(");
 
-    const result = engine.evaluateRecordGraph(
+    const result = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,

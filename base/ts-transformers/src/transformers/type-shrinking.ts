@@ -33,11 +33,11 @@ import {
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { uniquePaths } from "../utils/path-serialization.ts";
-import {
-  type CapabilityParamDefault,
-  type CapabilityParamSummary,
-  type CrossStageState,
-  type ReactiveCapability,
+import type {
+  CapabilityParamDefault,
+  CapabilityParamSummary,
+  CrossStageState,
+  ReactiveCapability,
   TransformationContext,
 } from "../core/mod.ts";
 import {

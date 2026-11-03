@@ -3,7 +3,7 @@
 // is enforced by the tokenizer-level guard; `_cf_link` encode/decode happens on
 // the client (runner) before/after these calls.
 
-import { type BindValue, Database } from "@db/sqlite";
+import type { BindValue, Database } from "@db/sqlite";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { isPlainObject } from "@commonfabric/js-values/types";

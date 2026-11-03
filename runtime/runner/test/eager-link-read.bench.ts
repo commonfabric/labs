@@ -25,7 +25,7 @@
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { isCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 

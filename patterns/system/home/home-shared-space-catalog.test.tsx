@@ -239,6 +239,38 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries[IMPORTED]?.revision !== revision.get() &&
     home.sharedSpaceCatalog.entries[IMPORTED]?.state === "saved"
   );
+  // A deletion mark changes nothing here: no space is deleted on this test's
+  // memory server, so a mark on a listed, saved entry at its current revision
+  // is refused as `not-deleted`, and one at a stale revision or for a space
+  // the catalog does not list is refused before the server is asked.
+  const action_mark_live = action(() => {
+    revision.set(home.sharedSpaceCatalog.entries[SPACE].revision);
+    home.sharedSpaces.commands.markDeleted!.send({
+      space: SPACE,
+      expectedRevision: home.sharedSpaceCatalog.entries[SPACE].revision,
+    });
+  });
+  const action_mark_stale = action(() => {
+    home.markSharedSpaceDeleted.send({
+      space: SPACE,
+      expectedRevision: "1:not-the-observed-revision",
+    });
+  });
+  const action_mark_unlisted = action(() => {
+    home.markSharedSpaceDeleted.send({
+      space: "did:key:catalog-test-unlisted",
+      expectedRevision: "1:unlisted",
+    });
+  });
+  const assert_nothing_marked = assert(() =>
+    home.sharedSpaceCatalog.entries[SPACE]?.state === "saved" &&
+    home.sharedSpaceCatalog.entries[SPACE]?.revision === revision.get() &&
+    home.sharedSpaceCatalog.entries["did:key:catalog-test-unlisted"] ===
+      undefined &&
+    home.sharedSpaces.view.status === "ready" &&
+    home.sharedSpaces.view.deleted?.length === 0 &&
+    home.sharedSpaces.view.byKind.loom.deleted?.length === 0
+  );
   return {
     [TESTS]: [
       { action: action_unsupported },
@@ -274,6 +306,10 @@ export default pattern(() => {
       { assertion: assert_import_removed },
       { action: action_register_import },
       { assertion: assert_reregistered_fresh },
+      { action: action_mark_live },
+      { action: action_mark_stale },
+      { action: action_mark_unlisted },
+      { assertion: assert_nothing_marked },
     ],
   };
 });

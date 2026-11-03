@@ -23,7 +23,7 @@ import {
 import type { FabricPrimitiveValueTag } from "@/fabric-primitives/interface.ts";
 import { debugStr } from "@/value-debug";
 
-import { type PlusTypePredicate } from "./interface.ts";
+import type { PlusTypePredicate } from "./interface.ts";
 import {
   type ConvertibleJsValueTag,
   type FabricValuePlusTag,

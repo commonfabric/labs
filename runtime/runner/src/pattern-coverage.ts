@@ -1,4 +1,8 @@
-import { dirname, fromFileUrl, join, relative, resolve } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+import { relative } from "@std/path/relative";
+import { resolve } from "@std/path/resolve";
 import type {
   PatternCoverageKind,
   PatternCoverageSpan,

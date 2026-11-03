@@ -1,7 +1,7 @@
 import { VerifierIdentity } from "@commonfabric/identity";
 import { DID_PREFIX, isDID, isDIDKey } from "@commonfabric/identity/did";
 
-import { AsyncResult, DID, DIDKey } from "./interface.ts";
+import type { AsyncResult, DID, DIDKey } from "./interface.ts";
 
 /**
  * Parses a DID string into an Identity

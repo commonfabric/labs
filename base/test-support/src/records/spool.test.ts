@@ -15,7 +15,7 @@ import {
   tryAdoptSpool,
 } from "./spool.ts";
 import { FragmentWriter } from "./fragment.ts";
-import { type RunContext, type TestRecord } from "./schema.ts";
+import type { RunContext, TestRecord } from "./schema.ts";
 
 const CONTEXT: RunContext = {
   schema: 1,

@@ -17,7 +17,7 @@ import { JSONObject, type JSONSchema } from "../src/index.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { StoreObjectManager } from "../src/storage/query.ts";
 import {
   CompoundCycleTracker,

@@ -37,7 +37,7 @@ import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
 import { isSigilLink, type NormalizedLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

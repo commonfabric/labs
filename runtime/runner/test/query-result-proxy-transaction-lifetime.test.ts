@@ -18,8 +18,8 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createQueryResultProxy } from "../src/query-result-proxy.ts";
-import { type Cell } from "../src/cell.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { Cell } from "../src/cell.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("qrp-transaction-lifetime");
 const space = signer.did();

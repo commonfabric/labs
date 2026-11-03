@@ -7,7 +7,7 @@
  */
 
 import { css, LitElement, PropertyValues } from "lit";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { CellController } from "../../../core/cell-controller.ts";
 import type { MarkType } from "../types.ts";
 

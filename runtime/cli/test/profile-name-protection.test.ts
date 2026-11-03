@@ -13,7 +13,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
-import { type SpaceConfig } from "../lib/piece.ts";
+import type { SpaceConfig } from "../lib/piece.ts";
 import { profileNameProtection } from "../lib/profile-name-protection.ts";
 
 const owner = await Identity.fromPassphrase("cli name protection owner");

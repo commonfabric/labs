@@ -23,7 +23,7 @@ import { palette as C } from "@commonfabric/cli/view/theme";
 import {
   defaultDisplayFit,
   type LabelDisplayFit,
-} from "@commonfabric/html/worker";
+} from "@commonfabric/html/display-fit-atoms";
 import { maxOf, minOf } from "@commonfabric/collections/math";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 

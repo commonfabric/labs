@@ -13,17 +13,16 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   integrityLabels,
   type LabelDisplayFit,
-} from "@commonfabric/html/worker";
+} from "@commonfabric/html/display-fit-atoms";
+import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
+import { wholeValueLabel } from "@commonfabric/runner/cfc/consumed-label";
+import { redactCaveatSourcesForDisplay } from "@commonfabric/runner/cfc/label-view-core";
+import { cfcLabelViewFromMetadata } from "@commonfabric/runner/cfc/label-view-state";
 import {
-  type CfcConfClause,
   type CfcLabelDocumentReader,
-  cfcLabelViewFromMetadata,
-  type IFCLabel,
   interpretStoredEnvelope,
-  redactCaveatSourcesForDisplay,
   resolveStoredCfcMetadata,
-  wholeValueLabel,
-} from "@commonfabric/runner/cfc";
+} from "@commonfabric/runner/cfc/metadata";
 import { exactPrincipalAttestations } from "@commonfabric/runner/cfc/represents-principal";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";

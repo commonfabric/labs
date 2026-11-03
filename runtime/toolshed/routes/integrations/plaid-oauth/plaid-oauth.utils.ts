@@ -1,8 +1,8 @@
-import {
-  type JSONSchema,
-  type Mutable,
-  type Schema,
-  type SigilLink,
+import type {
+  JSONSchema,
+  Mutable,
+  Schema,
+  SigilLink,
 } from "@commonfabric/runner";
 import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
 

@@ -4,7 +4,7 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
-import { TypeWithInternals } from "../type-utils.ts";
+import type { TypeWithInternals } from "../type-utils.ts";
 
 /**
  * Formatter for primitive TypeScript types

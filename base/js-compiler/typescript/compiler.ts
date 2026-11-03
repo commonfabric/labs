@@ -17,8 +17,12 @@ import type {
 } from "typescript";
 import ts from "typescript";
 
-import { Program, ProgramResolver, Source } from "../interface.ts";
-import type { SourceMap } from "../interface.ts";
+import type {
+  Program,
+  ProgramResolver,
+  Source,
+  SourceMap,
+} from "../interface.ts";
 import { parseSourceMap } from "../source-map.ts";
 import {
   authoredLocation,

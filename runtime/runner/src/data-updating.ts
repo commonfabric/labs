@@ -25,7 +25,7 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
-import { type CellScope, type JSONSchema } from "./builder/types.ts";
+import type { CellScope, JSONSchema } from "./builder/types.ts";
 import {
   CellImpl,
   getCarriedCfcLabelView,
@@ -73,7 +73,7 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
-import { type Runtime } from "./runtime.ts";
+import type { Runtime } from "./runtime.ts";
 import {
   allowMutableTransactionRead,
   markReadAsAttemptedWrite,

@@ -162,7 +162,7 @@ import {
   parseLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
+import type { MetaField, RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
@@ -194,11 +194,7 @@ import {
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
-import {
-  type SigilLink,
-  type SigilWriteRedirectLink,
-  type URI,
-} from "./sigil-types.ts";
+import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
