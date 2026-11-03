@@ -1147,11 +1147,12 @@ holds the measurements and the conditions for revisiting.
   emulated storage manager's memory server takes the mode of the runtime it
   serves as its posture, a loopback server (`newLoopbackServer()`) given none
   takes the runtime's default, as a toolshed of the same build does, and the
-  `StandaloneMemoryServer`s `cf test` and the serving memory servers start take
-  the mode their runtimes' flags resolve to. A memory server or client a test
-  builds itself takes the default as well. What remains is
-  making the flag reachable on servers, a deployment turning its posture on,
-  and the flip, which
+  `StandaloneMemoryServer`s `cf test` and the serving memory servers start are
+  given the mode their runtimes' flags resolve to. A `StandaloneMemoryServer`
+  takes a posture only from its caller, and each memory server or client this
+  repository's tests build is given the default. What remains is making the
+  flag reachable on servers, a deployment turning its posture on, and the flip,
+  which
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md)
   sequences.
 - **Status on 2026-11-02.** The transformer's off arm is held to `main`'s

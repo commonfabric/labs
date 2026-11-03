@@ -257,10 +257,11 @@ as a toolshed would. The one an emulated storage manager holds serves that
 manager alone, so its posture is the mode of the manager's runtime. A
 loopback server (`newLoopbackServer()`) given no posture takes the runtime's
 default for the flag, which is what a toolshed of the same build publishes.
-`StandaloneMemoryServer` takes a posture as the memory server does, and the
-servers `cf test` and the serving memory servers start give it the mode their
-runtimes' flags resolve to. A test that builds a memory server or a memory
-client of its own gives it the same default, so a test whose runtimes run that
+`StandaloneMemoryServer`, like the memory server, takes a posture only from
+its caller and otherwise names none. The servers `cf test` and the serving
+memory servers start pass it the mode their runtimes' flags resolve to. A test
+that builds a memory server or a memory client of its own gives it the same
+default, so a test whose runtimes run that
 default is never refused for its posture or its mode, with the default on or
 off. A test that runs runtimes of both modes against one server gives it a
 posture that names instances.
