@@ -3031,8 +3031,9 @@ export class RuntimeProcessor {
    * the race to another runtime's is an expected conflict, so nothing here
    * waits for the handling; `handleIdle()` waits for the send, and for the
    * handling as for any scheduler work. A failure to send is reported and not
-   * retried: a deleted space is refused once more only when the space is
-   * asked for again, and its notice then sends the mark again.
+   * retried: the storage manager gives one notice per space for its deletion,
+   * so the mark is sent again only by a later worker, or once the space's
+   * access record is reset and the deleted refusal met again.
    */
   #markDeletedSpace(space: MemorySpace): void {
     const mark: Promise<void> = this.#homeController().markDeletedSpace(space)
