@@ -9,7 +9,9 @@ import {
   type SessionSync,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type {
   IStorageNotification,
@@ -43,6 +45,7 @@ export const TEST_HELLO_SESSION_OPEN: SessionOpenAuthMetadata = {
   challenge: TEST_SESSION_OPEN_CHALLENGE,
 };
 export const TEST_MEMORY_SERVER_AUTH = {
+  namesInstances: namesInstancesByDefault,
   authorizeSessionOpen: () => TEST_SESSION_OPEN_PRINCIPAL,
   sessionOpenAuth: {
     audience: TEST_SESSION_OPEN_AUDIENCE,
@@ -67,6 +70,31 @@ export const newSharedServer = (options?: {
     ...options,
     audience: TEST_SESSION_OPEN_AUDIENCE,
   });
+
+/**
+ * Writes `space`'s deletion tombstone, naming `by`, straight into `engine`,
+ * as a deletion committed where no host announces it would land, and
+ * returns the `seq` it is stored at (INV-15).
+ */
+export const writeDeletionTombstone = (
+  engine: Engine.Engine,
+  space: string,
+  by: string,
+): number =>
+  Engine.applyCommit(engine, {
+    sessionId: "deletion-stand-in",
+    space,
+    commitClass: "system",
+    commit: {
+      localSeq: Engine.serverSeq(engine) + 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{
+        op: "set",
+        id: `of:${space}`,
+        value: { value: { deleted: { by } } },
+      }],
+    },
+  }).seq;
 
 export const testSessionOpenAuthFactory: MemoryV2Client.SessionOpenAuthFactory =
   (
@@ -327,6 +355,7 @@ export class SingleSessionFactory implements SessionFactory {
       throw new Error(`Session already created for ${space}`);
     }
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: this.#transport,
     });
     const session = await client.mount(space, {}, testSessionOpenAuthFactory);

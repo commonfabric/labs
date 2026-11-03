@@ -59,6 +59,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { LoopbackStorageManager } from "../src/executor/loopback-storage.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -160,6 +161,7 @@ class GatedLoopbackManager extends StorageManager {
         }
         const loopback = MemoryV2Client.loopback(server);
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: {
             ...loopback,
             send: async (payload) => {
@@ -202,6 +204,7 @@ describe("the session remount (profile-starvation fifth face)", () => {
     storeSeq += 1;
     sessionOpens = new ArrivalLog<string>();
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://session-remount-${storeSeq}`),
       subscriptionRefreshDelayMs: 0,
       // Both shapes: the signed loopback invocation carries `iss` (the

@@ -16,6 +16,10 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { dirname, fromFileUrl, join, resolve } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
+import {
+  defaultDisplayFit,
+  type LabelDisplayFit,
+} from "@commonfabric/html/worker";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { urlToAppView } from "@commonfabric/navigation";
@@ -39,6 +43,7 @@ import {
 import {
   boardFile,
   copySource,
+  identityDid,
   loadMirror,
   openDocSource,
   type OpenedDocSource,
@@ -48,7 +53,11 @@ import {
   refreshMirror,
   resolvePieces,
   saveMirror,
+  spaceDid,
 } from "./sync.ts";
+import { browseBoard, runQuietly, systemPrograms } from "./browse.ts";
+import { redact } from "./labels.ts";
+import type { Opening, WriteOutcome, WriteRequest } from "./browser.ts";
 import { similarTopics } from "./similar.ts";
 import {
   type Clock,
@@ -140,7 +149,19 @@ export interface TopicsDeps {
   warn: (text: string) => void;
 
   env: (name: string) => string | undefined;
+
+  /** Opens `url` in a web browser, for `browse`. */
+  openUrl: (url: string) => Promise<void>;
+
+  /** Puts `text` on the clipboard, for `browse`. */
+  copyText: (text: string) => Promise<void>;
+
+  /** The DID of the identity the keyfile at `path` holds, for `browse`. */
+  identityDid: (path: string) => Promise<string>;
 }
+
+/** The programs that open a web browser and fill the clipboard here. */
+const PROGRAMS = systemPrograms(Deno.build.os);
 
 const defaultDeps: TopicsDeps = {
   openDocSource,
@@ -155,6 +176,9 @@ const defaultDeps: TopicsDeps = {
   write: console.log,
   warn: console.error,
   env: Deno.env.get,
+  openUrl: (url) => runQuietly([...PROGRAMS.open, url]),
+  copyText: (text) => runQuietly(PROGRAMS.copy, text),
+  identityDid,
 };
 
 /**
@@ -287,9 +311,47 @@ async function readTopics(
   }
 }
 
+/**
+ * The board's Topics as {@link readTopics} reads them, less what the
+ * default display ceiling for the identity reading them does not admit:
+ * output is a display no authored policy covers, as `watch` is.
+ */
+async function shownTopics(
+  deps: TopicsDeps,
+  board: Board,
+  options: { offline?: boolean } = {},
+): Promise<Read> {
+  const read = await readTopics(deps, board, options);
+  return {
+    ...read,
+    topics: redact(read.topics, await displayFit(deps, board)),
+  };
+}
+
+/**
+ * What output shows to the identity `board` reads as: what the default
+ * display ceiling for it admits, or, with no identity to read, as offline
+ * a keyfile need not be, what names no one.
+ */
+async function displayFit(
+  deps: TopicsDeps,
+  board: Board,
+): Promise<LabelDisplayFit> {
+  let viewer: string | undefined;
+  try {
+    viewer = await deps.identityDid(board.identity);
+  } catch {
+    viewer = undefined;
+  }
+  return defaultDisplayFit(viewer);
+}
+
 /** The board's Topics, and where a reference may say the board is. */
 interface Read extends Refreshed {
-  /** The names of the board's space: the one configured, then the one read. */
+  /**
+   * The names of the board's space: the one configured, then its DID, the
+   * one it is read under.
+   */
   spaces: string[];
 
   /** The server the board is on. */
@@ -347,33 +409,56 @@ export function findTopic(
   return topic;
 }
 
-/**
- * Helper for {@link findTopic}, which is `undefined` for no such Topic.
- *
- * @throws Error saying why `reference` names no Topic on this board.
- */
+/** Helper for {@link findTopic}, which is `undefined` for no such Topic. */
 function lookUp(
   read: Pick<Read, "topics" | "spaces" | "apiUrl">,
   reference: string,
 ): Topic | undefined {
-  try {
-    const topic = read.topics.find(matcher(read, reference));
-    if (topic !== undefined || !quotesAnId(reference)) return topic;
-    const holding = read.topics.filter(({ address, piece }) =>
-      [address, piece].some((id) => `/${id}`.includes(reference))
-    );
-    if (holding.length <= 1) return holding[0];
-    throw new Error(
-      "it is part of the address or piece address of each of " +
-        holding.map((topic) => `top/${topic.number}`).join(", ") + ".",
-    );
-  } catch (error) {
-    throw new Error(
+  return opening(read, reference).find(read.topics);
+}
+
+/**
+ * How to find the Topic `reference` names on the board at `where`, as
+ * written in {@link findTopic}: its name in a message, and how to find it
+ * among the board's Topics.
+ *
+ * @throws Error saying why `reference` names no Topic on this board, at once
+ * where that does not turn on the board's Topics, and from `find` where it
+ * does.
+ */
+function opening(
+  where: Pick<Read, "spaces" | "apiUrl">,
+  reference: string,
+): Opening {
+  const refused = (error: unknown) =>
+    new Error(
       debugStr`$quote,long${reference} names no Topic on this board: ` +
         describeFailure(error),
       { cause: error },
     );
+  let is: (topic: Topic) => boolean;
+  try {
+    is = matcher(where, reference);
+  } catch (error) {
+    throw refused(error);
   }
+  return {
+    name: topicName(reference),
+    find: (topics) => {
+      const topic = topics.find(is);
+      if (topic !== undefined || !quotesAnId(reference)) return topic;
+      const holding = topics.filter(({ address, piece }) =>
+        [address, piece].some((id) => `/${id}`.includes(reference))
+      );
+      if (holding.length <= 1) return holding[0];
+      throw refused(
+        new Error(
+          "it is part of the address or piece address of each of " +
+            holding.map((topic) => `top/${topic.number}`).join(", ") + ".",
+        ),
+      );
+    },
+  };
 }
 
 /**
@@ -394,7 +479,7 @@ function quotesAnId(reference: string): boolean {
 }
 
 /**
- * Helper for {@link lookUp}, which is a test for the Topic `reference` names.
+ * Helper for {@link opening}, which is a test for the Topic `reference` names.
  *
  * @throws Error saying why `reference` names no Topic on this board.
  */
@@ -501,7 +586,9 @@ function agentFrom(deps: TopicsDeps, options: TopicsOptions): string {
  * The invocation session this machine's writes to `board` are chosen within,
  * minted on first use into a file only its owner can read.
  */
-export async function writeSession(board: Board): Promise<string> {
+export async function writeSession(
+  board: Pick<Board, "session">,
+): Promise<string> {
   const path = board.session;
   await Deno.mkdir(dirname(path), { recursive: true });
   // Linking a finished file into place mints the session atomically: a
@@ -609,10 +696,10 @@ async function invoke<T>(
     const phases = [...message.matchAll(/^invocation: \S+ phase: (\S+)$/gm)];
     return phases.at(-1)?.[1] === "initial_sync"
       ? new Error(message, { cause: error })
-      : new Error(
+      : new UnsettledWrite(
         `${message}\nThe write may have committed: run the same command ` +
           `with \`--invocation ${id}\` to settle it without writing twice.`,
-        { cause: error },
+        { invocation: id, reason: message, cause: error },
       );
   };
   let stdout: string;
@@ -648,11 +735,73 @@ async function invoke<T>(
       debugStr`\`${verb}\` did not settle: $quote,long${outcome}.`,
     );
   }
-  return await settle({
-    result: outcome.result,
-    invocation: id,
-    repeated: outcome.deduplicated === true,
-  });
+  try {
+    return await settle({
+      result: outcome.result,
+      invocation: id,
+      repeated: outcome.deduplicated === true,
+    });
+  } catch (error) {
+    // The write settled, so whatever failed after it leaves the write
+    // made: running the Topic or reading the board again is finished by
+    // naming the invocation again, which a write that reads back otherwise
+    // than it was made cannot be.
+    throw error instanceof UnsettledWrite || error instanceof UnconfirmedWrite
+      ? error
+      : new UnsettledWrite(
+        describeFailure(error),
+        { invocation: id, reason: describeFailure(error), cause: error },
+      );
+  }
+}
+
+/**
+ * A write that settled and does not read back as it was made, which naming
+ * its invocation again cannot change: something else changed the Topic
+ * since, or the deployed board stores it otherwise.
+ */
+export class UnconfirmedWrite extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnconfirmedWrite";
+  }
+}
+
+/**
+ * A write that failed once it may have committed: naming its invocation
+ * again settles it without writing twice.
+ */
+export class UnsettledWrite extends Error {
+  readonly #reason: string;
+  readonly #invocation: string;
+
+  /**
+   * A write of the invocation `invocation` that failed for `reason`, saying
+   * `message`, which may add how to settle it from the command line.
+   */
+  constructor(
+    message: string,
+    { invocation, reason, cause }: {
+      invocation: string;
+      reason: string;
+      cause: unknown;
+    },
+  ) {
+    super(message, { cause });
+    this.name = "UnsettledWrite";
+    this.#reason = reason;
+    this.#invocation = invocation;
+  }
+
+  /** What went wrong, without how to settle it from the command line. */
+  get reason(): string {
+    return this.#reason;
+  }
+
+  /** The invocation that settles the write. */
+  get invocation(): string {
+    return this.#invocation;
+  }
 }
 
 /**
@@ -672,12 +821,13 @@ async function step(
   try {
     await cf(deps, board, ["piece", "step", "--cell", cell]);
   } catch (error) {
-    throw new Error(
-      `${describeFailure(error)}\nThe write was made, but the board will not ` +
-        `show it until ${cell} runs: run the same command with ` +
+    const reason = `${describeFailure(error)}\nThe write was made, but the ` +
+      `board will not show it until ${cell} runs`;
+    throw new UnsettledWrite(
+      `${reason}: run the same command with ` +
         `\`--invocation ${written.invocation}\` to run it without writing ` +
         "again.",
-      { cause: error },
+      { invocation: written.invocation, reason: `${reason}.`, cause: error },
     );
   }
 }
@@ -695,11 +845,12 @@ async function confirm(
 ): Promise<void> {
   const topic = findTopic(await readTopics(deps, board), reference);
   if (!await wrote(topic)) {
-    throw new Error(
+    throw new UnconfirmedWrite(
       `The write settled but does not read back on top/${topic.number}.`,
     );
   }
-  deps.write(`${done}\n${formatTopicLine(topic, nowFor(deps))}`);
+  const [shown] = redact([topic], await displayFit(deps, board));
+  deps.write(`${done}\n${formatTopicLine(shown, nowFor(deps))}`);
 }
 
 /**
@@ -743,7 +894,7 @@ export async function searchAction(
   terms: string[],
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const { topics } = await readTopics(
+  const { topics } = await shownTopics(
     deps,
     boardFrom(deps, options),
     { offline: options.offline },
@@ -788,7 +939,7 @@ export async function similarAction(
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
   const text = await textFrom(deps, given, "text");
-  const { topics } = await readTopics(
+  const { topics } = await shownTopics(
     deps,
     boardFrom(deps, options),
     { offline: options.offline },
@@ -862,7 +1013,7 @@ export async function showAction(
   references: readonly string[],
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const read = await readTopics(
+  const read = await shownTopics(
     deps,
     boardFrom(deps, options),
     { offline: options.offline },
@@ -1025,8 +1176,7 @@ export async function linkAction(
   label: string | undefined,
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const like = (topic: Topic) =>
-    topic.links.filter((l) => l.url === url.trim() && !l.removed).length;
+  const like = (topic: Topic) => linksTo(topic, url);
   await writeTopic(
     deps,
     options,
@@ -1040,6 +1190,33 @@ export async function linkAction(
     }),
     (before, after, repeated) => like(after) > (repeated ? 0 : like(before)),
     "Linked",
+  );
+}
+
+/** How many links of `topic` to `url` are present. */
+function linksTo(topic: Topic, url: string): number {
+  return topic.links.filter((l) => l.url === url.trim() && !l.removed).length;
+}
+
+/** Runs the `unlink` command. */
+export async function unlinkAction(
+  options: TopicsOptions,
+  reference: string,
+  url: string,
+  deps: TopicsDeps = defaultDeps,
+): Promise<void> {
+  // `removeLink` takes back the most recently added link still present with
+  // the address, so the count of those has to fall.
+  const like = (topic: Topic) => linksTo(topic, url);
+  await writeTopic(
+    deps,
+    options,
+    reference,
+    "removeLink",
+    (agentName) => ({ url, agentName }),
+    (before, after, repeated) =>
+      repeated ? like(after) <= like(before) : like(after) < like(before),
+    "Took back a link of",
   );
 }
 
@@ -1098,6 +1275,8 @@ const OPTIONS: Record<string, readonly string[]> = {
   body: ["agent-name", "invocation"],
   title: ["agent-name", "invocation"],
   link: ["agent-name", "invocation", "kind"],
+  unlink: ["agent-name", "invocation"],
+  browse: ["agent-name"],
   mention: ["invocation"],
   unmention: ["invocation"],
 };
@@ -1136,6 +1315,11 @@ Reading:
       --rebuild             Read the whole board again.
   watch                     The board, live, on the whole terminal: each
                             change shown as it happens. q quits.
+  browse [topic]            The board to read and write on the whole
+                            terminal: a list searched as you type beside
+                            a Topic read whole, live, with menus, the
+                            mouse, and drafts kept until saved. F1 lists
+                            its keys; Alt-X quits.
   --offline                 Read the copy as it stands (search, similar,
                             show).
   --json                    Print JSON for a program to read (search,
@@ -1148,6 +1332,7 @@ Writing:
   title <topic> <title>     Rename a Topic.
   link <topic> <url> [label]
       --kind <kind>         Link kind: web (default) or pr.
+  unlink <topic> <url>      Take back the newest link to the address.
   mention <topic> <other>   Record that one Topic references another.
   unmention <topic> <other> Remove those references.
 
@@ -1324,11 +1509,52 @@ export async function main(
         throw new Error("`watch` takes over a terminal; run it in one.");
       }
       const board = boardFrom(deps, options);
-      return await watchBoard(board, {
+      return await watchBoard({
+        ...board,
+        viewer: await deps.identityDid(board.identity),
+      }, {
         terminal: deps.terminal,
         clock: deps.clock,
         connect: () => deps.openSession(board),
       });
+    }
+    case "browse": {
+      const [open] = take(0, 1);
+      if (!deps.stdin.isTerminal()) {
+        throw new Error("`browse` takes over a terminal; run it in one.");
+      }
+      const board = boardFrom(deps, options);
+      // Named before the board is read, by either name of its space.
+      const opened = open === undefined ? undefined : opening({
+        spaces: [board.space, await spaceDid(board.space)],
+        apiUrl: board.apiUrl,
+      }, open);
+      const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))
+        ?.trim();
+      const viewer = await deps.identityDid(board.identity);
+      return await browseBoard(
+        {
+          ...board,
+          viewer,
+          state: boardFile(
+            { browse: viewer },
+            board.apiUrl,
+            board.space,
+            board.board,
+            deps.env,
+          ),
+        },
+        {
+          terminal: deps.terminal,
+          clock: deps.clock,
+          connect: () => deps.openSession(board),
+          write: (request, signer, invocation) =>
+            browseWrite(deps, options, request, signer, invocation),
+          open: deps.openUrl,
+          copy: deps.copyText,
+        },
+        { open: opened, ...(agentName ? { agentName } : {}) },
+      );
     }
     case "sync":
       take(0, 0);
@@ -1359,11 +1585,86 @@ export async function main(
         deps,
       );
     }
+    case "unlink": {
+      const [topic, url] = take(2, 2);
+      return await unlinkAction(options, topic!, url!, deps);
+    }
     case "mention":
     case "unmention": {
       const [topic, other] = take(2, 2);
       return await mentionAction(options, command, topic!, other!, deps);
     }
+  }
+}
+
+/**
+ * Makes the write `request` for `browse`, signed as `agentName`, as the
+ * invocation `invocation`, through the command that makes it from the
+ * command line: what the command prints is the report, and a failure says
+ * whether the write may have committed, did and does not read back, or
+ * failed before it was made.
+ */
+export async function browseWrite(
+  deps: TopicsDeps,
+  options: TopicsOptions,
+  request: WriteRequest,
+  agentName: string,
+  invocation: string,
+): Promise<WriteOutcome> {
+  const printed: string[] = [];
+  const quiet: TopicsDeps = {
+    ...deps,
+    write: (text) => printed.push(text),
+    warn: () => {},
+  };
+  const as = { ...options, agentName, invocation };
+  try {
+    switch (request.verb) {
+      case "new":
+        await newAction(as, request.title, request.body, quiet);
+        break;
+      case "comment":
+        await commentAction(as, request.topic, request.text, quiet);
+        break;
+      case "body":
+        await bodyAction(as, request.topic, request.text, quiet);
+        break;
+      case "title":
+        await titleAction(as, request.topic, request.text, quiet);
+        break;
+      case "link":
+        await linkAction(
+          { ...as, kind: request.kind },
+          request.topic,
+          request.url,
+          request.label === "" ? undefined : request.label,
+          quiet,
+        );
+        break;
+      case "unlink":
+        await unlinkAction(as, request.topic, request.url, quiet);
+        break;
+      case "mention":
+      case "unmention":
+        await mentionAction(
+          as,
+          request.verb,
+          request.topic,
+          request.other,
+          quiet,
+        );
+        break;
+    }
+    return {
+      result: "written",
+      report: printed.join("\n").split("\n")[0] || "Done.",
+    };
+  } catch (error) {
+    return error instanceof UnsettledWrite
+      ? { result: "unsettled", message: error.reason }
+      : error instanceof UnconfirmedWrite
+      ? { result: "unconfirmed", message: error.message }
+      : { result: "failed", message: describeFailure(error) };
   }
 }
 

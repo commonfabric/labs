@@ -9,6 +9,7 @@ import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
 import { ACLManager } from "../../src/acl-manager.ts";
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceAccess } from "../../src/builder/space-access.ts";
 import {
@@ -146,6 +147,7 @@ class RecordingSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -187,6 +189,7 @@ describe("space-access-change", () => {
   beforeEach(() => {
     cleanups = [];
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://space-access-change-${++serverCount}`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: AUDIENCE },
@@ -278,6 +281,7 @@ describe("space-access-change", () => {
     acl: ACL,
   ): Promise<void> {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     try {

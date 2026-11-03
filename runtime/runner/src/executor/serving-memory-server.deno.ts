@@ -45,6 +45,7 @@ import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
 } from "@commonfabric/logger";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import { newLoopbackServer } from "../storage/v2-emulate.ts";
 import { ExecutorHost, type ExecutorHostOptions } from "./host.ts";
@@ -268,6 +269,9 @@ export async function startServingMemoryServer(
       new URL(`memory://serving-memory-server-${crypto.randomUUID()}`),
     subscriptionRefreshDelayMs,
     delegatingDids: [serviceIdentity.did()],
+    // The posture of a toolshed whose runtimes run the serving runtimes'
+    // flags (INV-16).
+    namesInstances: () => namesInstancesByDefault(hostOptions.experimental),
   });
   return await attachServingLoop({
     server,
@@ -322,6 +326,9 @@ export async function listenServingMemoryServer(
   const store = worker ? await temporaryStore() : undefined;
   const standalone = StandaloneMemoryServer.start({
     acl: { mode: aclMode ?? "off", delegatingDids: [serviceIdentity.did()] },
+    // The posture of a toolshed whose runtimes run the serving runtimes'
+    // flags (INV-16).
+    namesInstances: () => namesInstancesByDefault(hostOptions.experimental),
     ...(answer !== undefined ? { serve: answer } : {}),
     ...(store === undefined ? {} : { store: store.url }),
   });

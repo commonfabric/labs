@@ -19,6 +19,8 @@ import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { maxOf, minOf } from "@commonfabric/collections/math";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+import { labelsAt, type PartLabels } from "./labels.ts";
+
 /**
  * A document value reduced to JSON. A link is written as a {@link LinkMark};
  * a fabric value that is neither a link nor plain data (a byte sequence, for
@@ -50,6 +52,12 @@ export type LinkMark = {
 export interface HeldDoc {
   seq: number;
   value?: Plain;
+
+  /**
+   * The CFC label envelope the document stores beside its value, `null`
+   * for a document storing none; absent when the copy does not know.
+   */
+  cfc?: Plain | null;
 }
 
 /** What the copy persists between runs. */
@@ -78,15 +86,22 @@ export interface MirrorData {
  * Where a `names` entry leads: the Topic piece's document, and its input
  * document.
  *
- * The documents between an entry and its piece are not watched, because
- * watching one makes the server send the piece document it links, whole. The
- * board's namespace never moves a number to another Topic, and a write names
- * the entry rather than the piece, so it reaches whatever piece the entry
- * leads to when it is made.
+ * The documents between an entry and its piece are watched for their labels,
+ * and the piece, which the server sends along with them, is held for its
+ * revision alone, so that it is sent again only when it moves. Where an
+ * entry leads is not followed again: the board's namespace never moves a
+ * number to another Topic, and a write names the entry rather than the
+ * piece, so it reaches whatever piece the entry leads to when it is made.
  */
 export interface PieceInput {
   piece: string;
   input: string;
+
+  /**
+   * The documents between the entry and the piece, each only a link onward,
+   * whose labels restrict the Topic, as the copy holds them now.
+   */
+  via: string[];
 }
 
 /** A Topic as the client shows it. */
@@ -108,6 +123,12 @@ export interface Topic {
   createdAt: number;
   createdBy: string;
 
+  /**
+   * The newest of the Topic's own timestamps: when it was filed, and when
+   * its title or body last changed.
+   */
+  updatedAt: number;
+
   /** The newest of every timestamp the Topic holds, as the board orders by. */
   lastActivityAt: number;
 
@@ -116,6 +137,12 @@ export interface Topic {
 
   /** The documents `mention` has recorded references to, as linked. */
   mentions: string[];
+
+  /** What CFC says of the title and the body, when they are labeled. */
+  labels?: PartLabels;
+
+  /** Set when a display withholds the title and body, blanked. */
+  withheld?: true;
 }
 
 export interface TopicComment {
@@ -123,7 +150,14 @@ export interface TopicComment {
   body: string;
   sentAt: number;
   editedAt?: number;
+  removedAt?: number;
   removed: boolean;
+
+  /** What CFC says of the comment, when it is labeled. */
+  labels?: PartLabels;
+
+  /** Set when a display withholds the comment, blanked. */
+  withheld?: true;
 }
 
 export interface TopicLink {
@@ -132,7 +166,14 @@ export interface TopicLink {
   label: string;
   addedBy: string;
   addedAt?: number;
+  removedAt?: number;
   removed: boolean;
+
+  /** What CFC says of the link, when it is labeled. */
+  labels?: PartLabels;
+
+  /** Set when a display withholds the link, blanked. */
+  withheld?: true;
 }
 
 /**
@@ -184,10 +225,23 @@ export function linkOf(
   };
 }
 
-/** A value read out of the copy, with the document it was read from. */
-interface Position {
+/**
+ * A slot holding a link a read followed: its document and path, and the
+ * document's label envelope when the copy does not hold the document.
+ */
+export interface Slot {
   doc: string;
+  path: string[];
+}
+
+/**
+ * A value read out of the copy, with the document it was read from, where
+ * in that document's value it sits, and the slots holding the links the
+ * read followed to reach it.
+ */
+interface Position extends Slot {
   value: Plain | undefined;
+  via: Slot[];
 }
 
 /**
@@ -226,9 +280,18 @@ export class DocReader {
     return this.#missing;
   }
 
-  /** The root of document `id`'s value. */
-  root(id: string): Position {
-    return this.follow({ doc: id, value: { $link: { id, path: [] } } });
+  /**
+   * The root of document `id`'s value, reached through the slots `via`
+   * hold links to it.
+   */
+  root(id: string, via: Slot[] = []): Position {
+    this.#touched.add(id);
+    const held = this.#data.docs[id];
+    if (held?.value === undefined) {
+      if (!this.#absent.has(id)) this.#missing.add(id);
+      return { doc: id, path: [], value: undefined, via };
+    }
+    return this.follow({ doc: id, path: [], value: held.value, via });
   }
 
   /** The value `at` stands for, with every link on the way followed. */
@@ -239,7 +302,7 @@ export class DocReader {
       const link = linkOf(current.value);
       if (link === undefined) return current;
       if (link.space !== undefined && link.space !== this.#space) {
-        return { doc: current.doc, value: undefined };
+        return { ...current, value: undefined };
       }
       const id = link.id ?? current.doc;
       const key = JSON.stringify([id, link.path]);
@@ -248,33 +311,91 @@ export class DocReader {
       }
       seen.add(key);
       this.#touched.add(id);
+      const via = [...current.via, { doc: current.doc, path: current.path }];
       const held = this.#data.docs[id];
       if (held?.value === undefined) {
         if (!this.#absent.has(id)) this.#missing.add(id);
-        return { doc: id, value: undefined };
+        return { doc: id, path: link.path, value: undefined, via };
       }
       current = link.path.reduce<Position>(
         (position, key) => this.child(position, key),
-        { doc: id, value: held.value },
+        { doc: id, path: [], value: held.value, via },
       );
     }
   }
 
   /** The value at `key` under `at`. */
   child(at: Position, key: string): Position {
-    const { doc, value } = this.follow(at);
+    const { doc, path, value, via } = this.follow(at);
+    const under = [...path, key];
     if (Array.isArray(value)) {
-      return { doc, value: /^\d+$/.test(key) ? value[Number(key)] : undefined };
+      return {
+        doc,
+        path: under,
+        value: /^\d+$/.test(key) ? value[Number(key)] : undefined,
+        via,
+      };
     }
-    return { doc, value: isObjectNotArray(value) ? value[key] : undefined };
+    return {
+      doc,
+      path: under,
+      value: isObjectNotArray(value) ? value[key] : undefined,
+      via,
+    };
   }
 
   /** The elements of the array at `at`, each followed. */
   items(at: Position): Position[] {
-    const { doc, value } = this.follow(at);
+    const { doc, path, value, via } = this.follow(at);
     return Array.isArray(value)
-      ? value.map((item) => this.follow({ doc, value: item }))
+      ? value.map((item, index) =>
+        this.follow({ doc, path: [...path, String(index)], value: item, via })
+      )
       : [];
+  }
+
+  /**
+   * What CFC says of the fields `keys` names under `at`, the values a view
+   * shows of it, each read whole where it is held, at the end of any links,
+   * and restricted by the slots it was reached through. A record whose
+   * document holds nothing has nothing to label. A label document the copy
+   * lacks is needed, as a missing document is.
+   */
+  labels(at: Position, keys: readonly string[]): PartLabels | undefined {
+    const record = this.follow(at);
+    if (this.#data.docs[record.doc]?.value === undefined) return undefined;
+    const fields = keys.map((key) => this.follow(this.child(record, key)));
+    const labeled = (slot: Slot) => {
+      // A slot is labeled as the copy holds its document now, which the
+      // copy keeps, and so watches, for that.
+      this.#touched.add(slot.doc);
+      const held = this.#data.docs[slot.doc];
+      if (held?.value === undefined && !this.#absent.has(slot.doc)) {
+        this.#missing.add(slot.doc);
+      }
+      const cfc = held?.cfc;
+      // A label document the runtime remembers is not read again, but is
+      // needed all the same, so the copy keeps it.
+      for (const id of references(cfc)) this.#touched.add(id);
+      return { id: slot.doc, cfc, path: slot.path };
+    };
+    const reached = new Map<string, Slot>();
+    for (const slot of fields.flatMap((field) => field.via)) {
+      reached.set(JSON.stringify([slot.doc, slot.path]), slot);
+    }
+    return labelsAt(
+      fields.map(labeled),
+      [...reached.values()].map(labeled),
+      (id) => {
+        this.#touched.add(id);
+        const label = this.#data.docs[id]?.value;
+        if (label === undefined) {
+          if (!this.#absent.has(id)) this.#missing.add(id);
+          return undefined;
+        }
+        return { value: label };
+      },
+    );
   }
 
   text(at: Position, key: string): string {
@@ -300,6 +421,16 @@ export class DocReader {
   }
 }
 
+/** The documents `value` names by reference, as `{ $ref: id }`. */
+function references(value: Plain | null | undefined): string[] {
+  if (Array.isArray(value)) return value.flatMap(references);
+  if (!isObjectNotArray(value)) return [];
+  const { $ref } = value;
+  return typeof $ref === "string"
+    ? [$ref]
+    : Object.values(value).flatMap(references);
+}
+
 /**
  * The documents the board's `names` map links, by Topic number. The links are
  * not followed: the copy keeps no piece documents. A key that is not a number
@@ -322,23 +453,27 @@ export function topicPieces(
 }
 
 /**
- * Assembles the Topic whose input document is `input`. A Topic with
- * documents the copy lacks assembles with those parts empty, and the reader's
- * `missing` names them.
+ * Assembles the Topic whose input document is `input`, reached through
+ * the slots `via` holding links to it. A Topic with documents the copy
+ * lacks assembles with those parts empty, and the reader's `missing` names
+ * them.
  */
 export function assembleTopic(
   reader: DocReader,
   number: string,
   address: string,
   { piece, input }: PieceInput,
+  via: Slot[] = [],
 ): Topic {
-  const root = reader.root(input);
+  const root = reader.root(input, via);
   const comments = reader.items(reader.child(root, "comments")).map((at) => ({
     author: reader.author(at, "author", "authorName"),
     body: reader.text(at, "body"),
     sentAt: reader.number(at, "sentAt") ?? 0,
     ...optionalNumber("editedAt", reader.number(at, "editedAt")),
-    removedAt: reader.number(at, "removedAt"),
+    ...optionalNumber("removedAt", reader.number(at, "removedAt")),
+    removed: reader.number(at, "removedAt") !== undefined,
+    ...labeled(reader.labels(at, COMMENT_FIELDS)),
   }));
   const links = reader.items(reader.child(root, "links")).map((at) => ({
     kind: reader.text(at, "kind") || "web",
@@ -346,15 +481,15 @@ export function assembleTopic(
     label: reader.text(at, "label"),
     addedBy: reader.author(at, "addedBy", "addedByName"),
     ...optionalNumber("addedAt", reader.number(at, "addedAt")),
-    removedAt: reader.number(at, "removedAt"),
+    ...optionalNumber("removedAt", reader.number(at, "removedAt")),
+    removed: reader.number(at, "removedAt") !== undefined,
+    ...labeled(reader.labels(at, LINK_FIELDS)),
   }));
   const createdAt = reader.number(root, "createdAt") ?? 0;
-  const lastActivityAt = maxOf([
+  const updatedAt = maxOf([
     createdAt,
     reader.number(root, "bodyUpdatedAt") ?? 0,
     reader.number(root, "titleUpdatedAt") ?? 0,
-    ...comments.flatMap((c) => [c.sentAt, c.editedAt ?? 0, c.removedAt ?? 0]),
-    ...links.flatMap((l) => [l.addedAt ?? 0, l.removedAt ?? 0]),
   ]);
   const mentioned = reader.follow(reader.child(root, "mentioned")).value;
   return {
@@ -365,19 +500,69 @@ export function assembleTopic(
     body: reader.text(root, "body"),
     createdAt,
     createdBy: reader.author(root, "createdBy", "createdByName"),
-    lastActivityAt,
-    comments: comments.map(({ removedAt, ...comment }) => ({
-      ...comment,
-      removed: removedAt !== undefined,
-    })),
-    links: links.map(({ removedAt, ...link }) => ({
-      ...link,
-      removed: removedAt !== undefined,
-    })),
+    updatedAt,
+    lastActivityAt: activityOf(updatedAt, comments, links),
+    comments,
+    links,
     mentions: Array.isArray(mentioned)
       ? mentioned.flatMap((entry) => linkOf(entry)?.id ?? [])
       : [],
+    ...labeled(reader.labels(root, TOPIC_FIELDS)),
   };
+}
+
+/**
+ * The newest of a Topic's timestamps: `updatedAt`, its own, and those of
+ * its `comments` and `links`.
+ */
+export function activityOf(
+  updatedAt: number,
+  comments: readonly TopicComment[],
+  links: readonly TopicLink[],
+): number {
+  return maxOf([
+    updatedAt,
+    ...comments.flatMap((c) => [c.sentAt, c.editedAt ?? 0, c.removedAt ?? 0]),
+    ...links.flatMap((l) => [l.addedAt ?? 0, l.removedAt ?? 0]),
+  ]);
+}
+
+/** The fields of a Topic's input document a view shows of the Topic. */
+const TOPIC_FIELDS = [
+  "title",
+  "body",
+  "createdBy",
+  "createdByName",
+  "createdAt",
+  "bodyUpdatedAt",
+  "titleUpdatedAt",
+  "mentioned",
+];
+
+/** The fields of a comment a view shows. */
+const COMMENT_FIELDS = [
+  "author",
+  "authorName",
+  "body",
+  "sentAt",
+  "editedAt",
+  "removedAt",
+];
+
+/** The fields of a link a view shows. */
+const LINK_FIELDS = [
+  "kind",
+  "url",
+  "label",
+  "addedBy",
+  "addedByName",
+  "addedAt",
+  "removedAt",
+];
+
+/** `{ labels }`, or nothing for a part that carries none. */
+function labeled(labels: PartLabels | undefined): { labels?: PartLabels } {
+  return labels === undefined ? {} : { labels };
 }
 
 /**

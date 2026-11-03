@@ -45,7 +45,6 @@ import {
 } from "../config.ts";
 import {
   ciCommitGanttProgressResponse,
-  ciFetchProgressPanel,
   type CiGanttOptions,
   ciGanttOptions,
   ciGanttProgressResponse,
@@ -54,11 +53,13 @@ import {
   ciHistorySource,
   collectCiGanttInput,
   collectCommitCiGanttInput,
+  describeCiProgress,
   GANTT_MAX_RUNS,
 } from "../ci-job-history.ts";
 import {
   PERFORMANCE_VIEW_STYLES,
   performanceViewNav,
+  progressPanel,
 } from "../performance-views.ts";
 import {
   CHART_HIGHLIGHT,
@@ -230,7 +231,11 @@ ${DASHBOARD_THEME_HEAD}
     <label class="check"><input type="checkbox" id="mainOnly" checked> main pushes only</label>
     <label class="check"><input type="checkbox" id="allConcl"> include failed/cancelled in timing</label>
   </div>
-  ${ciFetchProgressPanel(undefined, { ariaLabel: "CI Gantt fetch progress" })}
+  ${
+    progressPanel(undefined, describeCiProgress, {
+      ariaLabel: "CI Gantt fetch progress",
+    })
+  }
   <div class="imgwrap"><img id="g" alt="CI Gantt chart"></div>
   <p class="note">Run, job, and step timings share the persistent server cache used by CI history. Regeneration reads cached past runs and fetches only missing runs or newer attempts.</p>
 ${dashboardThemeToggle()}
@@ -608,7 +613,7 @@ ${DASHBOARD_THEME_HEAD}
     escapeHtml(shortSha)
   } ↗</a></span></div>
   ${
-    ciFetchProgressPanel(undefined, {
+    progressPanel(undefined, describeCiProgress, {
       ariaLabel: "Commit CI Gantt fetch progress",
     })
   }

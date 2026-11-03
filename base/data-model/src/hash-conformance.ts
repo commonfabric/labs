@@ -859,6 +859,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     section: SECTION_INSTANCE,
     make: () => new UnknownValue(`${"T".repeat(63)}@1`, null),
   },
+  {
+    name: "unknown value under a tag with prefixes",
+    section: SECTION_INSTANCE,
+    make: () => new UnknownValue("sys.beep.Boop@1", null),
+  },
 
   // Cycles, and sharing.
   {

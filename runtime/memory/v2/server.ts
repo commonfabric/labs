@@ -24,6 +24,7 @@ import {
   hasConcreteOwner,
   isACL,
   isCapable,
+  isDeletionTombstone,
 } from "../acl.ts";
 import {
   canResolveScopeKey,
@@ -284,7 +285,9 @@ const WELL_FORMED_SPACE_DID = /^did:[^:]+:[^:]+$/;
  * reason the serving loop logs. */
 export type ForeignAuthorityVerdict =
   | { granted: true }
-  | { granted: false; reason: string };
+  /** `deleted` is present when the space is deleted (INV-15), which no
+   * grant reaches. */
+  | { granted: false; reason: string; deleted?: true };
 
 /** The capability a foreign authority probe resolves: WRITE for a
  * provisioning write under the carried actor's grant (protocol.md §2b),
@@ -703,12 +706,24 @@ const isNonNegativeInteger = (value: unknown): value is number =>
 const toError = (
   name: string,
   message: string,
-  details: Pick<V2Error, "permanentEvidence" | "aclRevision"> = {},
+  details: Pick<V2Error, "permanentEvidence" | "aclRevision" | "deleted"> = {},
 ): V2Error => ({
   name,
   message,
   ...details,
 });
+
+/**
+ * The refusal of every command to `space`, deleted, whose deletion tombstone
+ * is stored at `aclRevision` (INV-15): an `AuthorizationError` marked
+ * `deleted`, which no principal's retry heals.
+ */
+const deletedSpaceError = (space: string, aclRevision: number): V2Error =>
+  toError("AuthorizationError", `Space ${space} is deleted`, {
+    deleted: true,
+    permanentEvidence: true,
+    aclRevision,
+  });
 
 const toPreconditionFailedError = (
   error: unknown,
@@ -735,6 +750,9 @@ export type MemoryAclMode = "off" | "observe" | "enforce";
 type AclState =
   | { kind: "missing" }
   | { kind: "invalid" }
+  /** The space is deleted: its ACL document holds a deletion tombstone,
+   * stored at `seq` (INV-15). */
+  | { kind: "deleted"; seq: number }
   | { kind: "valid"; acl: Record<string, Capability | undefined> };
 
 /** The access list `engine` stores for `space`, classified. */
@@ -745,6 +763,7 @@ const readAclState = (engine: Engine.Engine, space: string): AclState => {
   // tombstone as public would turn deletion into an authorization bypass.
   if (state.document === null) return { kind: "invalid" };
   const acl = state.document.value;
+  if (isDeletionTombstone(acl)) return { kind: "deleted", seq: state.seq };
   if (!isACL(acl)) return { kind: "invalid" };
   const byPrincipal = acl as Record<string, Capability | undefined>;
   if (!hasConcreteOwner(byPrincipal)) return { kind: "invalid" };
@@ -1110,9 +1129,13 @@ export type ServedAclChange = {
   change: (stored: unknown) => ACL;
 };
 
-/** What {@link Server.checkServedAclChange} and its commit decide. */
+/**
+ * What {@link Server.checkServedAclChange} and its commit decide. A refusal
+ * carries `deleted` when the space whose list the change names is deleted
+ * (INV-15).
+ */
 export type ServedAclChangeVerdict =
-  | { readonly refused: string }
+  | { readonly refused: string; readonly deleted?: true }
   | { readonly admitted: true; readonly seq?: number };
 
 /**
@@ -2068,11 +2091,60 @@ class Connection {
     return true;
   }
 
-  #requireSession(
+  /**
+   * Whether the session `sessionId` on `space` is open on this connection
+   * and may take a command, sending the refusal when it may not. A session
+   * on a deleted space is open until its revocation reaches it, and its
+   * command is refused here, once the session is found and its routing
+   * holds, and before every other check, an ended chain's and a run-out
+   * lease's included (INV-15).
+   */
+  async #requireSession(
+    requestId: string,
+    space: string,
+    sessionId: string,
+  ): Promise<boolean> {
+    const handle = this.#findSession(requestId, space, sessionId);
+    if (handle === undefined) return false;
+    const deleted = await this.#server.deletedSpaceRefusal(space);
+    if (deleted !== null) {
+      this.#send({ type: "response", requestId, error: deleted });
+      return false;
+    }
+    return this.#requireSessionStanding(requestId, space, sessionId, handle);
+  }
+
+  /**
+   * Like {@link #requireSession}, for a report or a presence update, which
+   * is answered as it is handed over, so its deletion check reads the
+   * space's open engine without waiting.
+   */
+  #requireImmediateSession(
     requestId: string,
     space: string,
     sessionId: string,
   ): boolean {
+    const handle = this.#findSession(requestId, space, sessionId);
+    if (handle === undefined) return false;
+    const deleted = this.#server.deletedSpaceRefusalNow(space);
+    if (deleted !== null) {
+      this.#send({ type: "response", requestId, error: deleted });
+      return false;
+    }
+    return this.#requireSessionStanding(requestId, space, sessionId, handle);
+  }
+
+  /**
+   * Helper for {@link #requireSession} and {@link #requireImmediateSession},
+   * which returns the handle of the session `sessionId` on `space` when it is
+   * open on this connection and its routed authority holds, and otherwise
+   * sends the refusal and returns `undefined`.
+   */
+  #findSession(
+    requestId: string,
+    space: string,
+    sessionId: string,
+  ): SessionHandle | undefined {
     const handle = this.#sessions.get(sessionKey(space, sessionId));
     if (handle === undefined) {
       this.#send({
@@ -2083,7 +2155,7 @@ class Connection {
           "Session is not open on this connection",
         ),
       });
-      return false;
+      return undefined;
     }
     if (
       this.#routedOwns !== undefined &&
@@ -2096,8 +2168,23 @@ class Connection {
         requestId,
         error: toError("SessionRevokedError", "Routed memory authority ended"),
       });
-      return false;
+      return undefined;
     }
+    return handle;
+  }
+
+  /**
+   * Helper for {@link #requireSession} and {@link #requireImmediateSession},
+   * which returns whether the session `handle` names still stands: its proof
+   * chain has not ended and its authentication lease has not run out. It
+   * sends the refusal when it does not.
+   */
+  #requireSessionStanding(
+    requestId: string,
+    space: string,
+    sessionId: string,
+    handle: SessionHandle,
+  ): boolean {
     if (this.#delegationEnded(handle)) {
       // Not renewable: the grant came from the chain, and only a new open
       // with a fresh chain brings one. The session is ended so the client
@@ -2193,7 +2280,11 @@ class Connection {
       return;
     }
     if (
-      !this.#requireSession(message.requestId, message.space, message.sessionId)
+      !this.#requireImmediateSession(
+        message.requestId,
+        message.space,
+        message.sessionId,
+      )
     ) {
       return;
     }
@@ -2354,7 +2445,7 @@ class Connection {
       }
       case "transact": {
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2377,7 +2468,7 @@ class Connection {
       }
       case "graph.query":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2397,7 +2488,7 @@ class Connection {
         return;
       case "op.query":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2417,7 +2508,7 @@ class Connection {
         return;
       case "entity-id.list":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2437,7 +2528,7 @@ class Connection {
         return;
       case "entity-id.exists":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2457,7 +2548,7 @@ class Connection {
         return;
       case "sqlite.query":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2491,7 +2582,7 @@ class Connection {
           return;
         }
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2511,7 +2602,7 @@ class Connection {
         return;
       case "session.watch.set":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2601,7 +2692,7 @@ class Connection {
         return;
       case "session.watch.add":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2625,7 +2716,7 @@ class Connection {
         return;
       case "session.watch.remove":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2649,7 +2740,7 @@ class Connection {
         return;
       case "session.ack":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2669,7 +2760,7 @@ class Connection {
         return;
       case "session.close":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2682,7 +2773,7 @@ class Connection {
         return;
       case "event.attention.resolve":
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2702,7 +2793,7 @@ class Connection {
         return;
       case "pattern.lifecycle": {
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2766,7 +2857,7 @@ class Connection {
       }
       case "served": {
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -2822,7 +2913,7 @@ class Connection {
       }
       case "space.invite": {
         if (
-          !this.#requireSession(
+          !await this.#requireSession(
             parsed.requestId,
             parsed.space,
             parsed.sessionId,
@@ -3203,6 +3294,13 @@ export class Server {
   #queryEvaluationCaches = new Map<string, QueryEvaluationCache>();
 
   #engines = new Map<string, Promise<Engine.Engine>>();
+
+  /**
+   * Whether `close()` has reached this server's engines. From then on,
+   * `#openEngineInner()` refuses, since `close()` would never close an engine
+   * opened later.
+   */
+  #closed = false;
 
   /** What `executionLeases` returns, shared with every engine this opens. */
   readonly #executionLeases = new ExecutionLeases();
@@ -3876,6 +3974,41 @@ export class Server {
     return readAclState(engine, space);
   }
 
+  /**
+   * The refusal of every command to `space` when it is deleted, or `null`
+   * when it is not (INV-15). It holds in every ACL mode, and comes before
+   * every other check a command meets once it is routed and its session
+   * found.
+   */
+  #deletedRefusal(engine: Engine.Engine, space: string): V2Error | null {
+    const state = this.#aclState(engine, space);
+    return state.kind === "deleted"
+      ? deletedSpaceError(space, state.seq)
+      : null;
+  }
+
+  /**
+   * The refusal of a command a connection has routed to `space`, and found
+   * the session of where it names one, when the space is deleted, or `null`
+   * when it is not (INV-15). In every ACL mode. A space with no store is not
+   * deleted, and none is created for it here.
+   */
+  async deletedSpaceRefusal(space: string): Promise<V2Error | null> {
+    if (!(await this.#spaceStoreExists(space))) return null;
+    return this.#deletedRefusal(await this.#openEngine(space), space);
+  }
+
+  /**
+   * Like {@link deletedSpaceRefusal}, from the engine already open for
+   * `space`, without waiting, for a request answered as it is handed over.
+   * A session open on `space` has that engine open, since its open opened
+   * it; with none open, `null`.
+   */
+  deletedSpaceRefusalNow(space: string): V2Error | null {
+    const engine = this.#resolvedEngines.get(space);
+    return engine === undefined ? null : this.#deletedRefusal(engine, space);
+  }
+
   #resolveCapability(
     engine: Engine.Engine,
     space: string,
@@ -3899,7 +4032,8 @@ export class Server {
       return "WRITE";
     }
     // Malformed and ownerless ACLs fail closed. A service DID may still
-    // repair them explicitly.
+    // repair them explicitly. A deleted space's deletion tombstone grants
+    // nothing to anyone, and no one may repair it.
     return null;
   }
 
@@ -3987,6 +4121,12 @@ export class Server {
     ) {
       return toError("AuthorizationError", "Routed memory request denied");
     }
+    // A connection's command meets the deletion check before it gets here,
+    // but this policy answers for every caller: past this point, `observe`
+    // relaxes a shortfall and a service DID is OWNER whatever the ACL says,
+    // and neither may reach a deleted space (INV-15).
+    const deleted = this.#deletedRefusal(engine, space);
+    if (deleted !== null) return deleted;
     if (this.options.requireExplicitAcl === true) {
       const kind = this.#aclState(engine, space).kind;
       // Creation: until its genesis ACL lands, a space with no history
@@ -4167,6 +4307,10 @@ export class Server {
     committer: Pick<SessionState, "principal" | "genesisRoot" | "spaceKind">,
     commit: ClientCommit,
   ): V2Error | null {
+    // A deleted space is refused ahead of the shape and genesis checks, in
+    // every mode (INV-15).
+    const deleted = this.#deletedRefusal(engine, space);
+    if (deleted !== null) return deleted;
     const principal = committer.principal;
     for (const declaration of GENESIS_DECLARATIONS) {
       const declared = commit[declaration.field];
@@ -4807,6 +4951,13 @@ export class Server {
     }
   }
 
+  /**
+   * Closes this server's connections and engines, after which its store is the
+   * caller's to remove. This waits for running `pattern.lifecycle` and `served`
+   * requests, but for no frame still being handled, whose connection may have
+   * closed before this was called. A frame that goes on to need an engine is
+   * answered with an error.
+   */
   async close(): Promise<void> {
     // Withdraw this server's health-route providers so a closed server is
     // neither reported nor kept alive by the route; synchronous, ahead of
@@ -4833,6 +4984,7 @@ export class Server {
     await Promise.all(this.#lifecycleRuns);
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
+    this.#closed = true;
     for (const engine of this.#engines.values()) {
       Engine.close(await engine);
     }
@@ -5616,7 +5768,11 @@ export class Server {
       const sourceEngine = await this.#openEngine(request.sourceEvent.space);
       const outcome = Engine.runAtomicCommit(
         engine,
-        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+        (
+          apply,
+        ):
+          | { refused: string; deleted?: true }
+          | { applied?: Engine.AppliedCommit } => {
           const prepared = this.#prepareServedAclChange(
             engine,
             sourceEngine,
@@ -5673,7 +5829,9 @@ export class Server {
     sourceEngine: Engine.Engine,
     request: ServedAclChange,
     localSeq: number,
-  ): { refused: string } | { commit: ClientCommit | undefined } {
+  ):
+    | { refused: string; deleted?: true }
+    | { commit: ClientCommit | undefined } {
     const { space, actingPrincipal, sourceEvent } = request;
     if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
       return {
@@ -5716,7 +5874,10 @@ export class Server {
     const committer = { principal: actingPrincipal };
     const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
       this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
-    return invalid === null ? { commit } : { refused: invalid.message };
+    return invalid === null ? { commit } : {
+      refused: invalid.message,
+      ...(invalid.deleted === true ? { deleted: true as const } : {}),
+    };
   }
 
   async sqliteQuery(
@@ -6044,6 +6205,12 @@ export class Server {
         !this.options.ownsSpace(message.space)
       ) {
         throw authorizationError("Routed memory request denied");
+      }
+      // A deleted space is refused before every other part of an open, in
+      // every mode, an invitation it carries included (INV-15).
+      const deleted = await this.deletedSpaceRefusal(message.space);
+      if (deleted !== null) {
+        return respondTypedError<SessionOpenResult>(message.requestId, deleted);
       }
       // An open naming a principal rests on the connection's authentication
       // of it, and uses no challenge.
@@ -7513,6 +7680,15 @@ export class Server {
             ok: commit,
           };
         } catch (error) {
+          // The engine's own check, inside the write transaction, found a
+          // deletion committed after the server's: the transact gets the
+          // refusal the server's check would have given (INV-15).
+          if (error instanceof Engine.SpaceDeletedError) {
+            return respondTypedError<Engine.AppliedCommit>(
+              message.requestId,
+              deletedSpaceError(error.space, error.aclRevision),
+            );
+          }
           if (
             error instanceof Engine.OpCodecError ||
             error instanceof Engine.UnsupportedOpCodecError
@@ -12099,6 +12275,13 @@ export class Server {
           `${capability ?? "nothing"} (${requirement} required)`,
       };
     }
+    if (state.kind === "deleted") {
+      return {
+        granted: false,
+        reason: `Space ${space} is deleted`,
+        deleted: true,
+      };
+    }
     return {
       granted: false,
       reason: state.kind === "missing"
@@ -12144,9 +12327,15 @@ export class Server {
    * Helper for `#openEngine()`, which does the opening: an engine already
    * open or opening is handed back; otherwise one is opened at the space's
    * store URL, its directory created first when the store is a file, and
-   * indexed while it opens.
+   * indexed while it opens. A closed server refuses instead.
    */
   #openEngineInner(space: string): Promise<Engine.Engine> {
+    if (this.#closed) {
+      return Promise.reject(
+        new Error(`This memory server is closed: no engine for \`${space}\``),
+      );
+    }
+
     const existing = this.#engines.get(space);
     if (existing !== undefined) {
       return existing;

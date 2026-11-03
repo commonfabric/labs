@@ -8,6 +8,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -526,6 +527,7 @@ describe("document-release", () => {
       create: async (space, signer) => {
         const client = await MemoryV2Client.connect({
           transport: MemoryV2Client.loopback(server),
+          instanceNames: namesInstancesByDefault(),
         });
         const session = await client.mount(
           space,

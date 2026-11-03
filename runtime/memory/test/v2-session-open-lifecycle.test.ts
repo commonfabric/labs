@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { toFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { aclDocId } from "../acl.ts";
@@ -20,6 +21,71 @@ import {
 } from "./v2-auth-test-helpers.ts";
 
 describe("v2-session-open-lifecycle", () => {
+  it("answers an open still on its way to the engine when the server closes with an error, and leaves the store empty", async () => {
+    // Closing the server waits for no frame, and a connection that closed
+    // first is no longer one the server knows. An engine opened now would
+    // never be closed, and its files would land in a store the caller is free
+    // to remove once `close()` has returned.
+    const reached = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const space = TEST_SESSION_OPEN_PRINCIPAL;
+    const directory = await Deno.makeTempDir({ prefix: "v2-closed-open-" });
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: toFileUrl(`${directory}/`),
+      acl: { mode: "enforce", serviceDids: [TEST_SESSION_OPEN_PRINCIPAL] },
+      ownsSpace: (target) => target === space,
+    });
+    const messages: ServerMessage[] = [];
+    const connection = server.connectRouted(
+      (message) => messages.push(message),
+      (target) => target === space,
+    );
+    let opening: Promise<void> | undefined;
+    try {
+      await connection.receive(encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: getMemoryProtocolFlags(),
+      }));
+      connection.admitRoutedPrincipal(space, server.nowSeconds() + 600);
+      server.accessForTestingOnly.engineOpener = async (target, open) => {
+        reached.resolve();
+        await release.promise;
+        return await open(target);
+      };
+      opening = connection.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "open-past-close",
+        space,
+        principal: space,
+        session: { sessionId: "session:open-past-close" },
+      }));
+      await reached.promise;
+      connection.close();
+      await server.close();
+      release.resolve();
+      await opening;
+      expect(await Array.fromAsync(Deno.readDir(directory))).toEqual([]);
+      expect(
+        messages.find((message) =>
+          message.type === "response" &&
+          message.requestId === "open-past-close"
+        ),
+      ).toMatchObject({
+        error: {
+          name: "ProtocolError",
+          message: `This memory server is closed: no engine for \`${space}\``,
+        },
+      });
+    } finally {
+      release.resolve();
+      await opening;
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
   it("refuses a routed open whose authority ends during admission", async () => {
     const reached = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();

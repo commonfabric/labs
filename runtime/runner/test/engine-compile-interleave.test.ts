@@ -137,6 +137,39 @@ describe("Engine", () => {
       );
     });
 
+    it("gives a due timer a turn during a serving runtime's cold compile, and during no other's in Deno", async () => {
+      // A serving runtime's thread also serves other spaces and, in a worker,
+      // posts the heartbeat its watchdog listens for, so a stretch as long as a
+      // whole program would silence all of it.
+      const serving = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        servingPosture: true,
+      });
+      try {
+        const compile = (engine: Engine) =>
+          engine.compileResolvedToRecordGraph(storedSource, entryFilename);
+        const timerFiredDuring = async (engine: Engine) => {
+          let fired = false;
+          const timer = setTimeout(() => {
+            fired = true;
+          }, 0);
+          await compile(engine);
+          clearTimeout(timer);
+          return fired;
+        };
+        // Past the first compile, which loads the compiler and takes turns of
+        // its own on either driver.
+        await compile(serving.harness);
+        await compile(runtime.harness);
+
+        expect(await timerFiredDuring(runtime.harness)).toBe(false);
+        expect(await timerFiredDuring(serving.harness)).toBe(true);
+      } finally {
+        await serving.dispose();
+      }
+    });
+
     it("classifies a compile failure as deterministic with either driver", async () => {
       // A failure that is a function of the verified bytes keeps the
       // by-identity negative memo honest; the interleaved driver surfaces it

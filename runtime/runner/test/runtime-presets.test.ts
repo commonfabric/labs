@@ -157,6 +157,8 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   // a preset-built runtime under the flag is a speculating client by
   // construction.
   servingPosture: { treat: "absent" },
+  // The same factory shares these among the serving runtimes it builds.
+  compileTurns: { treat: "absent" },
 };
 
 describe("runtimePresets conformance", () => {

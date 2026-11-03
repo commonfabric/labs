@@ -21,6 +21,7 @@ import type { PatternLifecycleCall } from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
 import { StorageManager } from "../src/storage/v2.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const INVITE_HOST = "https://invites.example";
 
@@ -33,6 +34,7 @@ describe("storage-session-requests", () => {
   beforeEach(async () => {
     cleanups = [];
     server = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
       acl: { mode: "enforce" },
       inviteHost: INVITE_HOST,
     });

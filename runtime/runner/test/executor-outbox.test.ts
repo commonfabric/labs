@@ -58,7 +58,10 @@ import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import { SpaceOutbox } from "../src/executor/outbox.ts";
 import { sqliteQueryMemoDecision } from "../src/builtins/sqlite-builtins.ts";
 import { emptyServingLoopStats } from "../src/executor/stats.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  writeDeletionTombstone,
+} from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("executor outbox test");
 const space = signer.did() as MemorySpace;
@@ -1079,6 +1082,107 @@ describe("stage G outbox + sqlite discharge", () => {
       "evt-fifo-2",
       "evt-fifo-3",
     ]);
+  });
+
+  //
+  // A deleted space (serving-loop.md, "A deleted space")
+  //
+
+  /** Inserts `count` rows to one stream of the target, in order. */
+  const insertRows = (label: string, count: number) => {
+    const stream = { id: `of:${label}-stream-link`, path: [] as string[] };
+    const sidecar = streamEntriesDocId(stream);
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 1,
+      rows: Array.from({ length: count }, (_, i) => ({
+        targetSpace,
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId: `evt-${label}-${i + 1}`,
+        payload: { n: i + 1 },
+        actingPrincipal: "user:alice",
+        actingSession: "sess-1",
+        capabilityRef: `cap-${label}`,
+      })),
+    });
+    return sidecar;
+  };
+
+  /** The event ids the target's stream at `sidecar` holds. */
+  const delivered = async (sidecar: string): Promise<string[]> => {
+    const target = await server.engineForSpace(targetSpace);
+    const doc = Engine.read(target, { id: sidecar });
+    return ((doc?.value as { entries?: Array<{ eventId?: string }> })
+      ?.entries ?? []).map((entry) => entry.eventId ?? "");
+  };
+
+  it("starts no row once its own space is deleted, and leaves every row for the reap", async () => {
+    const sidecar = insertRows("own-deleted", 2);
+    writeDeletionTombstone(engine, space, signer.did());
+
+    const { outbox, stats } = newOutbox();
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 2 });
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(2);
+    expect(await delivered(sidecar)).toEqual([]);
+    expect(stats.outbox.failed).toBe(0);
+  });
+
+  it("reads its own space before each row: a deletion during one row's delivery stops the drain at the next", async () => {
+    const sidecar = insertRows("mid-deleted", 3);
+    // The space is deleted while the first row's delivery is under way.
+    let deleted = false;
+    const deletingServer = new Proxy(server, {
+      get(target, prop) {
+        if (prop === "commitDelegatedAppend") {
+          return async (...args: unknown[]) => {
+            const result = await (target.commitDelegatedAppend as (
+              ...args: unknown[]
+            ) => Promise<unknown>)(...args);
+            if (!deleted) {
+              deleted = true;
+              writeDeletionTombstone(engine, space, signer.did());
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const outbox = new SpaceOutbox({
+      stats: emptyServingLoopStats(),
+      server: deletingServer as typeof server,
+      engine,
+      space,
+      sessionId: holder,
+      localSeqRef,
+    });
+
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 2 });
+    expect(await delivered(sidecar)).toEqual(["evt-mid-deleted-1"]);
+    expect(
+      selectPendingExecutionOutboxRows(engine, { branch: "" }).map((row) =>
+        row.eventId
+      ),
+    ).toEqual(["evt-mid-deleted-2", "evt-mid-deleted-3"]);
+  });
+
+  it("refuses a row whose target is deleted deterministically: retired, counted failed, and the drain goes on", async () => {
+    const sidecar = insertRows("target-deleted", 2);
+    writeDeletionTombstone(
+      await server.engineForSpace(targetSpace),
+      targetSpace,
+      targetSigner.did(),
+    );
+
+    const { outbox, stats } = newOutbox();
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 0 });
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(0);
+    expect(stats.outbox.failed).toBe(2);
+    expect(await delivered(sidecar)).toEqual([]);
   });
 
   it("keeps the row on a transport-class delivery failure (admit-before-delete): the next drain delivers exactly one entry", async () => {

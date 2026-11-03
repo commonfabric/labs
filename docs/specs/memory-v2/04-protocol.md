@@ -27,9 +27,10 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- deleting a space (section 4.5.1, INV-15) is specified and not yet implemented:
-  the server refuses the deletion tombstone it writes under INV-12's validity
-  clause, as it refuses any ACL document that is not an access list
+- deleting a space (section 4.5.1, INV-15) is implemented in part: the server
+  refuses a space whose ACL document holds a deletion tombstone, but does not
+  yet admit the commit that writes one, refusing it under INV-12's validity
+  clause as it refuses any ACL document that is not an access list
 - the client in this repository handles the `deleted` marker and
   `session/revoked` reason, which the server sends neither of yet. Every
   client in use handles both before the server sends either, those built
@@ -37,9 +38,13 @@ rewrite. In particular:
   ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
 - instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
   by the server, which advertises `instanceNameMark`, records the mark and
-  admits opens and commits by it, and a client keeps the `session/revoked`
-  reason `instance-names` as the refusal `clientUpdateRequired` marks; no
-  client declares `instanceNames` yet, so no space is marked
+  admits opens and commits by it. A client whose runtime names instances
+  declares `instanceNames: true` in every open and requires
+  `instanceNameMark`, and a client keeps the `session/revoked` reason
+  `instance-names` as the refusal `clientUpdateRequired` marks. The runtime's
+  `instanceNames` flag is off by default and no environment sets it, so no
+  deployed runtime declares naming and no deployment's posture names
+  instances
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
@@ -648,7 +653,8 @@ Rules:
   the field would open, or refuse, the session without redeeming anything
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses
-  the message. No client declares it yet. A server
+  the message. A client declares it on every open, a resume included, when
+  its runtime names instances. A server
   that advertises `instanceNameMark` refuses, with a `SessionRevokedError`
   carrying `clientUpdateRequired: true`, an open or resume of a marked space by
   a positional session, and an open of an unmarked space by a naming session

@@ -96,6 +96,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 class LoopbackSessions implements SessionFactory {
   readonly #server: () => MemoryV2Server.Server;
@@ -106,6 +107,7 @@ class LoopbackSessions implements SessionFactory {
 
   async create(spaceId: string, signer?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server()),
     });
     const session = await client.mount(

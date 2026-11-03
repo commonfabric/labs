@@ -46,6 +46,7 @@ material.
 | replace the body              | `deno task -q topics body --agent-name <name> top/42 < body.md`                        |
 | rename                        | `deno task -q topics title --agent-name <name> top/42 '<title>'`                       |
 | link a pull request           | `deno task -q topics link --agent-name <name> top/42 <url> --kind pr`                  |
+| take back a link              | `deno task -q topics unlink --agent-name <name> top/42 <url>`                          |
 | reference another Topic       | `deno task -q topics mention top/42 top/7`                                             |
 
 A search term is a case-insensitive regular expression; a Topic matches when
@@ -60,8 +61,10 @@ backticks, or quotes goes on stdin through a quoted here-document (`<<'EOF'`),
 which the shell leaves unexpanded.
 
 `deno task -q topics watch` shows the board live on the whole terminal, for a
-person to watch; it takes over the terminal until a key quits it, so do not run
-it as an agent.
+person to watch, and `deno task -q topics browse` lets a person read and write
+it there, with menus, the mouse, and a search that narrows as it is typed. Both
+take over the terminal until a key quits them, so do not run either as an agent;
+point a person at `browse` when they want to read the board.
 
 ## What holds throughout
 
@@ -112,10 +115,10 @@ it as an agent.
 
 ## Beyond `deno task -q topics`
 
-The verbs the client does not wrap — editing or retracting a comment, removing a
-link, numbering — are called with `cf piece call`, from the same checkout, in
-the same invocation as these settings, since shell state rarely survives between
-an agent's tool calls:
+The verbs the client does not wrap — editing or retracting a comment, numbering
+— are called with `cf piece call`, from the same checkout, in the same
+invocation as these settings, since shell state rarely survives between an
+agent's tool calls:
 
 ```bash
 export CF_API_URL='https://estuary.saga-castor.ts.net'

@@ -20,9 +20,9 @@ export function applyLocalExperimentalDefaults(
   experimental.agentBuiltin ??= true;
   experimental.localFold ??= false;
   experimental.pieceCreatorRecord ??= false;
-  // TODO(danfuzz): Turn this on only once a runtime whose naming mode
-  // differs from a space's data is kept away from that space;
-  // `instance-naming-modes.test.ts` pins what one does to it until then.
+  // TODO(danfuzz): Turn this on once every deployment's posture names
+  // instances. Until then a runtime with it on is refused each unmarked space
+  // of a deployment whose posture names none (INV-16).
   experimental.instanceNames ??= false;
   experimental.localSessionDocuments ??= false;
 }

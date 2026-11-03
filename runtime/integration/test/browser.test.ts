@@ -4,12 +4,28 @@
  */
 
 import { expect } from "@std/expect";
+import { resolve } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { Browser, PROFILE_DIRECTORY_PREFIX } from "../browser.ts";
 import type { Page } from "../page.ts";
+
+const REPO_ROOT = resolve(import.meta.dirname!, "../../..");
+
+// A program that launches a browser, reports its endpoint, and is killed with
+// the browser still open. It runs nothing after the signal, which is the same
+// position as a run stopped from outside or ended by an uncaught error.
+const KILLED_WITH_ITS_BROWSER_OPEN = `
+  import { Browser } from ${
+  JSON.stringify(new URL("../browser.ts", import.meta.url).href)
+};
+  const browser = await Browser.launch();
+  console.log(browser.wsEndpoint());
+  Deno.kill(Deno.pid, "SIGKILL");
+`;
 
 // How many pages the browser holds open, read from the browser rather than
 // from what the tests opened, so a page astral closed only its own connection
@@ -214,6 +230,34 @@ describe("browser", () => {
             );
 
             expect(profileDirectories(directory)).toEqual([]);
+          });
+        });
+
+        it("ends the browser when the process that launched it is killed", async () => {
+          // As above, the launch writes into a `TMPDIR` of its own, and that is
+          // what removes the profile directory a killed process leaves behind.
+          await withTemporaryDirectory(async () => {
+            const { signal, stdout, stderr } =
+              await runDenoCommandWithTemporaryLock({
+                root: REPO_ROOT,
+                args: (lockPath) => [
+                  "eval",
+                  "--lock",
+                  lockPath,
+                  "--frozen=true",
+                  KILLED_WITH_ITS_BROWSER_OPEN,
+                ],
+              });
+            const decoder = new TextDecoder();
+            expect(signal, decoder.decode(stderr)).toBe("SIGKILL");
+
+            // A socket to a browser that has already gone closes as well, on
+            // the refused connection. Only a browser still running holds one
+            // open, which leaves this test waiting here.
+            const socket = new WebSocket(decoder.decode(stdout).trim());
+            await new Promise((resolve) => {
+              socket.addEventListener("close", resolve);
+            });
           });
         });
       });

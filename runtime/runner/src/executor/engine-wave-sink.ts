@@ -61,6 +61,7 @@ import {
   selectSessionOverwritePathsSince,
   selectWritePathsSince,
   serverSeq,
+  SpaceDeletedError,
   WaveCommitConflictError,
   WavePreconditionError,
   WaveStaleReadError,
@@ -115,6 +116,11 @@ export function waveCommitFailureResult(
         message: error.message,
         staleReads: error.staleReads,
       },
+    };
+  }
+  if (error instanceof SpaceDeletedError) {
+    return {
+      error: { name: "SpaceDeleted", message: error.message },
     };
   }
   if (error instanceof DerivedAclDocumentWriteError) {
@@ -537,7 +543,9 @@ export class EngineWaveCommitSink implements WaveCommitSink {
       if ("refused" in verdict) {
         return {
           error: {
-            name: "AclDocumentWriteRefused",
+            name: verdict.deleted === true
+              ? "SpaceDeleted"
+              : "AclDocumentWriteRefused",
             message: `access-list change to ${change.space} refused: ` +
               verdict.refused,
           },

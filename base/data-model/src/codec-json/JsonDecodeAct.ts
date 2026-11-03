@@ -73,7 +73,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
 
   /**
    * Decodes a codec-value tree back into `FabricValue`s. See Section 4.5 of
-   * the formal spec.
+   * `1-fabric-values.md`.
    *
    * Frozen-ness contract: every value this returns is deep-frozen, or built
    * mutable when this act is mutable, whichever arm produced it, the

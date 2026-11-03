@@ -27,6 +27,7 @@ import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
+  findSpaceDeletion,
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
@@ -45,6 +46,7 @@ import {
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
+  SPACE_DELETED_PARK,
   SpaceServer,
   type SpaceServerOptions,
   type SpaceServerPolicy,
@@ -231,11 +233,13 @@ export class ExecutorHost {
    * contiguity). */
   readonly #sinkLocalSeq = { value: 0 };
 
-  /** Consecutive failure parks per space: every park except an idle one
-   * and one on a rival's lease, and every activation that fails without
-   * parking. This backoff streak is cleared by an idle park or a
-   * successfully committed wave — real served progress, not merely a
-   * runtime that got built (every crash-loop tenure builds one). */
+  /** Consecutive failure parks per space: every park except an idle one,
+   * one on a rival's lease, and one for the space's deletion, and every
+   * activation that fails without parking. This backoff streak is cleared
+   * by an idle park or a successfully committed wave — real served
+   * progress, not merely a runtime that got built (every crash-loop tenure
+   * builds one) — and by the space's deletion, which leaves nothing to
+   * back off from (serving-loop.md, "A deleted space"). */
   readonly #failureParkStreaks = new Map<string, number>();
 
   /** Wakers for in-flight backoff sleeps — close() flushes them so a
@@ -580,6 +584,9 @@ export class ExecutorHost {
    * before its activation unwinds, so the gate waits for any activation
    * in flight rather than joining it. */
   #reactivateAfterPark(space: MemorySpace, parking?: SpaceServer): void {
+    // A tenure that ended for its space's deletion leaves nothing to
+    // re-evaluate (serving-loop.md, "A deleted space").
+    if (parking?.endedForDeletion === true) return;
     void (async () => {
       await parking?.whenParked;
       await this.#activating.get(space);
@@ -645,6 +652,13 @@ export class ExecutorHost {
     let parked = false;
     try {
       const engine = await this.#options.server.engineForSpace(space);
+      // The access list is read before the lease is acquired, on every
+      // activation, so a deleted space gets no tenure whatever demand set
+      // this one off (serving-loop.md, "A deleted space").
+      if (findSpaceDeletion(engine, space) !== undefined) {
+        this.#refuseDeletedSpace(space);
+        return;
+      }
       // The sink's session key IS the DR1 holder, whose process-instance
       // component makes a new process a NEW engine session — so the
       // process-global counter starting at 0 never collides with a prior
@@ -700,6 +714,11 @@ export class ExecutorHost {
               error,
             ]);
           }
+          // A park for the space's deletion ends its tenures for good: the
+          // space is not served again, so nothing is re-evaluated, and the
+          // park clears the backoff streak, as there is nothing left to
+          // back off from (serving-loop.md, "A deleted space").
+          //
           // A park on a rival's lease leaves the space to the rival.
           // Any other park may leave a space that still meets the ACTIVE
           // criteria unserved, so the host re-evaluates them once the
@@ -707,6 +726,12 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
+          if (reason === SPACE_DELETED_PARK) {
+            this.#failureParkStreaks.delete(space);
+            this.#pendingNotices.delete(space);
+            this.#endTenure(space, server, true);
+            return;
+          }
           const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
@@ -792,6 +817,19 @@ export class ExecutorHost {
       logger.error("activate-failed", `activation of ${space} failed`, error);
       this.#reportActivationSettled(space, "failed");
     }
+  }
+
+  /**
+   * Helper for `#activateInner()`, which declines to activate `space`,
+   * found deleted: whatever was buffered for its next tenure is dropped,
+   * since none comes, as are its failure streak and the runtime kept from
+   * its last idle park, and the attempt is reported refused.
+   */
+  #refuseDeletedSpace(space: MemorySpace): void {
+    this.#pendingNotices.delete(space);
+    this.#failureParkStreaks.delete(space);
+    this.#discardParkedRuntime(space);
+    this.#reportActivationSettled(space, "refused");
   }
 
   /**

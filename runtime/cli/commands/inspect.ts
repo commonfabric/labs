@@ -813,6 +813,14 @@ export const inspect = new Command()
               `${field.pagination.integratedTruncated ? "+" : ""}` +
               ` checkpoints=${field.checkpoints.length}`,
           );
+          const anchorsDocument = field.consistency.anchorsDocumentMatches;
+          console.log(
+            `  anchors=${field.anchors.length}` +
+              ` anchors-document=${field.anchorsDocumentId}` +
+              ` anchors-document-matches=${
+                anchorsDocument === null ? "n/a" : anchorsDocument
+              }`,
+          );
         }
         if (report.fieldsTruncated) {
           console.log(`field list truncated at ${report.fieldLimit}`);

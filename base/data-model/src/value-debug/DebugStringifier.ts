@@ -29,6 +29,10 @@ import { DebugConverter } from "./DebugConverter.ts";
  */
 const AFTER_LINE_BREAK_REGEX = /(?<=\r\n|\r(?!\n)|\n)/;
 
+/** Matches one or more valid ASCII identifiers joined by dots. */
+const DOTTED_IDENTIFIERS_REGEX =
+  /^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/;
+
 /**
  * What a `FabricPrimitive`'s codec hands back to be rendered: the
  * realm-crossing encoding of a terminal codec, or the expansion of a
@@ -613,7 +617,8 @@ export class DebugStringifier {
 
   /**
    * Returns the type name of a codec type tag: the tag less its encoding
-   * version, which a rendering leaves out.
+   * version, which a rendering leaves out. Namespace prefixes stay, so
+   * `sys.Boop@1` and `Boop@1` render as two different types.
    */
   static #typeNameOf(tag: string): string {
     return tag.replace(/@.*$/, "");
@@ -629,12 +634,15 @@ export class DebugStringifier {
   }
 
   /**
-   * Renders the type name a tagged form opens with: a slash, then the name as
+   * Renders the type name a tagged form opens with: a slash, then the name. A
+   * name made of valid identifiers joined by dots, as a type name with
+   * namespace prefixes is, stays bare, and any other name renders as
    * `#renderKey()` renders it. The `<anonymous>` marker, which stands for a
    * class with no name, stays bare.
    */
   static #renderTypeName(name: string): string {
-    const rendered = (name === "<anonymous>")
+    const rendered = (name === "<anonymous>") ||
+        DOTTED_IDENTIFIERS_REGEX.test(name)
       ? name
       : DebugStringifier.#renderKey(name);
     return `/${rendered}`;
