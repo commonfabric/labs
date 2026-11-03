@@ -3261,8 +3261,15 @@ export async function runLane(
       console.log(`ci-lane: ${describeFailure(error)}`);
     }
     // On every path, a lane that stops or throws included, since the job
-    // uploads what the lane leaves however it ends.
-    await relativizePatternCoverage(options);
+    // uploads what the lane leaves however it ends. A rewrite that fails
+    // fails the lane without displacing whatever the loop threw.
+    try {
+      await relativizePatternCoverage(options);
+    } catch (error) {
+      ok = false;
+      notes.push(describeFailure(error));
+      console.log(`ci-lane: ${describeFailure(error)}`);
+    }
     // Only for a lane that failed -- a green run has nothing to explain,
     // and the logs are large.
     if (!ok) {

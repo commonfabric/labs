@@ -16,9 +16,8 @@
  * from a file: `new URL(…)` or `URL.parse(…)` given `import.meta.url`, an
  * `import.meta.resolve(…)` call, or a literal starting with `file:`, and a
  * call to `toFileUrl`. It does not follow a URL through a variable or a
- * parameter. An assignment to `pathname`
- * is left alone, and so is a read whose value is assigned to another URL's
- * `pathname`, because both keep the path encoded.
+ * parameter. An assignment to `pathname` is left alone, because it writes back
+ * an encoded path.
  */
 
 const MESSAGE =
@@ -101,12 +100,10 @@ export default {
         return {
           MemberExpression(node) {
             if (!isPathname(node)) return;
-            // Writing a `pathname`, or copying one URL's onto another's,
-            // keeps it encoded.
+            // Writing a `pathname` keeps it encoded.
             const parent = node.parent;
             if (
-              parent.type === "AssignmentExpression" &&
-              (parent.left === node || isPathname(parent.left))
+              parent.type === "AssignmentExpression" && parent.left === node
             ) {
               return;
             }
