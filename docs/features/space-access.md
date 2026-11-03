@@ -17,8 +17,8 @@ access list whatever a pattern decided, so a pattern that offers a control on
 the strength of this answer has not granted anything. In `observe` mode the
 server only logs an ordinary shortfall, and in `off` mode, the memory server's
 own default when it is constructed without a mode, it checks nothing. A
-[deleted space](#a-deleted-space), once deletion is implemented, is the
-exception: it is refused in every mode.
+[deleted space](#a-deleted-space) is the exception: it is refused in every
+mode.
 
 ## Where the level comes from
 

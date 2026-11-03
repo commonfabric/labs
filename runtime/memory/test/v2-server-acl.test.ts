@@ -4685,6 +4685,49 @@ describe("v2-server-acl", () => {
       );
     });
 
+    it("revokes the space's sessions when a transact finds a deletion that landed after the command's own check", async () => {
+      await withSpace(
+        "late-deletion",
+        "enforce",
+        async ({ server, store, space }) => {
+          const alice = await connect(server);
+          const opened = await openSession(alice, space, ALICE);
+          expectExists(opened.ok);
+          // The command's own check opens the engine first; the deletion lands
+          // through another connection as the transact opens it next.
+          let opens = 0;
+          let seq = 0;
+          server.accessForTestingOnly.engineOpener = async (
+            requestedSpace,
+            open,
+          ) => {
+            if (requestedSpace === space && ++opens === 2) {
+              seq = await deleteElsewhere(store, space, ALICE);
+            }
+            return await open(requestedSpace);
+          };
+          try {
+            const write = await transactSet(
+              alice,
+              space,
+              opened.ok.sessionId,
+              "of:doc:late",
+              { late: true },
+              1,
+            );
+            expect(write.error).toEqual(deletedRefusal(space, seq));
+            expect(shiftMessage(alice.messages)).toMatchObject({
+              type: "session/revoked",
+              sessionId: opened.ok.sessionId,
+              reason: "deleted",
+            });
+          } finally {
+            server.accessForTestingOnly.engineOpener = undefined;
+          }
+        },
+      );
+    });
+
     /** A transact by `harness`'s session writing `value` as the ACL. */
     const writeAcl = (
       harness: Harness,

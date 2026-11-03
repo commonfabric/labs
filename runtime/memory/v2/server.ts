@@ -2526,7 +2526,9 @@ class Connection {
         }
         // Publishing inside the per-space transaction lock makes the verdict
         // visible before any fan-out for the same space can acquire that lock.
+        let refusedDeleted = false;
         await this.#server.transact(parsed, (verdict) => {
+          refusedDeleted = verdict.error?.deleted === true;
           this.#send(verdict);
         });
         // A self-deauthorizing ACL commit defers the writer's terminal
@@ -2535,6 +2537,9 @@ class Connection {
           parsed.space,
           parsed.sessionId,
         );
+        // A deletion that landed after this command's own check, and that
+        // the transact found instead, is noticed as that check's is.
+        if (refusedDeleted) this.#server.noticeDeletedSpace(parsed.space);
         return;
       }
       case "graph.query":
