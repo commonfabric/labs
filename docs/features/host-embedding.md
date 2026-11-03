@@ -714,7 +714,10 @@ a Home whose root already records the pattern it runs, and returns its cell.
 Where the user has no Home, or another writer is still creating it, it creates
 nothing, starts nothing, and returns `undefined`. A host through which a user
 first gets a Home makes the same call without `existingOnly`, which creates one
-where there is none. Nothing is rendered either way.
+where there is none. Nothing is rendered either way. Where Home's memory
+session has ended with an error, as when its first handshake failed on every
+attempt the client may make, the call rejects with that error, with or without
+`existingOnly`, and creates and starts nothing.
 
 Bringing Home up is what maintains it. The first bring-up in a runtime worker
 starts the worker's housekeeping over Home, once per worker:
@@ -750,7 +753,9 @@ housekeeping, but neither is the contract.
 an existing Home and starts the housekeeping, and that it creates and starts
 nothing where there is no Home. The cases beside it, in the same file's home
 pattern IPC block, hold each housekeeping step running once per worker and Home
-opening when a step fails.
+opening when a step fails. `describe("a Home whose every memory dial is
+refused")` there holds the rejection, against a host that refuses every
+websocket handshake.
 `runtime/runtime-client/test/runtime-client.test.ts`,
 `describe("ensureHomePatternRunning()")`, holds the request the client sends
 and the `undefined` it returns where no Home was brought up.

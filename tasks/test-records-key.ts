@@ -30,6 +30,7 @@
 
 import { exists } from "@std/fs";
 import { dirname, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   defaultSpoolRoot,
   type Environment,
@@ -108,10 +109,6 @@ export interface KeyToolDeps {
 
   /** Waits out one polling interval. */
   pause: () => Promise<void>;
-}
-
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Runs a command for its output; injectable so tests run no commands. */
@@ -202,7 +199,7 @@ async function github(
     });
   } catch (error) {
     throw new KeyToolError(
-      `Cannot reach ${API}: ${reason(error)}`,
+      `Cannot reach ${API}: ${describeFailure(error)}`,
     );
   }
 }
@@ -577,7 +574,7 @@ async function installDelivery(
   } catch (error) {
     throw new KeyToolError(
       `The delivery does not open with the identity at ` +
-        `${identityPath(deps.env)}: ${reason(error)}`,
+        `${identityPath(deps.env)}: ${describeFailure(error)}`,
     );
   }
   const keyText = new TextDecoder().decode(keyFile);
@@ -1114,7 +1111,7 @@ async function removeFile(path: string): Promise<boolean> {
     return true;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return false;
-    throw new KeyToolError(`Cannot remove ${path}: ${reason(error)}`);
+    throw new KeyToolError(`Cannot remove ${path}: ${describeFailure(error)}`);
   }
 }
 
@@ -1161,7 +1158,7 @@ async function moveFile(from: string, to: string): Promise<void> {
     await Deno.remove(from);
   } catch (error) {
     throw new KeyToolError(
-      `Cannot move ${from} to ${to}: ${reason(error)}\n` +
+      `Cannot move ${from} to ${to}: ${describeFailure(error)}\n` +
         "Move it there yourself and run the command again.",
     );
   }

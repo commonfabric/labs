@@ -21,6 +21,7 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { utf8Compare } from "@commonfabric/text/utf8";
 import { patternKey } from "./pattern-files.ts";
 import {
@@ -206,7 +207,7 @@ async function main() {
       } catch (error) {
         output.errors.push({
           pattern,
-          error: error instanceof Error ? error.message : String(error),
+          error: describeFailure(error),
         });
       }
     }

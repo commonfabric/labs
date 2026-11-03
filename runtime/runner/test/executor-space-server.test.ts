@@ -28,12 +28,7 @@ import {
   insertExecutionOutboxRows,
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-  liveExecutionLeaseHolder,
-  releaseExecutionLease,
-} from "@commonfabric/memory/v2/execution-lease";
+import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
 import {
   decodeMemoryBoundary,
   resolveScopeKey,
@@ -47,6 +42,7 @@ import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
   getDerivedInternalCell,
+  getMetaCell,
   getMetaLink,
   parseLink,
 } from "../src/link-utils.ts";
@@ -231,7 +227,7 @@ describe("stage G SpaceServer recovery seams", () => {
     );
     // The refused activation released the lease (no stranded row).
     expect(
-      liveExecutionLeaseHolder(engine, space),
+      engine.executionLeases.holderOf(space),
     ).toBeUndefined();
   });
 
@@ -241,11 +237,7 @@ describe("stage G SpaceServer recovery seams", () => {
     // activation below takes.
     const rival = executionLeaseHolder("did:key:space-server-rival");
     expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: rival,
-        ttlMs: 600_000,
-      }),
+      engine.executionLeases.acquire(space, rival),
     ).toBe(true);
 
     const parks: string[] = [];
@@ -260,7 +252,7 @@ describe("stage G SpaceServer recovery seams", () => {
     // not build a serving runtime it has no right to commit from — and
     // it leaves the rival's row exactly as it found it.
     expect(servingRuntime).toBeUndefined();
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(rival);
+    expect(engine.executionLeases.holderOf(space)).toBe(rival);
     expect(lastStats.lease.held).toBe(0);
   });
 
@@ -310,14 +302,14 @@ describe("stage G SpaceServer recovery seams", () => {
     // succeeds.
     let failuresLeft = 1;
     const flakyOnce = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "commitDelegatedAppend" && failuresLeft > 0) {
           return () => {
             failuresLeft -= 1;
             return Promise.reject(new Error("transport down"));
           };
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
@@ -722,28 +714,21 @@ describe("stage G SpaceServer recovery seams", () => {
 
   it("discards a REJECTED wave's effects: a terminal engine-side rejection withdraws the claims, so the batch must not egress (round-2 thread 3)", async () => {
     const created = newSpaceServer({
-      // Renewals must not repair the lease mid-test: the rejection is
-      // staged by deleting the engine-side lease row while the
-      // in-process tenure stays valid.
       policy: {
         flushDeadlineMs: 2_000,
         idleParkMs: 600_000,
-        renewIntervalMs: 600_000,
       },
     });
     expect(await created.activate()).toBe(true);
     const runtime = servingRuntime!;
 
-    // Pull the engine-side lease row out from under the ACTIVE server:
-    // the in-process tenure check still passes (no renew ran), so the
-    // wave proceeds to its commit — where the engine's derived-class
-    // admission (holder must hold the LIVE execution_lease) refuses it
-    // with a conflict-less rejection: the accumulator's terminal
+    // Pull the lease out from under the ACTIVE server: the in-process
+    // tenure check still passes, so the wave proceeds to its commit — where
+    // the engine's derived-class admission (holder must hold the lease)
+    // refuses it with a conflict-less rejection: the accumulator's terminal
     // `aborted: "rejected"` arm, exactly the failed-wave shape the
     // admission gate must discard effects for.
-    engine.database.prepare(
-      `DELETE FROM execution_lease WHERE space = :space`,
-    ).run({ space });
+    engine.executionLeases.release(space, created.holder);
 
     let flushed = 0;
     const probe = runtime.getCell<{ n: number }>(
@@ -781,74 +766,10 @@ describe("stage G SpaceServer recovery seams", () => {
     expect(Engine.serverSeq(engine)).toBe(seqBefore);
   });
 
-  it("reports a survived renewal blip to the memory server: the renew arm's same-process reacquire calls noteLeaseReacquired with the space and the service identity — once per blip, never on a plain renewal, never when the reacquire fails and the space parks (fan-out stage A's finding 1, the re-arm's trigger)", async () => {
-    // A Proxy facade over the real server that records the notice; every
-    // other call passes through (the sx2 facade pattern above).
-    const notices: Array<{ space: string; principal: string }> = [];
-    const noticeArrivals = new ArrivalLog<void>();
-    const spy = new Proxy(server, {
-      get(target, prop, receiver) {
-        if (prop === "noteLeaseReacquired") {
-          return (notice: { space: string; principal: string }) => {
-            notices.push(notice);
-            noticeArrivals.record();
-            return target.noteLeaseReacquired(notice);
-          };
-        }
-        const value = Reflect.get(target, prop, receiver);
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    }) as typeof server;
-    const stats = emptyServingLoopStats();
-    const created = newSpaceServer({
-      serverFacade: spy,
-      stats,
-      policy: {
-        flushDeadlineMs: 2_000,
-        idleParkMs: 600_000,
-        renewIntervalMs: 25,
-      },
-    });
-    expect(await created.activate()).toBe(true);
-    // Activation itself reports nothing. Whether a PLAIN renewal reports
-    // is carried by the count assertions after the blip below: the renew
-    // ticks every 25 ms for the rest of this test, so a renewal that
-    // reported would push the count past the one the blip produces.
-    expect(notices).toEqual([]);
-    expect(stats.lease.lost).toBe(0);
-
-    // The blip: the row vanishes with NO rival, so the next tick's
-    // renewal FAILS and the same-process reacquire SUCCEEDS.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    // The notice is the reacquire's own edge; the failed tick and the
-    // restored row are what produced it.
-    await noticeArrivals.reached(1);
-    expect(stats.lease.lost).toBeGreaterThanOrEqual(1);
-    expect(liveExecutionLeaseHolder(engine, space)).toBe(created.holder);
-    expect(notices).toEqual([{ space, principal: serviceSigner.did() }]);
-    expect(created.active).toBe(true);
-
-    // A blip the reacquire LOSES (a rival took the row) parks the space
-    // and reports nothing: there is no live lease to re-arm under.
-    releaseExecutionLease(engine, { space, holder: created.holder });
-    expect(
-      acquireExecutionLease(engine, {
-        space,
-        holder: executionLeaseHolder("did:key:rival-process"),
-        ttlMs: 600_000,
-      }),
-    ).toBe(true);
-    await parks.reached(1);
-    expect(created.active).not.toBe(true);
-    // One notice per blip, over every plain renewal since.
-    expect(notices.length).toBe(1);
-  });
-
   it("resolves a second park only once the first has parked the space", async () => {
-    // A park the renew arm fires without awaiting is still running its
-    // dispose when the host closes; the host's own park must wait for it,
-    // or the engine closes under a tenure that still releases its lease
-    // through it.
+    // A park the loop fires without awaiting is still running its dispose
+    // when the host closes; the host's own park must wait for it, or the
+    // engine closes under a tenure still disposing against it.
     const created = newSpaceServer();
     expect(await created.activate()).toBe(true);
     const first = created.park("first");
@@ -987,11 +908,11 @@ describe("stage G SpaceServer recovery seams", () => {
     }>,
   ): typeof server =>
     new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "demandForSpace") {
           return () => sessionDemandOf(demandRowsFor(roots));
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as typeof server;
@@ -1258,11 +1179,18 @@ describe("stage G SpaceServer recovery seams", () => {
     }
   });
 
-  // Sets up a piece at `rootName` whose record says another build numbered
-  // its writable one number further on, so a start of it is refused.
-  // `restore` stamps the record of this build, as a migration would, and
-  // `close` disposes of the runtime that set the piece up.
-  const setUpRefusedRoot = async (rootName: string) => {
+  /**
+   * A piece of a pattern with one writable and one computed field, run once
+   * by a creator runtime and stopped, as a client leaves a piece the serving
+   * loop later starts on demand. `argumentId` names the argument document,
+   * whose result backlink chains to the root; `touch()` commits a write to
+   * the root document. `origin` records a source origin on the root, which a
+   * piece created from a served source carries.
+   */
+  const setUpStoppedPiece = async (
+    rootName: string,
+    options: { origin?: string } = {},
+  ) => {
     const creatorManager = EmulatedStorageManager.connectTo(server, {
       as: spaceSigner,
     });
@@ -1284,24 +1212,64 @@ describe("stage G SpaceServer recovery seams", () => {
           ].join("\n"),
         }],
       }, { space });
-      const argument = creator.getCell<{ n: number }>(
-        space,
-        `${rootName}-arg`,
-        undefined,
-      );
-      const creatorRoot = creator.getCell<{ total?: number }>(
+      const root = creator.getCell<{ total?: number }>(
         space,
         rootName,
         undefined,
       );
-      await argument.sync();
-      await creatorRoot.sync();
+      await root.sync();
       const runTx = creator.edit();
-      argument.withTx(runTx).set({ n: 1 });
-      creator.run(runTx, compiled, argument, creatorRoot);
+      // A plain argument value: the runner then creates the argument document
+      // itself, with its result backlink to the root.
+      creator.run(runTx, compiled, { n: 1 }, root);
+      if (options.origin !== undefined) {
+        root.withTx(runTx).setMetaRaw(
+          "patternSource",
+          options.origin,
+          rawMetaWriteAuthorization,
+        );
+      }
+      const argumentId = getMetaCell(root, "argument", runTx)
+        .getAsNormalizedFullLink().id;
       expect((await runTx.commit().settled).error).toBeUndefined();
       await creator.idle();
-      creator.runner.stop(creatorRoot);
+      creator.runner.stop(root);
+      return {
+        creator,
+        compiled,
+        root,
+        argumentId,
+        touch: async () => {
+          const tx = creator.edit();
+          root.withTx(tx).setMetaRaw(
+            "slug",
+            `${rootName}-touched`,
+            rawMetaWriteAuthorization,
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await creator.storageManager.synced();
+        },
+        close: async () => {
+          await creator.dispose();
+          await creatorManager.close();
+        },
+      };
+    } catch (error) {
+      await creator.dispose();
+      await creatorManager.close();
+      throw error;
+    }
+  };
+
+  /**
+   * A stopped piece whose stored record says another build set it up with
+   * its writable one number further on, so a start of it is refused. `restore`
+   * stamps the record of the build itself, as a migration would.
+   */
+  const setUpRefusedRoot = async (rootName: string) => {
+    const piece = await setUpStoppedPiece(rootName);
+    try {
+      const { creator, compiled, root } = piece;
       const ref = creator.patternManager.getArtifactEntryRef(compiled)!;
       const own = storedSetupBuildOf(
         compiled,
@@ -1311,7 +1279,7 @@ describe("stage G SpaceServer recovery seams", () => {
       expect(own.state.length).toBe(1);
       const stampRecord = async (record: typeof own) => {
         const tx = creator.edit();
-        creatorRoot.withTx(tx).setMetaRaw(
+        root.withTx(tx).setMetaRaw(
           "patternSetupBuild",
           fabricFromConvertibleJsValue(record as never),
           rawMetaWriteAuthorization,
@@ -1327,16 +1295,9 @@ describe("stage G SpaceServer recovery seams", () => {
           description,
         ]),
       });
-      return {
-        restore: () => stampRecord(own),
-        close: async () => {
-          await creator.dispose();
-          await creatorManager.close();
-        },
-      };
+      return { restore: () => stampRecord(own), close: piece.close };
     } catch (error) {
-      await creator.dispose();
-      await creatorManager.close();
+      await piece.close();
       throw error;
     }
   };
@@ -1590,6 +1551,140 @@ describe("stage G SpaceServer recovery seams", () => {
       (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
       await creator.dispose();
       await creatorManager.close();
+    }
+  });
+
+  it("starts a piece whose start's commit failed once for all its demanded documents, parking them until a commit to the piece re-arms them", async () => {
+    // A start resolves before its commit settles, and the loop learns of
+    // the commit's failure through the runner's observer. Each document of
+    // the piece a client watches is a demand key of its own, and each
+    // resolves to the same piece: after the first start's commit has
+    // failed, a start for another key would fail the same way, so the keys
+    // park together, re-armed by a commit to the piece as a refused root is.
+    const stats = emptyServingLoopStats();
+    const rootName = "failed-start-root";
+    const { argumentId, touch, close } = await setUpStoppedPiece(rootName);
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    // The loop's own seal, refusing the piece's start commits while
+    // `refuseStarts` holds: the deterministic stand-in for a refusal of a
+    // start's writes at the wave.
+    const seal = created.seal.bind(created);
+    let refuseStarts = true;
+    const refusedStarts: string[] = [];
+    (created as { seal: typeof created.seal }).seal = (tx) => {
+      const actionId = waveRunContextOf(tx)?.actionId;
+      if (
+        refuseStarts && actionId !== undefined &&
+        actionId.startsWith("piece-") && actionId.endsWith(`/${rootId}`)
+      ) {
+        refusedStarts.push(actionId);
+        return Promise.resolve({
+          error: {
+            name: "StorageTransactionAborted" as const,
+            message: "test refusal of the piece's start commit",
+            reason: new Error("failed-start-test-refusal"),
+          },
+        });
+      }
+      return seal(tx);
+    };
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }, { id: argumentId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return stats.structureLoadFailures >= 1;
+      });
+      // Parked: the waves further input drives start nothing for either key.
+      for (let i = 0; i < 3; i++) {
+        created.noteDemandChanged();
+        await driveOneWave(`failed-start-probe-${i}`);
+      }
+      expect(refusedStarts.length).toBe(1);
+      expect(stats.structureLoadFailures).toBe(1);
+      expect(stats.structureLoadRefused).toBe(0);
+      expect(runtime.runner.isRunning(rootCell)).toBe(false);
+
+      refuseStarts = false;
+      await touch();
+      created.enqueueCommit({
+        space,
+        seq: Engine.serverSeq(engine),
+        class: "authored",
+        sessionId: "session:failed-start-restorer",
+        writes: [{ id: rootId, scopeKey: "space" }],
+      });
+      await awaitEach(cycles, () => runtime.runner.isRunning(rootCell));
+      expect(stats.structureLoadRearmed).toBe(2);
+      expect(stats.structureLoadFailures).toBe(1);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      await close();
+    }
+  });
+
+  it("follows a demanded piece's origin once, before the tenure's first start of it", async () => {
+    // Two demand keys resolve to the same stopped piece. The pass that first
+    // reaches the piece declines its start and queues the follow, which the
+    // next cycle runs ahead of its serve step; that cycle's pass starts the
+    // piece for both keys, and no other key of the piece follows it again.
+    const stats = emptyServingLoopStats();
+    const rootName = "followed-origin-root";
+    const { argumentId, close } = await setUpStoppedPiece(rootName, {
+      origin: "system:system/probe/probe.tsx",
+    });
+
+    const created = newSpaceServer({ stats });
+    expect(await created.activate()).toBe(true);
+    const runtime = servingRuntime!;
+    const rootCell = runtime.getCell<{ total?: number }>(
+      space,
+      rootName,
+      undefined,
+    );
+    const rootId = rootCell.getAsNormalizedFullLink().id;
+    const followed: Array<{ id: string; running: boolean }> = [];
+    const reconciled = stub(
+      runtime.sourceReconciler,
+      "reconcile",
+      (cell) => {
+        followed.push({
+          id: cell.getAsNormalizedFullLink().id,
+          running: runtime.runner.isRunning(cell),
+        });
+        return Promise.resolve("current" as const);
+      },
+    );
+    const originalWatched = server.demandForSpace.bind(server);
+    (server as { demandForSpace: unknown }).demandForSpace = () =>
+      sessionDemandOf(demandRowsFor([{ id: rootId }, { id: argumentId }]));
+    try {
+      await awaitEach(cycles, () => {
+        created.noteDemandChanged();
+        return runtime.runner.isRunning(rootCell);
+      });
+      for (let i = 0; i < 2; i++) {
+        created.noteDemandChanged();
+        await driveOneWave(`followed-origin-probe-${i}`);
+      }
+      // Followed once, while stopped, before the start.
+      expect(followed).toEqual([{ id: rootId, running: false }]);
+      expect(stats.originFollows).toBe(1);
+      expect(stats.structureLoadFailures).toBe(0);
+    } finally {
+      (server as { demandForSpace: unknown }).demandForSpace = originalWatched;
+      reconciled.restore();
+      await close();
     }
   });
 

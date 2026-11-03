@@ -511,13 +511,16 @@ export default pattern<{seed?: ${seedType}}>(() => {
           expect(delegated).not.toContain(identity);
         }
 
+        // The bumped version, with the variant `mergeRuntime` compiles under.
+        const mergeVersion = await mergeRuntime.patternManager
+          .compileCacheRuntimeVersion({ patternCoverage: false });
         const compiledTx = mergeRuntime.edit();
         try {
           const compiledClosure = await loadCompiledClosure(
             mergeRuntime,
             patternSpace,
             successorRef.identity,
-            { runtimeVersion: bumpedRuntimeVersion },
+            { runtimeVersion: mergeVersion! },
             compiledTx,
           );
           for (const [identity, sourceDoc] of successorClosure!) {
@@ -549,13 +552,17 @@ export default pattern<{seed?: ${seedType}}>(() => {
           expect(await invokeSetName(recoveredPiece, "recovered"))
             .toBe("v3:recovered");
           await recoveredRuntime.patternManager.flushCompileCacheWrites();
+          // The recovered version, with the variant `recoveredRuntime`
+          // compiles under.
+          const recoveredCacheVersion = await recoveredRuntime.patternManager
+            .compileCacheRuntimeVersion({ patternCoverage: false });
           const recoveredTx = recoveredRuntime.edit();
           try {
             const compiled = await loadCompiledClosure(
               recoveredRuntime,
               patternSpace,
               successorRef.identity,
-              { runtimeVersion: recoveredVersion },
+              { runtimeVersion: recoveredCacheVersion! },
               recoveredTx,
             );
             for (const [identity, sourceDoc] of successorClosure!) {

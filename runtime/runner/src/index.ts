@@ -15,6 +15,7 @@ export {
   type DurableRead,
   readConfirmed,
   readDurable,
+  speculationSettledFor,
 } from "./confirmed-read.ts";
 export { handlingCommittedBy } from "./handling-commit.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";

@@ -38,6 +38,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { createHasher } from "@commonfabric/content-hash";
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { openSpace } from "./db.ts";
 import {
   contentFingerprint,
@@ -448,7 +449,7 @@ async function assertNotInUse(storePath: string): Promise<void> {
     db.exec("BEGIN IMMEDIATE");
     db.exec("ROLLBACK");
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     if (!/database (is|table is) locked/i.test(message)) return;
     throw new Error(
       `refusing to reset ${storePath}: another process still has it open ` +

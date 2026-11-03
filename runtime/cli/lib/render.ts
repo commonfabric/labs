@@ -1,4 +1,5 @@
 import { encode } from "@commonfabric/text/utf8";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 function stringify(value: unknown): string {
@@ -84,7 +85,7 @@ export function safeStringify(obj: unknown, maxDepth = 8): string {
   try {
     return JSON.stringify(obj, replacer, 2) ?? "null";
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     throw new Error(`Could not serialize JSON output: ${message}`);
   }
 }

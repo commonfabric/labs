@@ -7,6 +7,7 @@ import {
   describeCompileErrors,
   describeFailures,
   dumperConfig,
+  dumperEnvironment,
   workspacePackages,
 } from "./check-cause-assignments.ts";
 import {
@@ -571,5 +572,23 @@ describe("check-cause-assignments", () => {
         const withAdded = await run(await dumperConfig(base, head));
         expect(new TextDecoder().decode(withAdded.stdout)).toBe("3 3\n");
       }));
+  });
+
+  describe("dumperEnvironment()", () => {
+    it("leaves out each variable that sets an experimental flag, and keeps the rest", () => {
+      expect(
+        dumperEnvironment({
+          PATH: "/bin",
+          EXPERIMENTAL_LOCAL_FOLD: "true",
+          EXPERIMENTAL_MODERN_CELL_REP: "false",
+          EXPERIMENTAL_UNMAPPED_NAME: "true",
+          LOG_LEVEL: "debug",
+        }),
+      ).toStrictEqual({
+        PATH: "/bin",
+        EXPERIMENTAL_UNMAPPED_NAME: "true",
+        LOG_LEVEL: "error",
+      });
+    });
   });
 });

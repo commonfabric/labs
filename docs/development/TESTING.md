@@ -31,15 +31,15 @@ covers trees no package's own check reaches.
 
 ### What a run ends with
 
-The root `deno task test`, `deno task integration`, and every
-continuous-integration lane end with a block headed `test summary`, built by
-`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
-run's block gives, for each of its first twenty failing tests, its name, its
-file, a command that runs it again where its kind of test has one, and the first
-lines of its error, and counts the rest. For a command that failed
-without a failing test to explain it, the block quotes the end of that
-command's output. The block ends with where the full logs are, so reading the
-end of the output is enough to know what failed and what to run next.
+The root `deno task test`, `deno task integration`, a `deno task test-gap` that
+runs tests, and every continuous-integration lane end with a block headed `test summary`, built
+by `tasks/test-summary.ts`. A passing run's block is one line of counts. A
+failing run's block gives, for each of its first twenty failing tests, its name,
+its file, a command that runs it again where its kind of test has one, and the
+first lines of its error, and counts the rest. For a command that failed without
+a failing test to explain it, the block quotes the end of that command's output.
+The block ends with where the full logs are, so reading the end of the output is
+enough to know what failed and what to run next.
 
 The root `deno task test` writes each package's output to a log file rather
 than to the console. A failing run keeps the directory of logs and names it in
@@ -93,6 +93,33 @@ source says.
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
+
+### Running what a pull request leaves out
+
+A pull request's continuous-integration run does not run every test. It runs
+the test files the change edits and a fixed budget of others chosen by their
+history (`DISCRETIONARY_SECONDS`), as [test selection](test-selection.md)
+describes. A test that imports a changed module can therefore go unrun until
+the default branch runs everything. Before opening a pull request, run those
+tests rather than tests the pull request will run anyway:
+
+```bash
+deno task test-gap --dry-run   # what would run, and what it is projected to cost
+deno task test-gap             # run it
+```
+
+It finds the test files the change reaches through their imports, takes away
+every test the pull request's default selection runs, and runs the rest,
+choosing them nearest the change first and passing over any that would take
+the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
+another budget, and `--base` the ref the change is measured against. A run that
+runs tests ends with the block described in
+[What a run ends with](#what-a-run-ends-with).
+After it come anything the run could not clean up, the failing tests that
+pull requests hold back as too flaky, which do not fail the run, and the test
+units left out, among them any this machine lacks something for.
+[Running locally what a pull request leaves out](test-selection.md#running-locally-what-a-pull-request-leaves-out)
+has the detail.
 
 ### Every test has to pass on its own
 
@@ -243,15 +270,33 @@ changed. The Tomorrow's Test Order workflow,
 ahead, so that such a test can be found and fixed before the day it would
 break.
 
-The workflow runs at 11:00 UTC every day. That is 04:00 in the Pacific zone in
-summer and 03:00 in winter, early on a Pacific day either way. It asks
-`deno task -q test-seed --tomorrow` for the seed of the next Pacific day, and
-calls the CI workflow at the head of `main` with that seed, which runs every CI
-test suite under it. When a test fails, the run fails. The run's checks on the
-commit are listed under "Tomorrow's order", apart from the checks of the
-commit's own run. When another workflow calls the CI workflow, it skips
-`Status`, which holds the coverage and topology checks. It also skips the build,
-attestation and deploy jobs. The records relay follows the workflow, and its
+The workflow runs the suites once for each seed, the first time it finds that
+the CI workflow passed on the head of `main`. A head that CI has not passed on
+would fail the run for reasons unrelated to the order. The workflow starts each
+time the CI workflow finishes on `main`, and a run goes on to decide only when
+that CI passed on a push. It also starts at 11:17 UTC every day, for a day when
+nothing lands. That is 04:17 in the Pacific zone in summer and 03:17 in winter,
+early on a Pacific day either way, so a scheduled run that GitHub starts hours
+late still asks for the same seed.
+
+Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
+Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the
+suites. It says yes when CI passed on the head of `main` and no other run has
+run that seed, whatever came of that run. A run checks out the head of `main`
+as it stood when the event that started the run fired, which is not always the
+commit whose CI run just finished. The runs that decide wait for one another,
+so that each sees what the run before it did. A run dispatched by hand runs the
+suites without asking, which is how to run a seed again, and it counts as
+having run the seed.
+
+A run that goes ahead calls the CI workflow at the head of `main` with the
+seed, which runs every CI test suite under it. When a test fails, the run
+fails. The run's checks on the commit are listed under "Tomorrow's order"
+followed by the seed, apart from the checks of the commit's own run. That
+name is how `tasks/test-order-tomorrow.ts` finds the runs of a seed. When
+another workflow calls the CI workflow, it skips `Status`, which holds the
+coverage and topology checks. It also skips the build, attestation and deploy
+jobs. The records relay follows the workflow, and its
 records carry the seed they ran under, so [test selection](test-selection.md)
 keeps them apart from the commit's own runs. Test selection reads them as runs
 on the default branch, since they ran its own head.
@@ -392,6 +437,8 @@ The following repository commands and test paths launch a browser:
   package name associated with browser tests does not by itself establish that
   a filtered test launches one.
 - The `deno task demo` command.
+- The `deno task test-gap` command, whenever what it chose to run includes
+  browser tests; its dry run lists the units it would run, with their suites.
 - Tests that run `deno-web-test`, call `Browser.launch()`, or bind a
   `ShellIntegration` lifecycle.
 
@@ -557,11 +604,10 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. Whichever role resolves ON also runs with
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
-baked shell, and the test processes of its package-integration and
-pattern-integration suites, so the ON arm's browsers receive only what their
-views need, and its posture probe checks that the toolshed publishes it.
+stay aligned. Web view-scoped replication is on by default under server
+execution, so the ON arm's browsers receive only what their views need without
+a variable of their own, and the ON arm's posture probe checks that the
+toolshed does not publish it off.
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
 flag itself.
 
@@ -570,15 +616,12 @@ test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too. CI's ON arm also runs with web
-view-scoped replication, so reproducing one of its failures takes that flag on
-the same processes:
+on neither arm. Start the servers with it too:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
-  ./scripts/start-local-dev.sh
+EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
 cd patterns
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+EXPERIMENTAL_SERVER_EXECUTION=true \
   API_URL=http://localhost:8000/ \
   deno test --shuffle=$(deno task -q test-seed) --no-check -A \
   ./integration/<name>.test.ts
@@ -595,9 +638,7 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
 function also checks the shell half of server execution, the define baked into
-the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
-view-scoped define the ON arm's shell bakes is not reported; the bake table in
-`cachedBinaries()` sets it, and the binary cache key covers that table.
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
@@ -628,11 +669,11 @@ these two harnesses while preserving the other inherited flags, so both run
 the OFF arm in every lane. Server-backed targets receive the supplied
 server-execution setting.
 
-For view-scoped replication, run the complete default integration suite with:
+View-scoped replication is on by default under server execution, so the
+complete default integration suite exercises it with:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true \
-EXPERIMENTAL_VIEW_SCOPED_REPLICATION=true deno task integration
+EXPERIMENTAL_SERVER_EXECUTION=true deno task integration
 ```
 
 The browser regression `shell/integration/view-scoped-replication.test.ts`
@@ -717,8 +758,8 @@ runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
 Either shape runs its loop in a Worker of the test's process when
-`SERVER_EXECUTION_WORKER` is `true` in the environment, as a toolshed does under
-that variable
+`SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
+file store runs it in a worker unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
 directory, since a worker cannot open a non-persistent one. `serving.host` is

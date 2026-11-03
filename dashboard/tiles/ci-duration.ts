@@ -9,6 +9,7 @@
 
 import { fromFileUrl } from "@std/path";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type GreenMark,
   type Route,
@@ -168,7 +169,7 @@ export async function renderGantt(
         headers: { "cache-control": "no-store" },
       });
     }
-    const message = e instanceof Error ? e.message : String(e);
+    const message = describeFailure(e);
     console.error("ci-gantt render error:", message);
     const safeMessage = friendlyError(message);
     if (safeMessage === "rate limit hit") {
@@ -762,7 +763,7 @@ function makeCiDuration(
       try {
         runs = await ctx.runsFor(opts.source);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         return {
           status: "unknown",
           value: "—",

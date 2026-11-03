@@ -112,6 +112,70 @@ function sqliteInput(value: FabricValue | undefined): {
 
 type SqliteOperationRunner = <T>(operation: () => Promise<T>) => Promise<T>;
 
+/**
+ * The cell `source`, a SQLite resource, resolves to once it reaches the
+ * database its producer makes. A pull alone does not promise that: under
+ * server execution the producer runs on the serving runtime, and a client's
+ * pull settles on the client's own loads, so it can find the producer's output
+ * still empty. The source then resolves to that output rather than to the
+ * database, and a grant of it would refuse the database as a retarget once it
+ * arrives. Read as a cell, the source holds its link to the output either way,
+ * so the wait reads its value, which follows that link and holds nothing until
+ * the database is written. A refused read of that value reached something
+ * labeled, which the empty output is not, so it ends the wait too.
+ *
+ * The wait holds subscriptions that keep the producer demanded, so an abort of
+ * `signal` ends it, releases them, and rejects with the signal's reason.
+ */
+async function producedSqliteCell(
+  source: CellHandle<unknown>,
+  signal: AbortSignal,
+): Promise<CellHandle<unknown>> {
+  signal.throwIfAborted();
+  // Held only to keep the producer demanded, as an operation's is.
+  const cancelDemand = source.asSchema({ asCell: ["sqlite"] }).subscribe(
+    () => {},
+    { onRefused: () => {} },
+  );
+  const database = source.asSchema({
+    type: "object",
+    additionalProperties: true,
+  });
+  const produced = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  const abandon = () => aborted.resolve();
+  signal.addEventListener("abort", abandon);
+  // A subscriber is first told what the handle holds, and a handle made from a
+  // context read earlier holds the field's link, which says nothing about the
+  // database. Only a later update, or what the pull below finds, does.
+  let subscribed = false;
+  const cancel = database.subscribe((value) => {
+    if (subscribed && value !== undefined) produced.resolve();
+  }, {
+    onRefused: () => {
+      if (subscribed) produced.resolve();
+    },
+  });
+  subscribed = true;
+  try {
+    // An abort ends the wait even while the pull is in flight.
+    await Promise.race([
+      database.pull().then((value) =>
+        value === undefined ? produced.promise : undefined
+      ),
+      aborted.promise,
+    ]);
+  } catch (error) {
+    if (!(error instanceof CellReadRefusedError)) throw error;
+  } finally {
+    signal.removeEventListener("abort", abandon);
+    cancel();
+    cancelDemand();
+  }
+  signal.throwIfAborted();
+  return await source.resolveAsCell();
+}
+
 async function demandSqliteSource<T>(
   source: CellHandle<unknown>,
   authority: CellHandle<unknown>,
@@ -513,11 +577,17 @@ export function createCellContextBridge(context: object): FabricBridge {
  * with no schema of its own names its streams only through the kinds given.
  * A name `resourceKinds` alone gives is a resource only where the context
  * holds a link under it, so a name the context does not hold grants nothing.
+ * A SQLite resource is granted once its producer has written the database, so
+ * this waits for each one the context holds. A wait keeps the producer
+ * demanded, and ends when the bridge fails or `signal` aborts. Once `signal`
+ * has aborted, the bridge rejects with its reason.
  */
 export async function resolveCellContextBridge(
   context: CellHandle<Record<string, unknown>>,
   resourceKinds: Readonly<Record<string, CellContextResourceKind>> = {},
+  signal?: AbortSignal,
 ): Promise<FabricBridge> {
+  signal?.throwIfAborted();
   // A context whose read is refused still names its fields, each of which
   // answers for its own reads.
   const contextNames = await fieldNames(context);
@@ -529,26 +599,36 @@ export async function resolveCellContextBridge(
     ...await fieldNames(root),
   ]);
   const names = new Set([...listed, ...Object.keys(resourceKinds)]);
+  // A failed resource rejects the bridge, which ends the other waits.
+  const failed = new AbortController();
+  const waits = signal === undefined
+    ? failed.signal
+    : AbortSignal.any([signal, failed.signal]);
   const entries = await Promise.all([...names].map(async (name) => {
     const source = context.key(name);
     const kindHint = Object.hasOwn(resourceKinds, name)
       ? resourceKinds[name]
       : undefined;
     const declaredKind = kindHint ?? cellKind(properties[name]);
+    let cell: CellHandle<unknown> | undefined;
+    if (!listed.has(name)) {
+      // An absent name resolves to the context's own path for it, which for a
+      // context that is itself a link is a path of the record it links to.
+      // It is settled before a SQLite resource's wait, which nothing would
+      // end for a name that holds nothing.
+      cell = await source.resolveAsCell();
+      const reached = cellRefToIdentityKey(cell.ref());
+      if (
+        reached === cellRefToIdentityKey(source.ref()) ||
+        reached === cellRefToIdentityKey(root.key(name).ref())
+      ) {
+        return undefined;
+      }
+    }
     if (declaredKind === "sqlite") {
-      await source.pull();
+      cell = await producedSqliteCell(source, waits);
     }
-    const cell = await source.resolveAsCell();
-    // An absent name resolves to the context's own path for it, which for a
-    // context that is itself a link is a path of the record it links to.
-    const reached = cellRefToIdentityKey(cell.ref());
-    if (
-      !listed.has(name) &&
-      (reached === cellRefToIdentityKey(source.ref()) ||
-        reached === cellRefToIdentityKey(root.key(name).ref()))
-    ) {
-      return undefined;
-    }
+    cell ??= await source.resolveAsCell();
     const resolvedSchema = cell.ref().schema;
     const runSqliteOperation: SqliteOperationRunner | undefined =
       declaredKind === "sqlite"
@@ -570,7 +650,12 @@ export async function resolveCellContextBridge(
         runSqliteOperation,
       ),
     ] as const;
-  }));
+  })).catch((error) => {
+    failed.abort();
+    signal?.throwIfAborted();
+    throw error;
+  });
+  signal?.throwIfAborted();
   return createFabricBridge(
     Object.fromEntries(entries.filter((entry) => entry !== undefined)),
   );

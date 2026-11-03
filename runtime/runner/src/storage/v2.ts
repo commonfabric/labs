@@ -91,6 +91,7 @@ import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import { BoundedKeyMap, LRUCache } from "@commonfabric/collections/cache";
 import { getLogger } from "@commonfabric/logger";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -1676,6 +1677,7 @@ export class StorageManager implements IStorageManager {
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
   #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
+  #spaceAnswerObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionReplacedObservers = new Set<(space: MemorySpace) => void>();
   #spaceSessionErrorObservers = new Set<
     (space: MemorySpace, error: Error) => void
@@ -2460,10 +2462,14 @@ export class StorageManager implements IStorageManager {
    * `space`'s ACL document, so a session this manager holds on that space
    * — revoked when an EARLIER ACL landed — may now re-open under a
    * different verdict. The executor host calls this for every registered
-   * space server on every ACL-doc-touching admission; `space` is usually
-   * NOT the caller's own, because the session that starves is typically a
-   * CROSS-SPACE replica (a served dispatch's argument link into the
-   * viewer's home space).
+   * space server on every ACL-doc-touching admission on its own memory
+   * server; `space` is usually NOT the caller's own, because the session
+   * that starves is typically a CROSS-SPACE replica (a served dispatch's
+   * argument link into the viewer's home space). A gated replica's grant
+   * verdicts on the space's actors do not wait for this call: the replica
+   * watches the list itself (SpaceReplica.#watchAccessList), so a change
+   * committed on the space's owner in another process reaches it over the
+   * session its reads go through.
    *
    * ALREADY-OPEN providers only. Opening one here would mount a session
    * for a space this manager has never read, turning an unrelated ACL
@@ -2659,12 +2665,17 @@ export class StorageManager implements IStorageManager {
           }
         },
         onAccessChange: (error) => {
-          const alreadyDenied = this.#spaceAccessErrors.has(space);
+          const previous = this.#spaceAccessErrors.get(space);
+          const alreadyDenied = previous !== undefined;
+          // A refusal that turns out to be the space's deletion is news even
+          // to an observer that heard of the refusal before it.
+          const nowDeleted = MemoryV2Client.isDeletedSpaceError(error) &&
+            !MemoryV2Client.isDeletedSpaceError(previous);
           if (error === undefined) {
             this.#spaceAccessErrors.delete(space);
           } else {
             this.#spaceAccessErrors.set(space, error);
-            if (!alreadyDenied) {
+            if (!alreadyDenied || nowDeleted) {
               for (const observer of [...this.#spaceAccessObservers]) {
                 try {
                   observer(space, error);
@@ -2674,13 +2685,22 @@ export class StorageManager implements IStorageManager {
               }
             }
           }
-          if (alreadyDenied !== (error !== undefined)) {
+          if (alreadyDenied !== (error !== undefined) || nowDeleted) {
             for (const observer of [...this.#spaceAccessChangeObservers]) {
               try {
                 observer(space);
               } catch (cause) {
                 console.error("space-access-change subscriber threw:", cause);
               }
+            }
+          }
+        },
+        onSessionAnswered: () => {
+          for (const observer of [...this.#spaceAnswerObservers]) {
+            try {
+              observer(space);
+            } catch (cause) {
+              console.error("space-answer subscriber threw:", cause);
             }
           }
         },
@@ -3068,11 +3088,35 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  spaceAnswered(space: MemorySpace): boolean | undefined {
+    if (this.#storeReadThroughs.has(space)) return undefined;
+    if (this.#spaceAccessErrors.has(space)) return true;
+    return this.#providers.get(space)?.sessionAnswered() ?? false;
+  }
+
+  /** @inheritDoc */
+  async awaitSpaceAnswer(space: MemorySpace): Promise<void> {
+    if (this.spaceAnswered(space) !== false) return;
+    try {
+      await this.#openProvider(space).ensureSession();
+    } catch (error) {
+      // A refusal is an answer, and is recorded before the open rejects.
+      if (this.spaceAnswered(space) !== true) throw error;
+    }
+  }
+
+  /** @inheritDoc */
   subscribeSpaceAccessLoss(
     observer: (space: MemorySpace, error: Error) => void,
   ): Cancel {
     this.#spaceAccessObservers.add(observer);
     return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAnswer(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAnswerObservers.add(observer);
+    return () => this.#spaceAnswerObservers.delete(observer);
   }
 
   /** @inheritDoc */
@@ -4354,6 +4398,12 @@ type ProviderOptions = {
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
 
+  /**
+   * Called when the memory server answers an open of the session, admitting
+   * or refusing it, after the answer is recorded.
+   */
+  onSessionAnswered?: () => void;
+
   /** Registers operation writes with the manager's durability barrier. */
   trackPendingCommit?: (promise: Promise<unknown>) => void;
 
@@ -4985,6 +5035,11 @@ class Provider
     return this.replica.authorizationError();
   }
 
+  /** See SpaceReplica.sessionAnswered. */
+  sessionAnswered(): boolean {
+    return this.replica.sessionAnswered();
+  }
+
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
   }
@@ -5562,8 +5617,9 @@ export class SpaceReplica
   /** The grant verdicts this provider has asked for, by actor: a settled
    * one answers `foreignScopedReadStanding` and every later read of that
    * actor's instances until word of an access-list change
-   * (`noteAclChanged`) asks for each again, the last verdict standing
-   * until the new one lands. */
+   * (`noteAclChanged`, which the replica's own watch on the list gives it
+   * whichever process the list changed in) asks for each again, the last
+   * verdict standing until the new one lands. */
   readonly #foreignScopedReadVerdicts = new Map<
     string,
     ForeignScopedReadVerdictEntry
@@ -5576,6 +5632,11 @@ export class SpaceReplica
     string,
     Map<string, { id: URI; scope: CellScope; scopeKey: ScopeKey }>
   >();
+
+  /** The watch a gated replica holds on this space's access-list document
+   * from its first grant ask on (`#watchAccessList`), with the list's
+   * confirmed seq as the watch last saw it. */
+  #accessListWatch: { cancel: Cancel; seq: number | undefined } | undefined;
 
   #closed = false;
   readonly #closeSignal = Promise.withResolvers<void>();
@@ -5724,6 +5785,7 @@ export class SpaceReplica
   #lastAuthorizationError: IAuthorizationError | null = null;
   #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
+  #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
@@ -5759,6 +5821,7 @@ export class SpaceReplica
       (() => false);
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
+    this.#onSessionAnswered = options.onSessionAnswered;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -6201,6 +6264,16 @@ export class SpaceReplica
     return undefined;
   }
 
+  /**
+   * Whether the memory server has answered for this replica's space: it has
+   * admitted a session this replica opened, or refused one, as
+   * `authorizationError()` reports.
+   */
+  sessionAnswered(): boolean {
+    return this.#sessionSession !== undefined ||
+      this.authorizationError() !== undefined;
+  }
+
   /** The terminal error of the remote subscription supplying this replica. */
   sessionError(): Error | undefined {
     if (this.#storeReadThrough() !== undefined) return undefined;
@@ -6308,10 +6381,17 @@ export class SpaceReplica
   noteAclChanged(): void {
     if (this.#closed) return;
     this.#aclChangedSinceMount = true;
-    // The list that decided every actor's grant has changed: each actor this
-    // replica has asked about is asked about again now, rather than on its
-    // next load, since an instance already loaded is read from the replica
-    // and loads no more. Its last verdict stands until the new one lands.
+    this.#reaskForeignScopedReadGrants();
+  }
+
+  /**
+   * Asks again for the grant of each actor this replica has asked about,
+   * now rather than on its next load, since an instance already loaded is
+   * read from the replica and loads no more: the list that decided every
+   * verdict has changed, or may have. Each last verdict stands until the
+   * new one lands.
+   */
+  #reaskForeignScopedReadGrants(): void {
     for (const actor of [...this.#foreignScopedReadVerdicts.keys()]) {
       this.#askForeignScopedReadGrant(actor);
     }
@@ -6361,6 +6441,7 @@ export class SpaceReplica
           "actor's grant with",
       });
     }
+    this.#watchAccessList();
     let entry = this.#foreignScopedReadVerdicts.get(actor);
     if (entry === undefined) {
       entry = { promise: Promise.resolve({ granted: true }) };
@@ -6393,6 +6474,37 @@ export class SpaceReplica
       });
     current.promise = asked;
     return asked;
+  }
+
+  /**
+   * Holds a watch on this space's access-list document through this
+   * replica's own session, so that a change to the list reaches a gated
+   * replica over the session its reads go through: the host's
+   * `noteSpaceAclChanged` fan-out hears the commits its own memory server
+   * admits, and the list of a space another process owns changes there.
+   * Each version of the list that lands after the first the watch saw is
+   * word of a change (`noteAclChanged`). The first landing re-asks every
+   * actor's grant without arming the remount latch: a verdict asked before
+   * the list reached the replica may have been decided on an older one.
+   */
+  #watchAccessList(): void {
+    if (this.#accessListWatch !== undefined || this.#closed) return;
+    const id = aclDocId(this.#space) as URI;
+    const seqOf = (): number | undefined =>
+      this.#visibleVersion(id, "space")?.record.confirmed.seq;
+    const watch = { cancel: () => {}, seq: seqOf() };
+    this.#accessListWatch = watch;
+    watch.cancel = this.sinkDocument(id, () => {
+      const seq = seqOf();
+      if (seq === watch.seq) return;
+      const before = watch.seq;
+      watch.seq = seq;
+      if (before !== undefined) {
+        this.noteAclChanged();
+      } else {
+        this.#reaskForeignScopedReadGrants();
+      }
+    });
   }
 
   /**
@@ -7365,6 +7477,8 @@ export class SpaceReplica
     this.#watchView?.close();
     this.#watchView = null;
     this.#operationSinks.clear();
+    this.#accessListWatch?.cancel();
+    this.#accessListWatch = undefined;
     // Also close the view the update consumer is bound to, in case it diverged
     // from #watchView; otherwise its pending next() never settles and the
     // `Promise.allSettled([...#updatePromises])` below hangs forever.
@@ -8413,9 +8527,7 @@ export class SpaceReplica
           (reason) => ({
             verdict: {
               withdrawn: {
-                message: `wave verdict rejected: ${
-                  reason instanceof Error ? reason.message : String(reason)
-                }`,
+                message: `wave verdict rejected: ${describeFailure(reason)}`,
               },
             } satisfies SealedCommitVerdict,
           }),
@@ -9207,9 +9319,7 @@ export class SpaceReplica
       ]);
     }, (error) => {
       logger.debug("cascade-late-reject", () => [
-        `late server verdict after local rejection: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `late server verdict after local rejection: ${describeFailure(error)}`,
         { localSeq },
       ]);
     }).finally(() => {
@@ -12433,6 +12543,7 @@ export class SpaceReplica
           this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
+          this.#onSessionAnswered?.();
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {
@@ -12487,6 +12598,7 @@ export class SpaceReplica
               !MemoryV2Client.isClientUpdateRequiredError(error)
             ) {
               this.#onAccessChange?.(error);
+              this.#onSessionAnswered?.();
             }
             this.#onSessionError?.(error);
           } else {
@@ -12525,11 +12637,11 @@ const snapshotState = (
 const toConnectionError = (error: unknown): IConnectionError =>
   ({
     name: "ConnectionError",
-    message: error instanceof Error ? error.message : String(error),
+    message: describeFailure(error),
     address: "",
     cause: {
       name: "SystemError",
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       code: 500,
     },
   }) as IConnectionError;
@@ -12543,10 +12655,34 @@ const isPermanentAuthorizationFailure = (error: { name: string }): boolean =>
   error.name === "AuthorizationError" &&
   (error as { retriable?: unknown }).retriable !== true;
 
-// Preserve a real AuthorizationError (name, message, and the server's retriable
-// marker) instead of flattening it to a generic ConnectionError, so a caller can
-// tell an authorization denial apart from a transport failure. Everything else
-// remains a ConnectionError.
+/**
+ * Returns the markers of the memory server's refusal that `error` carries,
+ * which every copy of an `AuthorizationError` keeps: `permanentEvidence`,
+ * `aclRevision`, and `deleted`, the marker of a deleted space.
+ */
+const authorizationMarkersOf = (error: object): {
+  permanentEvidence?: true;
+  aclRevision?: number;
+  deleted?: true;
+} => {
+  const details = error as {
+    permanentEvidence?: unknown;
+    aclRevision?: unknown;
+    deleted?: unknown;
+  };
+  return {
+    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
+    ...(typeof details.aclRevision === "number"
+      ? { aclRevision: details.aclRevision }
+      : {}),
+    ...(details.deleted === true ? { deleted: true } : {}),
+  };
+};
+
+// Preserve a real AuthorizationError (name, message, and the server's markers)
+// instead of flattening it to a generic ConnectionError, so a caller can tell an
+// authorization denial apart from a transport failure. Everything else remains
+// a ConnectionError.
 const toPullError = (error: unknown): PullError => {
   if (
     !(error instanceof Error) || error.name !== "AuthorizationError" ||
@@ -12554,44 +12690,30 @@ const toPullError = (error: unknown): PullError => {
   ) {
     return toConnectionError(error);
   }
-  const details = error as unknown as {
-    retriable?: unknown;
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
   return ({
     name: "AuthorizationError",
     message: error.message,
-    ...(details.retriable === true ? { retriable: true } : {}),
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
+    ...((error as { retriable?: unknown }).retriable === true
+      ? { retriable: true }
       : {}),
+    ...authorizationMarkersOf(error),
   }) as unknown as IAuthorizationError;
 };
 
 // Rebuild a throwable Error from a stored AuthorizationError result so `synced()`
 // rejects with a proper Error instance a caller can match on by name.
-const authorizationErrorToThrow = (error: IAuthorizationError): Error => {
-  const details = error as unknown as {
-    permanentEvidence?: unknown;
-    aclRevision?: unknown;
-  };
-  return Object.assign(new Error(error.message), {
+const authorizationErrorToThrow = (error: IAuthorizationError): Error =>
+  Object.assign(new Error(error.message), {
     name: "AuthorizationError",
-    ...(details.permanentEvidence === true ? { permanentEvidence: true } : {}),
-    ...(typeof details.aclRevision === "number"
-      ? { aclRevision: details.aclRevision }
-      : {}),
+    ...authorizationMarkersOf(error),
   });
-};
 
 const toRejectedError = (
   error: unknown,
   commit: ClientCommit,
   space: MemorySpace,
 ): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const name = error instanceof Error
     ? error.name
     : (error as { name?: unknown })?.name;

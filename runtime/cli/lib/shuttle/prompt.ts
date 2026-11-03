@@ -38,6 +38,8 @@
  * loop with a scripted key stream and reads back what it produced.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+
 import { EditBuffer } from "../view/editbuffer.ts";
 import type { Key } from "../view/keys.ts";
 import { completeLine } from "./completion.ts";
@@ -45,7 +47,7 @@ import { apply, codePoints } from "./editing.ts";
 import { LineHistory, recall } from "./history.ts";
 import type { FrameCursor, ValueLens } from "./lens.ts";
 import { ASSUMED_COLUMNS, ASSUMED_ROWS } from "./page.ts";
-import { escapeControlCharacters, messageOf } from "./place.ts";
+import { escapeControlCharacters } from "./place.ts";
 import { renderValue } from "./value.ts";
 import { runLine } from "./verbs.ts";
 import {
@@ -746,7 +748,7 @@ function promptFor(shuttle: Shuttle): string {
  * rendering, elides that node and bounds the page, because it is the verb a
  * person lands on by standing somewhere rather than by naming a target.
  *
- * Reading the message off a thrown value is `messageOf`'s and not this
+ * Reading the message off a thrown value is `describeFailure`'s and not this
  * expression's, because the obvious spelling of it throws on values a
  * rejection can carry, and a throw raised while answering a failure is the
  * failure this catch exists to stop.
@@ -802,7 +804,7 @@ async function report(
         };
     }
   } catch (thrown) {
-    return said(escapeControlCharacters(messageOf(thrown)));
+    return said(escapeControlCharacters(describeFailure(thrown)));
   }
 }
 

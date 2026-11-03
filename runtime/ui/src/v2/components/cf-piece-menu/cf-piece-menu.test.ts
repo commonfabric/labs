@@ -4731,6 +4731,44 @@ describe("describeFollowState", () => {
     expect(refused.at).toBe(at);
   });
 
+  it("separates a write that did not land from an origin it could not reach", () => {
+    // The origin answered and offered source the piece could take; what did
+    // not happen is the write that adopts it. Pointing the reader at the
+    // network would send them to the wrong place, and the next open tries
+    // the write again, so there is nothing to overrule.
+    const at = Date.UTC(2026, 7, 1, 9, 0, 0);
+    const unapplied = describeFollowState({
+      ...SOURCE,
+      reconciliation: {
+        outcome: "unapplied",
+        at,
+        origin: SOURCE.origin!.url,
+        offered: { identity: "candidate-identity", symbol: "default" },
+        detail: "the piece changed while its write was being prepared",
+      },
+    });
+    expect(unapplied.state).toBe("unapplied");
+    expect(unapplied.label).toBe("New source not applied");
+    expect(unapplied.summary).toContain("could not apply it yet");
+    expect(unapplied.detail).toContain("tries again");
+    expect(unapplied.reason).toBe(
+      "the piece changed while its write was being prepared",
+    );
+    expect(unapplied.offered).toEqual({
+      identity: "candidate-identity",
+      symbol: "default",
+    });
+    expect(unapplied.at).toBe(at);
+    expect(unapplied.canUpdate).toBe(true);
+    expect(unapplied.canForce).toBe(false);
+
+    const bare = describeFollowState({
+      ...SOURCE,
+      reconciliation: { outcome: "unapplied", at, origin: SOURCE.origin!.url },
+    });
+    expect(bare.reason).toBe("the write that adopts it did not land");
+  });
+
   it("has words for every reason a refusal can carry", () => {
     // The reason a check recorded is shown when there is one; these are what
     // the panel says when a refusal arrives carrying only its kind.

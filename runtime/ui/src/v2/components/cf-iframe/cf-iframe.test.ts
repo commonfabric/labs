@@ -25,6 +25,19 @@ type CFIframeInternals = {
 const internals = (element: CFIframe): CFIframeInternals =>
   element as unknown as CFIframeInternals;
 
+/**
+ * Connects without a DOM, which the shadow root, its styles, and the update
+ * that connecting schedules would all want. These tests read `render()`
+ * directly instead.
+ */
+class HeadlessIframe extends CFIframe {
+  protected override createRenderRoot(): HTMLElement {
+    return this;
+  }
+
+  protected override performUpdate(): void {}
+}
+
 const contextChange = (): PropertyValues<CFIframe> =>
   new Map([["context", null]]) as PropertyValues<CFIframe>;
 
@@ -166,6 +179,55 @@ describe("CFIframe", () => {
     expect(templateValues(element)[1]).toBe("<p>ready</p>");
   });
 
+  it("keeps a resolved context's bridge and source, sending nothing, when disconnected and connected again", async () => {
+    // Resolving the context again would hand the sandbox a new bridge, which
+    // reloads the guest.
+
+    const ref: CellRef = {
+      id: "of:context" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: { type: "object", properties: {} },
+    };
+    let requests = 0;
+    const runtime = {
+      [$conn]: () => ({
+        request: (request: { type: RequestType }) => {
+          requests++;
+          return request.type === RequestType.CellResolveAsCell
+            ? Promise.resolve({
+              cell: { ...ref, id: "of:resolved" as CellRef["id"] },
+            })
+            : Promise.resolve({ value: {} });
+        },
+        subscribe: () => Promise.resolve(),
+        unsubscribe: () => Promise.resolve(),
+        peersOf: () => [],
+        signal: { aborted: false },
+      }),
+    } as unknown as RuntimeClient;
+    const element = new HeadlessIframe();
+    element.connectedCallback();
+    element.src = "<p>ready</p>";
+    element.context = new CellHandle(runtime, ref);
+    const updated = Promise.withResolvers<void>();
+    element.requestUpdate = () => updated.resolve();
+    internals(element).willUpdate(contextChange());
+    await updated.promise;
+    const [bridge] = templateValues(element);
+    const sent = requests;
+
+    element.disconnectedCallback();
+    element.connectedCallback();
+
+    expect(requests).toBe(sent);
+    expect(templateValues(element).slice(0, 2)).toEqual([
+      bridge,
+      "<p>ready</p>",
+    ]);
+  });
+
   it("lets an explicit bridge load independently of context resolution", () => {
     const element = new CFIframe();
     const bridge: FabricBridge = { resources: {} };
@@ -258,6 +320,132 @@ describe("CFIframe", () => {
 
     expect(element._errorDetails).toBeNull();
     expect(templateValues(element)[1]).toBe(element.src);
+  });
+
+  describe("a context setup waiting for a SQLite database", () => {
+    // The database's producer never writes here, so the setup waits until
+    // it is aborted.
+
+    const ref: CellRef = {
+      id: "of:context" as CellRef["id"],
+      space: "did:key:test" as CellRef["space"],
+      scope: "space",
+      path: [],
+      schema: {
+        type: "object",
+        properties: { database: { type: "object", asCell: ["sqlite"] } },
+      },
+    };
+
+    /**
+     * A context whose database is never written. `held` is what is subscribed
+     * on its source, and `requests()` how many requests a setup has sent;
+     * `nextWait()` resolves once a setup waits for the database, and
+     * `nextRelease()` once nothing is held.
+     */
+    const unwrittenDatabase = () => {
+      const held = new Set<CellHandle<unknown>>();
+      let requests = 0;
+      let wait: PromiseWithResolvers<void> | undefined;
+      let release: PromiseWithResolvers<void> | undefined;
+      const runtime = {
+        [$conn]: () => ({
+          request: (request: { type: RequestType; cell: CellRef }) => {
+            requests++;
+            if (request.type === RequestType.CellResolveAsCell) {
+              return Promise.resolve({
+                cell: { ...request.cell, id: "of:resolved" },
+              });
+            }
+            const schema = request.cell.schema;
+            if (
+              request.type === RequestType.CellPull &&
+              request.cell.path[0] === "database" &&
+              typeof schema === "object" && !("asCell" in schema)
+            ) {
+              wait?.resolve();
+            }
+            return Promise.resolve({ value: undefined });
+          },
+          subscribe: (cell: CellHandle<unknown>) => {
+            held.add(cell);
+            return Promise.resolve();
+          },
+          unsubscribe: (cell: CellHandle<unknown>) => {
+            held.delete(cell);
+            if (held.size === 0) release?.resolve();
+            return Promise.resolve();
+          },
+          peersOf: () => [],
+          signal: { aborted: false },
+        }),
+      } as unknown as RuntimeClient;
+      return {
+        context: new CellHandle(runtime, ref),
+        held,
+        requests: () => requests,
+        nextWait: () => (wait = Promise.withResolvers()).promise,
+        nextRelease: () => (release = Promise.withResolvers()).promise,
+      };
+    };
+
+    it("releases the source when disconnected, and waits for the database again once connected again", async () => {
+      const { context, held, nextWait, nextRelease } = unwrittenDatabase();
+      const element = new HeadlessIframe();
+      element.src = "<p>ready</p>";
+      element.context = context;
+
+      const waiting = nextWait();
+      internals(element).willUpdate(contextChange());
+      await waiting;
+      expect(held.size).toBe(2);
+      const released = nextRelease();
+      element.disconnectedCallback();
+      await released;
+      const waitingAgain = nextWait();
+      element.connectedCallback();
+      await waitingAgain;
+
+      expect(held.size).toBe(2);
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("sends nothing for a context set while disconnected, and waits for the database once connected again", async () => {
+      const { context, held, requests, nextWait } = unwrittenDatabase();
+      const element = new HeadlessIframe();
+      element.src = "<p>ready</p>";
+      element.connectedCallback();
+      element.disconnectedCallback();
+
+      element.context = context;
+      internals(element).willUpdate(contextChange());
+      expect(requests()).toBe(0);
+      const waiting = nextWait();
+      element.connectedCallback();
+      await waiting;
+
+      expect(held.size).toBe(2);
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("releases the source when the context changes", async () => {
+      const { context, held, nextWait, nextRelease } = unwrittenDatabase();
+      const element = new CFIframe();
+      element.src = "<p>ready</p>";
+      element.context = context;
+
+      const waiting = nextWait();
+      internals(element).willUpdate(contextChange());
+      await waiting;
+      const released = nextRelease();
+      element.context = { count: 1 };
+      internals(element).willUpdate(contextChange());
+      await released;
+
+      expect(held.size).toBe(0);
+      expect(templateValues(element)[1]).toBe("<p>ready</p>");
+    });
   });
 
   it("hands the sandbox the outer frame the host's runtime names", () => {

@@ -78,29 +78,34 @@ function asEntityId(segment: string): string | undefined {
 }
 
 /**
- * The space a marked path segment carries, or `undefined` where the segment
- * carries no mark and so is not the space at all.
+ * The space a page URL's first path segment names, or `undefined` for a
+ * segment holding a malformed escape, which this cannot read.
  *
- * In the `/@space/` alias, a leading `@` marks a segment as the space: it keeps
- * a space from competing for the slot the piece would otherwise hold. What the mark carries is only held to a form by the
- * reader — a DID resolves from the string alone, a name needs a session — so
- * the rest of the segment comes back unexamined.
- *
- * The segment is percent-decoded first, so a mark or a name that arrived
- * escaped reads as what it stands for and `%40space` carries what `@space`
- * carries; a segment holding a malformed escape is one this cannot read, and
- * carries no space. A segment that is nothing but the mark returns the empty
- * string rather than `undefined`, which is the distinction a caller needs: it
- * says it is the space while naming none, where an unmarked segment never
- * said it was one.
+ * The segment is percent-decoded and then loses a leading `@`. The mark is the
+ * cell reference grammar's for a space segment, and the shell's page URLs
+ * write it ahead of a name that would otherwise read as something other than
+ * a name. So `/space`, `/@space`, and `/%40space` all name `space`, and
+ * `/@%40space` names `@space`. A segment that is nothing but the mark names
+ * the empty string, which is no space.
  */
-export function asSpaceSegment(segment: string): string | undefined {
+export function readSpaceSegment(segment: string): string | undefined {
   const decoded = decode(segment);
-  return decoded?.startsWith("@") ? decoded.slice(1) : undefined;
+  return decoded?.startsWith("@") ? decoded.slice(1) : decoded;
 }
 
-function splitPath(pathname: string): string[] {
-  return pathname.split("/").filter((segment) => segment.length > 0);
+/**
+ * The first segment of a shell page URL shown in embed mode. It says how the
+ * page is shown rather than what it names, so the space follows it.
+ */
+export const EMBED_PATH_PREFIX = ".embed";
+
+/**
+ * The nonempty segments of a page URL's path, from its space on: the embed
+ * prefix, when the path starts with one, comes off.
+ */
+export function pagePathSegments(pathname: string): string[] {
+  const segments = pathname.split("/").filter((segment) => segment.length > 0);
+  return segments[0] === EMBED_PATH_PREFIX ? segments.slice(1) : segments;
 }
 
 /** Every segment as its key, or undefined when any of them cannot be read. */
@@ -173,13 +178,13 @@ export function parseFabricUrl(
   const hosts = options.hosts ?? [];
   if (!hosts.includes(parsed.host)) return undefined;
 
-  const segments = splitPath(parsed.pathname);
+  const segments = pagePathSegments(parsed.pathname);
   // `/<space>/<piece>` is the page URL shape. A host of ours with anything
   // shorter is one of its own pages rather than a piece.
   if (segments.length < 2) return undefined;
 
-  const space = decode(segments[0]);
-  if (space === undefined) return undefined;
+  const space = readSpaceSegment(segments[0]);
+  if (!space) return undefined;
 
   const target = segments[1];
   const path = decodePath(segments.slice(2));

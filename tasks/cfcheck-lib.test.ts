@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
-  formatError,
   parseOnly,
   patternsToCheck,
   selectionFor,
@@ -110,16 +109,6 @@ describe("cfcheck-lib", () => {
 
     it("throws rather than widening, for a command line it cannot read", () => {
       expect(() => selectionFor(CORPUS, ["--only"])).toThrow();
-    });
-  });
-
-  describe("formatError()", () => {
-    it("returns the message of an error", () => {
-      expect(formatError(new Error("no such pattern"))).toBe("no such pattern");
-    });
-
-    it("returns the text of anything else thrown", () => {
-      expect(formatError("bare string")).toBe("bare string");
     });
   });
 

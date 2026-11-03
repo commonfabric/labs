@@ -1,12 +1,13 @@
 # View-scoped client replication
 
 This experimental web-client mode uses the server's observed execution reads to
-choose the documents needed for rendering and local interaction previews. It
-requires server execution, an opted-in web client, and a Memory server that
-advertises `viewScopedReplicationV1`. The
+choose the documents needed for rendering and local interaction previews. A web
+client runs it by default under server execution, against a Memory server that
+advertises `viewScopedReplicationV1`; without server execution it does nothing.
+The
 [experimental flags registry](../development/EXPERIMENTAL_OPTIONS.md#viewscopedreplication--webviewscopedreplication)
-defines the global default and independent web override. Both client modes can
-use one space concurrently.
+defines the global default and independent web override, either of which turns
+it off. Both client modes can use one space concurrently.
 
 ## View ownership and delivery
 

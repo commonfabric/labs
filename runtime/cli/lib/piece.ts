@@ -99,6 +99,7 @@ import {
   redactCaveatSourcesForDisplay,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
+  type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
 import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
@@ -106,6 +107,7 @@ import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -332,7 +334,9 @@ export function parseCellCfcLabelUpdate(
 
 /**
  * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
+ * reader — the doc the selected path lands in once its links are followed, or,
+ * with `lastNode: "top"`, the doc holding a link stored at the path, without
+ * the labels of where that link leads.
  *
  * Each command needs that doc for its own reason. An INSPECTION read must not
  * answer "none" for a value carrying a label behind a link the path crosses
@@ -343,8 +347,12 @@ export function parseCellCfcLabelUpdate(
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -565,22 +573,14 @@ export async function withRuntimeCleanupOnFailure<T>(
     if (closeNow) {
       await closeNow().catch((disposeError) => {
         report(
-          `loadPieces storage cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces storage cleanup failed: ${describeFailure(disposeError)}`,
         );
       });
     }
     await runtime.dispose().catch(
       (disposeError) => {
         report(
-          `loadPieces cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces cleanup failed: ${describeFailure(disposeError)}`,
         );
       },
     );
@@ -727,9 +727,7 @@ export async function loadPieces(
               navigateLine(`navigateTo new piece id ${id}`);
             } catch (e) {
               navigateFailure(
-                `navigateTo callback error: ${
-                  e instanceof Error ? e.message : String(e)
-                }`,
+                `navigateTo callback error: ${describeFailure(e)}`,
               );
             }
           },
@@ -784,9 +782,7 @@ export async function loadPieces(
       );
     } catch (error) {
       (output.report ?? console.warn)(
-        `Could not load the profile delegations: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not load the profile delegations: ${describeFailure(error)}`,
       );
     }
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
@@ -887,7 +883,7 @@ export async function listPieces(
         return {
           id: piece.id,
           reference,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -935,7 +931,7 @@ export async function listSpaceSlugs(
       } catch (err) {
         return {
           slug,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -1454,7 +1450,7 @@ export async function searchPieces(
     ) => {
       console.warn(
         `Warning: Could not read ${source} for piece ${pieceId}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     });
@@ -1732,26 +1728,23 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
 }
 
 /**
- * The client a served verb is sent with: signed as the configured identity,
- * and sent on `pieces`' memory session for its space where the storage
- * manager has one, so the verb reaches the process serving that space.
+ * The client a served verb is sent with: it sends the verb on `pieces`'
+ * memory session for its space, so the verb reaches the process serving that
+ * space and runs as the identity the connection was opened as.
  */
-async function lifecycleClient(
-  config: SpaceConfig,
-  pieces: PiecesController,
-  deps: PieceOperationDependencies,
-): Promise<LifecycleClientConfig> {
+function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
   const storageManager = (pieces.runtime as Runtime | undefined)
     ?.storageManager;
-  const runOnSession = storageManager?.runPatternLifecycle?.bind(
-    storageManager,
-  );
   return {
-    apiUrl: new URL(config.apiUrl),
-    identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
-    ...(runOnSession === undefined ? {} : {
-      session: (space, verb, body) => runOnSession(space, verb, body),
-    }),
+    session: (space, verb, body) => {
+      if (storageManager?.runPatternLifecycle === undefined) {
+        throw new Error(
+          "This connection's storage manager has no memory sessions to send " +
+            `the \`${verb}\` verb on`,
+        );
+      }
+      return storageManager.runPatternLifecycle(space, verb, body);
+    },
   };
 }
 
@@ -1785,7 +1778,6 @@ async function createWithReceipt(
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, pieces, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
@@ -1801,7 +1793,7 @@ async function createWithReceipt(
           "newPiece.create.instantiate",
           () =>
             (deps.instantiatePieceOnServer ?? instantiatePieceOnServer)(
-              client,
+              lifecycleClient(pieces),
               {
                 ...request,
                 space: pieces.getSpace(),
@@ -1816,20 +1808,21 @@ async function createWithReceipt(
         }
         return served;
       }
+      const actingUser =
+        (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did();
       const created = await timeCliPhase(
         "newPiece.create.instantiate",
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
             source: { program },
-            actingUser: client.identity.did(),
+            actingUser,
           }),
         trace,
       );
       return await timeCliPhase(
         "newPiece.create.register",
-        () =>
-          completeServedRegistration(pieces, created, client.identity.did()),
+        () => completeServedRegistration(pieces, created, actingUser),
         trace,
       );
     } catch (error) {
@@ -1842,7 +1835,7 @@ async function createWithReceipt(
       throw new Error(
         `Piece creation outcome may be incomplete. Retry the same command ` +
           `with --request-key ${requestKey}. ` +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
         { cause: error },
       );
     }
@@ -1928,7 +1921,7 @@ export async function newPiece(
     }
     throw new Error(
       `Could not initialize the space's default pattern: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
@@ -2178,7 +2171,7 @@ async function updateOnServer(
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, pieces, deps), {
+    setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
       program,
@@ -2198,7 +2191,7 @@ async function updateOnServer(
   } catch (error) {
     refresh = {
       status: "failed",
-      warning: error instanceof Error ? error.message : String(error),
+      warning: describeFailure(error),
     };
   }
   return {
@@ -4486,7 +4479,7 @@ async function buildConnectionMap(
       // Skip pieces that can't be inspected, but include them with no connections
       console.error(
         `Warning: Could not inspect piece ${piece.id}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
       connections.set(piece.id, createPieceConnection(piece));
@@ -5072,15 +5065,27 @@ const confidentialityToKeep = (
  * there, which rewrites the stored metadata. A `*` segment of the path names
  * every stored position it matches at its depth, the wildcard entry there
  * among them. The input then holds `confidentiality` alone, naming only
- * clauses the path already stores.
+ * clauses the path already stores. A write redirect at the path is followed
+ * to the labels where it leads, unless `linkSlot`, which lowers the labels of
+ * the link stored at the path itself.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
   addressedPath: (string | number)[],
   input: unknown,
-  options: { input?: boolean; lowerConfidentiality?: boolean } = {},
+  options: {
+    input?: boolean;
+    lowerConfidentiality?: boolean;
+    linkSlot?: boolean;
+  } = {},
   deps: PieceOperationDependencies = {},
 ): Promise<CfcLabelView | null> {
+  if (options.linkSlot === true && options.lowerConfidentiality !== true) {
+    throw new Error(
+      "`--link-slot` applies to a lowering alone: pass it with " +
+        "`--dangerously-allow-lowering-confidentiality`.",
+    );
+  }
   const update = parseCellCfcLabelUpdate(input);
   const keep = options.lowerConfidentiality === true
     ? confidentialityToKeep(update)
@@ -5120,12 +5125,22 @@ export async function setCellCfcLabel(
   }
 
   if (keep !== undefined) {
-    const release = await releaseCellConfidentiality(targetCell, keep);
+    const release = await releaseCellConfidentiality(
+      targetCell,
+      keep,
+      options.linkSlot === true ? { linkSlot: true } : {},
+    );
     if (release.receipt !== undefined) {
       await pieces.synced();
       noteWroteTo(release.receipt.space);
     }
-    return cfcLabelViewForCommand(targetCell, path);
+    // A lowering of a link slot reports the slot it lowered, not the labels
+    // where the link leads.
+    return cfcLabelViewForCommand(
+      targetCell,
+      path,
+      options.linkSlot === true ? { lastNode: "top" } : {},
+    );
   }
 
   const { observes: requestedObserves, ...label } = update;

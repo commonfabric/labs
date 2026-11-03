@@ -43,6 +43,8 @@ import {
   type PresenceRemoveMessage,
   type PresenceUpsertMessage,
   type ResponseMessage,
+  SERVED_REQUEST_MAX_BYTES,
+  type ServedRequestKind,
   type ServerMessage,
   SESSION_REPORT_TEXT_MAX,
   type SessionAdmissibleMessage,
@@ -147,6 +149,16 @@ const connectionLostWhileRestoring = (): Error =>
 const lifecycleRefusal = (code: string, message: string): Error => {
   const error = new Error(message);
   error.name = "PatternLifecycleRefusal";
+  return Object.assign(error, { code });
+};
+
+/**
+ * A `ServedRequestRefusal` raised before a request is sent, shaped as the
+ * server's own refusal arrives: `.code` names the reason.
+ */
+const servedRefusal = (code: string, message: string): Error => {
+  const error = new Error(message);
+  error.name = "ServedRequestRefusal";
   return Object.assign(error, { code });
 };
 
@@ -1112,6 +1124,18 @@ export class Client {
   }
 
   /**
+   * Refuses every later `session.open` from this client with `error`, a
+   * refusal `isClientUpdateRequiredError()` recognizes, as a response that
+   * carries `clientUpdateRequired` does. Once one is kept, a later one changes
+   * nothing.
+   *
+   * @internal For `SpaceSession`.
+   */
+  noteClientUpdateRequired(error: Error): void {
+    this.#clientUpdateError ??= error;
+  }
+
+  /**
    * Sends `message` and returns the `ok` of the server's response, or throws
    * its error. A request made while the connection is down waits for the
    * reconnect, unless `options.whileConnected` is set, in which case it
@@ -1239,6 +1263,9 @@ export class Client {
       if (result.error.aclRevision !== undefined) {
         (error as Error & { aclRevision?: number }).aclRevision =
           result.error.aclRevision;
+      }
+      if (result.error.deleted === true) {
+        (error as Error & { deleted?: true }).deleted = true;
       }
       serverVerdicts.add(error);
       throw error;
@@ -2187,16 +2214,19 @@ export class Client {
       .withResolvers<void>();
     this.#helloPending = ack;
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
-    // `patternLifecycle` and `spaceInvites` are the server's capabilities
-    // alone: the client reads them from `hello.ok` and never offers them.
-    // Other flags an endpoint does not know are ignored there, since the
-    // routed flag allowlists were removed (infra DEVIATIONS row 41).
+    // `patternLifecycle`, `servedRequests`, `spaceInvites` and
+    // `instanceNameMark` are the server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
       watchSetPartsV1: _stagedSetsServerOnly,
       patternLifecycle: _lifecycleServerOnly,
+      servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      instanceNameMark: _instanceNameMarkServerOnly,
       ...expectedFlags
     } = getMemoryProtocolFlags();
     const offerRoutedCompression = this.#offersRoutedCompression(
@@ -3356,6 +3386,57 @@ export class SpaceSession {
   }
 
   /**
+   * Sends one crossing into this session's space to the process that owns
+   * it, and returns what the owner's handler returns for it (04-protocol.md
+   * §4.3.12). The session is a serving process's, opened as the delegating
+   * class; the owner refuses any other.
+   *
+   * @throws `ServedRequestRefusal`, with the server's code as `.code`, when
+   *   the owner refuses the crossing (`refused`, deterministic, or
+   *   `unavailable`, `internal`), when the session's principal is outside the
+   *   delegating class (`forbidden`), or, before sending, when the server
+   *   does not advertise `servedRequests` (`served-unsupported`) or the
+   *   request takes more than `SERVED_REQUEST_MAX_BYTES` or than the
+   *   connection takes in one request (`payload-too-large`). A connection
+   *   lost before the answer throws a `ConnectionError`, and the crossing's
+   *   outcome is then unknown.
+   */
+  async runServed(
+    kind: ServedRequestKind,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject> {
+    await this.#ensureSessionRestored();
+    if (this.#client.serverFlags?.servedRequests !== true) {
+      throw servedRefusal(
+        "served-unsupported",
+        "The memory server does not advertise `servedRequests`",
+      );
+    }
+    const message = {
+      type: "served",
+      requestId: crypto.randomUUID(),
+      space: this.space,
+      sessionId: this.#sessionId,
+      kind,
+      body,
+    };
+    const limit = Math.min(
+      SERVED_REQUEST_MAX_BYTES,
+      this.#client.requestBytesLimit ?? SERVED_REQUEST_MAX_BYTES,
+    );
+    const bytes = new TextEncoder().encode(encodeMemoryBoundary(message))
+      .length;
+    if (bytes > limit) {
+      throw servedRefusal(
+        "payload-too-large",
+        `A \`served\` request takes at most ${limit} bytes on this ` +
+          `connection, and this one takes ${bytes}`,
+      );
+    }
+    return await this.#client.request<FabricPlainObject>(message);
+  }
+
+  /**
    * Administers this session space's invitations, as the session's
    * principal, and returns what the invitation service returns for
    * `invite` (04-protocol.md §4.3.11).
@@ -3579,7 +3660,8 @@ export class SpaceSession {
 
   /**
    * Observes this session ending with an error, which `closeError` then
-   * holds: a revocation (a takeover or an authorization denial), a permanent
+   * holds: a revocation (a takeover, an authorization denial, or a space
+   * marked for instance names, which requires an update), a permanent
    * reopen denial, a restore the server cannot base on declared holdings, or
    * a client that gives up reconnecting. A session that has already ended
    * that way reports to a late observer synchronously. Normal closure and
@@ -4148,10 +4230,29 @@ export class SpaceSession {
     if (this.#closed) {
       return;
     }
+    if (reason === "instance-names") {
+      // A naming commit marked the space (INV-16). The revocation carries no
+      // message, so the refusal's message is made from the space.
+      const error = Object.assign(
+        new Error(
+          `Space ${this.space} now holds data written with instance names, ` +
+            "which this runtime does not use",
+        ),
+        { name: "SessionRevokedError", clientUpdateRequired: true as const },
+      );
+      this.#client.noteClientUpdateRequired(error);
+      this.#terminateSession(error);
+      return;
+    }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = reason === "unauthorized"
-      ? "AuthorizationError"
-      : "SessionRevokedError";
+    error.name = reason === "taken-over"
+      ? "SessionRevokedError"
+      : "AuthorizationError";
+    // A session open when its space is deleted reports the deletion as a
+    // refused reopen would.
+    if (reason === "deleted") {
+      (error as Error & { deleted?: true }).deleted = true;
+    }
     this.#terminateSession(error);
   }
 
@@ -5380,19 +5481,27 @@ export type QueuedFrameTransport = Transport & {
 /**
  * A transport to an in-process server, delivering its frames as
  * {@link queuedFrameTransport} does. Nothing calls `lose()` over it, so a
- * disconnect the server initiates is invisible over loopback.
+ * disconnect the server initiates is invisible over loopback. The server
+ * takes the connection as one from this process unless `inProcess` is
+ * `false`, which a test passes where its loopback transport stands for the
+ * deployment's network.
  */
 export const loopback = (
   server: {
     connect(
       send: (message: ServerMessage, payload?: string) => void,
       syncParts?: PartLimits,
+      options?: { inProcess?: boolean },
     ): {
       receive(payload: string): Promise<void>;
       close(): void;
     };
   },
-  options: { syncParts?: PartLimits; messageLimits?: PartLimits } = {},
+  options: {
+    syncParts?: PartLimits;
+    messageLimits?: PartLimits;
+    inProcess?: boolean;
+  } = {},
 ): Transport => {
   // The transport exists before the connection, so a frame the server
   // sends as it connects is queued rather than lost.
@@ -5401,9 +5510,13 @@ export const loopback = (
     receive: (payload) => built.connection!.receive(payload),
     close: () => built.connection?.close(),
   });
-  built.connection = server.connect((message, payload) => {
-    transport.deliver(payload ?? encodeMemoryBoundary(message));
-  }, options.syncParts);
+  built.connection = server.connect(
+    (message, payload) => {
+      transport.deliver(payload ?? encodeMemoryBoundary(message));
+    },
+    options.syncParts,
+    { inProcess: options.inProcess ?? true },
+  );
   return options.messageLimits === undefined
     ? transport
     : { ...transport, messageLimits: options.messageLimits };
@@ -5550,6 +5663,19 @@ const isRetriableAuthorizationError = (error: unknown): boolean =>
 export function isPermanentAuthorizationError(error: unknown): boolean {
   return error instanceof Error && error.name === "AuthorizationError" &&
     (error as { retriable?: unknown }).retriable !== true;
+}
+
+/**
+ * Recognizes the memory server's refusal of a deleted space: an
+ * `AuthorizationError` marked `deleted`, which no principal's retry can undo
+ * (INV-15 in `docs/specs/memory-v2/09-invariants.md`).
+ */
+export function isDeletedSpaceError(error: unknown): error is Error & {
+  /** The space is deleted, and refused to every principal for good. */
+  deleted: true;
+} {
+  return error instanceof Error && error.name === "AuthorizationError" &&
+    (error as { deleted?: unknown }).deleted === true;
 }
 
 /** Recognizes a server refusal whose recovery requires replacing the runtime. */
@@ -5702,7 +5828,8 @@ const isSessionRevoked = (
   return type === "session/revoked" &&
     typeof space === "string" &&
     typeof sessionId === "string" &&
-    (reason === "taken-over" || reason === "unauthorized");
+    (reason === "taken-over" || reason === "unauthorized" ||
+      reason === "deleted" || reason === "instance-names");
 };
 
 const isSessionAdmissible = (

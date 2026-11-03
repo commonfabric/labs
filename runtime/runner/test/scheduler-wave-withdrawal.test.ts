@@ -70,11 +70,11 @@ describe("reactive wave withdrawal", () => {
     });
     engine = await server.engineForSpace(space);
     lease = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space,
       holder: executionLeaseHolder(`service:${space}`),
     });
-    expect(lease.acquire()).toBe(true);
+    expect(await lease.acquire()).toBe(true);
   });
 
   afterEach(async () => {
@@ -82,7 +82,7 @@ describe("reactive wave withdrawal", () => {
     runtime.clearSealDestination();
     for (const wave of waves) wave.abandon("test cleanup");
     await Promise.all(waves.map((wave) => wave.settled()));
-    lease.release();
+    await lease.release();
     await storageManager.synced();
     await runtime.dispose();
     await Promise.all(peers.map((peer) => peer.dispose()));
@@ -704,10 +704,14 @@ describe("reactive wave withdrawal", () => {
         : `does not revive a ${boundary} user instance after withdrawal`,
       async () => {
         await runtime.dispose();
-        lease.release();
+        await lease.release();
         const holder = executionLeaseHolder(signer.did());
-        lease = new ExecutionLeaseCycle({ engine, space, holder });
-        expect(lease.acquire()).toBe(true);
+        lease = new ExecutionLeaseCycle({
+          leases: engine.executionLeases,
+          space,
+          holder,
+        });
+        expect(await lease.acquire()).toBe(true);
         storageManager = EmulatedStorageManager.connectTo(server, {
           as: signer,
           id: holder,

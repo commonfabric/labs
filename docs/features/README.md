@@ -160,8 +160,8 @@ a line for each new document to the index below.
 
 - [`server-pattern-lifecycle.md`](server-pattern-lifecycle.md) — the upload,
   instantiate, and setsrc verbs as calls the space's serving runtime executes
-  under server execution: the memory-session request and the HTTP route that
-  carry a verb, the writer authority it needs, the wave
+  under server execution: the memory-session request that carries a verb, the
+  writer authority it needs, the wave
   cycle a verb runs in, the direct commit a source update's setup transaction
   makes outside that wave, and what `cf` still does in its own process
 - [`invoking-handlers-outside-a-pattern.md`](invoking-handlers-outside-a-pattern.md)

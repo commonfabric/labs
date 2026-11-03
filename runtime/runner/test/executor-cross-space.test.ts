@@ -158,6 +158,9 @@ describe("Phase 5 cross-space serving", () => {
   beforeEach(() => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
+      // The serving sessions' foreign named reads are admitted by the
+      // service identity's class (protocol.md §2's read row).
+      delegatingDids: [serviceSigner.did()],
     });
     servingRuntime = undefined;
     onServingRuntime = undefined;
@@ -1288,14 +1291,14 @@ describe("Phase 5 cross-space serving", () => {
     const badSigner = await Identity.fromPassphrase("x-space bad engine");
     const badSpace = badSigner.did() as MemorySpace;
     const proxiedServer = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "engineForSpace") {
           return (s: string) =>
             s === badSpace
               ? Promise.reject(new Error("engine open failed (test)"))
               : target.engineForSpace(s);
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as MemoryV2Server.Server;
@@ -2063,7 +2066,11 @@ describe("Phase 5 cross-space serving", () => {
       );
 
       // Alice's own instance: unresolved until her grant is asked for,
-      // admitted once the probe answers, and asked for once per actor.
+      // admitted once the probe answers, and asked for once per actor —
+      // and once more for every actor asked about when the list itself
+      // first lands in the replica, which watches it from the first ask on,
+      // since a verdict asked before the list reached it may have been
+      // decided on an older one.
       const alice = { principal: aliceDid };
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe(
         "unresolved",
@@ -2073,12 +2080,33 @@ describe("Phase 5 cross-space serving", () => {
         alice,
       );
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
-      expect(probed).toEqual([`${foreignSpace}\0${aliceDid}`]);
+      expect(probed[0]).toBe(`${foreignSpace}\0${aliceDid}`);
+      /** Resolves once the replica's copy of the list grants `principal`. */
+      const listGrants = (principal: string): Promise<void> => {
+        const held = manager.open(foreignSpace).replica as SpaceReplica;
+        const id = `of:${foreignSpace}` as never;
+        const grants = (doc: { value?: unknown } | undefined): boolean =>
+          (doc?.value as Record<string, unknown> | undefined)?.[principal] !==
+            undefined;
+        if (grants(held.getDocument(id))) return Promise.resolve();
+        return new Promise((resolve) => {
+          const cancel = held.sinkDocument(id, (doc) => {
+            if (!grants(doc)) return;
+            cancel();
+            resolve();
+          });
+        });
+      };
+      await listGrants(aliceDid);
+      expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
+        `${foreignSpace}\0${aliceDid}`,
+      ]);
       await manager.syncInstance(
         { space: foreignSpace, id: "of:x-other" as never, scope: "session" },
         { principal: aliceDid, sessionId: "alice-session" as never },
       );
-      expect(probed).toHaveLength(1);
+      expect(probed).toHaveLength(2);
 
       // Bob's instance: refused on the list, typed, with the list's reason.
       const bob = { principal: bobDid };
@@ -2094,12 +2122,13 @@ describe("Phase 5 cross-space serving", () => {
       );
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
 
-      // Word of an access-list change asks about every actor again at once,
-      // each last verdict standing meanwhile: alice's instances, already
-      // loaded and never pulled again, stay admitted throughout. Once alice
-      // grants bob READ, his standing turns admitted on the probe's answer
-      // alone, and the read refused earlier is pulled again for him, since
-      // nothing else would load it.
+      // Word of an access-list change, the list's new version landing in
+      // the replica over the session its reads go through, asks about every
+      // actor again at once, each last verdict standing meanwhile: alice's
+      // instances, already loaded and never pulled again, stay admitted
+      // throughout. Once alice grants bob READ, his standing turns admitted
+      // on the probe's answer alone, and the read refused earlier is pulled
+      // again for him, since nothing else would load it.
       const replica = manager.open(foreignSpace).replica as SpaceReplica;
       const repulled: string[] = [];
       const originalSync = replica.sync.bind(replica);
@@ -2111,9 +2140,8 @@ describe("Phase 5 cross-space serving", () => {
         [aliceDid]: "OWNER",
         [bobDid]: "READ",
       });
-      manager.noteSpaceAclChanged(foreignSpace);
+      await listGrants(bobDid);
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
-      expect(manager.scopedReadStanding(foreignUser, bob)).toBe("refused");
       await manager.syncInstance(
         { space: foreignSpace, id: "of:x-other" as never, scope: "user" },
         bob,
@@ -2121,6 +2149,7 @@ describe("Phase 5 cross-space serving", () => {
       expect(manager.scopedReadStanding(foreignUser, bob)).toBe("admitted");
       expect(manager.scopedReadStanding(foreignUser, alice)).toBe("admitted");
       expect(probed).toEqual([
+        `${foreignSpace}\0${aliceDid}`,
         `${foreignSpace}\0${aliceDid}`,
         `${foreignSpace}\0${bobDid}`,
         `${foreignSpace}\0${aliceDid}`,
@@ -3026,6 +3055,246 @@ export default pattern<
     sendEvent(result.key("create"), { title: "lobby" }, acked.resolve);
 
     expect((await acked.promise).status().status).toBe("error");
+  });
+
+  it("leaves a served `inSpace(name)` child's derivations to the loop of the space it is placed in, while a home derivation reads them", async () => {
+    // protocol.md §2b: a space's own loop is its only deriver. The home
+    // runtime instantiates the child in the handler's provisioning batch and
+    // stops it there; the room space's loop, warmed by that batch, derives
+    // the child. Were the child's graph still running on the home runtime,
+    // the home `spelled` derivation would pull the child's `map` there, and
+    // the home wave would refuse its writes into the room space.
+    const servingRuntimes = new Map<MemorySpace, Runtime>();
+    onServingRuntime = (runtime) => {
+      servingRuntimes.set(runtime.storageManager.servingHomeSpace!, runtime);
+      return Promise.resolve();
+    };
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import {
+  action,
+  computed,
+  pattern,
+  type Stream,
+  type Writable,
+} from "commonfabric";
+const Room = pattern<{ title: string }, { title: string; letters: string[] }>(
+  ({ title }) => {
+    const chars = computed(() => title.split(""));
+    return { title, letters: chars.map((char) => char.toUpperCase()) };
+  },
+);
+export default pattern<
+  { rooms: Writable<{ letters: string[] }[]> },
+  { create: Stream<{ title: string }>; spelled: string }
+>(({ rooms }) => ({
+  create: action(({ title }: { title: string }) => {
+    rooms.push(Room.inSpace("lobby")({ title }));
+  }),
+  spelled: computed(() =>
+    rooms.get().map((room) => (room.letters ?? []).join("")).join(",")
+  ),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+      homeSpace,
+      "in-space-derivation-argument",
+    );
+    const result = clientRuntime.getCell<{ create: unknown; spelled: string }>(
+      homeSpace,
+      "in-space-derivation-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ rooms: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    result.key("create").send({ title: "lobby" });
+    await waitForCellValue<string>(
+      clientRuntime,
+      result.key("spelled"),
+      (spelled) => spelled === "LOBBY",
+      { stuckLabel: "the home derivation to read the room's letters" },
+    );
+    await servingRuntimes.get(homeSpace)!.idle();
+    const engine = await server.engineForSpace(homeSpace);
+    const rooms = (readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+
+    const homeRuntime = servingRuntimes.get(homeSpace)!;
+
+    expect(rooms).toHaveLength(1);
+    expect(servingRuntimes.has(parseLink(rooms[0])!.space!)).toBe(true);
+    expect(
+      homeRuntime.runner.isRunning(
+        homeRuntime.getCellFromLink(parseLink(rooms[0])!),
+      ),
+    ).toBe(false);
+    expect(host!.stats().foreignWriteRefusals).toBe(0);
+  });
+
+  it("leaves a served `inSpace(name)` child's nested streams addressable once the child is provisioned, before the space it is placed in serves it", async () => {
+    // The child's `add` is a stream of a pattern nested in it, which exists
+    // once the child's graph is instantiated. The creating handler queues a
+    // home event that sends to it, and the room space's serving runtime is
+    // held back until that event has run, so the send finds only what the
+    // provisioning batch stored. A send that does not find a stream there
+    // writes into the room space instead of appending an event to it.
+    const roomRuntimeHeld = Promise.withResolvers<void>();
+    onServingRuntime = (runtime) =>
+      runtime.storageManager.servingHomeSpace === homeSpace
+        ? Promise.resolve()
+        : roomRuntimeHeld.promise;
+    try {
+      clientManager = SharedServerStorageManager.connectTo(server, {
+        as: aliceSigner,
+      });
+      clientRuntime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: clientManager,
+        experimental: { serverExecution: true },
+      });
+      const compiled = await clientRuntime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+import {
+  type Cell,
+  handler,
+  pattern,
+  type Stream,
+  type Writable,
+} from "commonfabric";
+type RoomLink = { names: string[] };
+const addName = handler<{ name: string }, { names: Writable<string[]> }>(
+  ({ name }, { names }) => {
+    names.push(name);
+  },
+);
+const Core = pattern<
+  { names: Writable<string[]> },
+  { add: Stream<{ name: string }> }
+>(({ names }) => ({ add: addName({ names }) }));
+const Room = pattern<
+  { names: Writable<string[]> },
+  { names: string[]; add: Stream<{ name: string }> }
+>(({ names }) => {
+  const core = Core({ names });
+  return { names, add: core.add };
+});
+function roomLinkOf(room: unknown): Cell<RoomLink>;
+function roomLinkOf(room: unknown): unknown {
+  return room;
+}
+function addStreamOf(
+  room: Cell<RoomLink>,
+): Cell<{ add: Stream<{ name: string }> }>;
+function addStreamOf(room: Cell<RoomLink>): unknown {
+  return room;
+}
+const joinRoom = handler<{ room: Cell<RoomLink> }, Record<PropertyKey, never>>(
+  (event) => {
+    addStreamOf(event.room).key("add").send({ name: "ada" });
+  },
+);
+const create = handler<
+  { title: string },
+  {
+    rooms: Writable<Cell<RoomLink>[]>;
+    joining: Stream<{ room: Cell<RoomLink> }>;
+  }
+>((_, { rooms, joining }) => {
+  const room = roomLinkOf(Room.inSpace("lobby")({ names: [] }));
+  rooms.push(room);
+  joining.send({ room });
+});
+export default pattern<
+  { rooms: Writable<Cell<RoomLink>[]> },
+  {
+    create: Stream<{ title: string }>;
+    joining: Stream<{ room: Cell<RoomLink> }>;
+  }
+>(({ rooms }) => {
+  const joining = joinRoom({});
+  return { create: create({ rooms, joining }), joining };
+});`,
+        }],
+      }, { space: homeSpace });
+      const argument = clientRuntime.getCell<{ rooms: unknown[] }>(
+        homeSpace,
+        "in-space-nested-stream-argument",
+      );
+      const result = clientRuntime.getCell<{ create: unknown }>(
+        homeSpace,
+        "in-space-nested-stream-result",
+        compiled.resultSchema,
+      );
+      await Promise.all([argument.sync(), result.sync()]);
+      const seed = clientRuntime.edit();
+      argument.withTx(seed).set({ rooms: [] });
+      clientRuntime.run(seed, compiled, argument, result);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await clientManager.synced();
+      host = newHost();
+      const engine = await server.engineForSpace(homeSpace);
+      const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+        (engine.database.prepare(
+          "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+        ).all() as { id: string }[]).flatMap(({ id }) =>
+          (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ??
+            []
+        );
+
+      result.key("create").send({ title: "lobby" });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries().length === 2 &&
+          entries().every((entry) => entry.consequenced),
+      );
+      const failures = entries().map((entry) => entry.status);
+      roomRuntimeHeld.resolve();
+      const rooms = (readDoc(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      })?.value as { rooms?: unknown[] } | undefined)?.rooms ?? [];
+      const room = clientRuntime.getCellFromLink<{ names: string[] }>(
+        parseLink(rooms[0])!,
+        {
+          type: "object",
+          properties: { names: { type: "array", items: { type: "string" } } },
+        },
+      );
+      const names = await waitForCellValue<string[]>(
+        clientRuntime,
+        room.key("names"),
+        (names) => names !== undefined && names.length > 0,
+        { stuckLabel: "the room space's loop to run the queued add" },
+      );
+
+      expect(failures).toEqual([undefined, undefined]);
+      expect(names).toEqual(["ada"]);
+    } finally {
+      roomRuntimeHeld.resolve();
+    }
   });
 
   it("a served `inSpace(..., { root: true })` places its child as the root of the space it creates, whose genesis seals the reservation", async () => {

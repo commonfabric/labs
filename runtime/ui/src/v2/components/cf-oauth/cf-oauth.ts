@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 
@@ -172,9 +173,7 @@ export class CFOAuth extends BaseElement {
       }, 500);
     } catch (error: unknown) {
       console.error("OAuth error:", error);
-      this.authStatus = `Error: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      this.authStatus = `Error: ${describeFailure(error)}`;
       this.isLoading = false;
     }
   }

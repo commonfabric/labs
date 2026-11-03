@@ -148,14 +148,19 @@ describe("fabrichat stamped title offers across runtimes", () => {
 
   it("offers a direct room found again to its counterpart, through their profile's inbox", async () => {
     // A start naming Grace by principal alone creates the room and queues a
-    // notice for her, since it has no profile to offer the room through.
+    // notice for her, since it has no profile to offer the room through. The
+    // start's own event sends the one that queues the notice, which a
+    // serving loop runs on its own account, so `settle()` does not wait for
+    // it.
     await ada.send("openDirect", {
       requestId: "d-first",
       counterpart: grace.identity.did(),
     }, START_ACTION);
     await harness.settle();
     expect(await ada.read(["requests", "d-first", "status"])).toBe("done");
-    expect(await ada.read(["outgoingNotices", "length"])).toBe(1);
+    await harness.settleUntil(async () =>
+      (await ada.read(["outgoingNotices", "length"])) === 1
+    );
 
     // A start naming her profile finds the room, and offers it there.
     await ada.send("openDirect", {
@@ -165,7 +170,9 @@ describe("fabrichat stamped title offers across runtimes", () => {
     }, START_ACTION);
     await harness.settle();
     expect(await ada.read(["requests", "d-again", "status"])).toBe("done");
-    expect(await ada.read(["outgoingNotices", "length"])).toBe(0);
+    await harness.settleUntil(async () =>
+      (await ada.read(["outgoingNotices", "length"])) === 0
+    );
     await harness.settleUntil(() => graceHolds("d-again"));
   });
 

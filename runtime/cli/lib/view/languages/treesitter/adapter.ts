@@ -18,6 +18,7 @@
  * edits. A contract test over non-ASCII source pins that convention.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   Document,
   Line,
@@ -143,9 +144,7 @@ async function loadGrammar(grammar: TreeSitterGrammar): Promise<void> {
   );
   const failure = failed === undefined
     ? undefined
-    : failed.error instanceof Error
-    ? failed.error.message
-    : String(failed.error);
+    : describeFailure(failed.error);
   for (const listener of loadListeners) listener(failure);
   if (failed !== undefined) throw failed.error;
 }

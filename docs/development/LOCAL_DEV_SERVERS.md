@@ -124,7 +124,14 @@ To let teammates interact with a locally-hosted pattern (e.g. "host latest-main
 `--inspect`) + shell on offset ports, deploys the pattern, and `tailscale serve`s
 it (tailnet-only). It launches the shell with `API_URL` set to your MagicDNS name
 — the standard `dev-local` task bakes in `localhost`, which breaks remote
-browsers.
+browsers. Each server runs in a process group of its own, so the servers keep
+running after the script returns, until `--down` stops them. Until the script
+prints the shareable URL, the servers end with it: a failure, Ctrl-C, or a
+hangup or termination signal sent to the script stops every server it started.
+Their logs are in `tmp/share-pattern-via-tailscale/` in the checkout. The script
+refuses to start while a share from the same checkout is running, or while
+anything answers on one of its ports. `--down` turns off the machine's
+`tailscale serve` mapping only in a checkout that has a record of a share.
 
 `start-local-dev.sh` validates required commands before launching anything and
 waits for both servers to bind their ports and return HTTP 200 before reporting
@@ -133,6 +140,18 @@ the toolshed answers by fetching the shell dev server and passing the result
 back; that is the one probe covering the hop between the two servers, which
 can be broken while each of them answers on its own port. Set
 `LOCAL_DEV_STARTUP_TIMEOUT` to adjust the readiness timeout in seconds.
+
+Each server runs in a process group of its own, so the servers keep running
+after the script returns, even under a tool that ends whatever a command leaves
+in its process group once the command exits. They run until
+`stop-local-dev.sh` stops them, which finds them by the ports they listen on.
+Until the script reports success, the servers end with it: a failed startup,
+Ctrl-C, or a hangup or termination signal sent to the script stops every
+server it started. A SIGKILL sent to the script's process group during
+startup cannot be caught, so it leaves the servers it started running, and
+`stop-local-dev.sh` stops them. When `CODEX_SANDBOX` is set, the script stays
+attached after startup, the servers stay in its process group, and stopping
+the script stops them.
 
 **Exit codes (`start-local-dev.sh`):**
 | Code | Meaning |

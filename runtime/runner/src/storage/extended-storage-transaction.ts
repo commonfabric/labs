@@ -26,6 +26,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
@@ -53,6 +54,8 @@ import {
   type CfcDenialCode,
   type CfcDereferenceTrace,
   cfcDereferenceTracesEqual,
+  type CfcDocumentAddress,
+  cfcDocumentKey,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
   type CfcExternalContentObservation,
@@ -737,6 +740,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     writePolicyInputIdentities: new Map(),
     writeIdentity: { sawWrite: false, multiple: false },
     attributedInitialization: false,
+    attributedPieces: [],
+    pieceCreators: [],
+    creatorRecordWrites: [],
     moduleDelegations: new Map(),
     outbox: [],
     diagnostics: [],
@@ -1592,6 +1598,23 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // refuse: every arm below is keyed by target id, and one that recorded
     // and returned ahead of this would leave the seam open on the documents
     // its prefix names.
+    //
+    // A write reaching the `creator` field is judged at commit preparation
+    // whatever authorization it carries (`pieceCreatorRecordReasons` in
+    // cfc/prepare.ts), which reads the documents recorded here rather than
+    // the write log, so it makes the transaction CFC-relevant on its own: a
+    // transaction writing nothing else would otherwise never be prepared.
+    if (metaFieldsWritten(address.path, value).includes("creator")) {
+      this.markCfcRelevant("creator-record-write");
+      this.#cfcState.creatorRecordWrites = [
+        ...this.#cfcState.creatorRecordWrites,
+        {
+          space: address.space,
+          id: address.id,
+          ...(address.scope !== undefined && { scope: address.scope }),
+        },
+      ];
+    }
     if (!rawMetaWriteAuthorized(options)) {
       // Three shapes reach a meta field: an address naming the field, a
       // document-root envelope carrying it as a key, and a document-root
@@ -1722,11 +1745,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
           },
         }).ok?.value;
         if (slot === undefined) {
+          // A serving runtime's handler waits for the Home's own server to
+          // link the root (`bringUpHomeRootForRefusedWrite()`).
           // TODO(danfuzz): On a serving runtime, bring the demanding user's
           // Home root up ahead of the write instead, stamped as the
           // SpaceServer's root ensure stamps it, so that an app layered on a
           // serving runtime can create a profile before its user has ever
-          // opened Home.
+          // opened Home, whose space no server then serves.
           throw new SpaceRootMissingError(address.space);
         }
       }
@@ -2294,15 +2319,59 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
     // The mark is what lets an initialization claim the acting principal, so
     // a call without the runtime's authorization changes nothing.
     if (!runtimeWritePolicyAuthorized(authorization)) return;
+    // A transaction marked whole attributes every piece's initializations
+    // already.
     if (this.#cfcState.attributedInitialization) return;
+    if (piece === undefined) {
+      this.#cfcState.attributedInitialization = true;
+    } else {
+      const key = cfcDocumentKey(piece);
+      if (
+        this.#cfcState.attributedPieces.some((listed) =>
+          cfcDocumentKey(listed) === key
+        )
+      ) {
+        return;
+      }
+      this.#cfcState.attributedPieces = [
+        ...this.#cfcState.attributedPieces,
+        piece,
+      ];
+    }
     this.#noteCfcActivity();
-    this.#cfcState.attributedInitialization = true;
     if (this.#cfcState.prepare.status === "prepared") {
       this.invalidateCfc("attributed-initialization-marked");
+    }
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    // The mark is what admits the record's write, so a call without the
+    // runtime's authorization changes nothing.
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    const key = cfcDocumentKey(piece);
+    if (
+      this.#cfcState.pieceCreators.some((record) =>
+        cfcDocumentKey(record.piece) === key && record.creator === creator
+      )
+    ) {
+      return;
+    }
+    this.#cfcState.pieceCreators = [
+      ...this.#cfcState.pieceCreators,
+      { piece, creator },
+    ];
+    this.#noteCfcActivity();
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("piece-creator-marked");
     }
   }
 
@@ -3579,7 +3648,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       // pre-storage-rejection path and every observer (commit callbacks, the
       // scheduler's failed-commit machinery, error surfacing) sees the real
       // cause.
-      const message = error instanceof Error ? error.message : String(error);
+      const message = describeFailure(error);
       this.#commitPreparationCrash = message;
       // Reported UNCONDITIONALLY, not through this module's opt-in logger
       // (disabled by default — `@commonfabric/logger` early-returns): a crash
@@ -4931,8 +5000,17 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
   ): void {
-    this.#wrapped.markCfcAttributedInitialization(authorization);
+    this.#wrapped.markCfcAttributedInitialization(authorization, piece);
+  }
+
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
+  ): void {
+    this.#wrapped.markCfcPieceCreator(authorization, piece, creator);
   }
 
   recordCfcWritePolicyInput(
@@ -5369,21 +5447,46 @@ export function createChildCellTransaction(
   return new TransactionWrapper(tx, { childCellTx });
 }
 
+const singleReadTxs = new WeakSet<IExtendedStorageTransaction>();
+
+/**
+ * Marks a read transaction as opened for one read whose caller supplied no open
+ * transaction. Nothing finishes such a transaction, and while it stays ready it
+ * returns each document as it first read it, so a cell the read hands out must
+ * not hold it: {@link getTransactionForChildCells} leaves that cell with no
+ * transaction, and each of its reads opens a new one and sees current state.
+ */
+export function markSingleReadTx(tx: IExtendedStorageTransaction): void {
+  singleReadTxs.add(tx);
+}
+
+/**
+ * Returns whether a read through `tx` is one a read opened for itself (see
+ * {@link markSingleReadTx}), directly or under a wrapper such as `Cell.sample()`
+ * puts around it.
+ */
+export function isSingleReadTx(tx: IExtendedStorageTransaction): boolean {
+  return getTransactionForChildCells(tx) === undefined;
+}
+
 /**
  * Helper function to get the transaction to use for creating child cells from a
  * potentially wrapped transaction. If the transaction is not wrapped, returns
  * it as-is.
  *
  * Used when creating child cells that should use a different transaction than
- * the parent read (e.g., in Cell.sample() or Cell.sink()).
+ * the parent read (e.g., in Cell.sample() or Cell.sink()). Returns `undefined`
+ * for a read that opened its transaction for itself, whose cells outlive it.
  */
 export function getTransactionForChildCells(
   tx: IExtendedStorageTransaction | undefined,
 ): IExtendedStorageTransaction | undefined {
-  if (tx instanceof TransactionWrapper) {
-    return tx.getTransactionForChildCells();
-  }
-  return tx;
+  const childTx = tx instanceof TransactionWrapper
+    ? tx.getTransactionForChildCells()
+    : tx;
+  return childTx !== undefined && singleReadTxs.has(childTx)
+    ? undefined
+    : childTx;
 }
 
 /**

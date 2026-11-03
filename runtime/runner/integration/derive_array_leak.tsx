@@ -1,8 +1,8 @@
 /**
- * An integration fixture: a counter whose increment handler sets the value
- * `INCREMENTS_PER_CLICK` times in one run, and a computed array of that
- * length mapped into the view, so one click drives the derivation that
- * many times.
+ * An integration fixture: a counter whose increment and decrement handlers
+ * each change the value by one `STEPS_PER_CLICK` times in one run, and a
+ * computed array as long as the value, mapped into the view one element per
+ * entry. One click therefore builds or tears down that many elements.
  */
 
 import {
@@ -17,8 +17,8 @@ import {
   UI,
 } from "commonfabric";
 
-// How many times to increment per click
-const INCREMENTS_PER_CLICK = 50;
+// How many steps each click takes.
+const STEPS_PER_CLICK = 50;
 
 interface PatternState {
   value: Default<number, 0>;
@@ -26,18 +26,17 @@ interface PatternState {
 
 interface PatternOutput {
   value: Default<number, 0>;
+  stepsPerClick: number;
   increment: Stream<void>;
   decrement: Stream<void>;
 }
 
-// Inline handlers to avoid import resolution issues
 const increment = handler<
   void,
   { value: Cell<number> }
 >(
   (_args, state) => {
-    // Increment multiple times per click to trigger derive() multiple times
-    for (let i = 0; i < INCREMENTS_PER_CLICK; i++) {
+    for (let i = 0; i < STEPS_PER_CLICK; i++) {
       state.value.set(state.value.get() + 1);
     }
   },
@@ -48,7 +47,9 @@ const decrement = handler<
   { value: Cell<number> }
 >(
   (_args, state) => {
-    state.value.set(state.value.get() - 1);
+    for (let i = 0; i < STEPS_PER_CLICK; i++) {
+      state.value.set(state.value.get() - 1);
+    }
   },
 );
 
@@ -57,10 +58,6 @@ function nth(value: number) {
   if (value === 2) return "2nd";
   if (value === 3) return "3rd";
   return `${value}th`;
-}
-
-function previous(value: number) {
-  return value - 1;
 }
 
 export default pattern<PatternState, PatternOutput>((state) => {
@@ -75,21 +72,22 @@ export default pattern<PatternState, PatternOutput>((state) => {
       <div>
         <div>
           <cf-button onClick={decrement(state)}>
-            dec to {previous(state.value)}
+            dec to {state.value - STEPS_PER_CLICK}
           </cf-button>
           <span id="counter-result">
             Counter is the {nth(state.value)} number
           </span>
           <cf-button onClick={increment({ value: state.value })}>
-            inc to {state.value + 1}
+            inc to {state.value + STEPS_PER_CLICK}
           </cf-button>
         </div>
-        <div>
-          {array.map((v: number, i: number) => <span key={i}>{v % 10}</span>)}
+        <div id="items">
+          {array.map((v: number) => <i>{v % 10}</i>)}
         </div>
       </div>
     ),
     value: state.value,
+    stepsPerClick: STEPS_PER_CLICK,
     increment: increment(state),
     decrement: decrement(state),
   };

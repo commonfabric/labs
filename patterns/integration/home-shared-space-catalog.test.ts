@@ -10,6 +10,7 @@ import {
   sharedSpaceCommandsSchema,
   sharedSpaceReceiptViewSchema,
 } from "@commonfabric/home-schemas";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
   streamEntriesDocId,
@@ -27,6 +28,11 @@ import {
   Runtime,
   sendEvent,
 } from "@commonfabric/runner";
+import {
+  markRendererTrustedEvent,
+  readStoredCfcMetadata,
+  reviewedActionProvenance,
+} from "@commonfabric/runner/cfc";
 import {
   ExecutorHost,
   type ExecutorHostOptions,
@@ -48,6 +54,7 @@ import type {
   SharedSpaceMembershipChange,
   SharedSpaceRegistration,
   SharedSpaceRemoval,
+  SharedSpaceRetitle,
 } from "../system/shared-space/shared-space-catalog.ts";
 import type {
   SharedSpaceCollectionView,
@@ -71,8 +78,14 @@ interface HomeSurface {
   registerSharedSpace: SharedSpaceRegistration;
   changeSharedSpaceMembership: SharedSpaceMembershipChange;
   removeSharedSpace: SharedSpaceRemoval;
+  retitleSharedSpace: SharedSpaceRetitle;
   addSpace: { did: string; name: string };
   spaces: { did: string; name: string }[];
+  createProfile: { name?: string };
+  chatManager: {
+    createGroup: { requestId: string; title: string; members: string[] };
+    requests: Record<string, { status: string; reason?: string }>;
+  };
 }
 
 /** Compiles Home and its production imports as authored source. */
@@ -337,6 +350,197 @@ async function withHome(
     await server.close();
   }
 }
+
+/** The label of the owner's own space, as a cross-space read carries it. */
+const OWNER_LABEL = {
+  type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+  owner: owner.did(),
+} as const;
+
+/**
+ * Sends `event` to `stream` as a user's gesture on the reviewed `action` of
+ * `surface`, and waits for this runtime to go idle.
+ */
+async function sendReviewed(
+  runtime: Runtime,
+  stream: Cell<unknown>,
+  event: Record<string, unknown>,
+  surface: string,
+  action: string,
+) {
+  const gesture = {
+    type: "click",
+    ...event,
+    provenance: reviewedActionProvenance("dom", { surface, action }),
+  };
+  markRendererTrustedEvent(gesture);
+  const { error } = await runtime.editWithRetry((tx) => {
+    stream.withTx(tx).send(gesture);
+  });
+  expect(error).toBeUndefined();
+  await runtime.idle();
+}
+
+/**
+ * The paths of `link`'s document whose stored label carries a
+ * `PersonalSpace` atom.
+ */
+function personalSpacePathsOf(
+  runtime: Runtime,
+  link: Parameters<typeof readStoredCfcMetadata>[1],
+): string[][] {
+  const tx = runtime.edit();
+  try {
+    return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+      .filter((entry) =>
+        (entry.label.confidentiality ?? []).some((atom) =>
+          (atom as { type?: unknown }).type === OWNER_LABEL.type
+        )
+      )
+      .map((entry) => [...entry.path]);
+  } finally {
+    tx.abort("label read");
+  }
+}
+
+/**
+ * Stamps the title of `space`'s entry in Home's catalog storage with the
+ * owner's `PersonalSpace` label, as a writer outside Home can: a transaction
+ * that reads a value so labeled, in a space of its own, and writes the
+ * catalog.
+ */
+async function stampCatalogTitle(
+  runtime: Runtime,
+  catalog: Cell<Record<string, any>>,
+  space: string,
+) {
+  const outside = await runtime.createSpace({ grants: {} });
+  const offers = runtime.getCell<string>(outside, "labeled offers", {
+    type: "string",
+    ifc: { confidentiality: [OWNER_LABEL] },
+  });
+  const seed = runtime.edit();
+  offers.withTx(seed).set("offer");
+  runtime.prepareTxForCommit(seed);
+  expect((await seed.commit().settled).error).toBeUndefined();
+  const stamp = runtime.edit();
+  offers.withTx(stamp).get();
+  catalog.withTx(stamp).key("entries").key(space).key("title").set("Stamped");
+  runtime.prepareTxForCommit(stamp);
+  expect((await stamp.commit().settled).error).toBeUndefined();
+}
+
+/**
+ * For each document in Home's space holding a `sessionProfile` slot, as the
+ * FabriChat manager's arguments do, the paths covering that slot whose stored
+ * label carries a `PersonalSpace` atom: the slot and anything under it, the
+ * document's root, and a wildcard over its top-level keys.
+ */
+async function sessionProfileStampsIn(runtime: Runtime) {
+  const controller = new PiecesController(
+    createSession({ identity: owner, spaceDid: owner.did() }),
+    runtime,
+  );
+  const stamps: string[][][] = [];
+  for (const id of await controller.listEntityIds() ?? []) {
+    const holder = runtime.getCellFromLink({
+      space: owner.did(),
+      id: id as `${string}:${string}`,
+      path: [],
+    });
+    const value = holder.getRaw();
+    if (!isObjectNotArray(value) || !("sessionProfile" in value)) continue;
+    stamps.push(
+      personalSpacePathsOf(runtime, holder.getAsNormalizedFullLink())
+        .filter((path) =>
+          path.length === 0 || path[0] === "sessionProfile" || path[0] === "*"
+        ),
+    );
+  }
+  return stamps;
+}
+
+describe("Home catalog retitles", () => {
+  it("answers a retitle's outcome and keeps the entry's revision", async () => {
+    await withHome(true, async (_runtime, home, fresh) => {
+      const client = await fresh(false);
+      const catalog = client.home.key("sharedSpaceCatalog");
+      const retitle = client.home.key("retitleSharedSpace");
+      await invoke(
+        client.runtime,
+        client.home.key("registerSharedSpace"),
+        registration,
+        "register-for-retitle",
+      );
+      const before = (await catalog.pull()).entries[registration.space];
+
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle"),
+      ).toEqual({ status: "retitled", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: registration.space,
+          title: "Renamed through the root",
+        }, "retitle-again"),
+      ).toEqual({ status: "unchanged", space: registration.space });
+      expect(
+        await invoke(client.runtime, retitle, {
+          space: "did:key:catalog-retitle-unlisted",
+          title: "Nowhere",
+        }, "retitle-unlisted"),
+      ).toEqual({ status: "conflict", reason: "missing" });
+
+      // A host reaches the same stream through its command projection.
+      const commands = client.home.key("sharedSpaces").key("commands")
+        .asSchema(sharedSpaceCommandsSchema);
+      expect((await commands.pull()).retitle).toBeDefined();
+      expect(
+        await invoke(
+          client.runtime,
+          commands.key("retitle"),
+          { space: registration.space, title: "Renamed by the host" },
+          "retitle-projected",
+        ),
+      ).toEqual({ status: "retitled", space: registration.space });
+
+      const after = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+      expect(after).toEqual({ ...before, title: "Renamed by the host" });
+      expect(
+        Object.keys((await home.key("sharedSpaceCatalog").pull()).entries),
+      ).toEqual([registration.space]);
+    });
+  });
+
+  it("refuses a malformed retitle and leaves the title", async () => {
+    await withHome(false, async (runtime, home) => {
+      await invoke(
+        runtime,
+        home.key("registerSharedSpace"),
+        registration,
+        "register-for-malformed-retitle",
+      );
+      const before = (await home.key("sharedSpaceCatalog").pull())
+        .entries[registration.space];
+
+      await expect(
+        invoke(runtime, home.key("retitleSharedSpace"), {
+          space: registration.space,
+          title: "x".repeat(201),
+        }, "retitle-too-long"),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("Invalid shared-space retitle"),
+      });
+      expect(
+        (await home.key("sharedSpaceCatalog").pull())
+          .entries[registration.space],
+      ).toEqual(before);
+    });
+  });
+});
 
 describe("Home catalog revisions across execution modes", () => {
   it("keeps an old revision stale when an invocation ID is admitted again", async () => {
@@ -1680,4 +1884,77 @@ describe("Home shared-space catalog", () => {
       });
     });
   }
+
+  describe("with a `PersonalSpace` stamp on catalog storage", () => {
+    // A writer outside Home can leave Home's catalog storage carrying the
+    // owner's `PersonalSpace` label, which no FabriChat room's space admits.
+    // The guard: a stamped catalog must not reach the room-creating
+    // transaction through `sessionProfile`. The profile a session's
+    // `#profile` wish finds is written to the manager's `sessionProfile`
+    // slot, and a link written after a labeled read carries that read's
+    // label; a create then follows the link and joins the label, and its
+    // writes into the room's space are refused. Whether following a stamped
+    // link of a wish's choosing should count as reading the stamp is an open
+    // Contextual Flow Control question for @seefeldb, so a slot stamped some
+    // other way is not exercised here.
+
+    for (const serving of [false, true]) {
+      it(`creates a group from a session brought up before or after the stamp with serving ${serving}`, async () => {
+        await withHome(serving, async (runtime, home, fresh) => {
+          await sendReviewed(
+            runtime,
+            home.key("createProfile"),
+            { name: "Ada" },
+            "ProfileCreateSurface",
+            "CreateProfile",
+          );
+          await invoke(
+            runtime,
+            home.key("registerSharedSpace"),
+            registration,
+            "seed",
+          );
+          const catalog = await backingCatalog(runtime, home);
+          await stampCatalogTitle(runtime, catalog, registration.space);
+          expect(
+            personalSpacePathsOf(runtime, catalog.getAsNormalizedFullLink()),
+          ).toContainEqual(["entries", registration.space, "title"]);
+
+          const peer = await fresh();
+          const sessions = [
+            { name: "later", ...peer },
+            { name: "earlier", runtime, home },
+          ];
+          for (const session of sessions) {
+            const stamps = await sessionProfileStampsIn(session.runtime);
+            expect(stamps.length).toBeGreaterThan(0);
+            expect(stamps).toEqual(stamps.map(() => []));
+
+            const manager = session.home.key("chatManager");
+            const requestId = `group-${session.name}`;
+            await sendReviewed(
+              session.runtime,
+              manager.key("createGroup"),
+              { requestId, title: `Team ${session.name}`, members: [] },
+              "ChatStartSurface",
+              "ChatStart",
+            );
+            const outcome = await waitForCellValue<{ status: string }>(
+              session.runtime,
+              manager.key("requests").key(requestId),
+              (value) => value !== undefined && value.status !== "pending",
+              { stuckLabel: `the ${session.name} session's group request` },
+            );
+            expect(outcome.status).toBe("done");
+          }
+          const titles = Object.values(
+            (await home.key("sharedSpaceCatalog").pull()).entries,
+          ).map((entry) => entry.title);
+          expect(titles).toEqual(
+            expect.arrayContaining(["Team later", "Team earlier"]),
+          );
+        });
+      });
+    }
+  });
 });

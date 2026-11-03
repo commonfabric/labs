@@ -10,6 +10,7 @@ import {
   connectFabric,
   type PresenceRoomEvent,
 } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type CanvasShape,
@@ -224,7 +225,7 @@ function cursorInk(hue: number): string {
 }
 
 function showError(cause: unknown): void {
-  alert.textContent = cause instanceof Error ? cause.message : String(cause);
+  alert.textContent = describeFailure(cause);
 }
 
 /** Returns the peer dragging the shape `id`, when one is. */

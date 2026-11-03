@@ -1,32 +1,21 @@
 // Drives the pattern-lifecycle client (lib/pattern-lifecycle.ts) against a
-// stubbed fetch, so the wire contract the serving side verifies is
-// exercised without a live toolshed: the request carries the CF1
-// first-party proof headers, the body sent is the body signed, and a
-// refusal comes back with the server's code and message.
+// stubbed memory session, so the wire contract the serving side verifies is
+// exercised without a live toolshed: the arguments go without their space,
+// and a refusal comes back with the server's code and message.
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { sha256 } from "@commonfabric/content-hash";
-import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import {
   instantiatePieceOnServer,
   type LifecycleClientConfig,
-  lifecycleUrl,
   ServedLifecycleError,
   setPieceSourceOnServer,
   wireProgram,
 } from "../lib/pattern-lifecycle.ts";
 
-const API_URL = new URL("http://pattern-lifecycle-test.invalid:9999/fabric/");
 const SPACE_DID: MemorySpace =
   "did:key:z6MkPatternLifecycleTestSpaceAAAAAAAAAAAAAAAAAAA";
-
-const AUTH_HEADER = "CF-Request-Auth";
-const PROOF_HEADER = "CF-Request-Proof";
-const USER_DID_HEADER = "CF-User-DID";
-const BODY_SHA256_HEADER = "CF-Request-Body-SHA256";
 
 const PROGRAM = {
   main: "/main.tsx",
@@ -34,71 +23,26 @@ const PROGRAM = {
   files: [{ name: "/main.tsx", contents: "export default 1;" }],
 };
 
-interface RecordedRequest {
-  url: URL;
-  method: string;
-  headers: Headers;
-  body: string;
-}
-
-interface StubReply {
-  status?: number;
-  body?: unknown;
-  raw?: string;
-}
-
-/**
- * Runs `fn` with `globalThis.fetch` replaced by a recorder that answers with
- * `reply`, and always puts the real fetch back.
- */
-async function withStubbedFetch<T>(
-  reply: StubReply,
-  fn: (calls: RecordedRequest[]) => Promise<T>,
-): Promise<T> {
-  const original = globalThis.fetch;
-  const calls: RecordedRequest[] = [];
-  globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
-    calls.push({
-      url: new URL(typeof input === "string" ? input : input.toString()),
-      method: init?.method ?? "GET",
-      headers: new Headers(init?.headers),
-      body: typeof init?.body === "string" ? init.body : "",
-    });
-    return Promise.resolve(
-      new Response(reply.raw ?? JSON.stringify(reply.body ?? {}), {
-        status: reply.status ?? 200,
-      }),
-    );
-  }) as typeof fetch;
-  try {
-    return await fn(calls);
-  } finally {
-    globalThis.fetch = original;
-  }
-}
-
-const bodySha256 = async (body: string): Promise<string> =>
-  toUnpaddedBase64url(await sha256(new TextEncoder().encode(body)));
-
-describe("pattern-lifecycle client", () => {
-  let config: LifecycleClientConfig | undefined;
-
-  const configured = async (): Promise<LifecycleClientConfig> => {
-    config ??= { apiUrl: API_URL, identity: await Identity.generate() };
-    return config;
-  };
-
-  describe("lifecycleUrl", () => {
-    it("keeps the API base's own path ahead of the verb's", () => {
-      expect(lifecycleUrl(API_URL, "instantiate").pathname).toBe(
-        "/fabric/api/pattern-lifecycle/instantiate",
-      );
-      expect(
-        lifecycleUrl(new URL("http://host.invalid"), "upload").pathname,
-      ).toBe("/api/pattern-lifecycle/upload");
-    });
+/** An error shaped as the memory client raises a lifecycle refusal. */
+const refusal = (code: string, message = `refused: ${code}`) =>
+  Object.assign(new Error(message), {
+    name: "PatternLifecycleRefusal",
+    code,
   });
 
+/** A config whose session records each call and answers with `answer`. */
+const sessionConfig = (answer: () => Promise<Record<string, unknown>>) => {
+  const sent: { space: MemorySpace; verb: string; body: unknown }[] = [];
+  const cfg: LifecycleClientConfig = {
+    session: (space, verb, body) => {
+      sent.push({ space, verb, body });
+      return answer() as never;
+    },
+  };
+  return { cfg, sent };
+};
+
+describe("pattern-lifecycle client", () => {
   describe("wireProgram", () => {
     it("carries the entry, its export, the files, the source roots, and the data files, and nothing else", () => {
       const carried = wireProgram({
@@ -118,241 +62,135 @@ describe("pattern-lifecycle client", () => {
 
   describe("instantiatePieceOnServer", () => {
     it("carries the same creation key across explicit retries", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        { body: { pieceId: "p1", pattern: { identity: "i", symbol: "s" } } },
-        async (calls) => {
-          const input = {
-            space: SPACE_DID,
-            program: PROGRAM,
-            requestKey: "stable-request",
-          };
-          await instantiatePieceOnServer(cfg, input);
-          await instantiatePieceOnServer(cfg, input);
-          expect(calls.map((call) => JSON.parse(call.body).requestKey)).toEqual(
-            [
-              "stable-request",
-              "stable-request",
-            ],
-          );
-        },
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+        })
       );
+      const input = {
+        space: SPACE_DID,
+        program: PROGRAM,
+        requestKey: "stable-request",
+      };
+      await instantiatePieceOnServer(cfg, input);
+      await instantiatePieceOnServer(cfg, input);
+      expect(
+        sent.map(({ body }) => (body as { requestKey?: string }).requestKey),
+      ).toEqual(["stable-request", "stable-request"]);
     });
 
-    it("signs the request with the identity and sends the bytes it signed", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        { body: { pieceId: "p1", pattern: { identity: "i", symbol: "s" } } },
-        async (calls) => {
-          const receipt = await instantiatePieceOnServer(cfg, {
-            space: SPACE_DID,
-            program: PROGRAM,
-            argument: { seed: 1 },
-            repository: "https://example.invalid/repo",
-          });
-          expect(receipt.pieceId).toBe("p1");
-          expect(calls).toHaveLength(1);
-          const [call] = calls;
-          expect(call.method).toBe("POST");
-          expect(call.url.pathname).toBe(
-            "/fabric/api/pattern-lifecycle/instantiate",
-          );
-          expect(call.headers.get(USER_DID_HEADER)).toBe(cfg.identity.did());
-          expect(call.headers.get(AUTH_HEADER)).toMatch(/^CF1 /);
-          expect(call.headers.get(PROOF_HEADER)).toMatch(/\S/);
-          expect(call.headers.get(BODY_SHA256_HEADER)).toBe(
-            await bodySha256(call.body),
-          );
-          expect(JSON.parse(call.body)).toEqual({
-            space: SPACE_DID,
-            program: PROGRAM,
-            argument: { seed: 1 },
-            repository: "https://example.invalid/repo",
-          });
-        },
+    it("raises the server's refusal with its code and message", async () => {
+      const { cfg } = sessionConfig(() =>
+        Promise.reject(refusal("compile-failed", "main.tsx:1 nope"))
       );
-    });
-
-    it("raises the server's refusal with its code, status, and message", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        {
-          status: 422,
-          body: { error: "main.tsx:1 nope", code: "compile-failed" },
-        },
-        async () => {
-          const failure = await instantiatePieceOnServer(cfg, {
-            space: SPACE_DID,
-            program: PROGRAM,
-          }).then(() => undefined, (error) => error);
-          expect(failure).toBeInstanceOf(ServedLifecycleError);
-          expect(failure.code).toBe("compile-failed");
-          expect(failure.status).toBe(422);
-          expect(failure.message).toBe("main.tsx:1 nope");
-        },
-      );
-    });
-
-    it("names the status when the answer is not JSON", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        { status: 502, raw: "<html>bad gateway</html>" },
-        async () => {
-          const failure = await instantiatePieceOnServer(cfg, {
-            space: SPACE_DID,
-            program: PROGRAM,
-          }).then(() => undefined, (error) => error);
-          expect(failure).toBeInstanceOf(ServedLifecycleError);
-          expect(failure.code).toBe("http-502");
-          expect(failure.message).toContain("instantiate failed (502)");
-        },
-      );
+      const failure = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.code).toBe("compile-failed");
+      expect(failure.message).toBe("main.tsx:1 nope");
     });
   });
 
   describe("setPieceSourceOnServer", () => {
-    it("signs the request, names the piece, and carries the override and the start flag only when set", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        {
-          body: {
-            pieceId: "p1",
-            pattern: { identity: "i", symbol: "s" },
-            revisionId: "r1",
-            seq: 7,
-            detachedOrigin: null,
-          },
-        },
-        async (calls) => {
-          const receipt = await setPieceSourceOnServer(cfg, {
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-            repository: "https://example.invalid/repo",
-          });
-          expect(receipt.revisionId).toBe("r1");
-          expect(receipt.seq).toBe(7);
-          expect(calls).toHaveLength(1);
-          const [call] = calls;
-          expect(call.url.pathname).toBe(
-            "/fabric/api/pattern-lifecycle/setsrc",
-          );
-          expect(call.headers.get(AUTH_HEADER)).toMatch(/^CF1 /);
-          expect(call.headers.get(BODY_SHA256_HEADER)).toBe(
-            await bodySha256(call.body),
-          );
-          expect(JSON.parse(call.body)).toEqual({
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-            repository: "https://example.invalid/repo",
-          });
-          await setPieceSourceOnServer(cfg, {
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-            dangerouslyAllowIncompatibleSchema: true,
-            start: false,
-          });
-          expect(JSON.parse(calls[1].body)).toEqual({
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-            dangerouslyAllowIncompatibleSchema: true,
-            start: false,
-          });
-        },
+    it("names the piece, and carries the override and the start flag only when set", async () => {
+      const { cfg, sent } = sessionConfig(() =>
+        Promise.resolve({
+          pieceId: "p1",
+          pattern: { identity: "i", symbol: "s" },
+          revisionId: "r1",
+          seq: 7,
+          detachedOrigin: null,
+        })
       );
+      const receipt = await setPieceSourceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        program: PROGRAM,
+        repository: "https://example.invalid/repo",
+      });
+      expect(receipt.revisionId).toBe("r1");
+      expect(receipt.seq).toBe(7);
+      await setPieceSourceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        program: PROGRAM,
+        dangerouslyAllowIncompatibleSchema: true,
+        start: false,
+      });
+      expect(sent).toEqual([{
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: {
+          piece: "p1",
+          program: PROGRAM,
+          repository: "https://example.invalid/repo",
+        },
+      }, {
+        space: SPACE_DID,
+        verb: "setsrc",
+        body: {
+          piece: "p1",
+          program: PROGRAM,
+          dangerouslyAllowIncompatibleSchema: true,
+          start: false,
+        },
+      }]);
     });
 
     it("raises the server's refusal with its code", async () => {
-      const cfg = await configured();
-      await withStubbedFetch(
-        {
-          status: 409,
-          body: { error: "the piece moved", code: "source-moved" },
-        },
-        async () => {
-          const failure = await setPieceSourceOnServer(cfg, {
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-          }).then(() => undefined, (error) => error);
-          expect(failure).toBeInstanceOf(ServedLifecycleError);
-          expect(failure.code).toBe("source-moved");
-          expect(failure.status).toBe(409);
-        },
+      const { cfg } = sessionConfig(() =>
+        Promise.reject(refusal("source-moved", "the piece moved"))
       );
+      const failure = await setPieceSourceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.code).toBe("source-moved");
     });
   });
+
   describe("on a memory session", () => {
-    /** An error shaped as the memory client raises a lifecycle refusal. */
-    const refusal = (code: string, message = `refused: ${code}`) =>
-      Object.assign(new Error(message), {
-        name: "PatternLifecycleRefusal",
-        code,
-      });
-
-    /** A config whose session records each call and answers with `answer`. */
-    const sessionConfig = async (
-      answer: () => Promise<Record<string, unknown>>,
-    ) => {
-      const sent: { verb: string; body: unknown }[] = [];
-      const cfg: LifecycleClientConfig = {
-        apiUrl: API_URL,
-        identity: await Identity.generate(),
-        session: (_space, verb, body) => {
-          sent.push({ verb, body });
-          return answer() as never;
-        },
-      };
-      return { cfg, sent };
-    };
-
-    it("sends the verb on the session without its space, and makes no HTTP call", async () => {
+    it("sends the verb on the session of its space, without the space among its arguments", async () => {
       const receipt = {
         pieceId: "p1",
         pattern: { identity: "i", symbol: "s" },
       };
-      const { cfg, sent } = await sessionConfig(() => Promise.resolve(receipt));
-      await withStubbedFetch({ status: 500 }, async (calls) => {
-        const result = await instantiatePieceOnServer(cfg, {
-          space: SPACE_DID,
-          program: PROGRAM,
-          requestKey: "k",
-          register: true,
-        });
-        expect(result).toEqual(receipt);
-        expect(calls).toEqual([]);
+      const { cfg, sent } = sessionConfig(() => Promise.resolve(receipt));
+      const result = await instantiatePieceOnServer(cfg, {
+        space: SPACE_DID,
+        program: PROGRAM,
+        requestKey: "k",
+        register: true,
       });
+      expect(result).toEqual(receipt);
       expect(sent).toEqual([{
+        space: SPACE_DID,
         verb: "instantiate",
         body: { requestKey: "k", program: PROGRAM, register: true },
       }]);
     });
 
-    it("posts over HTTP when the session's server does not take the request", async () => {
-      const { cfg, sent } = await sessionConfig(() =>
+    it("throws a settled refusal when the memory server does not take the request", async () => {
+      const { cfg } = sessionConfig(() =>
         Promise.reject(refusal("lifecycle-unsupported"))
       );
-      await withStubbedFetch(
-        { body: { pieceId: "p1", pattern: { identity: "i", symbol: "s" } } },
-        async (calls) => {
-          await setPieceSourceOnServer(cfg, {
-            space: SPACE_DID,
-            piece: "p1",
-            program: PROGRAM,
-          });
-          expect(calls.map((call) => JSON.parse(call.body).space)).toEqual([
-            SPACE_DID,
-          ]);
-        },
-      );
-      expect(sent.map(({ verb }) => verb)).toEqual(["setsrc"]);
+      const failure = await setPieceSourceOnServer(cfg, {
+        space: SPACE_DID,
+        piece: "p1",
+        program: PROGRAM,
+      }).then(() => undefined, (error) => error);
+      expect(failure).toBeInstanceOf(ServedLifecycleError);
+      expect(failure.code).toBe("lifecycle-unsupported");
+      expect(failure.refused).toBe(true);
     });
 
-    it("throws a settled refusal with the server's code and no status", async () => {
-      const { cfg } = await sessionConfig(() =>
+    it("throws a settled refusal with the server's code", async () => {
+      const { cfg } = sessionConfig(() =>
         Promise.reject(refusal("slug-taken", "the slug names a piece"))
       );
       const failure = await instantiatePieceOnServer(cfg, {
@@ -361,13 +199,12 @@ describe("pattern-lifecycle client", () => {
       }).then(() => undefined, (error) => error);
       expect(failure).toBeInstanceOf(ServedLifecycleError);
       expect(failure.code).toBe("slug-taken");
-      expect(failure.status).toBeUndefined();
       expect(failure.refused).toBe(true);
       expect(failure.message).toBe("the slug names a piece");
     });
 
     it("throws a settled refusal from a memory server that runs no verbs", async () => {
-      const { cfg } = await sessionConfig(() =>
+      const { cfg } = sessionConfig(() =>
         Promise.reject(refusal("server-execution-off"))
       );
       const failure = await instantiatePieceOnServer(cfg, {
@@ -379,9 +216,7 @@ describe("pattern-lifecycle client", () => {
     });
 
     it("throws an unsettled refusal for a code that leaves the outcome unknown", async () => {
-      const { cfg } = await sessionConfig(() =>
-        Promise.reject(refusal("internal"))
-      );
+      const { cfg } = sessionConfig(() => Promise.reject(refusal("internal")));
       const failure = await instantiatePieceOnServer(cfg, {
         space: SPACE_DID,
         program: PROGRAM,
@@ -394,7 +229,7 @@ describe("pattern-lifecycle client", () => {
       const lost = Object.assign(new Error("socket closed"), {
         name: "ConnectionError",
       });
-      const { cfg } = await sessionConfig(() => Promise.reject(lost));
+      const { cfg } = sessionConfig(() => Promise.reject(lost));
       const failure = await instantiatePieceOnServer(cfg, {
         space: SPACE_DID,
         program: PROGRAM,
@@ -406,16 +241,11 @@ describe("pattern-lifecycle client", () => {
   describe("ServedLifecycleError", () => {
     describe("instance members", () => {
       describe("refused", () => {
-        it("returns `true` for a 4xx other than 408, and `false` for a 408 and a 5xx", () => {
-          expect(new ServedLifecycleError("forbidden", 403, "").refused).toBe(
-            true,
-          );
-          expect(new ServedLifecycleError("http-408", 408, "").refused).toBe(
-            false,
-          );
-          expect(new ServedLifecycleError("internal", 500, "").refused).toBe(
-            false,
-          );
+        it("returns `true` for a code that settles the verb, and `false` for any other", () => {
+          expect(new ServedLifecycleError("forbidden", "").refused).toBe(true);
+          expect(new ServedLifecycleError("space-not-served", "").refused)
+            .toBe(false);
+          expect(new ServedLifecycleError("internal", "").refused).toBe(false);
         });
       });
     });

@@ -9,6 +9,7 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { PatternUpdateReceipt } from "@commonfabric/piece/ops";
 import { linkRefFrom } from "@commonfabric/runner/shared";
 
@@ -233,7 +234,7 @@ export function disconnectedWriteErrno(
 }
 
 export function isConnectionWriteFailure(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
+  const msg = describeFailure(error);
   return msg.includes("transport closed") ||
     msg.includes("ConnectionError") ||
     msg.includes("connection refused") ||
@@ -560,7 +561,7 @@ export async function main(argv: string[] = Deno.args) {
       envMode: Deno.env.get("CF_CFC_MODE") ?? undefined,
     });
   } catch (e) {
-    return await failStartup(e instanceof Error ? e.message : String(e));
+    return await failStartup(describeFailure(e));
   }
   const cfcAnnotationsEnabled = shouldEnableCfcAnnotations({
     annotationsRequested: Boolean(args["cfc-annotations"]),
@@ -588,7 +589,7 @@ export async function main(argv: string[] = Deno.args) {
       ),
     });
   } catch (e) {
-    return await failStartup(e instanceof Error ? e.message : String(e));
+    return await failStartup(describeFailure(e));
   }
 
   try {
@@ -659,7 +660,7 @@ export async function main(argv: string[] = Deno.args) {
   };
 
   function noteWriteFailure(e: unknown): string {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = describeFailure(e);
     writeStats.flushErrors++;
     writeStats.lastError = msg;
     writeStats.lastErrorAt = new Date().toISOString();
@@ -1854,7 +1855,7 @@ export async function main(argv: string[] = Deno.args) {
           // No receipt means no source transaction committed. Report the
           // write as failed; every operation after this catch is local
           // projection work and cannot negate the durable outcome.
-          const errorMsg = e instanceof Error ? e.message : String(e);
+          const errorMsg = describeFailure(e);
           if (isConnectionWriteFailure(e)) {
             noteWriteFailure(e);
             markExistingFailed(errorMsg);
@@ -1991,9 +1992,7 @@ export async function main(argv: string[] = Deno.args) {
       const isConnectionFailure = isConnectionWriteFailure(e);
       const msg = isConnectionFailure
         ? noteWriteFailure(e)
-        : e instanceof Error
-        ? e.message
-        : String(e);
+        : describeFailure(e);
       if (!isConnectionFailure) {
         writeStats.flushErrors++;
         writeStats.lastError = msg;

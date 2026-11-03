@@ -24,6 +24,11 @@ import {
   setQuietMode,
 } from "../commands/piece.ts";
 import { CellImpl } from "../../runner/src/cell.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { interceptTransaction } from "../../runner/test/support/intercept-transaction.ts";
 import { cell } from "../commands/cell.ts";
 import { argv, cf, stripAnsi } from "./utils.ts";
@@ -1113,6 +1118,117 @@ describe("cf piece CFC labels", () => {
       expect(cfcLabelViewForCell(linked)).toBeUndefined();
     });
 
+    describe("at a write redirect's own label", () => {
+      /**
+       * Stores a write redirect in `body`, with the label a write after a
+       * labeled read stamps on the link it writes, and returns the redirect's
+       * labeled target and a reader of the clauses stored at `body`.
+       */
+      const stampedRedirect = async () => {
+        const linked = runtime.getCell<string>(
+          signer.did(),
+          "cf-piece-label-slot-target",
+          { type: "string", ifc: { confidentiality: [signer.did()] } },
+        );
+        const seed = runtime.edit();
+        linked.withTx(seed).set("redirected value");
+        runtime.prepareTxForCommit(seed);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const stamp = runtime.edit();
+        writeSeedEnvelopeDoc(stamp, signer.did());
+        seedStoredEnvelope(stamp, {
+          ...root.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value: { body: linked.getAsWriteRedirectLink() },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["body"],
+                label: {
+                  confidentiality: [owner, cfcAtom.user(signer.did())],
+                },
+                origin: "link",
+                observes: "followRef",
+              }],
+            },
+          },
+        } as never);
+        expect((await stamp.commit().settled).error).toBeUndefined();
+        return { linked, slot: () => slotEntries(root.key("body")) };
+      };
+
+      /** The confidentiality `cell`'s document stores at exactly its path. */
+      const slotEntries = (cell: Cell<unknown>) => {
+        const tx = runtime.edit();
+        try {
+          const link = cell.getAsNormalizedFullLink();
+          return readStoredCfcMetadata(tx, link)?.labelMap.entries
+            .filter((entry) =>
+              entry.path.length === link.path.length &&
+              entry.path.every((segment, at) => segment === link.path[at])
+            )
+            .flatMap((entry) => entry.label.confidentiality ?? []);
+        } finally {
+          tx.abort();
+        }
+      };
+
+      it("lowers the slot's label with `linkSlot`, and leaves its target's", async () => {
+        const { linked, slot } = await stampedRedirect();
+        expect(slot()).toContainEqual(owner);
+        const target = slotEntries(linked);
+
+        const shown = await setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          { confidentiality: [cfcAtom.user(signer.did())] },
+          { ...lower, linkSlot: true },
+          deps as never,
+        );
+
+        expect(slot()).toEqual([cfcAtom.user(signer.did())]);
+        expect(slotEntries(linked)).toEqual(target);
+        expect(target).toEqual([signer.did()]);
+        // The view it returns is the slot's, as lowered, without the target's.
+        expect(
+          shown?.entries.flatMap((entry) => entry.label.confidentiality ?? []),
+        ).toEqual([cfcAtom.user(signer.did())]);
+      });
+
+      it("refuses the slot's label without `linkSlot`, and writes nothing", async () => {
+        const { linked, slot } = await stampedRedirect();
+        const before = slot();
+        const target = slotEntries(linked);
+
+        await expect(setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          { confidentiality: [] },
+          lower,
+          deps as never,
+        )).rejects.toThrow(
+          "the label of a write redirect the path follows (lowered by a " +
+            "release of the link slot itself, `--link-slot`)",
+        );
+        expect(slot()).toEqual(before);
+        expect(slotEntries(linked)).toEqual(target);
+      });
+
+      it("throws for `linkSlot` without the lowering flag", async () => {
+        await expect(setCellCfcLabel(
+          pieceConfig,
+          ["body"],
+          { confidentiality: [owner] },
+          { linkSlot: true },
+          deps as never,
+        )).rejects.toThrow("`--link-slot` applies to a lowering alone");
+      });
+    });
+
     it("lowers a wildcard label at a path naming `*`, though no value is there", async () => {
       const declared = runtime.getCell<{ items: string[] }>(
         signer.did(),
@@ -1312,10 +1428,15 @@ describe("cf piece CFC labels", () => {
         );
 
       await run({ dangerouslyAllowLoweringConfidentiality: true });
+      await run({
+        dangerouslyAllowLoweringConfidentiality: true,
+        linkSlot: true,
+      });
       await run({});
 
       expect(calls.map((call) => call[3])).toEqual([
         { input: undefined, lowerConfidentiality: true },
+        { input: undefined, lowerConfidentiality: true, linkSlot: true },
         { input: undefined },
       ]);
     });
@@ -1337,6 +1458,7 @@ describe("cf piece CFC labels", () => {
       /confidentiality\s+may only become\s+more restrictive/,
     );
     expect(text).toContain("--dangerously-allow-lowering-confidentiality");
+    expect(text).toContain("--link-slot");
     expect(text).toContain("--json");
   });
 });

@@ -130,6 +130,32 @@ most-recently-used (MRU) ordering:
   the person's profiles share. A space whose recorded profile is retired
   keeps that record, and `sharedSpaces.profiles` reads it as `retired`
   ([Social-space collection](#social-space-collection)).
+- A profile whose space is
+  [deleted](../../specs/random-space-identities.md#deleting-a-space) is
+  retired. The memory server refuses its space, with the `deleted` marker,
+  which is not the absence of a missing profile's document, and its `name`
+  cannot be followed, so it is never one of the user's own profiles. Until it
+  is retired, `#profile` cannot read it, and if it leaves no other live
+  profile, `#profile` reports an error rather than opening profile creation
+  ([`wish.md`](wish.md)). Retiring it records the deletion: a retired profile
+  is skipped before it is read, so once it is retired and no live profile is
+  left, the roster is empty and `#profile` opens profile creation. The picker
+  sends `retireProfile` for a profile `profiles` lists whose
+  `spaceDeleted(space)` returns `true`, as a pattern that lists catalog entries
+  sends `markDeleted`. `setProfileRetired` admits such a profile in place of
+  the ownership test it can no longer pass: its link is in `profiles` and
+  `spaceDeleted(space)` returns `true` in the handler, asked by the handler
+  itself, so an event naming a profile that is not deleted is held to the
+  usual refusals. The refusals that keep `#profile` from moving without the
+  person choosing do not apply, since a deleted profile is none of the live
+  ones they protect. Where the memory server has not yet answered for the
+  space, the handler runs again once it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`. The picker lists a deleted profile apart, by its
+  link and marked deleted, with no Restore. It shows no name, since a
+  profile's name is kept in its own space, which is gone. `restoreProfile`
+  refuses a deleted profile. Deleting a space is not implemented yet, and
+  neither is this.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
@@ -419,8 +445,9 @@ pattern is a version without the field, `wish({ query: "#agent_queue" })`
 resolves to nothing; where there is no home pattern yet, a headless wish
 resolves to nothing too, and any other resolves through the empty slot. A write
 through that cell is refused with a `SpaceRootMissingError`. When the write is a
-handler's on a client runtime and the refusal escapes the handler, the home
-pattern is created and the handler runs again; a serving runtime creates none.
+handler's and the refusal escapes the handler, the handler runs again once the
+home pattern exists: a client runtime creates it, and a serving runtime waits
+for the home space's own server to create it and link it.
 [Built-in Targets](wish.md#built-in-targets) describes both.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.

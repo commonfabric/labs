@@ -1,6 +1,7 @@
 import { getLogger } from "@commonfabric/logger";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { createRef } from "../create-ref.ts";
@@ -420,6 +421,7 @@ export function isHeadEventParked(
   return headEvent?.handlerLoadPending === true ||
     headEvent?.patternChangePending === true ||
     headEvent?.retryReadinessPending === true ||
+    headEvent?.presyncPending === true ||
     (headEvent?.notBefore !== undefined && headEvent.notBefore > now);
 }
 
@@ -918,7 +920,14 @@ function chainOnCommit(
  * enclosing it derives. A client under server execution runs the handler only
  * as its speculative echo, which the served run replaces, so it starts the
  * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server.
+ * read, to the server. A serving runtime also has the piece's origin followed
+ * before its first start of it (`EnsurePieceOptions.originFollowed`, which
+ * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
+ * opens a piece it serves, so the start is where the piece's source is
+ * brought up to date; the pieces its inputs come from are followed the same
+ * way before they start. A start a follow is still owed, the piece's own or
+ * an input source's, is declined, and the served event it was for is
+ * deferred to a later wave as any start that could not happen yet defers it.
  */
 function startEventPiece(
   runtime: Runtime,
@@ -927,6 +936,7 @@ function startEventPiece(
   return ensurePieceRunningVerdict(runtime, eventLink, {
     startInputSources: runtime.experimental.serverExecution !== true ||
       runtime.servingPosture,
+    originFollowed: runtime.pieceOriginFollowed,
   });
 }
 
@@ -1173,7 +1183,12 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           // stays pending and a later wave re-drains it, under the serving
           // loop's bounded deferral budget — a condition that outlasts the
           // budget hardens into §5's drop notice rather than wedging the
-          // stream. A client event waits as described above.
+          // stream. The exception is a pattern the runtime could not load,
+          // which the deferral names: when the space lacks the pattern's
+          // program closure, the loop waits for the closure to arrive, and
+          // past a grace counts the absence against the failed-state budget,
+          // which ends in a needs-attention notice rather than a drop. A
+          // client event waits as described above.
           // A verdict that did not start the piece and names no reason is
           // one whose start threw, which the start walk logs and collapses.
           const pieceStartReason = verdict.started
@@ -1185,7 +1200,31 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
           const reason = `Event dropped: no handler registered for ` +
             `${args.eventLink.id} and its piece ${pieceState}`;
           if (queuedEvent.served !== undefined) {
-            dropQueuedEvent(state, queuedEvent, reason, "deferred");
+            dropQueuedEvent(
+              state,
+              queuedEvent,
+              reason,
+              "deferred",
+              pieceStartReason === "origin-pending"
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "origin-pending",
+                    message: reason,
+                  },
+                }
+                : pieceStartReason === "pattern-unloadable" &&
+                    verdict.patternIdentity !== undefined
+                ? {
+                  servedOutcome: {
+                    kind: "deferred",
+                    cause: "pattern-unloadable",
+                    patternIdentity: verdict.patternIdentity,
+                    message: reason,
+                  },
+                }
+                : {},
+            );
             // A deferral carries the drain's arrival-order barrier
             // (events.md §2; review-6459 F1's sibling arm), exactly as
             // the handler-not-run withdrawal and the facade's load-park
@@ -1249,9 +1288,7 @@ export function queueSchedulerEvent(state: SchedulerEventQueueState, args: {
         // disposition was someone else's (e.g. a lineage drop mid-load).
         const alreadySettled = queuedEvent.finalOutcomeNotified === true;
         const reason = `Event dropped: starting the piece for ` +
-          `${args.eventLink.id} failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+          `${args.eventLink.id} failed: ${describeFailure(error)}`;
         if (queuedEvent.served === undefined) {
           dropUndeliverableClientEvent(
             state,
@@ -1901,6 +1938,97 @@ export function endPatternChangeWaits(
   }
 }
 
+/**
+ * The implementation a head's dispatch runs, and so the one whose inputs its
+ * presync covers: the guarded implementation the preflight selected, or the
+ * handler itself.
+ */
+function dispatchImplementationOf(
+  queuedEvent: QueuedEvent,
+): EventHandler | undefined {
+  return isGuardedDispatcher(queuedEvent.handler)
+    ? queuedEvent.preflightImplementation
+    : queuedEvent.handler;
+}
+
+/**
+ * Starts the head's input presync (`EventHandler.presyncInputs`) when
+ * `implementation` has one that has not covered the head's current payload,
+ * and returns whether it did. The head holds its FIFO slot while the presync
+ * runs, as it does while its handler's piece loads, and the pass ends there,
+ * so the presync's I/O holds the events behind the head but not the
+ * derivations the scheduler owes. The settlement queues a fresh tick, whose
+ * pass runs the head's preflight over what the presync loaded before it
+ * dispatches. A presync that fails still counts as done: the event dispatches
+ * anyway, and the failure surfaces as the handler's own read failure rather
+ * than as a silent drop.
+ */
+function holdHeadEventForPresync(
+  state: SchedulerEventExecutionState,
+  queuedEvent: QueuedEvent,
+  implementation: EventHandler | undefined,
+): boolean {
+  if (typeof implementation?.presyncInputs !== "function") return false;
+  const event = queuedEvent.event;
+  if (
+    queuedEvent.presynced?.implementation === implementation &&
+    queuedEvent.presynced.event === event
+  ) {
+    return false;
+  }
+  queuedEvent.presyncPending = true;
+  void presyncEventInputs(state, queuedEvent, implementation, event)
+    .then(() => {
+      delete queuedEvent.presyncPending;
+      queuedEvent.presynced = { implementation, event };
+      state.queueExecution();
+    });
+  return true;
+}
+
+/**
+ * Brings `implementation`'s input documents for `event` into the local replica
+ * through its `presyncInputs`, under the event's actor. Never rejects: a
+ * failure is logged.
+ */
+async function presyncEventInputs(
+  state: Pick<SchedulerEventExecutionState, "runtime" | "getActionId">,
+  queuedEvent: QueuedEvent,
+  implementation: EventHandler,
+  event: unknown,
+): Promise<void> {
+  const handlerId = state.getActionId(implementation);
+  const presyncTx = state.runtime.edit();
+  try {
+    state.runtime.scheduler.beginReadAttempt(presyncTx, "presync", handlerId);
+    presyncTx.setReadOnly?.("scheduler.presyncInputs()");
+    const identity = eventScopeIdentity(queuedEvent);
+    if (identity !== undefined) presyncTx.tx.scopeKeyIdentity = identity;
+    // The presync materializes the whole argument eagerly, so it is timed on
+    // its own key beside the dispatch's phases. The key is kept per process
+    // with one active start, like every dispatch timer on this logger, so two
+    // runtimes presyncing at once record one sample, possibly understated, and
+    // lose the other, and nothing else: no caller reads what `timeEnd()`
+    // returns.
+    logger.timeStart("scheduler", "execute", "event", "presyncInputs");
+    try {
+      // Materialization and synchronization use the same event actor.
+      await implementation.presyncInputs?.(event, identity, presyncTx);
+    } finally {
+      logger.timeEnd("scheduler", "execute", "event", "presyncInputs");
+    }
+  } catch (error) {
+    logger.warn(
+      "scheduler",
+      "handler input presync failed; dispatching anyway",
+      { error, handlerId },
+    );
+  } finally {
+    presyncTx.clearReadOnly?.();
+    if (presyncTx.status().status === "ready") presyncTx.abort();
+  }
+}
+
 export async function processPullQueuedEventDuringExecute(
   state: SchedulerEventExecutionState,
   eventBlockingDeps: Set<Action>,
@@ -1943,6 +2071,10 @@ export async function processPullQueuedEventDuringExecute(
   // re-runs against arrives; the readiness continuation queues a fresh tick.
   if (queuedEvent.retryReadinessPending) return;
 
+  // The head holds its slot while its handler's inputs presync; the
+  // presync's settlement queues a fresh tick.
+  if (queuedEvent.presyncPending) return;
+
   // Head is parked on in-flight closure loads; the park's settlement
   // re-queues, drops, or defers the event.
   if (state.isHeadEventLoadParked(queuedEvent)) {
@@ -1980,6 +2112,16 @@ export async function processPullQueuedEventDuringExecute(
   }
 
   const { handler } = queuedEvent;
+
+  // An unguarded handler is its own implementation, so its inputs presync
+  // ahead of the preflight, which then computes the closure over them. A
+  // guarded one presyncs once the preflight has selected its implementation.
+  if (
+    !isGuardedDispatcher(handler) &&
+    holdHeadEventForPresync(state, queuedEvent, handler)
+  ) {
+    return;
+  }
 
   let shouldSkipEvent = false;
   if (handler.populateDependencies) {
@@ -2076,6 +2218,16 @@ export async function processPullQueuedEventDuringExecute(
 
   if (shouldSkipEvent) return;
 
+  if (
+    holdHeadEventForPresync(
+      state,
+      queuedEvent,
+      dispatchImplementationOf(queuedEvent),
+    )
+  ) {
+    return;
+  }
+
   await dispatchQueuedEvent({
     runtime: state.runtime,
     eventQueue: state.eventQueue,
@@ -2151,12 +2303,11 @@ export async function dispatchQueuedEvent(state: {
   ) => void;
 }, queuedEvent: QueuedEvent): Promise<void> {
   const { action, handler, event: eventValue, retry, onCommit } = queuedEvent;
-  // Presync follows the actor-scoped dependency probe. Dispatch rechecks the
-  // selection after the await so a replacement cannot run with stale inputs.
-  const presyncedImplementation = isGuardedDispatcher(handler)
-    ? queuedEvent.preflightImplementation
-    : handler;
-  const diagnosticHandler = presyncedImplementation ?? handler;
+  // The head's presync covered this implementation (`holdHeadEventForPresync`),
+  // and dispatch rechecks the selection so a replacement cannot run with
+  // stale inputs.
+  const dispatchImplementation = dispatchImplementationOf(queuedEvent);
+  const diagnosticHandler = dispatchImplementation ?? handler;
   const handlerId = state.getActionId(diagnosticHandler);
 
   state.runtime.telemetry.submit({
@@ -2165,49 +2316,9 @@ export async function dispatchQueuedEvent(state: {
     handlerInfo: state.getActionTelemetryInfo(diagnosticHandler),
   });
 
-  // Ensure the handler's input docs are locally available before the body
-  // runs (see EventHandler.presyncInputs). Fail open: a presync error should
-  // surface as the handler's own read failure, not silently drop the event.
-  if (typeof presyncedImplementation?.presyncInputs === "function") {
-    const presyncTx = state.runtime.edit();
-    try {
-      state.runtime.scheduler.beginReadAttempt(presyncTx, "presync", handlerId);
-      presyncTx.setReadOnly?.("scheduler.presyncInputs()");
-      const identity = eventScopeIdentity(queuedEvent);
-      if (identity !== undefined) presyncTx.tx.scopeKeyIdentity = identity;
-      // The presync materializes the whole argument eagerly, so it is timed
-      // on its own key beside the dispatch's other phases. The key is kept per
-      // process with one active start, like every dispatch timer on this
-      // logger, so two runtimes presyncing at once record one sample, possibly
-      // understated, and lose the other, and nothing else: no caller reads
-      // what `timeEnd()` returns.
-      logger.timeStart("scheduler", "execute", "event", "presyncInputs");
-      try {
-        // Materialization and synchronization use the same event actor.
-        await presyncedImplementation.presyncInputs(
-          eventValue,
-          identity,
-          presyncTx,
-        );
-      } finally {
-        logger.timeEnd("scheduler", "execute", "event", "presyncInputs");
-      }
-    } catch (error) {
-      logger.warn(
-        "scheduler",
-        "handler input presync failed; dispatching anyway",
-        { error, handlerId },
-      );
-    } finally {
-      presyncTx.clearReadOnly?.();
-      if (presyncTx.status().status === "ready") presyncTx.abort();
-    }
-  }
-
-  // Lineage may fail while presync is awaiting I/O. Keep the event in its FIFO
-  // slot until that await completes so the lineage callback can still find and
-  // settle it. A failed origin removes the event through dropQueuedEvent; never
-  // continue into the handler or notify its final callback a second time.
+  // Dispatch takes the head. A failed origin removes the event through
+  // dropQueuedEvent; never continue into the handler or notify its final
+  // callback a second time.
   if (
     queuedEvent.finalOutcomeNotified ||
     state.eventQueue[0] !== queuedEvent
@@ -2244,7 +2355,7 @@ export async function dispatchQueuedEvent(state: {
     settledDisposition = { error: result.error, disposition };
     if (disposition.kind === "backoff") state.noteLineageRerun(tx);
   });
-  let viewHandler = presyncedImplementation ?? handler;
+  let viewHandler = dispatchImplementation ?? handler;
   const served = queuedEvent.served;
   let lineageReleased = false;
   const releaseLineage = () => {
@@ -2437,12 +2548,16 @@ export async function dispatchQueuedEvent(state: {
     // that has now been resolved, so re-running resolves it synchronously from
     // the cache. On the access-list path the run's access-list commit
     // conflicted, and the re-run stages its change against the list as it now
-    // stands. No count guards this loop. Name resolution is monotonic (each
+    // stands. On the space-answer path the run asked `spaceDeleted()` about a
+    // space the memory server has since answered for, and the re-run reads
+    // the answer. No count guards this loop. Name resolution is monotonic (each
     // re-run resolves at least one previously-unresolved name, and a resolved name
     // never becomes pending again), so a handler with finitely many distinct
     // inSpace names terminates; an access-list re-run repeats only when another
     // writer changed the same list in between, and a change it makes itself is
-    // a no-op on the re-run. Dispatch released the lineage registration above,
+    // a no-op on the re-run; a Home-root re-run follows the root being linked,
+    // and a linked root stays linked; a space-answer re-run waits for the
+    // answer it re-runs with. Dispatch released the lineage registration above,
     // so the fresh QueuedEvent must be re-recorded: otherwise an origin that fails
     // while the retry is queued cannot remove it, and the post-settlement
     // originStatus() fallback ("confirmed") would let a descendant of a failed
@@ -2666,9 +2781,7 @@ export async function dispatchQueuedEvent(state: {
             // behind it. The drop settles the requeued entry's callback; a
             // failed origin that dropped it meanwhile left nothing to drop.
             delete requeued.retryReadinessPending;
-            const detail = cause instanceof Error
-              ? cause.message
-              : String(cause);
+            const detail = describeFailure(cause);
             const failure = cause instanceof ReplicaLoadFailureError
               ? cause.failure
               : {
@@ -2758,9 +2871,10 @@ export async function dispatchQueuedEvent(state: {
         return;
       }
       // A RetryImmediately signal means the handler referenced an inSpace("name")
-      // target that has now been resolved into the runtime cache, or that its
-      // access-list commit conflicted. Abort this run's transaction and re-queue
-      // the event so the handler re-runs.
+      // target that has now been resolved into the runtime cache, that its
+      // access-list commit conflicted, or that a space it asked `spaceDeleted()`
+      // about has now been answered for. Abort this run's transaction and
+      // re-queue the event so the handler re-runs.
       if (error instanceof RetryImmediately) {
         const rerun = retry || served !== undefined;
         // Before the abort, whose settle callback drops the follow-ups this
@@ -3373,10 +3487,10 @@ export async function dispatchQueuedEvent(state: {
       let implementation = handler;
       if (isGuardedDispatcher(handler)) {
         const selected = selectEventImplementation(handler, tx);
-        if (selected === undefined || selected !== presyncedImplementation) {
+        if (selected === undefined || selected !== dispatchImplementation) {
           tx.dispatchedHandlerNotRun = {
             reason:
-              "event implementation changed or is unavailable after presync",
+              "event implementation changed or is unavailable since its preflight",
           };
         } else {
           implementation = selected;

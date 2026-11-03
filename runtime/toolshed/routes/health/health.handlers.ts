@@ -2,12 +2,14 @@ import { z } from "zod";
 import { resolveGitSha } from "@/lib/build-info.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
 import type {
+  CollectedMemoryRoute,
   DashRoute,
   DocumentInterestsRoute,
   IndexRoute,
   ServingLoopRealmRoute,
   StatsRoute,
 } from "./health.routes.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getCommitRates,
   getDocumentCachesDiagnostics,
@@ -17,6 +19,11 @@ import {
   getSlowQueries,
 } from "@commonfabric/memory/v2/server";
 import { getServingLoopStats } from "@commonfabric/runner/executor/stats";
+import {
+  type CollectedMemory,
+  collectedMemory as collectThisThread,
+  garbageCollectorExposed,
+} from "@commonfabric/runner/collected-memory";
 import { serverExecutionHost } from "@/lib/server-execution.ts";
 import {
   getLoggerCountsBreakdown,
@@ -121,14 +128,46 @@ export const servingLoopRealm: AppRouteHandler<ServingLoopRealmRoute> = async (
       HttpStatusCodes.OK,
     );
   } catch (error) {
+    return c.json(notServing(error), HttpStatusCodes.SERVICE_UNAVAILABLE);
+  }
+};
+
+/** The answer that says why the serving loop's worker did not answer. */
+function notServing(error: unknown): { error: string } {
+  return {
+    error: "The serving loop's worker is not serving: " +
+      describeFailure(error),
+  };
+}
+
+/**
+ * Collects the serving loop's worker, where the loop runs in one, and then
+ * this thread, and reports what each still holds.
+ */
+export const collectedMemory: AppRouteHandler<CollectedMemoryRoute> = async (
+  c,
+) => {
+  c.header("Cache-Control", "no-store");
+  if (!garbageCollectorExposed()) {
     return c.json(
-      {
-        error: "The serving loop's worker is not serving: " +
-          (error instanceof Error ? error.message : String(error)),
-      },
-      HttpStatusCodes.SERVICE_UNAVAILABLE,
+      { error: "This server was started without EXPOSE_GC=true" },
+      HttpStatusCodes.NOT_FOUND,
     );
   }
+  let servingLoopWorker: CollectedMemory | undefined;
+  try {
+    servingLoopWorker = await serverExecutionHost()?.collectedWorkerMemory();
+  } catch (error) {
+    return c.json(notServing(error), HttpStatusCodes.SERVICE_UNAVAILABLE);
+  }
+  return c.json(
+    {
+      timestamp: Date.now(),
+      mainThread: collectThisThread(),
+      ...(servingLoopWorker === undefined ? {} : { servingLoopWorker }),
+    },
+    HttpStatusCodes.OK,
+  );
 };
 
 /** Reads existing session indexes without loading documents or changing watches. */

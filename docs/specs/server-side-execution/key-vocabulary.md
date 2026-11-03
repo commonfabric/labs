@@ -91,7 +91,7 @@ not coin flip:
 - **`scope_key` is now WIRE vocabulary, so it cannot stay
   engine-internal.** Under the model, server-driven commits carry
   explicit keys inside — addressing per scoped write, attribution per
-  action run (protocol.md §1/§7) — and lease-holder reads name
+  action run (protocol.md §1/§7) — and a serving runtime's reads name
   `entity_scope_key` on the wire (protocol.md §2). A format both
   endpoints speak on the wire is protocol vocabulary by construction.
   Its home is the wire-shape module — `runtime/memory/v2.ts`, where
@@ -180,7 +180,7 @@ resolving `scope` against its identity. The vocabulary:
   absent-target kick (`Runtime.ensureLinkedDocLoaded(link, space,
   identity)`), and the served event's presync/preflight as the
   event's actor. The watch root carries `entityScopeKey` (protocol.md
-  §2's read row — lease-holder-only, exactly who issues one), the
+  §2's read row — a serving runtime's session, exactly who issues one), the
   watch id and the selector tracker (`SelectorTracker.#toKey`,
   `watchIdForEntry`, the pull dedupe key, the provider's replay map)
   key by the instance, and the pending-load ledger keys the address
@@ -191,14 +191,13 @@ resolving `scope` against its identity. The vocabulary:
   explicit-instance read — its STICKY wire vocabulary (`SessionState.
   leaseHolderReads`, kept for the session's life; amended 2026-08-17,
   the stage-A review's finding 1: keying never hangs from the live
-  lease, so a keyed delivery is always keyed-retracted; the DELIVERY of
-  foreign instances is the per-pass live-lease question, with the
-  lapse recorded and re-armed — `leaseHolderReadsLapsed`,
-  `noteLeaseReacquired`) (`toWireUpsert(entry, keyed)`, `toWireRemove`,
+  lease, so a keyed delivery is always keyed-retracted; since owner
+  routing R3, 2026-11-01, the DELIVERY of the instances it named is the
+  session's for its life as well) (`toWireUpsert(entry, keyed)`, `toWireRemove`,
   `buildFullSync` / `buildDiffSync(…, keyed)`,
   `queryGraph({keyedSnapshots})`); the collapse guard
   (`#denyExplicitInstanceReads`) refuses two instances of one (branch,
-  id, scope) for NON-holders only; `WatchView.applySync` keys by
+  id, scope) for the sessions the row refuses only; `WatchView.applySync` keys by
   `scopeKey ?? scope`.
 - **Scheduler** — `entityKey(address, identity)` prefers
   `address.scopeKey` (dependency/trigger keys per instance);

@@ -15,6 +15,7 @@ import {
   streamSource,
 } from "@commonfabric/agents-connector";
 import type { CommandLedger } from "@commonfabric/agents-connector/command-ledger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { abortable } from "./abort.ts";
 import { discoverGitCheckoutDirectories } from "./checkout-discovery.ts";
 import type { BoundCommandProducer } from "./command-producers.ts";
@@ -145,10 +146,6 @@ export interface AgentsHostStopOptions {
   flushPendingReceipts?: boolean;
   interruptInFlight?: boolean;
   publishHealth?: boolean;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export class AgentsHost {
@@ -346,7 +343,7 @@ export class AgentsHost {
             const worker = this.#commandWorker;
             void worker?.handle(commands, producer).catch((error) => {
               this.#logger.error(
-                `command admission failed: ${errorMessage(error)}`,
+                `command admission failed: ${describeFailure(error)}`,
               );
             });
           },
@@ -427,7 +424,7 @@ export class AgentsHost {
       this.#recordActivity(
         "command-subscription-stop-failed",
         "Fabric command subscription failed while stopping",
-        { error: errorMessage(error) },
+        { error: describeFailure(error) },
       );
     }
 
@@ -445,7 +442,7 @@ export class AgentsHost {
       await this.#publishHealth().catch((error) => {
         shutdownErrors.push(error);
         this.#logger.error(
-          `stopping health publication failed: ${errorMessage(error)}`,
+          `stopping health publication failed: ${describeFailure(error)}`,
         );
       });
     }
@@ -464,7 +461,7 @@ export class AgentsHost {
         this.#recordActivity(
           "command-drain-failed",
           "An admitted command failed before shutdown",
-          { error: errorMessage(error) },
+          { error: describeFailure(error) },
         );
       });
       if (options.flushPendingReceipts ?? true) {
@@ -480,7 +477,7 @@ export class AgentsHost {
             this.#recordActivity(
               "receipt-flush-failed",
               "Pending command receipt publication failed",
-              { error: errorMessage(error) },
+              { error: describeFailure(error) },
             );
           },
         );
@@ -504,7 +501,7 @@ export class AgentsHost {
         failedStops.add(sourceId);
         shutdownErrors.push(result.reason);
         state.status = "failed";
-        state.lastError = errorMessage(result.reason);
+        state.lastError = describeFailure(result.reason);
         this.#recordActivity(
           "source-stop-failed",
           "Source failed while stopping",
@@ -546,7 +543,7 @@ export class AgentsHost {
       await this.#publishHealth().catch((error) => {
         shutdownErrors.push(error);
         this.#logger.error(
-          `stopped health publication failed: ${errorMessage(error)}`,
+          `stopped health publication failed: ${describeFailure(error)}`,
         );
       });
     }
@@ -555,7 +552,7 @@ export class AgentsHost {
       throw new AggregateError(
         shutdownErrors,
         `agent host stopped with failures: ${
-          shutdownErrors.map(errorMessage).join("; ")
+          shutdownErrors.map(describeFailure).join("; ")
         }`,
       );
     }
@@ -613,9 +610,9 @@ export class AgentsHost {
         } catch (stopError) {
           this.#cleanupDrivers.set(config.id, driver);
           cleanupError = stopError;
-          const cleanupMessage = errorMessage(stopError);
+          const cleanupMessage = describeFailure(stopError);
           state.lastError = `${
-            errorMessage(error)
+            describeFailure(error)
           }; cleanup failed: ${cleanupMessage}`;
           this.#recordActivity(
             "source-start-cleanup-failed",
@@ -626,7 +623,7 @@ export class AgentsHost {
         }
       }
       state.status = "failed";
-      state.lastError ??= errorMessage(error);
+      state.lastError ??= describeFailure(error);
       this.#recordActivity(
         "source-start-failed",
         "Source startup failed",
@@ -747,7 +744,7 @@ export class AgentsHost {
           status: "failed",
           startedAt,
           completedAt: this.#now(),
-          error: errorMessage(signal.reason),
+          error: describeFailure(signal.reason),
         };
         this.#recordActivity(
           "sync-cancelled",
@@ -758,13 +755,13 @@ export class AgentsHost {
         await this.#publishHealth().catch((healthError) => {
           this.#logger.error(
             `cancellation health publication failed: ${
-              errorMessage(healthError)
+              describeFailure(healthError)
             }`,
           );
         });
         throw signal.reason;
       }
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       this.#lastSync = {
         reason,
         status: "failed",
@@ -780,7 +777,7 @@ export class AgentsHost {
       );
       await this.#publishHealth().catch((healthError) => {
         this.#logger.error(
-          `health publication failed: ${errorMessage(healthError)}`,
+          `health publication failed: ${describeFailure(healthError)}`,
         );
       });
       throw error;
@@ -803,7 +800,7 @@ export class AgentsHost {
       this.#recordActivity(
         "published-sessions-unavailable",
         "Published session lookup failed; every listed session will be read",
-        { error: errorMessage(error) },
+        { error: describeFailure(error) },
       );
       return new Map();
     }
@@ -912,7 +909,7 @@ export class AgentsHost {
     try {
       await this.#target.refreshSession(driver, nativeSessionId);
     } catch (error) {
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       const state = this.#sources.get(driver.source.id);
       if (state) {
         state.status = "degraded";
@@ -927,7 +924,7 @@ export class AgentsHost {
       );
       await this.#publishHealth().catch((healthError) => {
         this.#logger.error(
-          `refresh health publication failed: ${errorMessage(healthError)}`,
+          `refresh health publication failed: ${describeFailure(healthError)}`,
         );
       });
       throw error;
@@ -943,7 +940,7 @@ export class AgentsHost {
     );
     await this.#publishHealth().catch((error) => {
       this.#logger.error(
-        `refresh health publication failed: ${errorMessage(error)}`,
+        `refresh health publication failed: ${describeFailure(error)}`,
       );
     });
   }
@@ -954,7 +951,7 @@ export class AgentsHost {
     try {
       await this.#target.publishReceipt(receipt);
     } catch (error) {
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       const state = this.#sources.get(receipt.sourceId);
       if (state) {
         state.status = "degraded";
@@ -978,7 +975,7 @@ export class AgentsHost {
       await this.#publishHealth().catch((healthError) => {
         this.#logger.error(
           `receipt failure health publication failed: ${
-            errorMessage(healthError)
+            describeFailure(healthError)
           }`,
         );
       });
@@ -1006,13 +1003,13 @@ export class AgentsHost {
     );
     void this.#publishHealth().catch((error) => {
       this.#logger.error(
-        `receipt health publication failed: ${errorMessage(error)}`,
+        `receipt health publication failed: ${describeFailure(error)}`,
       );
     });
   }
 
   #recordCommandFailure(failure: CommandTaskFailure): void {
-    const message = errorMessage(failure.error);
+    const message = describeFailure(failure.error);
     this.#commandFailures.set(
       commandIdentity(failure.commandId, failure.producer),
       message,
@@ -1038,7 +1035,7 @@ export class AgentsHost {
     );
     void this.#publishHealth().catch((error) => {
       this.#logger.error(
-        `command failure health publication failed: ${errorMessage(error)}`,
+        `command failure health publication failed: ${describeFailure(error)}`,
       );
     });
   }

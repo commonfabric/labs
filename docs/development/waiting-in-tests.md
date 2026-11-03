@@ -464,7 +464,7 @@ has no other boundary, and adding one is the alternative the note above prefers
 to keeping a poll.
 
 These waits carry a stuck-condition net, which the waits in the sections above
-do not. A live SpaceServer renews its lease on a repeating timer, so a process
+do not. A live SpaceServer keeps its idle-park timer armed, so a process
 running one never goes quiet and the fail-fast described below never fires;
 without a net a wait whose condition never arrives burns the whole job instead
 of failing. `stuckNet` in `@commonfabric/test-support/stuck-net` is that net,
@@ -545,7 +545,7 @@ two runtimes over an in-process memory server. It does not carry over to the
 browser waits above, where a live DevTools Protocol connection holds the loop
 open and a waiter that never fires would hang instead. A client talking to a
 live server holds the loop open the same way, and so does a process running a
-live SpaceServer, whose lease renews on a repeating timer. A wait against one
+live SpaceServer, whose idle-park timer stays armed. A wait against one
 runs to the ambient test or CI limit rather than failing fast, which is what
 the stuck-condition net above is for. The CLI suite's readiness probe is such a
 client. It disposes its controller once the wait returns, which also keeps a
@@ -1234,7 +1234,7 @@ boundary the test can await without adding one to production code.
   rather than a poll this section endorses, and the helper stays for as long as
   they do and no longer. Its deadline is a
   stuck-condition backstop of the same kind, for the same reason — the serving
-  loop holds the event loop open through its lease-renew interval, so the
+  loop holds the event loop open through its timers, so the
   fail-fast described above never fires. What the poll interval under it costs
   is a latency floor on every one of those waits, and that is what converting a
   file removes. The failure names elapsed milliseconds and the poll count, which

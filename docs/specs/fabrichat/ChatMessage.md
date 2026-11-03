@@ -171,6 +171,18 @@ message said before remains in the room. A deletion takes no file out of its
 store: an attachment's entry stays there, and anyone else linking it still
 reads it.
 
+## A message the room can't read
+
+No send stores a message that lacks `sentAt` or `body`, or holds either of
+another type than the one above, such as a `sentAt` that is a bare `bigint`
+rather than a `FabricEpochNsec`. A room's stored messages can still hold one,
+as data stored under another shape can. The room leaves such a message out of
+everything it derives from its messages, as though they didn't hold it: it
+isn't counted in its [`ChatMessageList`](ChatMessageList.md), shown, or given
+an entry in `messageRights` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)),
+and the room's other messages are derived as they would be without it. An
+optional field of another type reads as absent, and the message is kept.
+
 ## Future directions
 
 Not part of this design, and not planned yet. They are recorded here so that the

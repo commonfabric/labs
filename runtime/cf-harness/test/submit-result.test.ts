@@ -496,6 +496,7 @@ describe("submit_result", () => {
     await expect(
       run("run-blank-no-schema", [finalTurn(""), finalTurn("Done.")], {
         schema: false,
+        allowedToolIds: ["submit_result"],
       }),
     ).rejects.toMatchObject({ code: "provider-unavailable" });
   });

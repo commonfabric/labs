@@ -2968,6 +2968,7 @@ export type PiecePatternRefView = {
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**
@@ -4124,6 +4125,12 @@ export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
 export type SpaceAccessLostNotification = {
   type: NotificationType.SpaceAccessLost;
   space: DID;
+
+  /**
+   * Present when the space is deleted: the memory server refuses it to every
+   * principal for good, so no retry can admit anyone.
+   */
+  deleted?: true;
 };
 
 /**

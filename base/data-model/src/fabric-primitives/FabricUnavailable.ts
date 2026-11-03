@@ -15,6 +15,7 @@ import type {
   UnavailableErrorKind,
   UnavailableReason,
 } from "@/api.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
@@ -346,7 +347,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            `Unavailable: ${(e instanceof Error) ? e.message : String(e)}`,
+            `Unavailable: ${describeFailure(e)}`,
             mutable,
           );
         }
@@ -389,7 +390,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            (e instanceof Error) ? e.message : String(e),
+            describeFailure(e),
             mutable,
           );
         }

@@ -390,6 +390,13 @@ export type Frame = {
   inSpaceCounter?: number;
 
   /**
+   * The spaces a `spaceDeleted()` call in this handler frame asked about that
+   * the memory server has not answered for yet. The runner waits for each
+   * answer after the run and re-runs (see RetryImmediately).
+   */
+  pendingSpaceAnswers?: Set<MemorySpace>;
+
+  /**
    * The access-list changes `grantSpaceAccess()` and `revokeSpaceAccess()`
    * staged during this handler frame, by space, each space's in call order.
    * Where they commit, each space's changes commit as a commit of their own,

@@ -46,6 +46,23 @@ export function hasConcreteOwner(acl: ACL): boolean {
   );
 }
 
+/**
+ * The principal that owns `space` under `acl`: the space itself where the
+ * list names it `OWNER`, a self-owned space such as a home; else the first of
+ * its concrete `OWNER` principals in DID order; `undefined` where the list
+ * names none.
+ */
+export function aclOwner(acl: ACL, space: string): string | undefined {
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  if (byPrincipal[space] === "OWNER") return space;
+  return Object.entries(byPrincipal)
+    .filter(([principal, capability]) =>
+      principal !== ANYONE_USER && capability === "OWNER"
+    )
+    .map(([principal]) => principal)
+    .sort()[0];
+}
+
 /** Whether a stored ACL document is exactly `expected`: same principals,
  *  same capabilities, nothing more. Key order is not part of the contract. */
 export function sameAcl(stored: unknown, expected: ACL): boolean {

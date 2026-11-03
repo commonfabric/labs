@@ -9,6 +9,7 @@ import {
   normalize,
 } from "@std/path/posix";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   CfcEnforcementMode,
   CfcSandboxResult,
@@ -546,10 +547,6 @@ const pathParts = (path: string, fromLink: boolean): PathPart[] =>
     fromLink,
   }));
 
-/** Returns what `error` says of itself, for a message that passes it on. */
-const errorText = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Returns the path the filesystem takes the absolute host path `path` to: a
  * path with no symbolic link, no `.` and no `..` in it. `label` names the
@@ -602,7 +599,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
       if (!(error instanceof Deno.errors.NotFound)) {
         refuse(
           `cannot be resolved: ${next} could not be examined (${
-            errorText(error)
+            describeFailure(error)
           })`,
         );
       }
@@ -636,7 +633,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
     } catch (error) {
       target = refuse(
         `cannot be resolved: the symbolic link ${next} could not be read (${
-          errorText(error)
+          describeFailure(error)
         })`,
       );
     }
@@ -656,7 +653,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
   } catch (error) {
     real = refuse(
       `cannot be resolved: ${reached} could not be examined (${
-        errorText(error)
+        describeFailure(error)
       })`,
     );
   }
@@ -734,7 +731,7 @@ const resolveRunscBinary = (given: string): string => {
     } catch (error) {
       throw new Error(
         `${label} ${given} cannot be resolved: the working directory could not be read (${
-          errorText(error)
+          describeFailure(error)
         }); give an absolute path`,
       );
     }
@@ -1198,7 +1195,7 @@ export const verifyPrivateScratchParent = async (
   } catch (error) {
     throw refusal(
       `owner ${info.uid}, mode ${mode}; this process could not make an entry in it: ${
-        errorText(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -1807,7 +1804,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           "runsc did not deliver a CFC result on the result descriptor",
           {
             containerId: callId,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeFailure(error),
           },
         );
       }
@@ -1963,7 +1960,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       await this.#dropSession(state);
       throw new SandboxSessionUnavailableError(
         `sandbox session "${session}" could not start: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }; run without a session, or try again`,
         "start-failed",
       );
@@ -2107,7 +2104,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           "runsc exec did not deliver a CFC result on the result descriptor",
           {
             containerId: state.containerId,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeFailure(error),
           },
         );
       }

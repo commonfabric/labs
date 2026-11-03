@@ -224,6 +224,10 @@ export class BuildConfig {
     return this.#path("runtime", "toolshed", "index.ts");
   }
 
+  toolshedServingWorkerPath() {
+    return this.#path("runtime", "toolshed", "lib", "serving-worker.ts");
+  }
+
   toolshedEnvPath() {
     return this.#path("runtime", "toolshed", "COMPILED");
   }
@@ -281,6 +285,7 @@ export class BuildConfig {
       this.shellProjectPath(),
       this.toolshedProjectPath(),
       this.toolshedEntryPath(),
+      this.toolshedServingWorkerPath(),
       this.staticAssetsPath(),
       ...this.patternPaths(),
       this.staticTypesPath(),
@@ -306,6 +311,9 @@ export class BuildConfig {
         return [
           this.toolshedShellFrontendPath(),
           this.toolshedShellFrontendPathDev(),
+          // The serving loop's worker entry. The compile does not follow a
+          // worker's module, so it is named here.
+          this.toolshedServingWorkerPath(),
           this.toolshedEnvPath(),
           this.staticAssetsPath(),
           ...this.patternPaths(),

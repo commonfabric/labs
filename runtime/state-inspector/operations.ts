@@ -1,4 +1,5 @@
 import type { FabricValue } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type FieldAnchor,
   operationAnchorsDocId,
@@ -176,7 +177,7 @@ const decode = (value: string): FabricValue => {
     return decodeStored(value);
   } catch (error) {
     return {
-      decodeError: error instanceof Error ? error.message : String(error),
+      decodeError: describeFailure(error),
       stored: value,
     };
   }

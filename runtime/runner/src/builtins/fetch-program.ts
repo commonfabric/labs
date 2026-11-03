@@ -1,5 +1,6 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
@@ -669,7 +670,7 @@ async function startFetch(
             inputHash,
             state: {
               type: "error",
-              message: err instanceof Error ? err.message : String(err),
+              message: describeFailure(err),
             },
           },
         });
