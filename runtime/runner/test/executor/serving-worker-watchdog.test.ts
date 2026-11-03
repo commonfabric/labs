@@ -15,6 +15,40 @@ const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("watchdog service");
 
 describe("serving-worker-watchdog", () => {
+  it("gives a timer on a worker's thread a turn during a compile", async () => {
+    // The heartbeat the watchdog listens for is a timer on that thread, so a
+    // compile that gave it no turn would read as a stalled thread once it
+    // outlasted the watchdog's limit.
+    const directory = await Deno.makeTempDir({ prefix: "watchdog-" });
+    const server = newSharedServer({
+      subscriptionRefreshDelayMs: 0,
+      store: toFileUrl(`${directory}/`),
+    });
+    const worker = new ServingWorker({
+      server,
+      identity: serviceSigner,
+      apiUrl: new URL(import.meta.url),
+      workerModule: new URL(
+        "../support/stalling-serving-worker.ts",
+        import.meta.url,
+      ),
+      ensureSpaceRoots: false,
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+    });
+    try {
+      await worker.ready;
+      const { receipt } = await worker.runLifecycleVerb(space, {
+        name: "compile",
+        request: {},
+      });
+      expect(receipt).toBeGreaterThan(0);
+    } finally {
+      await worker.close();
+      await server.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
   it("replaces a worker whose thread stalled holding a lease, and refuses its commits", async () => {
     // A real worker's thread, stopped: the part a stand-in cannot show is that
     // a thread that has stopped can be terminated at all, and that its
