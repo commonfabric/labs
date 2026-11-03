@@ -26,6 +26,7 @@ import {
   type SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {
@@ -80,6 +81,7 @@ export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
   eventStats: () => ServingLoopStats["events"];
   diagnostics: () => ServingLoopDiagnostics;
+  collectedMemory: () => CollectedMemory;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
@@ -677,6 +679,10 @@ export class ServingPlane {
     this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
+    this.#endpoint.onRequest(
+      "host.collectedMemory",
+      () => host.collectedMemory(),
+    );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",
       ({ space, verb }) => host.runLifecycleVerb(space, verb),

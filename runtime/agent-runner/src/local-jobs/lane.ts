@@ -24,6 +24,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { agentRunObservationCeiling } from "../agent-run-harness.ts";
@@ -631,9 +632,7 @@ export class LocalJobLane {
       );
     } catch (error) {
       this.#report(() =>
-        `agent runner: local job ${job.id} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+        `agent runner: local job ${job.id} failed: ${describeFailure(error)}`
       );
       result = {
         outcome: "failed",

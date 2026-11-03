@@ -15,6 +15,7 @@
 import { isDeepFrozen } from "@commonfabric/data-model";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { URI } from "@commonfabric/memory/interface";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -366,9 +367,7 @@ const resolveStoredLabel = (
     // arrives as the fail-closed error rather than as its own class.
     throw new UnresolvableCfcLabelDocumentError(
       entry.label.$ref,
-      `the label document could not be read: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `the label document could not be read: ${describeFailure(error)}`,
     );
   }
   const content = isObjectOrArray(stored) ? stored.value : undefined;

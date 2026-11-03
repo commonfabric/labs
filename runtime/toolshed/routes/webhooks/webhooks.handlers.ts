@@ -9,6 +9,7 @@
 
 import env from "@/env.ts";
 import type { AppRouteHandler } from "@/lib/types.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   CreateRoute,
   IngestRoute,
@@ -94,7 +95,7 @@ export const create: AppRouteHandler<CreateRoute> = async (c) => {
 
     return c.json({ id, name }, 200);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = describeFailure(error);
     const stack = error instanceof Error ? error.stack : undefined;
     logger.error({ error: msg, stack }, "Failed to create webhook");
     return c.json({ error: "Failed to create webhook" }, 500);

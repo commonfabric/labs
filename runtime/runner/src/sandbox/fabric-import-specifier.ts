@@ -1,4 +1,5 @@
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { validateSlug } from "../slugs.ts";
 import { ENTITY_URI_SCHEMES, type EntityUriScheme } from "../entity-kind.ts";
@@ -216,7 +217,7 @@ function parseRefToken(
   try {
     return { kind: "slug", slug: validateSlug(refToken) };
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const message = describeFailure(cause);
     throw new FabricRefError(message, specifier);
   }
 }
@@ -236,7 +237,7 @@ function validateSpace(
   try {
     validateSlug(space);
   } catch (cause) {
-    const message = cause instanceof Error ? cause.message : String(cause);
+    const message = describeFailure(cause);
     throw new FabricRefError(message, specifier);
   }
 }

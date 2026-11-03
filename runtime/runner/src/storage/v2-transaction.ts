@@ -27,6 +27,7 @@ import {
   toValuePath,
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { PathKeyMap } from "@commonfabric/collections/path-key-map";
 import {
@@ -289,7 +290,7 @@ const multiSpaceCommitLogger = getLogger("storage.v2.multi-space-commit", {
 });
 
 const toStoreError = (error: unknown): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   return {
     name: "StoreError" as const,
     message,

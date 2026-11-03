@@ -6,6 +6,7 @@ import {
   type IframePresentation,
   IPC,
 } from "@commonfabric/iframe-sandbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isCellHandle, type RuntimeClient } from "@commonfabric/runtime-client";
 import { ContextConsumer, createContext } from "@lit/context";
 import { css, html } from "lit";
@@ -333,9 +334,7 @@ export class CFIframe extends BaseElement {
       }).catch((error) => {
         if (setup.signal.aborted) return;
         this.#contextSetup = undefined;
-        const description = error instanceof Error
-          ? error.message
-          : String(error);
+        const description = describeFailure(error);
         this._errorDetails = {
           description,
           source: "cf-iframe context",

@@ -18,6 +18,7 @@ import {
 } from "@commonfabric/logger";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setPatternEnvironment } from "../builder/env.ts";
+import { collectedMemory } from "../collected-memory.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
@@ -129,6 +130,7 @@ export function serveFromPort(
         loggerCounts: getLoggerCountsBreakdown(),
         timingStats: getTimingStatsBreakdown(),
       }),
+      collectedMemory,
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(

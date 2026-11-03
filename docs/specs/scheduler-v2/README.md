@@ -711,6 +711,41 @@ evidence first). An opt-in server-confirmed dispatch mode would occupy only
 its own lane while others proceed. Nothing in v2 may assume "the head
 event" is globally unique — components address "the head of a lane".
 
+**Per-space lanes now (PROPOSED 2026-11-02, awaiting ruling).** The
+contention the step above waits for is here. A head that waits on I/O that
+never finishes holds every later event in the runtime, on every stream of
+every space: a presync or a closure load on a connection that never
+answers, or a cross-space lineage origin whose commit never settles. A
+send to one chat room then waits on a load in another, and the host sees
+sends that never answer. The proposal:
+
+- An event's lane is its stream's space (`eventLink.space`). Each lane is
+  FIFO, and its head is parked, held, gated and dispatched exactly as the
+  single lane's head is now.
+- A pass takes the lanes' heads in the order they were enqueued, so while
+  no head waits, events dispatch in the order the single lane gives them.
+  A waiting head holds only its own lane.
+- Same-space order is unchanged: I4 holds per space, and so does the
+  arrival order events.md §2 promises across one space's streams. The
+  single lane promised order across spaces as well; nothing that reads two
+  spaces' events may rely on that order afterwards, which events.md §2
+  already does not claim ("no global ordering claim beyond the space's
+  commit sequence").
+
+Recommended: adopt it. Alternatives:
+
+- Keep the single lane (the status quo). A head that never stops waiting
+  keeps every later event waiting, and only a drop of that head releases
+  them.
+- A host-owned cancel: `sendReviewed(…, { signal })` drops a still-queued
+  event without a deadline, so a host can release a stuck head. It
+  complements lanes rather than replacing them, since the host must know
+  which head is stuck, and a send to a healthy room still waits until it
+  acts.
+- Per-stream lanes. Finer, but a handler reads and writes across the
+  streams of its piece, and events.md §2 promises arrival order across one
+  space's streams.
+
 Every event gets a durable **event id minted at send time**, causally
 derived from the originating context: the sending transaction's id (or the
 external ingress id for events not born in a transaction), the stream link,
@@ -1290,7 +1325,8 @@ semantics) or its commit was rejected. Corollary: a computation producing
 unchanged output triggers no downstream runs.
 
 **I4 — Event ordering & consistency.** Handlers dispatch in enqueue order
-within their ordering lane (today: one global lane). Before dispatch, every
+within their ordering lane (today: one global lane; per-space lanes are
+PROPOSED in §7.5). Before dispatch, every
 invalid node upstream of the handler's read closure has been run, and every
 in-flight replica load for an address the closure depends on has completed
 (or the event is parked; it is never skipped or reordered within its lane).

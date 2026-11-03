@@ -193,13 +193,16 @@ session that has none is refused.
   `roomMembership`, saved or archived, for which `spaceDeleted(room)` returns
   `true`. A room archived before its space was deleted is listed too, as the
   catalog lists its entry, so a person sees the same deletions in Home and in
-  FabriChat. A deleted
-  room can't be read, written or forgotten, so a client shows each one as
-  deleted and offers no control for it. Nothing through the entry's link can
-  be read, so what is left to show is what the manager holds itself: the
-  catalog's `title` hint for a standalone room, and for any room the entry's
-  own `kind`, `counterpart` and `since`. Recording the deletion is the
-  catalog's `markDeleted`, sent by the runtime that holds the catalog
+  FabriChat. So is a room declared inside a container's space, once that space
+  is deleted: the room lives in the container's space and is deleted with it
+  ([`clients.md`](clients.md#showing-a-room)). A deleted room can't be read,
+  written or forgotten, so a client shows each one as deleted and offers no
+  control for it. Nothing through the entry's link can be read, so what is left
+  to show is what the manager holds itself: the catalog's `title` hint for a
+  standalone room, or for a room declared in a container the container's catalog
+  `title`, and for any room the entry's own `kind`, `counterpart` and `since`.
+  Recording the deletion is the catalog's `markDeleted`, sent by the runtime
+  that holds the catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
   the manager writes nothing when a room is deleted.
 - **`roomMembership`** keeps explicit choices about individual conversations:

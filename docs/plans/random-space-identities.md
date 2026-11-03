@@ -135,12 +135,11 @@ in this order, each step a change of its own:
    includes reading an invitation operation's `space-deleted` as final rather
    than retrying it, and an `AuthorizationError` marked `deleted` as a refusal
    no later grant heals.
-2. **`aclRevision` names the access-control document's `seq`.** Every ACL
-   refusal's `aclRevision` becomes the `seq` at which the space's
-   access-control document is stored, rather than the server's current
-   sequence (INV-15, and section 4.5.1 of the Memory protocol). The runner reads
-   it as a recovery epoch, so this lands on its own, ahead of the deletion
-   server work, and reviewed by the Memory server's owners.
+2. **`aclRevision` names the access-control document's `seq`.** Done: every
+   ACL refusal's `aclRevision` is the `seq` at which the space's
+   access-control document is stored, or 0 where it has none, rather than the
+   server's current sequence (INV-15, and section 4.5.1 of the Memory
+   protocol).
 3. **INV-15 is read before the server work starts.** Its refusal in every mode,
    `off` included, and its check inside the engine's write transaction are the
    parts most expensive to reverse, so the Memory server's and serving loop's

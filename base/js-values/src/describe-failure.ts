@@ -12,9 +12,9 @@ import { isFunction, isObjectOrArray } from "./types.ts";
  * Describing a failure never fails in turn. An object made with
  * `Object.create(null)` has no `toString` to reach, a proxy can throw from any
  * property read, and an `Error` can carry a `message` that is not a string.
- * Such a value is described by a fixed sentence saying that it carries no
- * message, so a caller already reporting one failure does not have it replaced
- * by a second.
+ * Such a value is described by a fixed sentence saying that it could not be
+ * converted to text, so a caller already reporting one failure does not have
+ * it replaced by a second.
  */
 export function describeFailure(thrown: unknown): string {
   try {
@@ -26,5 +26,5 @@ export function describeFailure(thrown: unknown): string {
   } catch {
     // Reading or converting the value threw.
   }
-  return "The failure carries nothing that can be written as a message.";
+  return "error could not be converted to text";
 }

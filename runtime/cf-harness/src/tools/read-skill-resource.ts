@@ -2,6 +2,7 @@ import { isAbsolute, relative } from "@std/path";
 import { normalize as normalizeResourcePath } from "@std/path/posix";
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type {
   HarnessSkillDiagnostic,
@@ -319,7 +320,7 @@ export const readSkillResourceTool: HarnessToolDefinition<
         skill: input.skill,
         path: input.path,
         code: "resource_path_invalid",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       });
       await context.recordSkillResourceRead(
         buildReadRecord({ output, runId: context.runId, readAt }),
@@ -392,7 +393,7 @@ export const readSkillResourceTool: HarnessToolDefinition<
         skill: skill.name,
         path: normalizedPath,
         code,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       });
       await context.recordSkillResourceRead(
         buildReadRecord({ output, runId: context.runId, readAt }),
@@ -446,7 +447,7 @@ export const readSkillResourceTool: HarnessToolDefinition<
         skill: skill.name,
         path: normalizedPath,
         code,
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       });
       await context.recordSkillResourceRead(
         buildReadRecord({ output, runId: context.runId, readAt }),

@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { decode } from "@commonfabric/text/utf8";
 import { entropyToMnemonic, mnemonicToEntropy } from "@scure/bip39";
@@ -193,7 +194,7 @@ Deno.test("toRaw throws cleanly for a non-noble implementation", async () => {
     identity.toRaw();
     throw new Error("expected toRaw to throw for the default implementation");
   } catch (error) {
-    message = error instanceof Error ? error.message : String(error);
+    message = describeFailure(error);
   }
   // Only meaningful when the platform actually used native; noble-only
   // environments (Deno/Chromium in CI) won't throw, and that's fine.

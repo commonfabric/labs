@@ -1,4 +1,5 @@
 import { resolve, toFileUrl } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -645,9 +646,7 @@ const parseRequestLine = (line: string): HarnessChatRequestEnvelope => {
     parsed = JSON.parse(line);
   } catch (error) {
     throw invalidRequestResponse(
-      `failed to parse chat request JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `failed to parse chat request JSON: ${describeFailure(error)}`,
     );
   }
   if (!isRequestEnvelope(parsed)) {
@@ -700,7 +699,7 @@ export const runHarnessInteractiveChatNdjsonTransport = async (
         response = isTransportErrorResponse(error)
           ? error
           : invalidRequestResponse(
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           );
       }
       await writeEnvelope(response);
@@ -903,7 +902,7 @@ if (import.meta.main) {
   try {
     await runHarnessInteractiveChatStdioCli();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

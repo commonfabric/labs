@@ -8,6 +8,7 @@
 
 import { dirname, join, resolve } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type CapabilityId,
   type Exec,
@@ -311,7 +312,7 @@ try {
     );
   }
 } catch (error) {
-  manifest.error = error instanceof Error ? error.message : String(error);
+  manifest.error = describeFailure(error);
   if (manifest.status === "preparing" || manifest.status === "running") {
     manifest.status = "failed";
   }

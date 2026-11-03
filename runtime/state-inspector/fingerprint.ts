@@ -8,6 +8,7 @@
 
 import { type FabricValue, hashOf } from "@commonfabric/data-model";
 import { LRUCache } from "@commonfabric/collections/cache";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
@@ -58,7 +59,7 @@ export function hashEntityValue(
   try {
     return { hash: hashOf(value).toString() };
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: describeFailure(error) };
   }
 }
 

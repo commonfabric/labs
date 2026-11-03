@@ -7,6 +7,7 @@ import {
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -613,9 +614,6 @@ const transcriptTimelineEntry = (
     ? { toolCallId: message.toolCallId, toolId: message.toolName }
     : {}),
 });
-
-const toErrorDetail = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The host's answer to a turn that carried neither text nor a tool call, in a
@@ -4523,7 +4521,7 @@ export class CfHarnessPromptLoop {
       annotatePromptLoopError(error, modelTurns);
       try {
         if (options.signal?.aborted) {
-          await this.engine.cancelRun(toErrorDetail(options.signal.reason));
+          await this.engine.cancelRun(describeFailure(options.signal.reason));
         } else {
           await this.engine.failRun("prompt_loop_error", error);
         }
@@ -5460,7 +5458,7 @@ export class CfHarnessPromptLoop {
         toolInputSummary,
         ...optionalPolicyEventIndexes(policyEventIndexes),
         ...(result !== undefined ? { resultRef: result.resultRef } : {}),
-        errorDetail: toErrorDetail(error),
+        errorDetail: describeFailure(error),
       });
       // Reaching this catch ends the run: its owner canceled it, or a tool
       // failed in sandbox spawn/infra, CFC transport, artifact/run-state
@@ -6716,13 +6714,13 @@ export class CfHarnessPromptLoop {
       childModelTurns = promptLoopModelTurnsFromError(error) ?? childModelTurns;
       summary = subagentStatus === "canceled"
         ? "Subagent canceled by the parent run."
-        : `Subagent failed: ${toErrorDetail(error)}`;
+        : `Subagent failed: ${describeFailure(error)}`;
       // The child's loop writes the child's own outcome. A child that never
       // reached its loop — its model was unavailable, or its skill context
       // would not persist — has none yet, and gets one here.
       if (!isTerminalHarnessRunStatus(childEngine.getRunState().status)) {
         if (options.signal?.aborted) {
-          await childEngine.cancelRun(toErrorDetail(options.signal.reason));
+          await childEngine.cancelRun(describeFailure(options.signal.reason));
         } else {
           await childEngine.failRun("setup_error", error, {
             source: "run_error",

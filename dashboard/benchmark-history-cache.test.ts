@@ -590,7 +590,8 @@ Deno.test("runtime benchmark history removes a temporary file after rename fails
       Promise.reject(new Error("rename failed"))) as typeof Deno.rename;
     await assertRejects(() => store.save(), Error, "rename failed");
     Deno.rename = rename;
-    assertEquals((await temporaryFiles(history)).length, 1);
+    assertEquals(await temporaryFiles(history), []);
+    assertEquals(store.dirty, true);
     await store.save();
     assertEquals(await temporaryFiles(history), []);
     assertEquals(store.dirty, false);
@@ -981,7 +982,10 @@ Deno.test("runtime benchmark history removes temporary files that interrupted wr
     await Deno.mkdir(history);
     await Deno.writeTextFile(`${history}/951-1.run.1234.tmp`, "partial");
     await Deno.writeTextFile(`${history}/state.json.5678.tmp`, "partial");
-    await Deno.writeTextFile(`${directory}/history.json.9abc.tmp`, "partial");
+    await Deno.writeTextFile(
+      `${directory}/history.json.0b5c2c4e-6c3e-4b8e-9d8a-1f6c2e0d9a11.tmp`,
+      "partial",
+    );
     await Deno.writeTextFile(`${directory}/history-other.json.tmp`, "kept");
 
     const store = new BenchmarkHistoryStore(history);
@@ -989,6 +993,17 @@ Deno.test("runtime benchmark history removes temporary files that interrupted wr
     assertEquals(await temporaryFiles(history), []);
     assertEquals(await temporaryFiles(directory), ["history-other.json.tmp"]);
     assertEquals(store.dirty, false);
+
+    await Deno.writeTextFile(`${history}/952-1.run.1234.tmp`, "partial");
+    await Deno.writeTextFile(
+      `${directory}/history.json.6f1d3a52-9b7e-4c1a-8e2f-3d4c5b6a7e8f.tmp`,
+      "partial",
+    );
+    const saver = new BenchmarkHistoryStore(history);
+    saver.set(localRun(952, Date.now()));
+    await saver.save();
+    assertEquals(await temporaryFiles(history), []);
+    assertEquals(await temporaryFiles(directory), ["history-other.json.tmp"]);
   } finally {
     await Deno.remove(directory, { recursive: true });
   }

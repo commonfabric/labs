@@ -23,7 +23,7 @@
 import { dirname, join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { currentBenchKey } from "./bench-report.ts";
-import { dashboardCacheFile } from "./history-files.ts";
+import { CacheFile, dashboardCacheFile, replaceFile } from "./history-files.ts";
 
 export const BENCHMARK_HISTORY_CACHE_DAYS = 60;
 export const BENCHMARK_HISTORY_SAMPLING_VERSION = 1;
@@ -55,24 +55,24 @@ export interface BenchmarkStats {
 /** One attempt of one benchmark workflow run and what it measured. */
 export interface CachedBenchmarkRun {
   /** The workflow run. */
-  runId: number;
+  readonly runId: number;
   /** The attempt of that run. */
-  runAttempt: number;
+  readonly runAttempt: number;
   /** When the run was created, in milliseconds since the epoch. */
-  at: number;
+  readonly at: number;
   /**
    * The processor the benchmarks ran on. Entries written before
    * processor-specific charts are fetched again.
    */
-  cpu?: string;
+  readonly cpu?: string;
   /** Each benchmark's statistics, by name. */
-  metrics: ReadonlyMap<string, BenchmarkStats>;
+  readonly metrics: ReadonlyMap<string, BenchmarkStats>;
 }
 
 /** A run as the store holds it. */
 interface StoredBenchmarkRun extends CachedBenchmarkRun {
   /** The run's measurements, packed. */
-  metrics: StoredMetrics;
+  readonly metrics: StoredMetrics;
 }
 
 /** Names one attempt of one workflow run. */
@@ -525,34 +525,12 @@ async function readLegacyFile(
 }
 
 /**
- * Writes `bytes` to `path` through a temporary file beside it, so a reader
- * sees the old contents or the new ones and nothing in between, and the new
- * contents are on disk before `path` names them. A temporary file that a
- * failure leaves behind is removed by the next read of the store.
- */
-async function writeAtomically(
-  path: string,
-  bytes: Uint8Array<ArrayBuffer>,
-): Promise<void> {
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
-  const file = await Deno.open(temporary, { write: true, createNew: true });
-  try {
-    for (let at = 0; at < bytes.length;) {
-      at += await file.write(bytes.subarray(at));
-    }
-    await file.syncData();
-  } finally {
-    file.close();
-  }
-  await Deno.rename(temporary, path);
-}
-
-/**
  * The runtime benchmark history, kept in memory and in a directory that
  * several dashboard processes may share.
  */
 export class BenchmarkHistoryStore {
   #directory: string | undefined;
+  #legacy: CacheFile | undefined;
   #loadRequest: Promise<void> | null = null;
   #runs = new Map<string, StoredBenchmarkRun>();
   #names = new Set<MetricNames>();
@@ -777,18 +755,15 @@ export class BenchmarkHistoryStore {
         }));
         await Deno.mkdir(this.directory, { recursive: true });
         for (const run of written) {
-          await writeAtomically(
-            join(this.directory, runFile(run)),
-            encodeRun(run),
-          );
+          await replaceFile(join(this.directory, runFile(run)), encodeRun(run));
         }
-        await writeAtomically(join(this.directory, STATE_FILE), state);
+        await replaceFile(join(this.directory, STATE_FILE), state);
         for (const key of disk.runs) {
           if (!this.#runs.has(key)) {
             await Deno.remove(join(this.directory, `${key}.run`));
           }
         }
-        if (disk.legacy) await Deno.remove(this.#legacyFile);
+        if (disk.legacy) await Deno.remove(this.#legacyFile.path);
         for (const run of this.#unsaved) {
           if (
             written.includes(run) ||
@@ -806,26 +781,14 @@ export class BenchmarkHistoryStore {
     await this.#write;
   }
 
-  get #legacyFile(): string {
-    return `${this.directory}.json`;
+  get #legacyFile(): CacheFile {
+    return this.#legacy ??= new CacheFile(`${this.directory}.json`);
   }
 
   /** Runs `body` holding the lock every process sharing the store takes. */
   async #locked(body: () => Promise<void>): Promise<void> {
     await Deno.mkdir(dirname(this.directory), { recursive: true });
-    const lock = await Deno.open(`${this.#legacyFile}.lock`, {
-      create: true,
-      write: true,
-    });
-    let locked = false;
-    try {
-      await lock.lock(true);
-      locked = true;
-      await body();
-    } finally {
-      if (locked) await lock.unlock();
-      lock.close();
-    }
+    await this.#legacyFile.locked(body);
   }
 
   /**
@@ -923,7 +886,7 @@ export class BenchmarkHistoryStore {
     const runs: StoredBenchmarkRun[] = [];
     let value: unknown;
     try {
-      value = await readLegacyFile(this.#legacyFile, (text) => {
+      value = await readLegacyFile(this.#legacyFile.path, (text) => {
         let run: unknown;
         try {
           run = JSON.parse(text);
@@ -967,17 +930,6 @@ export class BenchmarkHistoryStore {
   async #sync(saving: boolean): Promise<DiskListing> {
     const legacy = await this.#readLegacy(saving);
     if (legacy) this.#merge(legacy);
-
-    if (!saving) {
-      const parent = dirname(this.directory);
-      const legacyName = this.#legacyFile.slice(parent.length + 1);
-      for await (const entry of Deno.readDir(parent)) {
-        if (
-          entry.name.startsWith(`${legacyName}.`) &&
-          entry.name.endsWith(".tmp")
-        ) await Deno.remove(join(parent, entry.name));
-      }
-    }
 
     const names: string[] = [];
     try {

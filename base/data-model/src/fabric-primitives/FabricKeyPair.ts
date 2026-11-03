@@ -4,6 +4,7 @@ import {
   toUnpaddedBase64url,
 } from "@commonfabric/bytes/base64url";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { backtickQuote } from "@commonfabric/text/markdown";
 import { isPlainObject } from "@commonfabric/js-values/types";
 
@@ -307,7 +308,7 @@ export class FabricKeyPair extends BaseFabricPrimitive {
           return ProblematicValue.make(
             typeTag,
             state,
-            `KeyPair: ${e instanceof Error ? e.message : String(e)}`,
+            `KeyPair: ${describeFailure(e)}`,
             mutable,
           );
         }

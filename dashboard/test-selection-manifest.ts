@@ -31,6 +31,7 @@
  * the system. It names tests, never people.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   declaredSchema,
   type LanePlan,
@@ -138,7 +139,7 @@ export async function readManifest(name: string, options: {
       selectedSeconds(manifest);
     } catch (error) {
       throw new Error(
-        `manifest ${name}: ${error instanceof Error ? error.message : error}`,
+        `manifest ${name}: ${describeFailure(error)}`,
       );
     }
     return manifest;

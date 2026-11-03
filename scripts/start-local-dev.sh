@@ -372,7 +372,10 @@ if [[ "$INSPECT" == "true" ]]; then
         INSPECT_FLAG="--inspect=127.0.0.1:$INSPECT_PORT"
     fi
 fi
+# EXPOSE_GC lets a leak test read the server's memory after a full collection
+# (/api/health/collected-memory).
 SHELL_URL="http://localhost:$SHELL_PORT" \
+    EXPOSE_GC=true \
     API_URL="$TOOLSHED_API_URL" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
     deno run --unstable-otel -A $INSPECT_FLAG $WATCH_FLAG \

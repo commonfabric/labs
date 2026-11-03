@@ -270,15 +270,33 @@ changed. The Tomorrow's Test Order workflow,
 ahead, so that such a test can be found and fixed before the day it would
 break.
 
-The workflow runs at 11:00 UTC every day. That is 04:00 in the Pacific zone in
-summer and 03:00 in winter, early on a Pacific day either way. It asks
-`deno task -q test-seed --tomorrow` for the seed of the next Pacific day, and
-calls the CI workflow at the head of `main` with that seed, which runs every CI
-test suite under it. When a test fails, the run fails. The run's checks on the
-commit are listed under "Tomorrow's order", apart from the checks of the
-commit's own run. When another workflow calls the CI workflow, it skips
-`Status`, which holds the coverage and topology checks. It also skips the build,
-attestation and deploy jobs. The records relay follows the workflow, and its
+The workflow runs the suites once for each seed, the first time it finds that
+the CI workflow passed on the head of `main`. A head that CI has not passed on
+would fail the run for reasons unrelated to the order. The workflow starts each
+time the CI workflow finishes on `main`, and a run goes on to decide only when
+that CI passed on a push. It also starts at 11:17 UTC every day, for a day when
+nothing lands. That is 04:17 in the Pacific zone in summer and 03:17 in winter,
+early on a Pacific day either way, so a scheduled run that GitHub starts hours
+late still asks for the same seed.
+
+Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
+Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the
+suites. It says yes when CI passed on the head of `main` and no other run has
+run that seed, whatever came of that run. A run checks out the head of `main`
+as it stood when the event that started the run fired, which is not always the
+commit whose CI run just finished. The runs that decide wait for one another,
+so that each sees what the run before it did. A run dispatched by hand runs the
+suites without asking, which is how to run a seed again, and it counts as
+having run the seed.
+
+A run that goes ahead calls the CI workflow at the head of `main` with the
+seed, which runs every CI test suite under it. When a test fails, the run
+fails. The run's checks on the commit are listed under "Tomorrow's order"
+followed by the seed, apart from the checks of the commit's own run. That
+name is how `tasks/test-order-tomorrow.ts` finds the runs of a seed. When
+another workflow calls the CI workflow, it skips `Status`, which holds the
+coverage and topology checks. It also skips the build, attestation and deploy
+jobs. The records relay follows the workflow, and its
 records carry the seed they ran under, so [test selection](test-selection.md)
 keeps them apart from the commit's own runs. Test selection reads them as runs
 on the default branch, since they ran its own head.

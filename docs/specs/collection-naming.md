@@ -336,8 +336,8 @@ short.
 | `#top/42` | member 42 of the collection named `top` in scope |
 | `#@<space>/top/42` | fully qualified; depends on no binding |
 
-A leading `@` marks a space segment, matching what `asSpaceSegment`
-(`runtime/runner/src/fabric-url.ts`) already recognizes, and it keeps a binding
+A leading `@` marks a space segment, matching what `readSpaceSegment`
+(`runtime/runner/src/fabric-url.ts`) removes from a page URL, and it keeps a binding
 name and a space name from competing for the same slot. A space name is
 universal rather than personal: `createSession`
 (`base/identity/src/session.ts`) derives a space's DID from a fixed public
@@ -613,6 +613,15 @@ written two ways: the second slash is what a reference carries and is no part of
 the space, so the shell opens `//<space>/top/42`, the reference its header
 offers, and settles on `/<space>/top/42`. A leading `@` on the first segment
 marks the space as well, and the shell opens `/@<space>/top/42` the same way.
+A space name answers to no grammar, so the first segment carries it
+percent-encoded: `topics space` is written `/topics%20space` and `a/b` is
+written `/a%2Fb`. The shell and `cf` both read the segment through
+`readSpaceSegment`, though `cf` still refuses a space the cell reference grammar
+cannot hold once a piece follows it. A name that begins with `@`,
+is a dot segment, or is the embed prefix `.embed` is written behind the mark,
+as in `/@%40space` and `/@..`, since the reader would otherwise take it for
+the mark, resolve it away, or read it as embed mode. An empty name and a name
+that is a DID have no page URL.
 Resolution is a separate worker round trip, `slug:resolve`
 (`runtime/runtime-client/src/backends/runtime-processor.ts`), which hands the
 reference to the runner's walk and answers with the piece and whatever the walk

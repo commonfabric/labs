@@ -24,6 +24,10 @@ import { listFlags } from "@commonfabric/piece/refusal";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { isSlugAddress, parseCellPath, UI } from "@commonfabric/runner";
 import {
+  pagePathSegments,
+  readSpaceSegment,
+} from "@commonfabric/runner/fabric-url";
+import {
   encodeJsonPointer,
   linkPathSegmentToCellPathSegment,
   parseCellReference,
@@ -66,6 +70,7 @@ import {
 import { cliCommand, cliText } from "../lib/cli-name.ts";
 import { toCompactDebugString } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { reservesStdoutForCommandOutput } from "../lib/json-output.ts";
 import {
@@ -891,7 +896,7 @@ export function exitPieceCallFailure(
   }
   const printError = deps?.printError ?? console.error;
   const exit = deps?.exit ?? Deno.exit;
-  printError(error instanceof Error ? error.message : String(error));
+  printError(describeFailure(error));
   // Where the invocation stopped decides retry semantics: anything at or
   // past "dispatched" retries SAFELY ONLY with this same id. At-most-once
   // is per COMMIT, not per execution: a same-id retry runs the handler
@@ -5224,7 +5229,7 @@ function parseScopedId(id: string): { id: string; scope?: CellScope } {
     return parseScopedIdSegment(id);
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }
@@ -5555,7 +5560,7 @@ function resolvePiecePath(
     });
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }
@@ -5695,10 +5700,12 @@ function decomposeUrl(
     );
   }
   const apiUrl = `${url.protocol}//${url.host}`;
-  const segments = url.pathname.split("/").filter(Boolean);
+  const segments = pagePathSegments(url.pathname);
+  // The space is read as the shell reads it, and a segment that cannot be
+  // read is refused by `decodeUrlSegment`, which says why.
   const space = segments[0] === undefined
     ? undefined
-    : decodeUrlSegment(segments[0]);
+    : readSpaceSegment(segments[0]) ?? decodeUrlSegment(segments[0]);
   if (!space) {
     throw new ValidationError(
       `"--url" does not contain a space.`,
@@ -5729,7 +5736,7 @@ function decomposeUrl(
     });
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }

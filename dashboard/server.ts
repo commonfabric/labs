@@ -30,6 +30,7 @@
  */
 
 import { minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { CI_WORKFLOW, PORT, REPO, TICK_MS } from "./config.ts";
 import { latestCiJobs, TILES } from "./registry.ts";
@@ -166,7 +167,7 @@ async function refreshDashboardMessage(): Promise<boolean> {
       previous.updatedAt !== dashboardMessage.updatedAt ||
       previous.revision !== dashboardMessage.revision;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     return false;
   }
 }
@@ -439,7 +440,7 @@ async function collectView(
       acceptingIntermediate = false;
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = describeFailure(e);
     console.error(`tile "${tile.label}" failed:`, msg);
     const prev = views.get(tile.label);
     return prev
@@ -571,7 +572,7 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       try {
         runs = await sourceCtx.runsFor(group.source);
       } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
+        error = describeFailure(e);
         console.error(`run source ${runSourceKey(group.source)} failed:`, error);
       }
 
@@ -786,7 +787,7 @@ export async function handle(req: Request): Promise<Response> {
     try {
       dashboardMessage = await dashboardMessageStore.set(text);
     } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
+      console.error(describeFailure(error));
       return Response.json({ error: "Could not save the dashboard message." }, {
         status: 500,
       });

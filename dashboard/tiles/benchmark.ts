@@ -64,6 +64,7 @@
  */
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -215,7 +216,30 @@ interface BenchmarkSeries {
   cpus: BenchmarkCpuSeries[];
 }
 
-let snapshot: BenchmarkSeries[] = [];
+/** What the /bench drill-down charts, and its version. */
+export interface BenchmarkSnapshot {
+  /** The runs the snapshot was assembled from, oldest first. */
+  runs: readonly CachedBenchmarkRun[];
+  /** Every charted benchmark, in key order. */
+  series: BenchmarkSeries[];
+  /**
+   * A hash of the run attempts that `series` holds, in time order. An open
+   * page compares it with the one the update check reports, and refreshes its
+   * charts when they differ. `BenchmarkHistoryStore` never replaces a cached
+   * run attempt that names a processor, and `series` holds only such
+   * attempts, so for one version of the dashboard's code the attempts
+   * determine `series`. The hash changes when `series` does, unless two
+   * attempt lists collide in its 32 bits. It does not cover the code that
+   * builds or draws `series`.
+   */
+  version: string;
+}
+
+let snapshot: BenchmarkSnapshot = {
+  runs: [],
+  series: [],
+  version: benchmarkVersion(""),
+};
 // The benchmarks.yml runs, as far down as the window reaches, for each GitHub
 // client that reads them: the tile's, and the drill-down's, which reads on the
 // performance views' rate budget. Each keeps its own, so that neither waits
@@ -283,18 +307,22 @@ let benchmarkRefreshFailedAt = 0;
 let benchmarkRefreshError = "";
 const benchmarkProgressById = new Map<string, BenchmarkProgressRecord>();
 
-function benchmarkVersion(value: BenchmarkSeries[]): string {
-  const serialized = JSON.stringify(value);
+function benchmarkVersion(text: string): string {
   let hash = 0x811c9dc5;
-  for (let index = 0; index < serialized.length; index++) {
-    hash ^= serialized.charCodeAt(index);
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
 }
 
 export function benchmarkSnapshotVersion(): string {
-  return benchmarkVersion(snapshot);
+  return snapshot.version;
+}
+
+/** The snapshot the /bench drill-down currently charts. */
+export function benchmarkSnapshotForTest(): BenchmarkSnapshot {
+  return snapshot;
 }
 
 function newBenchmarkProgress(baseline?: string): BenchmarkProgressRecord {
@@ -523,9 +551,22 @@ function currentRunMetrics(run: Run): ReadonlyMap<string, Stats> | undefined {
   return cached?.cpu === undefined ? undefined : cached.metrics;
 }
 
-function assembleBenchmarkSeries(
+/**
+ * Groups the measurements in `runs` into series by benchmark and processor,
+ * leaving out calibration benchmarks and runs that name no processor, and
+ * versions the result by the run attempts it holds. When the current snapshot
+ * was assembled from the same run objects, returns it instead.
+ * `BenchmarkHistoryStore` replaces a run rather than changing it, so the same
+ * objects hold the same measurements.
+ */
+function assembleCachedBenchmarkSnapshot(
   runs: CachedBenchmarkRun[],
-): BenchmarkSeries[] {
+): BenchmarkSnapshot {
+  const sorted = runs.toSorted((a, b) => a.at - b.at);
+  if (
+    sorted.length === snapshot.runs.length &&
+    sorted.every((run, index) => run === snapshot.runs[index])
+  ) return snapshot;
   const byKey = new Map<
     string,
     Map<
@@ -538,10 +579,13 @@ function assembleBenchmarkSeries(
       }[]
     >
   >();
-  for (const run of [...runs].sort((a, b) => a.at - b.at)) {
+  const attempts: string[] = [];
+  for (const run of sorted) {
     if (run.cpu === undefined) continue;
+    let held = false;
     for (const [key, stats] of run.metrics) {
       if (isCalibrationKey(key)) continue;
+      held = true;
       let byCpu = byKey.get(key);
       if (!byCpu) {
         byCpu = new Map();
@@ -559,8 +603,9 @@ function assembleBenchmarkSeries(
         stats,
       });
     }
+    if (held) attempts.push(`${run.runId}.${run.runAttempt}`);
   }
-  return [...byKey]
+  const series = [...byKey]
     .map(([key, byCpu]) => ({
       key,
       cpus: [...byCpu]
@@ -570,10 +615,15 @@ function assembleBenchmarkSeries(
     }))
     .filter((series) => series.cpus.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key));
+  return {
+    runs: sorted,
+    series,
+    version: benchmarkVersion(attempts.join(" ")),
+  };
 }
 
-function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSeries[] {
-  return assembleBenchmarkSeries(
+function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSnapshot {
+  return assembleCachedBenchmarkSnapshot(
     runs.flatMap((run) => {
       const cached = currentBenchmarkRun(run);
       return cached?.cpu !== undefined && productMetricCount(cached) > 0
@@ -581,12 +631,6 @@ function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSeries[] {
         : [];
     }),
   );
-}
-
-function assembleCachedBenchmarkSnapshot(
-  runs: CachedBenchmarkRun[],
-): BenchmarkSeries[] {
-  return assembleBenchmarkSeries(runs);
 }
 
 async function loadCachedBenchmarkSnapshot(now = Date.now()): Promise<void> {
@@ -681,9 +725,6 @@ function benchmarkUnavailable(sub: string, aside?: string): TileView {
     sub,
   };
 }
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 // The geometric mean of the per-benchmark ratios between two runs on the same
 // processor, over the benchmarks they share that match `select` (each with a
@@ -1200,7 +1241,7 @@ async function collectBenchmark(
       needsReload: missing.length > 0,
     });
     if (!chosen.length) {
-      snapshot = [];
+      snapshot = assembleCachedBenchmarkSnapshot([]);
       await markBenchmarkRefreshed([], "no-runs");
       return {};
     }
@@ -1256,20 +1297,20 @@ async function collectBenchmark(
       (currentRunMetrics(run)?.size ?? 0) > 0
     );
     if (!withData.length) {
-      if (firstReadError === undefined) snapshot = [];
       if (firstReadError === undefined) {
+        snapshot = assembleCachedBenchmarkSnapshot([]);
         await markBenchmarkRefreshed(chosen, "data-unavailable");
       }
       return { error: firstReadError };
     }
     const collectedSnapshot = assembleBenchmarkSnapshot(withData);
-    if (collectedSnapshot.length || firstReadError === undefined) {
+    if (collectedSnapshot.series.length || firstReadError === undefined) {
       snapshot = collectedSnapshot;
     }
     if (firstReadError === undefined) {
       await markBenchmarkRefreshed(
         chosen,
-        collectedSnapshot.length ? "data" : "no-metric",
+        collectedSnapshot.series.length ? "data" : "no-metric",
       );
     }
     return { error: firstReadError };
@@ -1348,9 +1389,7 @@ function startBenchmarkRefresh(
   const result = collection().then((outcome) => {
     finishRefresh();
     if (outcome.error) {
-      const message = outcome.error instanceof Error
-        ? outcome.error.message
-        : String(outcome.error);
+      const message = describeFailure(outcome.error);
       if (scope === "bench") {
         benchmarkRefreshFailedAt = Date.now();
         benchmarkRefreshError = friendlyError(message);
@@ -1465,7 +1504,7 @@ async function collectBenchmarkTileRuns(
   await refresh;
   return {
     runs: runs ?? [],
-    offline: runs ? undefined : friendlyError(errorMessage(listError)),
+    offline: runs ? undefined : friendlyError(describeFailure(listError)),
   };
 }
 
@@ -1557,7 +1596,7 @@ export async function benchmarkHistoryResponse(
   let progress: BenchmarkFetchProgress | undefined;
   let refreshError: string | undefined;
   if (!credential) {
-    refreshError = snapshot.length
+    refreshError = snapshot.series.length
       ? "Set GH_TOKEN to refresh runtime benchmark history."
       : "Set GH_TOKEN to collect runtime benchmark history.";
   }
@@ -1805,7 +1844,7 @@ export function benchPage(
   }" id="fetch-progress" aria-live="polite" data-check-url="/bench/check?view=runtime" data-snapshot-version="${
     escapeHtml(version)
   }" data-refresh-on-complete="${
-    progress && !progressIdle && !snapshot.length ? "1" : "0"
+    progress && !progressIdle && !snapshot.series.length ? "1" : "0"
   }"${
     lastRequestError
       ? ` data-last-request-error="${escapeHtml(lastRequestError)}"`
@@ -1819,13 +1858,13 @@ export function benchPage(
       ? ""
       : ` value="${progressIdle ? 0 : progress?.completedRuns ?? 0}"`
   } aria-label="Runtime benchmark fetch progress"></progress><p id="fetch-detail">${progressDetail}</p></section>`;
-  const refreshNotice = options.refreshError && snapshot.length
+  const refreshNotice = options.refreshError && snapshot.series.length
     ? `<p class="refresh-error">${escapeHtml(options.refreshError)}</p>`
     : "";
 
   let body: string;
   let cpuLegend = "";
-  if (!snapshot.length) {
+  if (!snapshot.series.length) {
     body = progress && !progressIdle ? "" : `<p class="empty">${
       escapeHtml(
         options.refreshError ??
@@ -1838,7 +1877,7 @@ export function benchPage(
     const axisSpan = axisEnd - axisStart || 1;
     const bucketMs = ciHistoryBucketMs(days);
     const colors = cpuColors(
-      snapshot.flatMap((series) => series.cpus.map((cpu) => cpu.cpu)),
+      snapshot.series.flatMap((series) => series.cpus.map((cpu) => cpu.cpu)),
     );
     const cpuKeys = new Map(
       [...colors.keys()].map((cpu, index) => [
@@ -1846,7 +1885,7 @@ export function benchPage(
         { label: `CPU ${index + 1}`, anchor: `cpu-type-${index + 1}` },
       ]),
     );
-    const rows = snapshot.flatMap((s) => {
+    const rows = snapshot.series.flatMap((s) => {
       if (options.keyOnly && !isKeyBenchmark(s.key)) return [];
       const visibleCpus = s.cpus.flatMap((series) => {
         const sourcePoints = series.points.filter((point) =>
