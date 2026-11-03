@@ -1,10 +1,9 @@
 # Hash Byte Format
 
 This document specifies the precise byte-level format for hashing of
-`FabricValue`s. It is the implementation-ready companion to Section 6.4 of the
-formal spec (`1-fabric-values.md`), which defines the algorithm at the
-pseudocode level. The tag byte assignments used here are defined in formal spec
-Section 6.3.
+`FabricValue`s, including the tag byte assignments. It is the
+implementation-ready companion to Section 6 of `1-fabric-values.md`, which
+defines what is hashed and the properties the hash has.
 
 An implementer can work from this document alone to produce a byte-for-byte
 compatible hasher. All encodings are deterministic; two conforming
@@ -42,13 +41,62 @@ Every value fed to the hasher begins with a single-byte type tag. The tag
 prevents cross-type collisions (e.g., the number `0` and the boolean `false`
 produce different hashes even though both could be represented as a zero byte).
 
-The authoritative tag assignments are in formal spec Section 6.3. Tags are
-organized into four categories by high nibble: **meta** (`0x0N`) for structural
-markers like `TAG_END`, `TAG_HOLE`, and `TAG_CYCLE`, **compound** (`0x1N`) for
-containers whose children are tagged values, **primitive** (`0x2N`) for leaf
-value types, and **optimized** (`0xFN`) for hash-level encodings of primitive
-values that substitute a digest for the raw payload (see Section 4.4 for the
-long-string optimization). All unassigned values are reserved for future use.
+The tags are organized into four categories by high nibble:
+
+**Meta tags (`0x0N`)** — structural markers that are not themselves value types:
+
+| Tag               | Hex    | Decimal | Used for                        |
+|:------------------|:-------|:--------|:--------------------------------|
+| `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
+| `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
+
+**Compound tags (`0x1N`)** — containers whose children are tagged values:
+
+| Tag               | Hex    | Decimal | Used for                        |
+|:------------------|:-------|:--------|:--------------------------------|
+| `TAG_ARRAY`       | `0x10` | 16      | plain arrays                    |
+| `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
+| `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
+
+**Primitive tags (`0x2N`)** — leaf value types:
+
+| Tag               | Hex    | Decimal | Used for                          |
+|:------------------|:-------|:--------|:----------------------------------|
+| `TAG_NULL`        | `0x20` | 32      | `null`                            |
+| `TAG_UNDEFINED`   | `0x21` | 33      | `undefined`                       |
+| `TAG_BOOLEAN`     | `0x22` | 34      | `boolean`                         |
+| `TAG_NUMBER`      | `0x23` | 35      | `number` (any IEEE 754 binary64)  |
+| `TAG_STRING`      | `0x24` | 36      | `string` (direct form)            |
+| `TAG_BYTES`       | `0x25` | 37      | `FabricBytes`                     |
+| `TAG_BIGINT`      | `0x26` | 38      | `bigint`                          |
+| `TAG_EPOCH_NSEC`  | `0x27` | 39      | `FabricEpochNsec`                 |
+| `TAG_EPOCH_DAY`   | `0x28` | 40      | `FabricEpochDay`                  |
+| `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
+| `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
+| `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
+| `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
+| `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
+| `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
+| `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
+
+**Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
+payload of a primitive type with a digest, when doing so shortens the byte
+stream fed to the outer hasher:
+
+| Tag                | Hex    | Decimal | Used for                                 |
+|:-------------------|:-------|:--------|:-----------------------------------------|
+| `TAG_STRING_HASH`  | `0xF0` | 240     | `string` (hashed form; see Section 4.4) |
+
+All unassigned values are reserved for future use. The category structure
+(meta/compound/primitive/optimized) is a convention for readability and is not
+enforced by the encoding — a decoder should handle any tag byte it encounters
+regardless of nibble range.
+
+> **Scope.** These tag bytes are recommended for any wire format that needs to
+> distinguish `FabricValue` types at the byte level (`1-fabric-values.md`
+> Section 6.3). This format is the first consumer; future binary encoding
+> formats may reuse the same tag assignments.
 
 ---
 

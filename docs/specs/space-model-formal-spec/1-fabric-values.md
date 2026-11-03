@@ -4014,66 +4014,15 @@ construction.
 - The hash reflects the logical content, not any particular encoding or
   intermediate representation.
 
-### 6.3 Suggested Tag Bytes
+### 6.3 Tag Bytes
 
-The following single-byte type tags are used by the hash byte format and are
-recommended for any binary encoding of `FabricValue`s. They are organized into
-four categories by high nibble:
-
-**Meta tags (`0x0N`)** — structural markers that are not themselves value types:
-
-| Tag               | Hex    | Decimal | Used for                        |
-|:------------------|:-------|:--------|:--------------------------------|
-| `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
-| `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
-| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
-
-**Compound tags (`0x1N`)** — containers whose children are tagged values:
-
-| Tag               | Hex    | Decimal | Used for                        |
-|:------------------|:-------|:--------|:--------------------------------|
-| `TAG_ARRAY`       | `0x10` | 16      | plain arrays                    |
-| `TAG_OBJECT`      | `0x11` | 17      | plain objects                   |
-| `TAG_INSTANCE`    | `0x12` | 18      | `FabricInstance` (general)    |
-
-**Primitive tags (`0x2N`)** — leaf value types:
-
-| Tag               | Hex    | Decimal | Used for                          |
-|:------------------|:-------|:--------|:----------------------------------|
-| `TAG_NULL`        | `0x20` | 32      | `null`                            |
-| `TAG_UNDEFINED`   | `0x21` | 33      | `undefined`                       |
-| `TAG_BOOLEAN`     | `0x22` | 34      | `boolean`                         |
-| `TAG_NUMBER`      | `0x23` | 35      | `number` (any IEEE 754 binary64)  |
-| `TAG_STRING`      | `0x24` | 36      | `string` (direct form)            |
-| `TAG_BYTES`       | `0x25` | 37      | `FabricBytes`                     |
-| `TAG_BIGINT`      | `0x26` | 38      | `bigint`                          |
-| `TAG_EPOCH_NSEC`  | `0x27` | 39      | `FabricEpochNsec`                 |
-| `TAG_EPOCH_DAY`   | `0x28` | 40      | `FabricEpochDay`                  |
-| `TAG_HASH`        | `0x29` | 41      | `FabricHash`                      |
-| `TAG_SYMBOL`      | `0x2A` | 42      | `symbol` (registry-interned only) |
-| `TAG_REGEXP`      | `0x2B` | 43      | `FabricRegExp`                    |
-| `TAG_KEY_PAIR`    | `0x2C` | 44      | `FabricKeyPair` (holding material) |
-| `TAG_UNAVAILABLE` | `0x2D` | 45      | `FabricUnavailable`               |
-| `TAG_DURATION_NSEC` | `0x2E` | 46    | `FabricDurationNsec`              |
-| `TAG_DURATION_DAY` | `0x2F` | 47     | `FabricDurationDay`               |
-
-**Optimized tags (`0xFN`)** — hash-level substitutes that replace the raw
-payload of a primitive type with a digest, when doing so shortens the byte
-stream fed to the outer hasher:
-
-| Tag                | Hex    | Decimal | Used for                                 |
-|:-------------------|:-------|:--------|:-----------------------------------------|
-| `TAG_STRING_HASH`  | `0xF0` | 240     | `string` (hashed form; see byte-format spec §4.4) |
-
-All unassigned values are reserved for future use. The category structure
-(meta/compound/primitive/optimized) is a convention for readability and is not
-enforced by the encoding — a decoder should handle any tag byte it encounters
-regardless of nibble range.
-
-> **Scope.** These tag bytes are defined here for use by any wire format that
-> needs to distinguish `FabricValue` types at the byte level. The hash byte
-> format (`2-hash-byte-format.md`) is the first consumer; future binary encoding
-> formats may reuse the same tag assignments.
+The hash byte format begins every value it feeds the hasher with a single-byte
+type tag, so that values of different types never share a byte stream. The tag
+bytes are assigned in Section 2 of `2-hash-byte-format.md`, in four categories
+by high nibble: meta, compound, primitive, and optimized. They are recommended
+for any binary encoding of `FabricValue`s that needs to distinguish types at
+the byte level: the hash byte format is the first consumer, and a future binary
+format may reuse the same assignments.
 
 ### 6.4 Hashing Algorithm
 
@@ -4113,144 +4062,24 @@ regardless of nibble range.
  * before hashing it.
  */
 export function hashOf(value: FabricValue): FabricHash {
-  // Type tag bytes — see Section 6.3 for the full table.
-  // Tag categories: meta (0x0N), compound (0x1N), primitive (0x2N),
-  // optimized (0xFN).
-  //
-  // Implementation feeds type-tagged data into the hasher.
-  // Byte-length prefixes for raw payloads use unsigned LEB128.
-  // Compound types (array, object) use TAG_END instead of a count prefix.
-  //
-  // Strings use two forms based on UTF-8 byte length (threshold is 64
-  // bytes; see byte-format spec §4.4). The helper `hashStr(s)` emits:
-  //   - direct form (utf8ByteLen <= 64):
-  //       hash(TAG_STRING, leb128(utf8ByteLen), utf8Bytes)
-  //   - hashed form (utf8ByteLen > 64):
-  //       hash(TAG_STRING_HASH, sha256(utf8Bytes))
-  // The `hashStr` abstraction is used wherever the algorithm emits a
-  // complete tagged string — including object keys, FabricInstance type
-  // tags, and FabricHash algorithm tags.
-  //
-  // - `null`:              hash(TAG_NULL)
-  // - `boolean`:           hash(TAG_BOOLEAN, boolByte)
-  // - `number`:            hash(TAG_NUMBER, ieee754Float64Bytes)
-  // - `string`:            hashStr(s)
-  // - `bigint`:            hash(TAG_BIGINT, leb128(byteLen), signedTwosComplementBytes)
-  // - `undefined`:         hash(TAG_UNDEFINED)
-  // - `FabricBytes`:      hash(TAG_BYTES, leb128(byteLen), rawBytes)
-  //                        (hashes the underlying byte content)
-  // - `FabricEpochNsec`: hash(TAG_EPOCH_NSEC, leb128(byteLen), twosComplementBytes)
-  //                        (same payload format as TAG_BIGINT but distinct tag)
-  // - `FabricEpochDay`: hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
-  //                        (same payload format as TAG_BIGINT but distinct tag)
-  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
-  //                        twosComplementBytes)
-  //                        (same payload format as TAG_BIGINT but distinct tag)
-  // - `FabricDurationDay`: hash(TAG_DURATION_DAY, leb128(byteLen),
-  //                        twosComplementBytes)
-  //                        (same payload format as TAG_BIGINT but distinct tag)
-  // - `FabricHash`: hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
-  //                        (algorithm tag as a tagged string, then raw hash bytes)
-  // - array:               hash(TAG_ARRAY, ...elements, TAG_END)
-  //                        Elements are hashed in index order:
-  //                          if `i in array`: hashOf(array[i])
-  //                          else (hole run): hash(TAG_HOLE, leb128(N))
-  //                        TAG_END marks the end of the element sequence.
-  //                        (order-preserving)
-  //
-  //                        Holes use run-length encoding in the hash
-  //                        stream, matching the wire format: a maximal
-  //                        run of N consecutive holes is hashed as a
-  //                        single `TAG_HOLE` followed by the run length
-  //                        (unsigned LEB128). A single hole is
-  //                        `hash(TAG_HOLE, leb128(1))`.
-  //
-  //                        Runs MUST be maximal — consecutive holes are
-  //                        always coalesced into a single TAG_HOLE entry
-  //                        so the hash is canonical. (An implementation
-  //                        must not split a run of 10 holes into two
-  //                        runs of 5; this would produce a different
-  //                        hash.)
-  //
-  //                        When hashing from the wire format, each
-  //                        `hole` entry maps directly to one
-  //                        `TAG_HOLE + leb128(N)` in the hash (since
-  //                        the wire format also uses maximal runs).
-  //                        When hashing from an in-memory array, the
-  //                        implementation must count consecutive absent
-  //                        indices to form maximal runs.
-  // - object:              hash(TAG_OBJECT, ...sortedKeyValuePairs, TAG_END)
-  //                        Keys sorted lexicographically by UTF-8.
-  //                        Each pair: hashStr(key) + tagged value.
-  //                        TAG_END marks the end of the pair sequence.
-  // - `FabricInstance`:  hash(TAG_INSTANCE, hashStr(codec.tagForValue(v)),
-  //                              hashOf(codec.encode(v)))
-  //                        where `codec` is `codecOf(v)` -- the class's
-  //                        `[CODEC]` (Section 2.4), the same source of
-  //                        truth the codec layer uses.
-  // - cycle:               an array, object, or `FabricInstance` that is
-  //                        already on the path from the root (by identity)
-  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
-  //                        where `distance` counts up the path from this
-  //                        position: 1 for the enclosing container. See
-  //                        the byte-level spec, Section 4.19.
-  //
-  // The JS object wrappers and temporal types are hashed as follows:
-  //
-  // - `FabricError`, `FabricMap`, `FabricSet`,
-  //   and other `FabricInstance`s with recursively-processable
-  //   encoded state are hashed via TAG_INSTANCE:
-  //     hash(TAG_INSTANCE, hashStr(codec.tagForValue(v)),
-  //          hashOf(codec.encode(v)))
-  //
-  // - `FabricBytes` uses TAG_BYTES (dedicated primitive tag).
-  // - `FabricEpochNsec` uses TAG_EPOCH_NSEC (dedicated primitive tag).
-  // - `FabricEpochDay` uses TAG_EPOCH_DAY (dedicated primitive tag).
-  // - `FabricDurationNsec` uses TAG_DURATION_NSEC (dedicated primitive tag).
-  // - `FabricDurationDay` uses TAG_DURATION_DAY (dedicated primitive tag).
-  // - `FabricHash` uses TAG_HASH (dedicated primitive tag).
-  // - `FabricRegExp` uses TAG_REGEXP (dedicated primitive tag).
-  // - `FabricKeyPair` uses TAG_KEY_PAIR (dedicated primitive tag), and only
-  //   when it holds material; hashing one that holds handles throws.
-  // - `FabricUnavailable` uses TAG_UNAVAILABLE (dedicated primitive tag).
-  //
-  // Examples (existing type tags are all short enough for the direct
-  // string form, so `hashStr(tag)` below expands to
-  // `TAG_STRING, leb128(utf8ByteLen), utf8Bytes`):
-  // - `FabricError`:      hash(TAG_INSTANCE, hashStr("Error@1"), hashOf(errorState))
-  // - `FabricMap`:        hash(TAG_INSTANCE, hashStr("Map@1"), hashOf(entries))
-  //                         where entries are hashed in insertion order
-  // - `FabricSet`:        hash(TAG_INSTANCE, hashStr("Set@1"), hashOf(elements))
-  //                         where elements are hashed in insertion order
-  // - `FabricEpochNsec`:  hash(TAG_EPOCH_NSEC, leb128(byteLen), twosComplementBytes)
-  // - `FabricEpochDay`:   hash(TAG_EPOCH_DAY, leb128(byteLen), twosComplementBytes)
-  // - `FabricDurationNsec`: hash(TAG_DURATION_NSEC, leb128(byteLen),
-  //                               twosComplementBytes)
-  // - `FabricDurationDay`: hash(TAG_DURATION_DAY, leb128(byteLen),
-  //                               twosComplementBytes)
-  // - `FabricHash`:  hash(TAG_HASH, hashStr(algTag), leb128(hashByteLen), hashBytes)
-  // - `FabricBytes`:      hash(TAG_BYTES, leb128(byteLen), rawBytes)
-  // - `FabricRegExp`:     hash(TAG_REGEXP, hashStr(source), hashStr(flags),
-  //                               hashStr(flavor))
-  // - `FabricKeyPair`:    hash(TAG_KEY_PAIR, hashStr(algorithm),
-  //                               hashOf(publicKey), hashOf(privateKey))
-  // - `FabricUnavailable`: hash(TAG_UNAVAILABLE, hashStr(reason),
-  //                               hashOf(errorKind), hashOf(rawErrorMessage))
-  //                         where each of the last two is a string or `null`
-  //
-  // Each type is tagged to prevent collisions between types with
-  // identical content representations. In particular, holes (TAG_HOLE),
-  // `undefined` (TAG_UNDEFINED), and `null` (TAG_NULL) all produce
-  // distinct hashes, ensuring `[1, , 3]`, `[1, undefined, 3]`, and
-  // `[1, null, 3]` are distinguishable by hash.
-  //
-  // Note: The hash is a function of the logical value, not any
-  // particular wire format. Implementations that hash from an
-  // in-memory array and implementations that hash from the wire
-  // format must produce identical hashes. Both use maximal-run RLE
-  // for holes in the hash stream.
+  // Feeds the byte stream of `2-hash-byte-format.md` Section 4 to SHA-256.
 }
 ```
+
+The byte stream `hashOf()` feeds SHA-256 is specified type by type in Section
+4 of `2-hash-byte-format.md`. Two properties hold of it beyond what that
+document's encodings state:
+
+- **The hash is a function of the logical value, not of any wire format.** An
+  implementation that hashes an in-memory value and one that hashes from a wire
+  form must produce identical hashes. Both use maximal-run encoding for holes:
+  each `hole` entry in the wire format maps directly to one `TAG_HOLE` run,
+  since the wire format also uses maximal runs, while hashing an in-memory
+  array counts consecutive absent indices to form them.
+- **A `FabricInstance` is hashed through its class's codec.** Its type tag is
+  `codec.tagForValue(v)` and its content is `codec.encode(v)`, where `codec` is
+  `codecOf(v)` -- the class's `[CODEC]` (Section 2.4), the same source of truth
+  the codec layer uses.
 
 > **String encoding for hashing.** Strings are hashed as WTF-8 byte sequences
 > (UTF-8, extended to encode lone surrogates as themselves). A string of up to
