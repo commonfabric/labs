@@ -2670,13 +2670,43 @@ describe("piece schema compatibility", () => {
       ).toEqual(["result.state.checked.ship"]);
     });
 
-    it("accepts dropping an optional verb", () => {
+    it("refuses dropping an optional verb", () => {
+      // A holder cannot read a verb's absence: its stream handle reads as
+      // itself, so it keeps sending to a handler that is gone.
+
       expect(
         patternSchemaIncompatibilities(
           verbs({ doubled: { type: "number" }, tick }, ["doubled"]),
           verbs({ doubled: { type: "number" } }, ["doubled"]),
         ),
-      ).toEqual([]);
+      ).toEqual([{
+        path: "result.tick",
+        reason: "existing result field was removed",
+      }]);
+    });
+
+    it("refuses dropping an optional verb whose marker its reference carries", () => {
+      const withVerb = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties,
+          $defs: {
+            Tick: {
+              type: "object",
+              properties: { n: { type: "number" } },
+              asCell: ["stream"],
+            },
+          },
+        });
+      expect(
+        patternSchemaIncompatibilities(
+          withVerb({ tick: { $ref: "#/$defs/Tick" } }),
+          withVerb({}),
+        ),
+      ).toEqual([{
+        path: "result.tick",
+        reason: "existing result field was removed",
+      }]);
     });
 
     it("refuses dropping a required verb", () => {

@@ -316,6 +316,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-ocrU646RD4YKITBc",
     ],
     paths: [
+      "result.mentionable[].mention",
       "result.crossrefs[].fid",
       "result.crossrefs[].commentCount",
       "result.index[].fid",
@@ -330,6 +331,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.topics[].createdBy",
       "result.index[].topic",
       "result.crossrefs[].title",
+      "result.topics[].mention",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
@@ -361,9 +363,11 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.mentionable[].mentions",
       "result.mentionable[].referencedBy",
       "result.mentionable[].references",
+      "result.mentionable[].unmention",
       "result.topics[].mentioned",
       "result.topics[].referencedBy",
       "result.topics[].references",
+      "result.topics[].unmention",
     ],
     reason:
       "Two accepted breaks on one pattern: the reference-graph rebuild on cell " +

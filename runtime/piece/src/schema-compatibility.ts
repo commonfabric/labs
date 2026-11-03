@@ -1309,16 +1309,20 @@ function objectSubsetIssues(
   // object's `patternProperties` and `additionalProperties` then admit — an
   // open object admits any, a closed one none.
   //
-  // Three things narrow that allowance. It is evolution policy, so it holds
+  // Four things narrow that allowance. It is evolution policy, so it holds
   // only at a whole contract boundary: inside a conjunct proof, a field one
   // fragment does not name may be one another fragment does, and a
   // whole-object constraint such as `dependentRequired` can name it too.
   // A candidate that still constrains the name, through a matching pattern
   // or a typed index signature, still publishes a value there, which must
-  // hold to every contract the previous object gave the name. And a verb's
-  // event refuses it outright: a caller still sends a field the event stops
-  // declaring, and an event strips undeclared fields before any handler
-  // runs, so the caller's value would be dropped without a refusal.
+  // hold to every contract the previous object gave the name. A verb is
+  // refused even when optional, because its absence is not something a
+  // holder can read: a stream handle reads as itself when nothing is stored,
+  // so a holder still bound to it keeps sending, and each event is dropped
+  // for want of a handler. And a verb's event refuses it outright: a caller
+  // still sends a field the event stops declaring, and an event strips
+  // undeclared fields before any handler runs, so the caller's value would
+  // be dropped without a refusal.
   //
   // An argument's named fields are not held either way: dropping one gives up
   // a demand, which leaves a writer's value unread rather than breaking a
@@ -1339,7 +1343,8 @@ function objectSubsetIssues(
       if (Object.hasOwn(candidateProperties, property)) continue;
       if (
         allowEvolutionPolicy && !context.verbEvent &&
-        !previousRequired.has(property)
+        !previousRequired.has(property) &&
+        !publishesVerb(targetProperties[property], context.targetRoot)
       ) {
         removed.add(property);
         const candidatePatterns = matchingPatternPropertySchemas(
@@ -1778,6 +1783,16 @@ function matchingPatternPropertySchemas(
     if (pattern.test(property)) matches.push(schema);
   }
   return matches;
+}
+
+/**
+ * Whether `schema`, a field's contract under `root`, publishes a verb: the
+ * stream marker on the field's own node, or on what its reference names.
+ */
+function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
+  if (declaresVerbStream(schema)) return true;
+  const resolved = resolveSchema(schema, root).schema;
+  return resolved !== undefined && declaresVerbStream(resolved);
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
