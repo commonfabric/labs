@@ -154,7 +154,7 @@ export async function process(
     return { output, transformed };
   }
 
-  const { main } = engine.evaluateRecordGraph(
+  const { main } = await engine.evaluateRecordGraph(
     id,
     graph,
     mainSpecifier,

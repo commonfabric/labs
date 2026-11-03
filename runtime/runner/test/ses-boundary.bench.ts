@@ -55,11 +55,11 @@ Deno.bench(
         benchProgram,
       );
       // Warm once outside the timed region (first-load initialization).
-      engine.evaluateRecordGraph(id, graph, mainSpecifier, benchProgram);
+      await engine.evaluateRecordGraph(id, graph, mainSpecifier, benchProgram);
 
       b.start();
       for (let i = 0; i < 25; i++) {
-        engine.evaluateRecordGraph(
+        await engine.evaluateRecordGraph(
           id,
           graph,
           mainSpecifier,

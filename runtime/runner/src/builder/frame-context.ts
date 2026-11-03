@@ -131,9 +131,10 @@ export function topFrame(): Frame | undefined {
  *
  * The mark lives on the action's context, so an async action's continuations
  * stay covered past its awaits, and a module evaluated on another context is
- * not covered. A module evaluated inside the action's own context pushes a
- * frame marked `moduleEvaluation` and is fully synchronous, so the guard
- * admits mints made while such a frame is on top.
+ * not covered. A module evaluated inside the action's own context runs
+ * synchronously under a frame marked `moduleEvaluation`, which is on the stack
+ * only while it runs, so the guard admits mints made while such a frame is on
+ * top.
  */
 export function runInActionExecution<R>(fn: () => R): R {
   const context = contexts.getStore();
