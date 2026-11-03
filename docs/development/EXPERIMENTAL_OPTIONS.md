@@ -42,7 +42,7 @@ was last checked against the code.
 | [`sharedMemoryConnection`](#sharedmemoryconnection) | `EXPERIMENTAL_SHARED_MEMORY_CONNECTION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment, and an explicit build define of the same name overrides it | off | Bernhard Seefeld (2026-09-29) | turn on once a deployment's routing serves a connection carrying several spaces, then delete the flag and the connection-per-space path | implemented, off by default |
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
-| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | exclude a runtime whose naming mode differs from its space's, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default; must not turn on before that exclusion exists |
+| [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
@@ -1128,35 +1128,43 @@ holds the measurements and the conditions for revisiting.
   It has to cover runtimes already connected, long-lived browser tabs and
   backends among them, not only new admissions. A manifest entry an older
   guard reads is not enough on its own: an older runtime's plain reopen of a
-  parent is never judged by its guard. What a runtime with naming off does to a
-  parent a naming runtime carried over is pinned by
-  `runtime/runner/test/instance-naming-modes.test.ts`: its reopen and its
-  update alike run the inserted sibling on the carried child's document and the
-  named instance on a fresh one, and show the carried child's state under the
-  sibling, with no refusal in either. Its reopen of a parent a naming runtime
-  set up shows fresh children in place of the named ones. The mechanism is a
-  one-way mark on each space, recorded at the first commit from a naming
-  runtime and only where the deployment's posture names instances, after which
-  the memory server admits no runtime with naming off to the space (INV-16 in
+  parent is never judged by its guard. The mechanism is a one-way mark on each
+  space, recorded at the first commit from a naming runtime and only where the
+  deployment's posture names instances, after which the memory server admits
+  no runtime with naming off to the space (INV-16 in
   [`../specs/memory-v2/09-invariants.md`](../specs/memory-v2/09-invariants.md#inv-16--instance-naming-admission)).
-  The memory server's half is built: it records the mark, enforces INV-16,
+  It is built. The memory server records the mark, enforces INV-16,
   advertises `instanceNameMark`, and takes its posture from this flag's
   deployment value, which toolshed gives it from `experimentalPosture()`. A
-  memory server in the same process as its runtimes, a loopback server
-  (`newLoopbackServer()`), a `StandaloneMemoryServer` that `cf test` or a
-  serving memory server starts, or one a test builds, takes the posture a
-  toolshed of the same build would (`namesInstancesByDefault()`). The client's
-  half is not built: no runtime declares its mode yet.
-  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
-  it, the env mapping, the tests that assume the flag's default, and the flip.
-- **Status on 2026-10-29.** The transformer's off arm is held to `main`'s
+  `Runtime` declares its mode to its storage manager
+  (`IStorageManager.setInstanceNames()`), whose memory clients declare
+  `instanceNames: true` in every open of a naming runtime
+  (`ConnectOptions.instanceNames`) and fail the connection permanently to a
+  server that does not advertise `instanceNameMark`. One storage manager
+  serves runtimes of one mode, and refuses a runtime of the other; one no
+  runtime has declared a mode to runs this build's default
+  (`namesInstancesByDefault()`), as a serving host's routed plane does. An
+  emulated storage manager's memory server takes the mode of the runtime it
+  serves as its posture, a loopback server (`newLoopbackServer()`) given none
+  takes the runtime's default, as a toolshed of the same build does, and the
+  `StandaloneMemoryServer`s `cf test` and the serving memory servers start take
+  the mode their runtimes' flags resolve to. A memory server or client a test
+  builds itself takes the default as well. What remains is
+  making the flag reachable on servers, a deployment turning its posture on,
+  and the flip, which
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md)
+  sequences.
+- **Status on 2026-11-02.** The transformer's off arm is held to `main`'s
   output by the golden fixtures and `pipeline-regressions.test.ts`, and both
   arms by `transform.test.ts`. That compiled code is never shared between the
   two modes is pinned by `runtime/runner/test/instance-naming-modes.test.ts`.
-  So is a cold start, in either mode, of a parent the other mode set up: the
-  two modes stamp the same setup record, so the start runs the parent. With
-  naming on, it carries the children over; with naming off, the positional
-  roots start fresh. Carry-over is pinned by
+  So is the boundary between them: a runtime with naming off is refused a
+  space a naming runtime wrote, whether it reopens, updates or starts a parent
+  there, or loads compiled code from it, and a naming runtime that opens the
+  parent afterwards finds each child where it bound it. A cold start with
+  naming on of a parent a runtime with naming off set up carries the children
+  over, since the two modes stamp the same setup record. Carry-over is pinned
+  by
   `runtime/runner/test/instance-carry-over.test.ts`, and by the Home upgrade
   cases in `patterns/integration/home-interface-upgrade.test.ts`, which run
   with the flag on. The plumbing is pinned by
@@ -1930,7 +1938,8 @@ the per-epic implementation notes).
 >   with the server's posture taken from the
 >   [`instanceNames`](#instancenames) flag. Only the server's advertisement
 >   is read. Older servers omit it, which parses as `false`; such a server
->   records no mark. It is permanent.
+>   records no mark, and a client whose runtime names instances fails its
+>   connection there permanently. It is permanent.
 
 ### `experimentalConcurrentWatchRefresh`
 

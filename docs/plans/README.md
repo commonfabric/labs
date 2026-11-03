@@ -318,8 +318,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   before the `instanceNames` flag turns on: a one-way mark on each space,
   recorded at the first commit from a naming runtime and only where the
   deployment names instances, after which the memory server admits no
-  positional runtime to it; then the flag's env mapping, the tests that assume
-  its default, the flip, and the flag's removal.
+  positional runtime to it, which is built; then the flag's env mapping, the
+  flip, and the flag's removal.
 - [Handler-callable egress](handler-callable-egress.md) records the capability
   a pattern does not have: a network request a handler can issue and await,
   which the runtime records and gates the way it records and gates a node
