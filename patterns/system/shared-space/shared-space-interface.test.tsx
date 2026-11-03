@@ -134,6 +134,7 @@ export default pattern(() => {
     hasText(browser[UI], "Team loom") && hasText(browser[UI], "Older loom") &&
     !hasText(browser[UI], "Team chat") &&
     !hasText(browser[UI], "Future space") &&
+    findNodeByProp(browser[UI], "spaceDid", LOOM) !== undefined &&
     propValue(
         findNodeByProp(browser[UI], "data-space", LOOM),
         "data-revision",
@@ -207,7 +208,8 @@ export default pattern(() => {
     catalog.get().entries[FUTURE].revision === "future-revision"
   );
   // An entry whose space is deleted is listed apart from saved, archived and
-  // unfamiliar states, under Deleted, with no membership control.
+  // unfamiliar states, under Deleted, with neither a membership control nor a
+  // link to open the space.
   const action_deleted = action(() => {
     catalog.set({
       ...SEED,
@@ -234,7 +236,8 @@ export default pattern(() => {
     view.saved.length === 2 &&
     hasText(browser[UI], "Gone loom") && !hasText(browser[UI], "Team loom") &&
     !hasText(browser[UI], "Future space") &&
-    findNodeByProp(browser[UI], "data-space", GONE) === undefined
+    findNodeByProp(browser[UI], "data-space", GONE) === undefined &&
+    findNodeByProp(browser[UI], "spaceDid", GONE) === undefined
   );
   const action_malformed = action(() =>
     catalog.set({ entries: {}, offers: null })

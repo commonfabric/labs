@@ -240,9 +240,10 @@ flight. The shell calls it when the person navigates into a space
 A `spaceaccesslost` for a deleted space carries `deleted: true`. No retry can
 admit anyone to such a space, so its placeholder reads "Deleted" and has no
 Retry button, and the shell does not ask for it again. The worker also sends the
-user's Home catalog its `markDeleted` for the space, where Home exists and lists
-it, so the person's collection records the deletion
-([`docs/features/shared-space-catalog.md`](../../docs/features/shared-space-catalog.md#deleted-spaces)).
+user's Home catalog its `markDeleted` for the space, where Home exists and holds
+the space as saved or archived, so the person's collection records the deletion
+([`docs/features/shared-space-catalog.md`](../../docs/features/shared-space-catalog.md#deleted-spaces)),
+and `idle` resolves only once the mark is sent.
 [`docs/features/space-access.md`](../../docs/features/space-access.md) says how
 the answer is kept current.
 

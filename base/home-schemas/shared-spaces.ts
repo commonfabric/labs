@@ -22,7 +22,6 @@ export const sharedSpaceEntrySchema = {
 } as const satisfies JSONSchema;
 
 const entries = { type: "array", items: sharedSpaceEntrySchema } as const;
-// `deleted` came after the first Homes with this view, which are read without it.
 const kindView = {
   type: "object",
   properties: {
@@ -31,7 +30,7 @@ const kindView = {
     deleted: entries,
     other: entries,
   },
-  required: ["saved", "archived", "other"],
+  required: ["saved", "archived", "deleted", "other"],
 } as const;
 const unavailable = {
   type: "object",
@@ -60,7 +59,15 @@ export const sharedSpaceCollectionViewSchema = {
         other: entries,
         byKind: { type: "object", additionalProperties: kindView },
       },
-      required: ["status", "entries", "saved", "archived", "other", "byKind"],
+      required: [
+        "status",
+        "entries",
+        "saved",
+        "archived",
+        "deleted",
+        "other",
+        "byKind",
+      ],
     },
   ],
 } as const satisfies JSONSchema;

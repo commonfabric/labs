@@ -651,6 +651,64 @@ describe("space access loss notification", () => {
       }
     });
 
+    it("answers `idle` only once a deleted space's mark is sent", async () => {
+      // Draining the task queue (all microtasks, then one macrotask) runs
+      // every continuation a handler that skipped the mark would take to
+      // resolve, so a correct handler has not resolved by then.
+
+      const identity = await Identity.fromPassphrase(
+        "processor deleted space mark before idle",
+      );
+      const storage = StorageManager.emulate({ as: identity });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager: storage,
+      });
+      let loss: ((space: MemorySpace, error: Error) => void) | undefined;
+      const subscribe = stub(
+        storage,
+        "subscribeSpaceAccessLoss",
+        (observer) => {
+          loss = observer;
+          return () => {};
+        },
+      );
+      const marking = Promise.withResolvers<"sent">();
+      const mark = stub(
+        PiecesController.prototype,
+        "markDeletedSpace",
+        () => marking.promise,
+      );
+      const post = stub(ownerClient, "post", () => true);
+      const processor = buildProcessor({
+        runtime,
+        identity,
+        space: identity.did(),
+      });
+      try {
+        loss!(
+          "did:key:z6Mk-processor-idle-gone" as MemorySpace,
+          deletedRefusal(),
+        );
+        let done = false;
+        const idling = processor.handleIdle().then(() => {
+          done = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(done).toBe(false);
+
+        marking.resolve("sent");
+        await idling;
+        expect(done).toBe(true);
+      } finally {
+        await processor.dispose();
+        mark.restore();
+        subscribe.restore();
+        post.restore();
+        await storage.close();
+      }
+    });
+
     it("tells a render boundary whether a refused space is deleted", async () => {
       const identity = await Identity.fromPassphrase("render deleted space");
       const storage = StorageManager.emulate({ as: identity });

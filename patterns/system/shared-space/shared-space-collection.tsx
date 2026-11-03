@@ -161,7 +161,9 @@ const SharedSpaceCollection = pattern<
               <cf-hstack slot="content" gap="2" align="center">
                 <cf-vstack gap="1" style={{ flex: "1" }}>
                   <cf-text variant="body">{entry.title || entry.space}</cf-text>
-                  <cf-space-link spaceDid={entry.space} label="Open" />
+                  {entry.state === "deleted"
+                    ? null
+                    : <cf-space-link spaceDid={entry.space} label="Open" />}
                   <cf-text variant="caption" tone="muted">
                     {kindLabel(entry.kind)} · {entry.state}
                   </cf-text>

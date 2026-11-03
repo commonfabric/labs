@@ -355,10 +355,12 @@ occasions of its own, and until it does, its person's catalog keeps such an
 entry as it was.
 
 Deleting a space is not implemented yet: the memory server sends no refusal
-marked `deleted`, so `markDeleted` answers `not-deleted` for every space, and
-the `deleted` lists stay empty. The command, its flat alias
-`markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()` and the lists are in
-place for when it is.
+marked `deleted`, so no consumer comes upon a deletion, `spaceDeleted(space)`
+reads `true` for no space, a mark for a saved or archived entry at its observed
+revision answers `not-deleted`, and the `deleted` lists stay empty. The command,
+its flat alias `markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()`, the
+lists, the senders, and the **Deleted** view of the collection are in place for
+when it is.
 
 ## The profile acting in a space
 
