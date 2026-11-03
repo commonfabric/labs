@@ -74,14 +74,14 @@ for a value the complete catalog validator refuses. A ready view has `entries`,
 keyed by space DID, and `saved`, `archived`, `deleted`, and `other` lists. It
 also has `byKind`, whose keys are the kinds actually present and whose values
 contain those four lists. An absent kind has no entry. The `deleted` lists are
-absent from a view a Home older than them produced, and the host projections
-in `@commonfabric/home-schemas` declare them optional for that reason; a reader
-takes their absence as empty. For presentation, lists
-sort admission hints newest first, treating missing times as zero and breaking
-ties by space DID. This display order establishes no authoritative chronology or
-conflict precedence. Entries retain extension fields and opaque revisions;
-unfamiliar states appear under `other`. The receipts view has the same
-availability distinction and exposes `offers` when ready.
+absent from a view a Home older than them produced, and the host projections in
+`@commonfabric/home-schemas` declare them optional for that reason; a reader
+takes their absence as empty. For presentation, lists sort admission hints
+newest first, treating missing times as zero and breaking ties by space DID.
+This display order establishes no authoritative chronology or conflict
+precedence. Entries retain extension fields and opaque revisions; unfamiliar
+states appear under `other`. The receipts view has the same availability
+distinction and exposes `offers` when ready.
 
 Read availability establishes a valid initialized observation. It does not
 establish synchronized loading, producer-interface absence, or durable command
@@ -357,13 +357,15 @@ navigation and on regaining focus. A runtime outside the shell asks on
 occasions of its own, and until it does, its person's catalog keeps such an
 entry as it was.
 
-Deleting a space is not implemented yet: the memory server sends no refusal
-marked `deleted`, so no consumer comes upon a deletion, `spaceDeleted(space)`
-reads `false` once the server has answered for the space and `undefined`
-before, a mark for a saved or archived entry at its observed revision answers
-`not-deleted`, and the `deleted` lists stay empty. The command, its flat alias
-`markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()`, the lists, the shell's
-sender, and the **Deleted** view of the collection are in place for when it is.
+Deleting a space is not implemented yet: the memory server refuses a space whose
+access list a deletion tombstone has replaced, marked `deleted`, but refuses the
+commit that would write one, so no consumer comes upon a deletion,
+`spaceDeleted(space)` reads `false` once the server has answered for the space
+and `undefined` before, a mark for a saved or archived entry at its observed
+revision answers `not-deleted`, and the `deleted` lists stay empty. The command,
+its flat alias `markSharedSpaceDeleted`, `markSharedSpaceDeletedIn()`, the
+lists, the shell's sender, and the **Deleted** view of the collection are in
+place for when it is.
 
 ## The profile acting in a space
 
