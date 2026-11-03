@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import { entityIdFrom } from "../src/create-ref.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";

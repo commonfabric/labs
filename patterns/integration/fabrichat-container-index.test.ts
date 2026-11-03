@@ -561,7 +561,7 @@ describe("fabrichat-container-index", () => {
     const manager = runtime.run(
       tx,
       managerPattern,
-      { myProfile: profile },
+      { myProfile: profile, sessionProfile: profile },
       runtime.getCell(home, "manager", undefined, tx),
     );
     const homeRoot = runtime.getCell(home, "home", undefined, tx);

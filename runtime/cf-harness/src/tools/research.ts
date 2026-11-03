@@ -5,7 +5,11 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   RESEARCH_CFC_SCHEMA,
   RESEARCH_KIT_SCHEMA,
@@ -22,7 +26,6 @@ import {
   isHarnessResearchHandleValue,
 } from "../contracts/research.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
-import { errorMessage } from "../error-message.ts";
 import { resolveReferentToken } from "../handle-table.ts";
 import {
   createHarnessResearchCfcProjection,
@@ -301,7 +304,7 @@ export const researchTool: HarnessToolDefinition<
       await context.recordResearchFailure?.();
       return {
         ...errorOutput(RESEARCH_FAILURE_MESSAGE),
-        rawCauseMessage: errorMessage(error),
+        rawCauseMessage: describeFailure(error),
         ...(error instanceof HarnessResearchError
           ? { cfc: error.record.cfc, researchRecord: error.record }
           : {}),

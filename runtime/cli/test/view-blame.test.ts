@@ -8,6 +8,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { term, visibleWidth } from "../lib/view/ansi.ts";
 import {
   BLAME_WIDTH,
@@ -151,7 +152,7 @@ async function loadBlames(session: Session): Promise<number> {
     } catch (error) {
       session.failBlameLoad(
         load,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
     }
   }

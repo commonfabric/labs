@@ -15,8 +15,9 @@ import type {
   UnavailableErrorKind,
   UnavailableReason,
 } from "@/api.ts";
-import type { MustBeTrue, Same } from "@commonfabric/utils/types";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
@@ -114,7 +115,7 @@ type TransientReason = Exclude<UnavailableReason, "error">;
  * failed. Only the `error` reason carries a kind, and it always does; only
  * the `error` reason may carry a message, and `errorMessage` supplies one for
  * its kind when none was given. The constructor refuses the other pairings.
- * See Section 1.4.12 of the formal spec.
+ * See Section 1.4.12 of `1-fabric-values.md`.
  */
 export class FabricUnavailable extends BaseFabricPrimitive
   implements ApiFabricUnavailable {
@@ -346,7 +347,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            `Unavailable: ${(e instanceof Error) ? e.message : String(e)}`,
+            `Unavailable: ${describeFailure(e)}`,
             mutable,
           );
         }
@@ -389,7 +390,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            (e instanceof Error) ? e.message : String(e),
+            describeFailure(e),
             mutable,
           );
         }

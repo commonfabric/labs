@@ -5,7 +5,7 @@ import type {
 import {
   bigintFromUnpaddedBase64url,
   bigintToUnpaddedBase64url,
-} from "@commonfabric/utils/bigint";
+} from "@commonfabric/bytes/bigint";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
@@ -29,7 +29,7 @@ import {
 /**
  * Temporal type representing nanoseconds from the POSIX Epoch
  * (1970-01-01T00:00:00Z). Wraps a `bigint` value. Used for high-precision
- * timestamps. See Section 1.4.7 of the formal spec.
+ * timestamps. See Section 1.4.7 of `1-fabric-values.md`.
  */
 export class FabricEpochNsec extends BaseFabricPrimitive
   implements ApiFabricEpochNsec {

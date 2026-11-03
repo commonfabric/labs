@@ -6,7 +6,7 @@
  * {@link IPC_SAMPLE_STRIDE} is measured and the rest are counted.
  */
 
-import { approximateJsonSize } from "@commonfabric/utils/approximate-json-size";
+import { approximateJsonSize } from "@commonfabric/json/approximate-json-size";
 
 import type { IpcChannelSizes } from "@/protocol/mod.ts";
 

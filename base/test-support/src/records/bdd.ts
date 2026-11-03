@@ -36,7 +36,7 @@ import {
   describe as realDescribe,
   it as realIt,
 } from "@std/testing/bdd/real";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   activeCapture,
   NAME_SEPARATOR,

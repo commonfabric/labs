@@ -21,7 +21,10 @@ import {
   parseLLMFriendlyLink,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
   HANDLE_TOKEN_ALPHABET,

@@ -7,7 +7,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { MustBeTrue } from "@commonfabric/utils/types";
+import type { MustBeTrue } from "@commonfabric/js-values/types";
 import type {
   AsCell,
   Cell,

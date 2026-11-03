@@ -3,7 +3,7 @@
  * run failures; a question or a give-up leaves the conversation reusable.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   type HarnessClientAction,

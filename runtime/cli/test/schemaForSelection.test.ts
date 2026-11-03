@@ -6,7 +6,7 @@ import { containsExternalSchemaRef } from "@commonfabric/data-model-schema/schem
 import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { decomposeSchema, type JSONSchema } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { schemaForSelection } from "../lib/cell-selection.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";

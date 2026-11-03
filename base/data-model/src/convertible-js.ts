@@ -29,17 +29,17 @@ import {
   isObjectOrArray,
   isUnsafeObjectKey,
   unsafeObjectKeyIn,
-} from "@commonfabric/utils/types";
-import { isInertPlainObject } from "@commonfabric/utils/objects";
+} from "@commonfabric/js-values/types";
+import { isInertPlainObject } from "@commonfabric/js-values/objects";
 import {
   isArrayIndexPropertyName,
   isInertArray,
-} from "@commonfabric/utils/arrays";
+} from "@commonfabric/js-values/arrays";
 
-import {
-  type FabricConvertibleJsValue,
-  type FabricValue,
-  type FabricValueLayer,
+import type {
+  FabricConvertibleJsValue,
+  FabricValue,
+  FabricValueLayer,
 } from "./interface.ts";
 import {
   assertValidFabricValueLayer,

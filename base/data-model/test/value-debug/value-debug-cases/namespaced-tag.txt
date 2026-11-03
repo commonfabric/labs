@@ -1,0 +1,44 @@
+{
+  "tag with namespace prefixes": (() => {
+    // The prefixes stay in the type name, which renders bare.
+    class Boop extends FabricPrimitive {
+      static get [REALM_CODEC]() {
+        return {
+          tagForValue: () => "sys.beep.Boop@1",
+          encode: () => ({ x: 1 }),
+        };
+      }
+    }
+    return new Boop();
+  })(),
+
+  "class named with dots": (() => {
+    class Dotted {
+      x = 1;
+      static name = "sys.Dotted";
+    }
+    return new Dotted();
+  })(),
+}
+
+--
+
+tag with namespace prefixes:
+/sys.beep.Boop(x:1)
+/sys.beep.Boop(
+  x: 1
+)
+/sys.beep.Boop(
+  x: 1
+)
+
+class named with dots:
+/sys.Dotted(x:1)
+/sys.Dotted(
+  x: 1
+)
+{
+  "/sys.Dotted": {
+    x: 1
+  }
+}

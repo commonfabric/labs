@@ -41,6 +41,7 @@ import {
   type FabricEpochNsec,
   getEntityId,
   handler,
+  principalOf,
   spaceAccess,
   spaceOf,
   type Stream,
@@ -469,7 +470,10 @@ export interface MessageEntry extends ViewItem {
 
 /** The entries of a room's messages, and every author among them. */
 export interface MessageEntries {
-  /** Every stored message, in the order recorded. */
+  /**
+   * Every stored message the room can read (see `readableMessage()`), in
+   * the order recorded.
+   */
   entries: MessageEntry[];
 
   /**
@@ -478,7 +482,7 @@ export interface MessageEntries {
    */
   authors: ProfileCell[];
 
-  /** Each stored message's record, by its entry's key. */
+  /** Each entry's record, by its key. */
   records: ReadonlyMap<string, MessageRecord>;
 
   /**
@@ -509,12 +513,84 @@ const cellAt = (
 };
 
 /**
- * Every stored message of `messages`, as an entry, with the authors among
- * them, in one walk of the list that reads each record once. It writes
- * nothing, which its parameter declares by being a `Cell` where
- * `MessagesCell` is a `Writable`: a computation that hands a cell to a
- * helper of another module is scheduled as a writer of that cell when the
- * helper's parameter is a `Writable`.
+ * The indexes of the elements of `list`. Only the list's length is read
+ * through the list: an element read through it is read under the list's
+ * schema, where one the schema doesn't accept refuses the whole computation
+ * reading it.
+ */
+const indexesOf = (
+  list: Cell<MessagesValue> | Cell<ReactionsValue>,
+): number[] =>
+  Array.from({ length: (list.get() ?? []).length }, (_, index) => index);
+
+/**
+ * The value of `cell`, or `undefined` where it lacks a field its schema
+ * requires or holds one of `fields` of a type the schema doesn't accept. A
+ * field like that, read through a list holding the value or through the value
+ * itself, refuses the whole computation reading it, so the value is read as
+ * that of its own cell, and each of `fields` as the value of a cell of its
+ * own, where it reads as `undefined` instead.
+ */
+const readableRecord = <T extends object>(
+  cell: Cell<T>,
+  fields: readonly (keyof T & string)[],
+): T | undefined => {
+  const record = cell.get();
+  if (record === undefined) return undefined;
+  return fields.every((field) => cell.key(field).get() !== undefined)
+    ? record
+    : undefined;
+};
+
+/**
+ * The stored message `message`, or `undefined` where it lacks a field its
+ * schema requires or holds a `sentAt` or a `body` of a type the schema doesn't
+ * accept (see `readableRecord()`).
+ */
+const readableMessage = (message: MessageCell): MessageRecord | undefined =>
+  readableRecord(message, ["sentAt", "body"]);
+
+/** A reaction the room can read, and its place in its message's reactions. */
+export interface ReadableReaction {
+  /** The reaction, as the element of its message's reactions. */
+  cell: Cell<ChatReaction>;
+
+  /** Its value. */
+  record: ChatReaction;
+}
+
+/**
+ * Every reaction of `list` the room can read, in the order added: each with
+ * every field `ChatReaction` requires, an `emoji` and a `sentAt` of the types
+ * it gives them (see `readableRecord()`), and a `reactorProfile` that is a
+ * link. A reaction it can't read is one no handler stores, and is left out, so
+ * the other reactions don't depend on it.
+ */
+export const readableReactions = (
+  list: Cell<ReactionsValue>,
+): ReadableReaction[] =>
+  indexesOf(list).flatMap((index): ReadableReaction[] => {
+    const cell: Cell<ChatReaction> = list.key(index);
+    const record = readableRecord(cell, ["emoji", "sentAt"]);
+    if (record === undefined) return [];
+    // Read as its own cell's value, a `reactorProfile` is a cell either way:
+    // over what it links where it is a link, and over itself where it isn't,
+    // one that refuses any read of it through the reaction. The field is
+    // addressed in the reaction's own document, where a cell over itself has
+    // the field's own link.
+    const reactor = cell.resolveAsCell().key("reactorProfile");
+    return reactor.equalLinks(reactor.get()) ? [] : [{ cell, record }];
+  });
+
+/**
+ * Every stored message of `messages` the room can read (see
+ * `readableMessage()`), as an entry, with the authors among them, in one walk
+ * of the list. A message it can't read is one no handler stores, and has no
+ * entry, so the other messages' entries don't depend on it. It writes nothing,
+ * which its parameter declares by being a `Cell` where `MessagesCell` is a
+ * `Writable`: a computation that hands a cell to a helper of another module is
+ * scheduled as a writer of that cell when the helper's parameter is a
+ * `Writable`.
  */
 export const messageEntries = (
   messages: Cell<MessagesValue>,
@@ -523,10 +599,11 @@ export const messageEntries = (
   const authors: ProfileCell[] = [];
   const records = new Map<string, MessageRecord>();
   let legacyReplies = 0;
-  const entries = ((messages.get() ?? []) as MessageRecord[]).flatMap(
-    (record, index): MessageEntry[] => {
-      if (record?.sentAt === undefined) return [];
+  const entries = indexesOf(messages).flatMap(
+    (index): MessageEntry[] => {
       const cell = cellAt(messages, index).resolveAsCell();
+      const record = readableMessage(cell);
+      if (record === undefined) return [];
       const key = entityKeyOf(cell);
       if (key === undefined) return [];
       records.set(key, record);
@@ -589,14 +666,10 @@ export const isDeleted = (
 export const isOwnerOf = (cell: Cell<unknown>): boolean =>
   spaceAccess(cell) === "OWNER";
 
-/** Whether `profile` is the profile `record`'s author sent it under. */
-const isAuthorOf = (
-  record: RightsFacts | undefined,
-  profile: ProfileCell | undefined,
-): boolean => {
-  const author = record?.authorProfile;
-  return author !== undefined && profile !== undefined &&
-    equals(author, profile);
+/** Whether the authenticated actor wrote the record's current contents. */
+const isActorAuthor = (record: Cell<unknown>): boolean => {
+  const actor = currentPrincipal();
+  return actor !== undefined && principalOf(record, "authored-by") === actor;
 };
 
 /** What one person may do to one message. */
@@ -619,26 +692,27 @@ export const NO_MESSAGE_RIGHTS: MessageRights = {
 };
 
 /**
- * What the person acting under `profile` may do to the message `record` in a
+ * What a person may do to the message `record`, given `isAuthor`, in a
  * room of `kind`, given whether they hold OWNER in the room's space and
  * whether the room lets its OWNERs obliterate. Only the message's author may
  * edit or delete it, and in a direct room they may obliterate it too. An OWNER
  * may obliterate any message while `ownersMayObliterate` holds, and otherwise
  * gains nothing over anyone else: never an edit or a deletion of someone
  * else's message. A deleted message takes nothing further but obliteration,
- * and an obliterated one, which names no author, takes nothing. The room's
- * handlers admit an act by this, and the room's view and rendering offer one
- * by it.
+ * and an obliterated one, which names no author, takes nothing. Handlers
+ * establish `isAuthor` from the authenticated actor; displayed rights use
+ * the selected profile's verified owner and may differ from what a handler
+ * permits.
  */
 export const messageRightsOf = (
   record: RightsFacts | undefined,
-  profile: ProfileCell | undefined,
+  isAuthor: boolean,
   kind: ChatRoomKind,
   isOwner: boolean,
   ownersMayObliterate: boolean,
 ): MessageRights =>
   rightsOf(
-    isAuthorOf(record, profile),
+    isAuthor,
     !isDeleted(record),
     record?.authorProfile !== undefined,
     kind,
@@ -1225,13 +1299,12 @@ const leaveTombstone = (target: MessageCell, keepsAuthor: boolean): void => {
  * `joined` is told. A send that joins a thread with no title yet, carrying a
  * `threadTitle`, gives the thread that title in `threadInfo`.
  *
- * Every handler here takes the event a rendered control of the room sends,
- * and the controls offer only acts the viewer may take, so a handler checks
- * what the element's write policy does not — whose message it is, and that
- * a message acted on or replied to is one of the room's — and refuses
- * anything else by throwing, with a reason a person can read, before it
- * writes: the run fails and writes nothing, and a send that awaits its
- * handling is rejected with the reason. An act that would change nothing,
+ * Every handler here takes the event a rendered control of the room sends.
+ * A handler checks what the element's write policy does not — whose message
+ * it is, and that a message acted on or replied to is one of the room's —
+ * and refuses anything else by throwing, with a reason a person can read,
+ * before it writes: the run fails and writes nothing, and a send that awaits
+ * its handling is rejected with the reason. An act that would change nothing,
  * such as a reaction added twice, writes nothing and succeeds.
  *
  * @throws If the profile hasn't resolved, the send has neither text nor
@@ -1606,7 +1679,7 @@ export const commitEdit = handler<RoomStreamEvent, EditState>(
     const target = messageInRoom(room, event?.message ?? message);
     const current = target.get();
     if (isDeleted(current)) throw new Error(DELETED);
-    if (!isAuthorOf(current, profile)) {
+    if (!isActorAuthor(target)) {
       throw new Error("Only its author can edit a message.");
     }
     const body = textOf(event);
@@ -1638,7 +1711,7 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
     const current = target.get();
     // Deleted already: there is nothing to delete.
     if (isDeleted(current)) return;
-    if (!isAuthorOf(current, profile)) {
+    if (!isActorAuthor(target)) {
       throw new Error("Only its author can delete a message.");
     }
     leaveTombstone(target, !FABRICHAT_POLICY.deletionIsObliteration);
@@ -1651,14 +1724,14 @@ export const commitDelete = handler<RoomStreamEvent, MessageActState>(
  * author, labeled with whoever obliterated it.
  */
 export const commitObliterate = handler<RoomStreamEvent, ObliterateState>(
-  (event, { myProfile, room, message, kind, ownersMayObliterate }) => {
+  (event, { room, message, kind, ownersMayObliterate }) => {
     const target = messageInRoom(room, event?.message ?? message);
     const current = target.get();
     // Obliterated already, its author gone: there is nothing to remove.
     if (isDeleted(current) && current?.authorProfile === undefined) return;
     const rights = messageRightsOf(
       current,
-      resolvedProfile(myProfile),
+      isActorAuthor(target),
       kind,
       isOwnerOf(target),
       ownersMayObliterate === true,
@@ -1752,7 +1825,7 @@ export const commitDeleteReaction = handler<
     const record = removed.get();
     // One no longer there, which reads as none, removes nothing.
     if (record === undefined) return;
-    if (!equals(record.reactorProfile, profile)) {
+    if (!isActorAuthor(removed)) {
       throw new Error("Only the person who reacted can remove a reaction.");
     }
     list.removeByValue(removed);

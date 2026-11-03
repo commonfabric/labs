@@ -1,7 +1,7 @@
 /** Exercises compiled scoped list callbacks across scope changes and runtime reloads. */
 
 import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 

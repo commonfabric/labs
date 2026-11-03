@@ -14,7 +14,7 @@
  * caller reporting a failure it does not own has nowhere to defer to.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export function describeThrown(error: unknown): string {
   if (error instanceof Error) return error.message || error.name;

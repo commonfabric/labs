@@ -1,7 +1,8 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { DEFAULT_GENERATE_OBJECT_MODEL } from "@commonfabric/llm";
-import {
-  type LLMGenerateObjectRequest,
-  type LLMGenerateObjectResponse,
+import type {
+  LLMGenerateObjectRequest,
+  LLMGenerateObjectResponse,
 } from "@commonfabric/llm/types";
 import { trace } from "@opentelemetry/api";
 import {
@@ -51,9 +52,7 @@ async function generateObjectCall(
       validator = ajv.compile(providerSchema);
     } catch (error) {
       throw new LLMRequestError(
-        `Schema cannot be compiled: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Schema cannot be compiled: ${describeFailure(error)}`,
         { cause: error },
       );
     }

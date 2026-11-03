@@ -1,6 +1,6 @@
 /** Lossless, negotiated CFC metadata tables scoped to one server sync. */
 
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import type { ServerMessage, SessionSync } from "../v2.ts";
 import {

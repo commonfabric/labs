@@ -36,7 +36,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   applyCommit,
   applyWaveCommit,
@@ -46,10 +46,7 @@ import {
   read,
   selectPendingStreamEventDocs,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   aliasForDbId,
   attachDatabase,
@@ -127,7 +124,7 @@ const sidecarValue = (engine: Engine): StreamEventsDocValue =>
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);
-  assert(acquireExecutionLease(engine, { space: SPACE, holder }));
+  assert(engine.executionLeases.acquire(SPACE, holder));
   return holder;
 };
 

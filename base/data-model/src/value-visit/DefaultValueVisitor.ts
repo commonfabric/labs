@@ -1,6 +1,6 @@
-import { type Primitive } from "@commonfabric/utils/types";
+import type { Primitive } from "@commonfabric/js-values/types";
 
-import {
+import type {
   FabricBytes,
   FabricDurationDay,
   FabricDurationNsec,
@@ -8,17 +8,17 @@ import {
   FabricEpochNsec,
   FabricHash,
   FabricKeyPair,
-  type FabricPrimitiveValueTag,
+  FabricPrimitiveValueTag,
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
-import {
-  type FabricArrayPlus,
-  type FabricContainerValuePlus,
-  type FabricInstancePlus,
-  type FabricPlainObjectPlus,
-  type FabricPrimitive,
-  type FabricValuePlus,
+import type {
+  FabricArrayPlus,
+  FabricContainerValuePlus,
+  FabricInstancePlus,
+  FabricPlainObjectPlus,
+  FabricPrimitive,
+  FabricValuePlus,
 } from "@/interface.ts";
 import {
   type FabricContainerValueTag,

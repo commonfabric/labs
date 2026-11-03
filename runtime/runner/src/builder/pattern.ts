@@ -10,9 +10,12 @@ import {
   isDeepFrozen,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isInertPlainObject } from "@commonfabric/utils/objects";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isInertPlainObject } from "@commonfabric/js-values/objects";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   ARRAY_SUBSCHEMA_KEYS,
   RECORD_SUBSCHEMA_KEYS,
@@ -52,9 +55,9 @@ import {
 } from "../query-result-proxy.ts";
 import { inSpaceRootCause } from "../in-space-root-cause.ts";
 import { getContentAddressedSchemasConfig } from "../schema-doc-config.ts";
-import { Runtime } from "../runtime.ts";
+import type { Runtime } from "../runtime.ts";
 import { hardenVerifiedFunction } from "../sandbox/function-hardening.ts";
-import {
+import type {
   IExtendedStorageTransaction,
   MemorySpace,
 } from "../storage/interface.ts";
@@ -442,7 +445,8 @@ function factoryFromPattern<T, R>(
   });
   // The positional cause each named instance takes the place of. It still
   // consumes its number, so every other anonymous root keeps the number it
-  // has without instance names.
+  // has without instance names; the runner maps a deployed instance found
+  // under this cause onto its name.
   const legacyPartialCauses = new Map<OpaqueCell<any>, JSONValue>();
   allCells.forEach((cell) => {
     const { cell: top, path, kind, name, external } = exportCell(cell);
@@ -869,10 +873,25 @@ function factoryFromPattern<T, R>(
           );
         }
       }
+      if (options?.selfOwned && (isDID(space) || isCell(space))) {
+        throw new Error(
+          "inSpace() makes a space its own owner only when it creates it, " +
+            "and a DID or a cell names a space that exists",
+        );
+      }
+      if (
+        options?.selfOwned &&
+        Object.values(grants ?? {}).includes("OWNER")
+      ) {
+        throw new Error(
+          "inSpace() grants OWNER to nobody in a space that owns itself",
+        );
+      }
       const derived = makePatternFactory(defaultScope, space ?? "", {
         ...(grants !== undefined ? { grants } : {}),
         ...(options?.root ? { root: true } : {}),
         ...(spaceKind !== undefined ? { spaceKind } : {}),
+        ...(options?.selfOwned ? { selfOwned: true } : {}),
       });
       noteDerivedCopy(derived, factory);
       return derived;
@@ -1279,6 +1298,9 @@ type InSpaceRequest = {
 
   /** The kind the space's genesis commit declares. */
   spaceKind?: string;
+
+  /** Whether the created space owns itself; see `InSpaceCreationRequest`. */
+  selfOwned?: true;
 };
 
 /**
@@ -1384,19 +1406,19 @@ function anonymousSpaceName(frame: Frame): string {
 }
 
 /**
- * Pushes a frame that inherits the runtime, transaction, space and
- * implementation identity of the frame beneath it, unless it is a
+ * Builds a frame that inherits the runtime, transaction, space and
+ * implementation identity of the frame now on top of the stack, unless it is a
  * module-evaluation frame. A module is evaluated whenever it is first needed,
  * which can be while an action awaits with its own frame still on the stack; a
  * module-evaluation frame inherits nothing from that frame, so the cells a
  * pattern body mints are not bound to the waiting action's space or
- * transaction.
+ * transaction. The frame is on no stack until something puts it there.
  */
-export function pushFrame(frame: Partial<Frame> = {}): Frame {
+export function makeFrame(frame: Partial<Frame> = {}): Frame {
   const parent = getTopFrame();
   const inherited = frame.moduleEvaluation ? undefined : parent;
 
-  const result = {
+  return {
     parent,
     reactives: new Set(),
     generatedIdCounter: 0,
@@ -1409,9 +1431,28 @@ export function pushFrame(frame: Partial<Frame> = {}): Frame {
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...frame,
   };
+}
 
+/** Pushes a frame built as {@link makeFrame} builds it, and returns it. */
+export function pushFrame(frame: Partial<Frame> = {}): Frame {
+  const result = makeFrame(frame);
   pushOntoFrameStack(result);
   return result;
+}
+
+/**
+ * Runs `fn` with `frame` on top of the current frame context's stack, and takes
+ * it off again before returning. Work that runs under one frame in several
+ * synchronous stretches uses this, so that between its stretches the frame is on
+ * no stack where other code would read it.
+ */
+export function runInFrame<R>(frame: Frame, fn: () => R): R {
+  pushOntoFrameStack(frame);
+  try {
+    return fn();
+  } finally {
+    popFrame(frame);
+  }
 }
 
 /**

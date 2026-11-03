@@ -31,7 +31,7 @@ import {
   isObjectOrArray,
   isPlainObject,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import {
   type FabricArray,
@@ -76,10 +76,10 @@ import { refuseFabricInstance } from "./refuseFabricInstance.ts";
  * a structural walk holds, and so still admits a `Date`, a `Map`, a `Cell` and
  * a query-result proxy over one.
  *
- * Like its `utils` counterparts, the name settles the array question, and the
+ * Like its `js-values` counterparts, the name settles the array question, and the
  * sibling {@link isKeyableObjectNotArray} is the same test with arrays
  * removed. This is a structural predicate, so it narrows in one direction only
- * and is overloaded accordingly; see the header of `@commonfabric/utils/types`
+ * and is overloaded accordingly; see the header of `@commonfabric/js-values/types`
  * for what that means. The narrowed type is read-only, these callers only
  * reading what they narrow.
  */

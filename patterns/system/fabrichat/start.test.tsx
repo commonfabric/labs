@@ -54,8 +54,10 @@ const statusOf = (
 export default pattern(() => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const notices = Writable.of<ChatManagerNotice[]>([]);
+  const profile = Writable.of<TestProfile>({ name: "Tester" });
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Tester" }),
+    myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,

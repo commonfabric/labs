@@ -6,8 +6,9 @@
  * drawing the tiles chart their history with.
  */
 
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray, isObjectOrArray } from "@commonfabric/js-values/types";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
@@ -226,9 +227,8 @@ function boundedLogDetail(detail: string): string | undefined {
 }
 
 function errorMessage(error: unknown): string {
-  const detail = error instanceof Error
-    ? `${error.name}: ${error.message}`
-    : String(error);
+  const message = describeFailure(error);
+  const detail = error instanceof Error ? `${error.name}: ${message}` : message;
   return boundedLogDetail(detail) ?? "unknown error";
 }
 
@@ -763,11 +763,6 @@ export async function runArtifactId(options: {
 // Requests in flight at once when a tile reads many repositories. GitHub asks
 // for a client's requests to be spread out rather than fired together.
 export const GITHUB_REQUEST_CONCURRENCY = 8;
-
-/** The message of `error`, or `error` itself when it is not an `Error`. */
-export function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /**
  * Runs `tasks` with at most `limit` in flight at once, returning their results

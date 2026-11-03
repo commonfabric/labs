@@ -8,7 +8,7 @@ import {
   type CellRef,
   TILE_UI,
 } from "@commonfabric/runtime-client";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";

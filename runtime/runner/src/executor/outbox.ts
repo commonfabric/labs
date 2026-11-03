@@ -31,21 +31,25 @@
 // effects" table (the effect half never touches the store), no delivery
 // of a withdrawn contribution's appends (the wave folds survivors only).
 
-import type { Engine } from "@commonfabric/memory/v2/engine";
-import * as EngineModule from "@commonfabric/memory/v2/engine";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { type Engine, findSpaceDeletion } from "@commonfabric/memory/v2/engine";
 import {
   deleteExecutionOutboxRow,
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
 import type { PendingOutboxRow } from "@commonfabric/memory/v2/execution-outbox";
 import { ProtocolError } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import {
   POST_COMMIT_RELEASE_REJECTED,
   type PostCommitSideEffect,
 } from "../cfc/types.ts";
-import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../storage/interface.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
+import { isServedRefusal, type RoutedScope } from "./routed-plane.ts";
 import type { WaveRunContext } from "./wave.ts";
 import type { ServingLoopStats } from "./stats.ts";
 import { RUNNER_ACCEPTANCE_EFFECT_KIND } from "./runner-acceptance.ts";
@@ -115,6 +119,13 @@ export class SpaceOutbox {
   readonly #sessionId: string;
   readonly #space?: string;
   readonly #localSeqRef: { value: number };
+
+  /**
+   * The route to each target space's owner, which delivers the appends in
+   * place of this process's server; absent, every append is delivered to
+   * this process's server. Disposed with the outbox.
+   */
+  readonly #route: RoutedScope | undefined;
 
   /** In-flight effect entries per effect key — §4's in-flight dedupe,
    * scoped per (memo key, result target): a second admit of a live key
@@ -200,6 +211,13 @@ export class SpaceOutbox {
     /** Per-space egress budgets (Phase 6); absent = unbounded. */
     budget?: OutboxBudgetPolicy;
 
+    /**
+     * The tenure's scope on the host's routed plane
+     * (`serving-loop.md` §5): present, each append is sent to
+     * the target's owner as a `served` request.
+     */
+    route?: RoutedScope;
+
     /** DIAGNOSTIC (tests): called as each in-flight effect is retired,
      * once the counts that drop with it have moved. Retirement happens
      * inside the outbox's own continuations, which nothing else
@@ -212,6 +230,7 @@ export class SpaceOutbox {
     this.#space = options.space;
     this.#sessionId = options.sessionId;
     this.#localSeqRef = options.localSeqRef;
+    this.#route = options.route;
     this.#budget = options.budget;
     this.#onEffectRetired = options.onEffectRetired;
     this.#now = options.budget?.now ?? Date.now;
@@ -320,6 +339,7 @@ export class SpaceOutbox {
     while (this.#dispatchWaiters.length > 0) {
       this.#dispatchWaiters.shift()?.();
     }
+    this.#route?.dispose();
   }
 
   /** The runtime's async-work observer hook (installed by the
@@ -562,15 +582,27 @@ export class SpaceOutbox {
    * order exists to carry. The cost is one drain cycle of latency for
    * rows behind the failure aimed at OTHER streams; correctness over
    * throughput here.
+   *
+   * Before it starts each row, the drain reads its own space's access list,
+   * and it stops at the first row it finds the space deleted before. That
+   * row and every later one stay for a reap to remove with the rest of the
+   * store (serving-loop.md, "A deleted space"). A row whose TARGET is
+   * deleted is refused there deterministically, like any other LT4 refusal.
    */
   async deliverPendingAppends(): Promise<{ remaining: number }> {
     const rows = selectPendingExecutionOutboxRows(this.#engine, {
       branch: "",
     });
     for (const [index, row] of rows.entries()) {
+      if (findSpaceDeletion(this.#engine, this.#space) !== undefined) {
+        logger.warn("append-drain-space-deleted", () => [
+          `the space is deleted; drain stopped before append ${row.eventId}, ` +
+          "its row and successors left for the reap",
+        ]);
+        return { remaining: rows.length - index };
+      }
       try {
-        await this.#server.commitDelegatedAppend({
-          targetSpace: row.targetSpace,
+        const entry = {
           targetStream: row.targetStream,
           ...(row.targetStreamLink === undefined
             ? {}
@@ -590,14 +622,35 @@ export class SpaceOutbox {
             ? { sessionlessSpaceScope: true }
             : {}),
           capabilityRef: row.capabilityRef,
-          sessionId: this.#sessionId,
-          localSeq: ++this.#localSeqRef.value,
-        });
+        };
+        // Through the route, the target's owner admits the append on the
+        // routed session, numbered by the plane; otherwise this process's
+        // server admits it under the delivering service session, numbered
+        // from the host's counter.
+        if (this.#route !== undefined) {
+          await this.#route.append(row.targetSpace as MemorySpace, entry);
+          this.#stats.routed.appends += 1;
+        } else {
+          await this.#server.commitDelegatedAppend({
+            ...entry,
+            targetSpace: row.targetSpace,
+            sessionId: this.#sessionId,
+            localSeq: ++this.#localSeqRef.value,
+          });
+        }
         // Delivery-ack: the target processed the entry (admitted or
         // horizon-deduped) — retire the row (FP1's queue that empties).
         deleteExecutionOutboxRow(this.#engine, row.rowId);
       } catch (error) {
-        if (error instanceof ProtocolError) {
+        // The owner's `refused` is the engine's `ProtocolError`, answered
+        // over the route, and an append too large to send is refused before
+        // it is sent and never fits later; every other refusal of the
+        // owner's is transient.
+        if (
+          error instanceof ProtocolError ||
+          isServedRefusal(error, "refused") ||
+          isServedRefusal(error, "payload-too-large")
+        ) {
           // LT4: a deterministic admission rejection does not retry. The
           // source-side failure notice writes BEFORE the row retires
           // (OW14's write-then-delete order): a crash between the two
@@ -609,9 +662,9 @@ export class SpaceOutbox {
           // out of order by REMOVING a row — later rows were always
           // going to follow it), so the drain continues.
           this.#stats.outbox.failed += 1;
-          const noticed = this.#writeDeliveryFailureNotice(
+          const noticed = await this.#writeDeliveryFailureNotice(
             row,
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           );
           if (!noticed) {
             // The notice could not be written durably: KEEP the row so
@@ -671,15 +724,15 @@ export class SpaceOutbox {
    * entry — "a failure notice on the source event's stream entry,
    * written by the source SpaceServer" — per events.md §5's
    * error-is-the-consequence shape. Deduped by the refused append's
-   * eventId; a small derived-class engine commit of the loop's own
-   * (the completion-commit precedent: post-wave, never through §3d's
-   * sealing). Returns whether the notice is durably present (already
-   * present counts).
+   * eventId; a small derived-class commit of the loop's own, which the
+   * memory server makes against its current document and its lease map (the
+   * completion-commit precedent: post-wave, never through §3d's sealing).
+   * Returns whether the notice is durably present (already present counts).
    */
-  #writeDeliveryFailureNotice(
+  async #writeDeliveryFailureNotice(
     row: PendingOutboxRow,
     reason: string,
-  ): boolean {
+  ): Promise<boolean> {
     if (row.sourceEvent === undefined) {
       logger.warn("append-rejected-unsourced", () => [
         `rejected append ${row.eventId} carries no source event; the ` +
@@ -689,24 +742,6 @@ export class SpaceOutbox {
       return true;
     }
     try {
-      const doc = EngineModule.read(this.#engine, {
-        id: row.sourceEvent.sidecarId,
-      });
-      const entries =
-        ((doc?.value ?? {}) as { entries?: Array<StreamEventEntryShape> })
-          .entries ?? [];
-      const index = entries.findIndex((entry) =>
-        entry?.eventId === row.sourceEvent!.eventId
-      );
-      if (index < 0) {
-        // The source entry compacted away (events.md §4's allowance):
-        // the notice never outlives the entry it annotates.
-        return true;
-      }
-      const existing = entries[index]?.deliveryFailures ?? [];
-      if (existing.some((failure) => failure.eventId === row.eventId)) {
-        return true;
-      }
       if (this.#space === undefined) {
         logger.warn("append-notice-unspaced", () => [
           `failure notice for ${row.eventId} needs the home space for ` +
@@ -714,30 +749,15 @@ export class SpaceOutbox {
         ]);
         return true;
       }
-      EngineModule.applyCommit(this.#engine, {
-        sessionId: this.#sessionId,
+      await this.#server.commitDeliveryFailureNotice({
         space: this.#space,
-        commitClass: "derived",
         holder: this.#sessionId,
-        commit: {
-          localSeq: ++this.#localSeqRef.value,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "patch",
-            id: row.sourceEvent.sidecarId as never,
-            patches: [{
-              op: "replace",
-              path: `/value/entries/${index}/deliveryFailures`,
-              value: [
-                ...existing,
-                {
-                  eventId: row.eventId,
-                  targetSpace: row.targetSpace,
-                  reason,
-                },
-              ] as never,
-            }],
-          }],
+        localSeq: ++this.#localSeqRef.value,
+        sourceEvent: row.sourceEvent,
+        failure: {
+          eventId: row.eventId,
+          targetSpace: row.targetSpace,
+          reason,
         },
       });
       return true;
@@ -750,12 +770,3 @@ export class SpaceOutbox {
     }
   }
 }
-
-type StreamEventEntryShape = {
-  eventId?: string;
-  deliveryFailures?: Array<{
-    eventId: string;
-    targetSpace: string;
-    reason: string;
-  }>;
-} | null;

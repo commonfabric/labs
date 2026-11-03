@@ -8,7 +8,7 @@
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type { CfcLabelView };
 

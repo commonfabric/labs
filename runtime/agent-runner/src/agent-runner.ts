@@ -27,7 +27,8 @@ import {
 } from "@commonfabric/runner/agent-run";
 import type { MemorySpace } from "@commonfabric/runner/storage/cache.deno";
 import { addressKey } from "@commonfabric/runner/shared";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { LaneTransition } from "./local-jobs/readiness.ts";
 
@@ -199,9 +200,7 @@ export class AgentRunner {
       } catch (cleanupError) {
         this.#options.report?.(
           `agent runner: could not clear a failed registration: ${
-            cleanupError instanceof Error
-              ? cleanupError.message
-              : String(cleanupError)
+            describeFailure(cleanupError)
           }`,
         );
       }
@@ -296,12 +295,10 @@ export class AgentRunner {
       } catch (error) {
         this.#options.readiness?.({
           state: "down",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
         this.#options.report?.(
-          `agent runner: a queue scan failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `agent runner: a queue scan failed: ${describeFailure(error)}`,
         );
         this.#scheduleWake(new Date(this.#now().getTime() + 1_000));
       } finally {
@@ -348,13 +345,9 @@ export class AgentRunner {
           stopFollowing: record.sink(() => this.#requestScan()),
         });
       } catch (error) {
-        failure ??= `Could not follow ${key}: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        failure ??= `Could not follow ${key}: ${describeFailure(error)}`;
         this.#options.report?.(
-          `agent runner: could not follow ${key}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `agent runner: could not follow ${key}: ${describeFailure(error)}`,
         );
       }
     }
@@ -597,9 +590,7 @@ export class AgentRunner {
       }
     } catch (error) {
       this.#options.report?.(
-        `agent runner: a run failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `agent runner: a run failed: ${describeFailure(error)}`,
       );
       execution = { outcome: "failed", errorCode: PROVIDER_FAILURE };
     }
@@ -612,9 +603,7 @@ export class AgentRunner {
           await this.#finish(followed, execution, abort);
         } catch (error) {
           this.#options.report?.(
-            `agent runner: terminal write failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `agent runner: terminal write failed: ${describeFailure(error)}`,
           );
         }
       }

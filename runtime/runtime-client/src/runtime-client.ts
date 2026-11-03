@@ -9,7 +9,7 @@ import type { CellScope, JSONValue } from "@commonfabric/api";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { DID, Identity } from "@commonfabric/identity";
-import { Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type {
   ApplyOpResolution,
   OpCursor,
@@ -18,7 +18,7 @@ import type {
 } from "@commonfabric/memory/v2";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
-import { NameSchema } from "@commonfabric/runner/schemas";
+import type { NameSchema } from "@commonfabric/runner/schemas";
 import type {
   ActionRunTraceEntry,
   JSONSchema,
@@ -43,7 +43,7 @@ import {
   type SubscriptionDiagnostics,
 } from "./client/connection.ts";
 import { EventEmitter } from "./client/emitter.ts";
-import { RuntimeTransport } from "./client/transport.ts";
+import type { RuntimeTransport } from "./client/transport.ts";
 import { PieceHandle } from "./piece-handle.ts";
 import {
   type CellRef,
@@ -169,7 +169,12 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
-  spaceaccesslost: [{ space: DID }];
+
+  /**
+   * The memory server refused the runtime principal a space. `deleted` is
+   * present when the space is deleted, which no retry can undo.
+   */
+  spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
    * A space that refused the runtime principal admitted it again. A load the
@@ -1861,8 +1866,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.emit("eventintentoutcome", { space, eventId, kind, reason });
   };
 
-  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
-    this.emit("spaceaccesslost", { space });
+  #onSpaceAccessLost = (
+    { space, deleted }: SpaceAccessLostNotification,
+  ): void => {
+    this.emit("spaceaccesslost", { space, ...(deleted && { deleted }) });
   };
 
   #onSpaceAccessRestored = (

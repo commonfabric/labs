@@ -138,8 +138,8 @@ blob store, cells hold descriptors), `apps/habit-tracker/`,
 are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
-item only by sending the pattern's `addItem` verb, which the generated frame
-takes as a stream), `product/lobby/`, `apps/lunch-poll/`,
+item only by sending the pattern's `addItem` verb, which writes the pattern's
+own state), `product/lobby/`, `apps/lunch-poll/`,
 `examples/profile-group-chat/`, `apps/project-list/`,
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,

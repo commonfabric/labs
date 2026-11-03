@@ -4,7 +4,7 @@
  */
 
 import { sha256 } from "@commonfabric/content-hash";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { isAbsolute } from "@std/path";
 
 import type { ProcessRunner } from "./sandbox/process-runner.ts";

@@ -2,7 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isDeepFrozen } from "@commonfabric/data-model";
 
-import { patternLiteralForTestingOnly } from "@commonfabric/runner/for-testing-only";
+import {
+  instancePartialCauseForTestingOnly,
+  patternLiteralForTestingOnly,
+} from "@commonfabric/runner/for-testing-only";
+import { instanceNameOfPartialCause } from "../src/builder/instance-name.ts";
 import type { Pattern } from "../src/builder/types.ts";
 
 describe("for-testing-only", () => {
@@ -94,6 +98,20 @@ describe("for-testing-only", () => {
       expect(Object.isFrozen(node.module)).toBe(false);
       expect(Object.isFrozen(node.inputs.value)).toBe(false);
       expect(Object.isFrozen(node.inputs.value.$alias)).toBe(false);
+    });
+  });
+
+  describe("instancePartialCauseForTestingOnly()", () => {
+    it("returns the partial cause of the instance it names", () => {
+      expect(
+        instanceNameOfPartialCause(
+          instancePartialCauseForTestingOnly("profilePicker"),
+        ),
+      ).toBe("profilePicker");
+    });
+
+    it("returns a deep-frozen partial cause", () => {
+      expect(isDeepFrozen(instancePartialCauseForTestingOnly("a"))).toBe(true);
     });
   });
 });

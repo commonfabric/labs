@@ -317,6 +317,29 @@ export type ServedEventFailureOutcome =
     message: string;
   }
   | {
+    /** The piece the event addresses records an origin the serving loop
+     * has not yet followed this tenure (`EnsurePieceOptions.originFollowed`),
+     * so the start that would register its handler was declined. The loop
+     * itself owes the follow, so this deferral spends none of the drain's
+     * deferral budget, and the follow's completion re-scans the entry. */
+    kind: "deferred";
+
+    cause: "origin-pending";
+    message: string;
+  }
+  | {
+    /** The piece the event addresses names a pattern this runtime could not
+     * load (`pattern-unloadable`). The serving loop asks its space's store
+     * whether the pattern's program closure is there (events.md §5): a
+     * closure still on its way into a space is waited for rather than
+     * charged to the deferral budget. */
+    kind: "deferred";
+
+    cause: "pattern-unloadable";
+    patternIdentity: string;
+    message: string;
+  }
+  | {
     kind: "deferred";
     cause: "delivery-failure";
     role: "failed-head";
@@ -483,6 +506,23 @@ export type QueuedEvent = {
    */
   retryReadinessPending?: boolean;
 
+  /**
+   * The FIFO slot is held while the handler's input presync
+   * (`EventHandler.presyncInputs`) runs. The head parks the queue for that
+   * wait as it does for a loading handler, so a later event cannot overtake
+   * it, and the pass that started the presync ends, so the derivations the
+   * scheduler owes still run while it waits. The presync's settlement clears
+   * the flag and queues an execution.
+   */
+  presyncPending?: boolean;
+
+  /**
+   * The implementation and payload the head's presync covered. A head whose
+   * selected implementation or payload differs is presynced again before it
+   * dispatches.
+   */
+  presynced?: { readonly implementation: EventHandler; readonly event: any };
+
   /** Internal exactly-once guard for terminal pre-dispatch drops. */
   finalOutcomeNotified?: boolean;
 
@@ -495,7 +535,9 @@ export type QueuedEvent = {
    * while transient commit retries remain disabled and belong to the drain's
    * wave cadence. There is no name-resolution retry count: RetryImmediately is
    * bounded by the monotonic space-name cache (each re-run resolves at least one
-   * previously-unresolved name, and a resolved name never becomes pending again).
+   * previously-unresolved name, and a resolved name never becomes pending again),
+   * and a re-run after a Home's root is brought up or linked follows a root
+   * that stays linked.
    */
   retry: boolean;
 

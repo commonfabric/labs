@@ -12,7 +12,7 @@ import {
   NotificationType,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Install the browser globals Lit reads and return a restoration function. */
 function installBrowserGlobals(

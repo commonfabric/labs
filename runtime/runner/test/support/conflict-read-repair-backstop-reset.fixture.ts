@@ -9,7 +9,7 @@
 // fixture through `conflict-read-repair-backstop-scenario.ts`.
 
 import { describe, it } from "@std/testing/bdd";
-import { resetAllLoggerCounts } from "@commonfabric/utils/logger";
+import { resetAllLoggerCounts } from "@commonfabric/logger";
 import { rideReadRepairBackstop } from "./conflict-read-repair-backstop-scenario.ts";
 
 describe("a backstop firing survives a later logger reset", () => {

@@ -158,14 +158,16 @@ It:
 ### Loading
 
 `lockdown()` runs once: the loader calls [`ensureSESLockdown`][c10], which
-delegates to the idempotent [`ensureSESInitialized`][c10]. [`loadModuleGraph`][c6]
-creates one `Compartment` per load, freezes its global bindings, and drives the
-entry with `compartment.importNow(entrySpecifier)`. Its `verify` option runs
-[`verifyModuleGraph`][c8] and defaults to **on**, so a graph assembled outside
-the Engine cannot load unchecked; the Engine passes `verify: false` because it
-already ran the check while compiling. Because every reachable record is
-registered in the compartment's `importNowHook` up front, no asynchronous import
-occurs at run time, preserving the scheduler's synchronous-execution contract.
+delegates to the idempotent [`ensureSESInitialized`][c10]. [`openModuleGraph`][c6]
+creates one `Compartment` per load, freezes its global bindings, and returns the
+modules to import in order. [`loadModuleGraph`][c6] imports them in one stretch;
+the Engine imports them one at a time, so it can yield between them. The loader's
+`verify` option runs [`verifyModuleGraph`][c8] and defaults to **on**, so a graph
+assembled outside the Engine cannot load unchecked; the Engine passes
+`verify: false` because it already ran the check while compiling. Because every
+reachable record is registered in the compartment's `importNowHook` up front, no
+asynchronous import occurs at run time, preserving the scheduler's
+synchronous-execution contract.
 Trusted runtime modules are ordinary records in the same graph under
 `cf:runtime/<specifier>` ([`runtimeModuleRecords`][c6]); endowment and hardening
 are unchanged. Exactly four specifiers are admitted —
@@ -182,6 +184,30 @@ Records are SES *virtual* (third-party) records — `{ imports, exports, execute
 ([`VirtualModuleRecord`][c6]) — because this build of `ses` exposes no
 `ModuleSource`/`StaticModuleRecord` constructor. Import cycles resolve through
 lazy `compartment.importNow` inside `execute`.
+
+### Evaluation order
+
+A compiled body evaluates each import as it reaches that import's `require`,
+nested inside its own evaluation, and a record's `imports` lists those in the
+order the body reaches them. So a depth-first walk of `imports`, listing each
+module after its imports, finishes modules in the order that importing the entry
+alone finishes them, and each body then finds its imports already evaluated. That
+walk is the order [`openModuleGraph`][c6] returns, and it lets a graph evaluate
+one module at a time. A module's own evaluation stays one synchronous stretch.
+
+- Code a body runs ahead of an `import` statement runs after that import, which
+  is the order ES modules give it.
+- A cycle is listed by the one module the walk entered it through, and everything
+  the walk first reached through that module evaluates nested inside it, in one
+  stretch. Which module of a cycle sees another's exports half-populated depends
+  on which evaluates first and on when each `require` is reached.
+
+The Engine evaluates a graph under one module-evaluation frame, which is on the
+frame stack only while a module runs. A cell holds the frame it was made under,
+so the modules of a graph share it; other runtimes read the same stack during a
+yield, so it is not left there. Where an engine interleaves its compiles
+(`EngineOptions.interleaveCompile`) it takes a macrotask turn ahead of each
+authored module, and elsewhere those yields are microtask completions.
 
 ### Identity flow into action identity
 
@@ -465,9 +491,9 @@ inputs also require the integration described in
    no filename namespace is needed and there is no synthetic `/index.ts`.
 
 3. **Synchronous load.** Every reachable record is registered in the
-   compartment's module map before execution, and the entry is driven with
-   `compartment.importNow(entrySpecifier)` ([`loadModuleGraph`][c6]), so no
-   asynchronous import occurs at run time.
+   compartment's module map before execution, and each module is driven with
+   `compartment.importNow` ([`openModuleGraph`][c6]), so no asynchronous import
+   occurs at run time.
 
 4. **Runtime modules as records.** The four admitted runtime specifiers are
    records in the same graph ([`runtimeModuleRecords`][c6]), each copying the
@@ -859,6 +885,10 @@ cell's contents. The cache is designed around this:
   space (`Factory.inSpace(...)`), the runner replicates the child pattern's
   source + compiled closures into the child's space so the piece is
   independently loadable there (`PatternManager.replicatePatternToSpace`).
+  The replication runs after the run that creates the child, so a served
+  event can reach the child first; it waits for the closure's arrival
+  ([`server-side-execution/events.md`](server-side-execution/events.md)
+  §5).
   The same replication runs for a load the runner's in-memory artifact
   index serves: the index is cross-space, so a space whose loads of an
   identity are all served from it never receives the compiled closure, and
@@ -866,7 +896,18 @@ cell's contents. The cache is designed around this:
   closure into another space in the same session, such a load copies it
   into its own space from there; when it compiled the closure in the same
   session and the write-back was deferred by a preview or failed, the load
-  writes that compile back instead of compiling again.
+  writes that compile back instead of compiling again. On a serving runtime a
+  write-back commits when its wave accepts it, and a write-back the wave
+  withdraws at its commit counts as failed: the runner no longer counts that
+  space as holding the closure, neither as a copy's origin nor as a space
+  that needs no copy, and owes it the write a failed write-back is owed.
+  A copy carries the compiled closure under the cache variant it was read
+  under. That is the runtime's own variant, unless the runner wrote the
+  closure into the origin space in the same session under another variant
+  only — a compile given its own coverage collector writes the coverage
+  variant — in which case it is that one. A closure another session wrote
+  into the origin under the coverage variant alone is read under the
+  runtime's own variant, and so is not found there.
   Chain-of-custody holds — compiled docs are read through the integrity-gated
   loader ([`loadCompiledClosure`][c14]; only docs already carrying the compiler
   stamp replicate) and re-stamped on the child-space write by a legitimate
@@ -1016,9 +1057,9 @@ index's restart-stable `action` column,
   [`collectDataFileNames`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
-- Loading: [`loadModuleGraph`][c6] / [`importModuleGraphNow`][c6] over
-  [`VirtualModuleRecord`][c6]s, with [`runtimeModuleRecords`][c6] supplying the
-  trusted host modules.
+- Loading: [`openModuleGraph`][c6], [`loadModuleGraph`][c6] and
+  [`importModuleGraphNow`][c6] over [`VirtualModuleRecord`][c6]s, with
+  [`runtimeModuleRecords`][c6] supplying the trusted host modules.
 - Runtime-module policy: [`RuntimeModuleIdentifiers`][c15] is the admitted set,
   enforced on the authored side by [`isAllowedAuthoredImportSpecifier`][c15] and
   on the registration side by [`Engine.runtimeModuleNames`][c1].

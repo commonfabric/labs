@@ -7,7 +7,7 @@ import type {
   ViewPlan,
   ViewValueBasis,
 } from "@commonfabric/memory/v2";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Cancel } from "./cancel.ts";
 import type { Cell } from "./cell.ts";

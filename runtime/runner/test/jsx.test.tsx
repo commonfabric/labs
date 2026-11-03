@@ -107,6 +107,58 @@ describe("jsx", () => {
       }
     });
 
+    it("stores each cell of a record given to a binding prop as a cell link", async () => {
+      const signer = await Identity.fromPassphrase("jsx binding records");
+      const runtime = new Runtime({
+        storageManager: StorageManager.emulate({ as: signer }),
+        apiUrl: new URL("http://localhost"),
+      });
+      try {
+        const tx = runtime.edit();
+        const glaze = runtime.getCell(signer.did(), "glaze", undefined, tx);
+        glaze.set("maple");
+        const fillings = runtime.getCell(
+          signer.did(),
+          "fillings",
+          undefined,
+          tx,
+        );
+        fillings.set(["custard"]);
+
+        const vnode = h("cf-iframe", { $context: { glaze, fillings } }, []);
+        const context = (vnode.props as any).$context;
+
+        expect(Object.keys(context)).toEqual(["glaze", "fillings"]);
+        expect(context.glaze["/"]["link@1"].id).toBe(
+          glaze.getAsNormalizedFullLink().id,
+        );
+        expect(context.fillings["/"]["link@1"].id).toBe(
+          fillings.getAsNormalizedFullLink().id,
+        );
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("throws when a record given to a binding prop has a field that is not a cell", async () => {
+      const signer = await Identity.fromPassphrase("jsx mixed binding record");
+      const runtime = new Runtime({
+        storageManager: StorageManager.emulate({ as: signer }),
+        apiUrl: new URL("http://localhost"),
+      });
+      try {
+        const tx = runtime.edit();
+        const glaze = runtime.getCell(signer.did(), "glaze", undefined, tx);
+        glaze.set("maple");
+
+        expect(() =>
+          h("cf-iframe", { $context: { glaze, order: { count: 2 } } }, [])
+        ).toThrow("$context");
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("keeps a binding prop as a cell when there is no link context", async () => {
       const signer = await Identity.fromPassphrase(
         "jsx standalone binding props",

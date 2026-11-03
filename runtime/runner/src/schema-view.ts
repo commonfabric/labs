@@ -45,9 +45,9 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import { FabricPrimitive, type FabricValue } from "@commonfabric/data-model";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
@@ -60,13 +60,13 @@ import {
 } from "./cfc/label-view-state.ts";
 
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
-import { type Runtime } from "./runtime.ts";
+import type { Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
   processDefaultValue,
   validateAndTransform,
 } from "./schema.ts";
-import { type IExtendedStorageTransaction } from "./storage/interface.ts";
+import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
   arrayItemFallbackType,

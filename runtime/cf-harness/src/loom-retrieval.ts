@@ -14,7 +14,7 @@
 
 import type { JSONValue } from "@commonfabric/api";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { isAbsolute } from "@std/path";
 
 import type { HarnessLoomAuthoringTransport } from "./loom-authoring.ts";

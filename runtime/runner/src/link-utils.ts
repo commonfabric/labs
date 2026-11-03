@@ -31,16 +31,23 @@ import {
   registerSchemaDocument,
 } from "./schema-registry.ts";
 import type { MetaLinkField } from "./meta-seam.ts";
-import type { IReadOptions } from "./storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  IReadOptions,
+} from "./storage/interface.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { getLogger } from "@commonfabric/utils/logger";
-
 import {
-  type AnyCell,
-  type DerivedInternalCellDescriptor,
-  type JSONSchema,
-  type JSONValue,
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
+
+import type {
+  AnyCell,
+  DerivedInternalCellDescriptor,
+  JSONSchema,
+  JSONValue,
 } from "./builder/types.ts";
 import {
   type Cell,
@@ -74,11 +81,7 @@ import {
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { type CellLinkRefPayload, type SigilLink } from "./sigil-types.ts";
-import {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "./storage/interface.ts";
+import type { CellLinkRefPayload, SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 
 export * from "./link-types.ts";

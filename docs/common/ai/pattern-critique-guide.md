@@ -338,7 +338,7 @@ calls, for example:
 
 ## Severity and Prioritization
 
-Use the shared severity taxonomy from the factory protocol:
+Use this severity taxonomy:
 
 - `critical` - breaks correctness or reactivity, or loses data. Examples: a
   reactive loop, `.get()` on a computed during render, `new Writable(reactiveValue)`,
@@ -350,12 +350,6 @@ Use the shared severity taxonomy from the factory protocol:
   Examples: `handler()` where `action()` suffices, helper defined inside the
   pattern body that happens to work.
 - `info` - observation, no change required.
-
-For modify-mode pre-build reviews, findings should also be easy for an
-orchestrator to triage into:
-
-- correctness or divergence risks that are `MUST-FIX`
-- style or taste observations that are `NOTED`
 
 Every non-trivial finding should include:
 

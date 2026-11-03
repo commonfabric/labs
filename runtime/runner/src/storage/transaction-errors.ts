@@ -1,5 +1,5 @@
 import { debugStr, toCompactDebugString } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type {
   IInvalidArrayLengthError,
   IMemoryAddress,

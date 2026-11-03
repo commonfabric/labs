@@ -1,6 +1,6 @@
 import type { DID } from "@commonfabric/api";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { labelMetadataFieldIsProtected } from "../cfc/label-metadata-population.ts";
 import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";

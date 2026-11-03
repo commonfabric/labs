@@ -1,4 +1,4 @@
-import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import { base64pad } from "multiformats/bases/base64";
 
 import {
@@ -6,7 +6,7 @@ import {
   Ed25519Signer,
   Ed25519Verifier,
 } from "./ed25519/index.ts";
-import { AsBytes, DIDKey, Signer, Verifier } from "./interface.ts";
+import type { AsBytes, DIDKey, Signer, Verifier } from "./interface.ts";
 import { hash } from "./utils.ts";
 
 const textEncoder = new TextEncoder();

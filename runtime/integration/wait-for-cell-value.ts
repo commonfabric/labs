@@ -1,7 +1,7 @@
 import { debugStr } from "@commonfabric/data-model";
 import type { Cell, Runtime } from "@commonfabric/runner";
 import { stuckNet } from "@commonfabric/test-support/stuck-net";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { describeThrown } from "./describe-thrown.ts";
 

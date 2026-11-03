@@ -44,7 +44,7 @@ import {
   RECORD_SCHEMA_VERSION,
   type StoredReportGroup,
 } from "@commonfabric/test-support/records";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { dashboardCacheFile } from "./history-files.ts";
 import { github } from "./lib.ts";
 import {

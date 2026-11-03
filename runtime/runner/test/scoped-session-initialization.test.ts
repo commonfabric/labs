@@ -17,7 +17,7 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 

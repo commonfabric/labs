@@ -66,8 +66,8 @@ import {
   declaredHandleKind,
   followExternalReferences,
 } from "@commonfabric/runner/stream-declaration";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { SpaceDb } from "./db.ts";
 import {

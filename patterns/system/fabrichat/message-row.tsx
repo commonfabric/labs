@@ -7,9 +7,11 @@ import {
   action,
   type Cell,
   computed,
-  equals,
+  type Default,
   pattern,
   type PerSession,
+  principalOf,
+  profileOwnerOf,
   type ReadonlyCell,
   Stream,
   UI,
@@ -30,10 +32,9 @@ import {
   isDeleted,
   type JoiningManager,
   type MessageCell,
-  messageRightsOf,
   type MessagesCell,
-  NO_MESSAGE_RIGHTS,
   type ReactionsValue,
+  readableReactions,
   type RepliedMessage,
   type RoomStreamEvent,
   tellManagerJoined,
@@ -78,36 +79,42 @@ export interface ReactionTally extends ChatReactionTally {
   cardId: string;
 
   /**
-   * The viewer's reaction with this emoji, the one `deleteReaction` removes;
-   * absent where `mine` is false.
+   * The reaction offered for removal with this emoji; absent where `mine` is
+   * false. `deleteReaction` checks its author against the authenticated actor
+   * before removing it.
    */
   own?: Cell<ChatReaction>;
 }
 
 /**
- * The reactions `list` holds, tallied as `reactionTalliesOf()` does, each
- * tally with a card id made from `cardIdPrefix` and, where the viewer is
- * among its reactors, the viewer's reaction by its cell.
+ * The reactions `list` holds that the room can read (see
+ * `readableReactions()`), tallied as `reactionTalliesOf()` does, each tally
+ * with a card id made from `cardIdPrefix`. `mine` and `own` compare each
+ * reaction's authenticated author with `profileOwnerOf(viewer)`; counts and
+ * reactor lists retain their profile-based identity.
  */
 export const reactionTallies = (
   list: Cell<ReactionsValue> | undefined,
   viewer: ProfileCell | undefined,
   cardIdPrefix: string,
 ): ReactionTally[] => {
-  const reactions = (list?.get() ?? []) as ChatReaction[];
-  return reactionTalliesOf(reactions, viewer).map((tally, index) => {
-    const own = viewer === undefined
-      ? -1
-      : reactions.findIndex((reaction) =>
-        reaction?.emoji === tally.emoji &&
-        equals(reaction.reactorProfile, viewer)
-      );
-    return {
-      ...tally,
-      cardId: `${cardIdPrefix}-${index}`,
-      ...(own < 0 || list === undefined ? {} : { own: list.key(own) }),
-    };
-  });
+  const reactions = list === undefined ? [] : readableReactions(list);
+  const owner = viewer === undefined ? undefined : profileOwnerOf(viewer);
+  return reactionTalliesOf(reactions.map(({ record }) => record), undefined)
+    .map((tally, index) => {
+      const own = owner === undefined
+        ? undefined
+        : reactions.find(({ cell, record }) =>
+          record.emoji === tally.emoji &&
+          principalOf(cell, "authored-by") === owner
+        );
+      return {
+        ...tally,
+        mine: own !== undefined,
+        cardId: `${cardIdPrefix}-${index}`,
+        ...(own === undefined ? {} : { own: own.cell }),
+      };
+    });
 };
 
 /** How a message's body reads, for a quote or a deleted message. */
@@ -201,6 +208,32 @@ const FabriChatAttachment = pattern<AttachmentInput, { [UI]: VNode }>(
   },
 );
 
+/**
+ * What a row offers its reader, as the room derives it for every row at once:
+ * whether each control that acts on the message shows.
+ */
+export interface RowFacts {
+  /** Whether the edit control shows. */
+  edit: ChatDisplay;
+
+  /** Whether the delete control shows. */
+  delete: ChatDisplay;
+
+  /** Whether the obliterate control shows. */
+  obliterate: ChatDisplay;
+
+  /** Whether the open editor shows. */
+  editor: ChatDisplay;
+}
+
+/** What a row the room has derived nothing for yet offers: no control. */
+const NO_ROW_FACTS: RowFacts = {
+  edit: "none",
+  delete: "none",
+  obliterate: "none",
+  editor: "none",
+};
+
 /** What a message row needs. */
 export interface FabriChatMessageRowInput {
   /** The message. */
@@ -232,8 +265,15 @@ export interface FabriChatMessageRowInput {
   /** Whether the viewer can't send, edit, delete, or react in the room. */
   cannotWrite: boolean;
 
-  /** Whether the viewer holds OWNER in the room's space. */
-  isOwner: boolean;
+  /**
+   * What every row offers the reader, by the message's key, as the room
+   * derives it for the session. The row reads its own message's. It defaults
+   * to none, which a row whose argument was stored before it was given one
+   * reads, and then offers no control.
+   */
+  rowFacts: ReadonlyCell<
+    Record<string, RowFacts> | Default<Record<string, never>>
+  >;
 
   /**
    * Whether the room lets an OWNER of its space obliterate any message;
@@ -309,7 +349,7 @@ export const FabriChatMessageRow = pattern<
     composer,
     places,
     cannotWrite,
-    isOwner,
+    rowFacts,
     ownersMayObliterate,
     messages,
     canJoin,
@@ -329,26 +369,6 @@ export const FabriChatMessageRow = pattern<
     );
   });
   const isDeletedNow = computed(() => isDeleted(message.get()));
-  // What the viewer may do to the message, by the rule the room's handlers
-  // admit an act by, and none of it while they can't write in the room. The
-  // rule reads the message's author and body, and is handed those two alone.
-  const rights = computed(() => {
-    if (cannotWrite || myProfile?.get() === undefined) return NO_MESSAGE_RIGHTS;
-    const record = message.get();
-    return messageRightsOf(
-      record === undefined
-        ? undefined
-        : { authorProfile: record.authorProfile, body: record.body },
-      myProfile.resolveAsCell(),
-      kind,
-      isOwner === true,
-      ownersMayObliterate === true,
-    );
-  });
-  const isEditing = computed(() => {
-    const editing = composer.get()?.editing;
-    return editing !== undefined && equals(editing, message);
-  });
   const text = computed(() => bodyText(message.get()));
   const attachments = computed((): Cell<FileEntry>[] =>
     message.get()?.attachments ?? []
@@ -397,20 +417,15 @@ export const FabriChatMessageRow = pattern<
   // for that viewer runs the room, which one that only renders it does not,
   // so which rows the main conversation holds, which every viewer is shown,
   // is decided from the room's messages alone, by the room.
-  const editDisplay = computed((): ChatDisplay =>
-    rights.canEdit ? "inline-flex" : "none"
-  );
-  const deleteDisplay = computed((): ChatDisplay =>
-    rights.canDelete ? "inline-flex" : "none"
-  );
-  const obliterateDisplay = computed((): ChatDisplay =>
-    rights.canObliterate ? "inline-flex" : "none"
-  );
-  // An open editor closes once the message no longer takes an edit from the
-  // viewer, as when an OWNER deletes it.
-  const editorDisplay = computed((): ChatDisplay =>
-    isEditing && rights.canEdit ? "block" : "none"
-  );
+  //
+  // Which of the controls that act on the message show is the room's, derived
+  // for every row at once for the session. The row reads its own entry, and
+  // runs again only when that one changes.
+  const facts = computed((): RowFacts => {
+    const key = viewKeyOf(message);
+    return (key === undefined ? undefined : rowFacts.key(key).get()) ??
+      NO_ROW_FACTS;
+  });
   const pickerDisplay = computed((): ChatDisplay =>
     pickerOpen.get() === true ? "flex" : "none"
   );
@@ -548,7 +563,7 @@ export const FabriChatMessageRow = pattern<
                 data-ui-pattern={CHAT_EDIT_SURFACE}
                 data-ui-event-integrity={CHAT_EDIT_SURFACE}
                 hidden
-                style={{ display: editorDisplay }}
+                style={{ display: facts.editor }}
               >
                 <cf-hstack gap="1" align="center">
                   <cf-submit-input
@@ -715,7 +730,7 @@ export const FabriChatMessageRow = pattern<
               size="sm"
               variant="ghost"
               hidden
-              style={{ display: editDisplay }}
+              style={{ display: facts.edit }}
               onClick={startEdit}
             >
               Edit
@@ -730,7 +745,7 @@ export const FabriChatMessageRow = pattern<
                 size="sm"
                 variant="ghost"
                 hidden
-                style={{ display: deleteDisplay }}
+                style={{ display: facts.delete }}
                 onClick={deleteMessage}
               >
                 Delete
@@ -746,7 +761,7 @@ export const FabriChatMessageRow = pattern<
                 size="sm"
                 variant="ghost"
                 hidden
-                style={{ display: obliterateDisplay }}
+                style={{ display: facts.obliterate }}
                 onClick={obliterateMessage}
               >
                 Remove entirely

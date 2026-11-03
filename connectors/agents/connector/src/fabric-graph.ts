@@ -9,7 +9,10 @@ import {
 } from "@commonfabric/runner";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { addressKey } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import { stableFabricValue } from "./stable-fabric-value.ts";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 

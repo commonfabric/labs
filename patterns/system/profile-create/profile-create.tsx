@@ -129,9 +129,14 @@ export const seedProfileName = handler<
 // `inSpace()` call below: the calling (home) space records one allocation per
 // call, keyed by this handler's frame cause, which carries the creating user's
 // per-home-space input links plus the durable per-event id (runner.ts
-// `createPatternFrame` cause). The space is created with a random DID and owned
-// by the creating user, so a profile is unique per user AND per creation event,
-// and stable across the cross-space-commit retry. The display name flows ONLY to
+// `createPatternFrame` cause). The space is created with a random DID, so a
+// profile is unique per user AND per creation event, and stable across the
+// cross-space-commit retry. The space owns itself (`selfOwned`): its access
+// list grants its own DID OWNER and the creating user nothing, and the user
+// holds instead a delegation the space's key issued before being destroyed,
+// recorded in the home space beside the allocation and presented when the
+// user's runtime opens the space (docs/specs/profile-delegation.md). The
+// space declares the `profile` kind. The display name flows ONLY to
 // `initialName` (editable later, independent of the space identity). Other
 // users read a profile — a lunch poll or a chat room shows its name — and a
 // runtime showing one writes into the profile's space, its per-session state
@@ -169,6 +174,8 @@ export const submitProfileCreation = handler<
     const profile = ProfileHome.inSpace(undefined, {
       grants: { "*": "WRITE" },
       root: true,
+      spaceKind: "profile",
+      selfOwned: true,
     })({
       initialName: name,
     });

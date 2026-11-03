@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-run=git
+#!/usr/bin/env -S deno run --allow-read --allow-env --allow-run=git
 
 /**
  * Fails when a command that starts a test runner does not shuffle the
@@ -19,19 +19,23 @@
  * where each step acts on what the step before it left — is listed in
  * {@link EXEMPTIONS} with that reason.
  *
- * Two halves. Every command written in a task, a workflow, or a shell
+ * Three parts. Every command written in a task, a workflow, or a shell
  * script is held to carrying the flag where it needs one. Every
- * workspace member is held to reaching a runner named here at all, which
- * is what a member arriving with a runner nobody decided about fails.
- * A member's task may run other commands beside its runner — a type
- * check, a baseline capture — and a second test runner hidden among
- * those is left to review.
+ * `deno test` that TypeScript source writes as an array literal, in one
+ * of the shapes {@link builtDenoTests} reads, is held to the same. Every
+ * workspace member is held to reaching a runner named here at all,
+ * which is what a member arriving with a runner nobody decided about
+ * fails. A member's task may run other commands beside its runner
+ * — a type check, a baseline capture — and a second test runner hidden
+ * among those is left to review.
  *
- * Usage: deno run --allow-read --allow-run=git ./tasks/check-test-shuffle.ts
+ * Usage: deno run --allow-read --allow-env --allow-run=git \
+ *        ./tasks/check-test-shuffle.ts
  */
 
 import { basename, dirname, fromFileUrl, join } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
+import ts from "typescript";
 import { readInvocation } from "./run-member-tests.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
@@ -274,6 +278,23 @@ async function trackedFiles(root: string): Promise<string[]> {
   return new TextDecoder().decode(stdout).split("\0").filter((p) => p !== "");
 }
 
+/**
+ * The contents of a tracked file, or nothing where the working tree no
+ * longer holds it, which is what a deletion looks like before it is
+ * staged.
+ */
+async function readTracked(
+  root: string,
+  file: string,
+): Promise<string | undefined> {
+  try {
+    return await Deno.readTextFile(join(root, file));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return undefined;
+    throw error;
+  }
+}
+
 /** Whether a file is a manifest, whose commands are read from its tasks. */
 function isManifest(file: string): boolean {
   return /(^|\/)deno\.jsonc?$/.test(file);
@@ -428,18 +449,207 @@ export async function commandsWrittenIn(
   }
 
   for (const file of files.filter(isScript)) {
-    let contents: string;
-    try {
-      contents = await Deno.readTextFile(join(root, file));
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) continue;
-      throw error;
-    }
+    const contents = await readTracked(root, file);
+    if (contents === undefined) continue;
     for (const { line, command } of writtenCommands(contents)) {
       found.push({ where: `${file}:${line}`, command });
     }
   }
   return found;
+}
+
+/** Whether a node is a string literal, or a template without substitutions. */
+function isPlainString(
+  node: ts.Node | undefined,
+): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral {
+  return node !== undefined &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node));
+}
+
+/** Whether a node is a plain string spelling `text`. */
+function spells(node: ts.Node | undefined, text: string): boolean {
+  return isPlainString(node) && node.text === text;
+}
+
+/** Whether a node is parentheses, `as`, or `satisfies` around an expression. */
+function isWrapper(
+  node: ts.Node,
+): node is
+  | ts.ParenthesizedExpression
+  | ts.AsExpression
+  | ts.SatisfiesExpression {
+  return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node);
+}
+
+/** The expression inside any wrappers around `node`. */
+function unwrapped(node: ts.Expression): ts.Expression {
+  return isWrapper(node) ? unwrapped(node.expression) : node;
+}
+
+/** Whether a node is `Deno.<name>`. */
+function isDenoMember(node: ts.Node, name: string): boolean {
+  return ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.expression) && node.expression.text === "Deno" &&
+    node.name.text === name;
+}
+
+/**
+ * Whether a node is a call to a function named `name`, whether by that
+ * name alone or as a property, as in `shuffle.shuffleFlag()`.
+ */
+function calls(node: ts.Node, name: string): boolean {
+  if (!ts.isCallExpression(node)) return false;
+  const callee = node.expression;
+  return ts.isPropertyAccessExpression(callee)
+    ? callee.name.text === name
+    : ts.isIdentifier(callee) && callee.text === name;
+}
+
+/**
+ * Whether a node is a string that writes `prefix` with a value after it: a
+ * literal with text after the prefix, or a template or concatenation that
+ * starts with the prefix and goes on with an expression.
+ */
+function writesOption(node: ts.Node, prefix: string): boolean {
+  if (isPlainString(node)) {
+    return node.text.startsWith(prefix) && node.text.length > prefix.length;
+  }
+  if (ts.isTemplateExpression(node)) return node.head.text.startsWith(prefix);
+  if (
+    !ts.isBinaryExpression(node) ||
+    node.operatorToken.kind !== ts.SyntaxKind.PlusToken
+  ) return false;
+  return isPlainString(node.left)
+    ? node.left.text.startsWith(prefix)
+    : writesOption(node.left, prefix);
+}
+
+/** Whether a node names the `deno` program: `"deno"` or `Deno.execPath()`. */
+function namesDeno(node: ts.Node | undefined): boolean {
+  return spells(node, "deno") ||
+    (node !== undefined && ts.isCallExpression(node) &&
+      isDenoMember(node.expression, "execPath"));
+}
+
+/**
+ * Whether an array literal is the `args` of a `new Deno.Command()` whose
+ * program is `deno`. A type assertion or parentheses around the array
+ * are looked through.
+ */
+function isDenoCommandArgs(list: ts.ArrayLiteralExpression): boolean {
+  let property = list.parent;
+  while (isWrapper(property)) property = property.parent;
+  if (
+    !ts.isPropertyAssignment(property) ||
+    !(ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ||
+    property.name.text !== "args"
+  ) return false;
+  const command = property.parent.parent;
+  return ts.isNewExpression(command) &&
+    isDenoMember(command.expression, "Command") &&
+    namesDeno(command.arguments?.[0]);
+}
+
+/**
+ * Whether an array literal is, or may be, the arguments of a
+ * `deno test`: the whole command, starting `"deno", "test"` or
+ * `Deno.execPath(), "test"`, or the `args` of a `Deno.Command` that runs
+ * `deno`, starting `"test"`. A command starting with `deno` whose second
+ * element is not a plain string, as in `["deno", ...args]`, may be one,
+ * and is held to the same rule, since nothing here can tell what it
+ * runs.
+ */
+function isDenoTestList(list: ts.ArrayLiteralExpression): boolean {
+  const [first, second] = list.elements;
+  if (namesDeno(first)) {
+    return second !== undefined &&
+      (spells(second, "test") || !isPlainString(second));
+  }
+  return spells(first, "test") && isDenoCommandArgs(list);
+}
+
+/**
+ * Whether an argument list carries a seed: an element that is a string
+ * starting `--shuffle=`, or a call to `shuffleFlag()`, which returns one.
+ * A spread hides what it holds, so it never counts.
+ */
+function listShuffles(list: ts.ArrayLiteralExpression): boolean {
+  return list.elements.map(unwrapped)
+    .some((element) =>
+      writesOption(element, "--shuffle=") || calls(element, "shuffleFlag")
+    );
+}
+
+/**
+ * The `deno test` argument lists a TypeScript source builds, each with
+ * the line it starts on, its text on one line, and whether it carries a
+ * seed. The seed has to be in the list as written, so that the list
+ * answers for itself.
+ */
+export function builtDenoTests(
+  source: string,
+  path: string,
+): { line: number; text: string; shuffles: boolean }[] {
+  const file = ts.createSourceFile(
+    path,
+    source,
+    ts.ScriptTarget.ESNext,
+    /* setParentNodes */ true,
+    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const found: { line: number; text: string; shuffles: boolean }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isArrayLiteralExpression(node) && isDenoTestList(node)) {
+      found.push({
+        line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+        text: node.getText().replace(/\s+/g, " "),
+        shuffles: listShuffles(node),
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
+
+/**
+ * Whether a file is TypeScript source whose argument lists are read. A
+ * test file's `deno test` runs a fixture the test wrote, or is the value
+ * it expects a builder to return, so it starts none of this repository's
+ * tests. A runner that forwards its flags builds its list out of flags
+ * its caller wrote, and the commands that start it are held to carrying
+ * the seed among them.
+ */
+function isBuildingSource(file: string): boolean {
+  return /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file) &&
+    !RUNNERS.some((runner) =>
+      runner.kind === "forwards" && runner.implementation === file
+    );
+}
+
+/** The `deno test` argument lists without a seed that sources build. */
+async function unshuffledListsIn(root: string): Promise<Violation[]> {
+  const violations: Violation[] = [];
+  for (const file of (await trackedFiles(root)).filter(isBuildingSource)) {
+    const source = await readTracked(root, file);
+    if (source === undefined) continue;
+    // Parsing is exact but not free, and most files never name `deno`
+    // or `test` as a quoted string. Reading the text first settles those.
+    if (!/["'`](?:deno|test)["'`]|Deno\.execPath/.test(source)) continue;
+    for (const { line, text, shuffles } of builtDenoTests(source, file)) {
+      if (shuffles) continue;
+      violations.push({
+        where: `${file}:${line}`,
+        command: text,
+        problem: "a `deno test`, or a `deno` command whose subcommand " +
+          "this check cannot read, with no seed; write the command as " +
+          "one array holding `shuffleFlag(shuffleSeed())` from " +
+          "`@commonfabric/test-support/shuffle`",
+      });
+    }
+  }
+  return violations;
 }
 
 /** Runs the check over `root`, reporting what it found. */
@@ -449,6 +659,9 @@ export async function scan(root: string): Promise<Violation[]> {
     const problem = problemWith(command);
     if (problem === undefined) continue;
     violations.push({ where, command: command.trim(), problem });
+  }
+  for (const violation of await unshuffledListsIn(root)) {
+    violations.push(violation);
   }
 
   // Every member is held to reaching a runner this knows shuffles, which

@@ -1,4 +1,5 @@
 import { basename } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   buildFuseChildDenoArgs,
   fuseMod,
@@ -221,7 +222,7 @@ if (import.meta.main) {
     }
     await runFuseSupervisor(options);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

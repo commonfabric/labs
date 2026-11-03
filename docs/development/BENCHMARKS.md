@@ -33,7 +33,7 @@ cannot establish retained memory cost.
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
 hours on a schedule, on the dedicated runner group. It runs `deno bench --json`
 over `runtime/runner/test/*.bench.ts` plus explicitly listed benchmarks in
-`base/utils`, `runtime/fuse`, `runtime/memory`,
+`base/collections`, `base/js-values`, `runtime/fuse`, `runtime/memory`,
 `base/data-model`, `runtime/piece`, `dashboard`, and
 `patterns`. It uploads JSON stdout and a copy of stderr in the `bench-results`
 artifact with 90-day retention. A bench file outside those paths does not run in
@@ -787,10 +787,10 @@ reconciler's demand over the piece's view for the run, as a mounted tab does
 (`renderView` on the session, with the fixture showing the poll's own view under
 its `renderPoll` input), so a client that derives the tallies and cards it would
 show has derived them by the measured end. Each client is a web client
-(`clientClass: "web"` on the session), so under
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` its view registers as a view interest
-and the server selects what it receives, as it does for a browser tab; hold that
-flag and server execution constant when comparing arms. Such a client derives
+(`clientClass: "web"` on the session), so with web view-scoped replication on,
+as it is by default under server execution, its view registers as a view
+interest and the server selects what it receives, as it does for a browser tab;
+hold that flag and server execution constant when comparing arms. Such a client derives
 none of the poll itself, and the tallies the server derives from a burst's votes
 can reach it a wave after the votes do, which the measured end below does not
 wait for, so with that flag and server execution on the end is the votes'
@@ -1768,14 +1768,14 @@ deno bench -A --json runtime/memory/test/v2-refresh-schema-closure.bench.ts
 
 ## String tuple keys
 
-`base/utils/test/string-tuple-key.bench.ts` measures encoding 256 distinct
+`base/collections/test/string-tuple-key.bench.ts` measures encoding 256 distinct
 string tuples and looking up their values in a prebuilt Map. The cases cover
 two-field document identities, three-field cache slots, five-field consumed
 sources, and fields containing escape characters or Unicode. Construction and
 checksum checks stay outside the timed interval; the lookup includes string
 hashing and flattening.
 
-`stringTupleKey` is available through `@commonfabric/utils/string-tuple-key`.
+`stringTupleKey` is available through `@commonfabric/collections/string-tuple-key`.
 It preserves string and tuple boundaries, including empty strings and embedded
 NULs. Its opaque output is for internal Map and Set identities whose components
 are all strings. A caller with a fixed string prefix and one trailing path can

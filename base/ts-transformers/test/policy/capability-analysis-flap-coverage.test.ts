@@ -175,11 +175,11 @@ Deno.test(
 );
 
 Deno.test(
-  "conflicting map .set() values drop the value binding so .get().member no longer resolves",
+  "map .set() values from different sources each reach a .get().member read",
   () => {
-    // Branch: `updateLocalCollectionBinding` deletes the tracked map-value
-    // binding when two `.set()` calls store non-equal sources, so their merge
-    // is undefined (capability-analysis.ts ~1977-1979).
+    // Branch: `mergeAliasBinding` merges two `.set()` calls that store
+    // different sources into alternatives, so the value `.get()` returns may
+    // be either and a member read through it is charged to both.
 
     const input = getPaths(
       analyzeNoChecker(
@@ -193,13 +193,12 @@ Deno.test(
       ),
       "input",
     );
-    // Both set arguments are still read at set time.
+    // Both set arguments are read at set time, and the later
+    // `.get("k").name` is read through each.
     assert(input.readPaths.includes("a"));
     assert(input.readPaths.includes("b"));
-    // But the merged binding was deleted, so the later `.get("k").name` resolves
-    // to no source: neither a.name nor b.name is recorded.
-    assert(!input.readPaths.includes("a.name"));
-    assert(!input.readPaths.includes("b.name"));
+    assert(input.readPaths.includes("a.name"));
+    assert(input.readPaths.includes("b.name"));
   },
 );
 

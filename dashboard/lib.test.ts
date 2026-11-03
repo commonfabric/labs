@@ -3,7 +3,7 @@
  */
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import { budgetStatus, ciDurationSub, clampInt, compactSpan, concDot, daysLabel, durationTag, escapeHtml, friendlyError, groupDigits, humanDur, humanSpan, jsonFromZip, landingHref, lighten, median, multiSparkline, pullRequestLinks, readBudget, sparkline, strip, thin, usd } from "./lib.ts";
 import { artifactZip, bytes, makeZip } from "./test/artifact-zip.ts";
 

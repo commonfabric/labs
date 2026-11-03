@@ -48,8 +48,8 @@ import {
   isBoolean,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
-import { getLogger } from "@commonfabric/utils/logger";
+} from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
 import { debugStr } from "@commonfabric/data-model";
 
 const logger = getLogger("schema-walk", { level: "warn" });

@@ -25,7 +25,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
-import type { Immutable } from "@commonfabric/utils/types";
+import type { Immutable } from "@commonfabric/js-values/types";
 import { join } from "@std/path";
 import {
   initializePiecesController,

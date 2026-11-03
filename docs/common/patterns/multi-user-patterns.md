@@ -403,6 +403,10 @@ const addFan = action(({ fan }: { fan: unknown }) => {
 - It reads nothing but its argument, so it works anywhere: in an action or
   handler, in a `computed()` or `lift()`, and in a pattern body or JSX, where a
   call on a reactive value is lifted like a call to any other function.
+- To take a DID apart, call `parseDID()`, also exported from `commonfabric`,
+  rather than splitting the string. It returns the DID's `method` and its
+  method-specific `id`, or `undefined` for a value that does not start with
+  `did:`, and it can be called anywhere `isWellFormedDID()` can.
 
 ### The principal a profile or record names
 
@@ -874,6 +878,35 @@ a `target` of `undefined`, and throughout a run that names a space `inSpace()`
 has not resolved yet: the runtime creates the space once that run ends,
 discards what it wrote, and runs it again, and that next run gets the DID.
 [`space-access.md`](../../features/space-access.md#the-spaces-own-did) has the
+details.
+
+### Telling a deleted space
+
+`spaceDeleted(target)` returns whether a space is deleted, so a pattern that
+keeps a list of spaces can put away an entry whose space is gone. `target` is a
+cell, naming the space its value lives in, or the space's own DID.
+
+```tsx
+// Shown at module scope.
+const SavedRooms = pattern<{ rooms: DID[] }>(({ rooms }) => {
+  const live = computed(() =>
+    rooms.filter((room) => spaceDeleted(room) !== true)
+  );
+  return { live };
+});
+```
+
+`true` means the memory server refuses the space because it is deleted, which it
+is for good, and `false` that it admits the runtime there or refuses it for
+another reason. `undefined` means there is no answer yet: a computation runs
+again once the server answers, and a handler is run again with the answer in
+place, unless it runs on the client and its event was sent with
+`retries: false`; a handler a serving runtime runs is run again either way. It
+is also `undefined`, with no answer from the server coming to run anything
+again, when `target` is `undefined`, and on a runtime with no memory server to
+ask about the space, such as one that reads the space from a local store. Call
+it where `spaceAccess(target)` can be called.
+[`space-access.md`](../../features/space-access.md#a-deleted-space) has the
 details.
 
 ## Mapping Shared Lists

@@ -13,8 +13,9 @@ import {
   decodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import type { Cell } from "../../src/cell.ts";
@@ -107,6 +108,7 @@ describe("wish-home-readiness", () => {
             async create(space, signer, options = {}) {
               const base = loopback(server);
               const client = await connect({
+                instanceNames: namesInstancesByDefault(),
                 transport: {
                   ...base,
                   async send(payload) {

@@ -1,4 +1,4 @@
-import { basename } from "@std/path";
+import { basename } from "@std/path/basename";
 
 function normalizeCliName(
   name: string | undefined | null,

@@ -11,7 +11,10 @@
 
 import { encodeHex } from "@std/encoding/hex";
 import { sha256 } from "@commonfabric/content-hash";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 // By path rather than through `@commonfabric/runner`: the gate runs
 // `cause-assignments-dump.ts` against a checkout of the base revision, under
 // that checkout's configuration, where a package specifier would reach the
@@ -59,6 +62,18 @@ export interface PatternAssignment {
 export interface PatternAssignmentError {
   pattern: string;
   error: string;
+}
+
+/**
+ * A pattern file one compiler built to no cause assignment, as it does a
+ * helper module that exports no pattern.
+ */
+export interface UnassignedPattern {
+  /** The pattern's key, as `pattern-files.ts` names it. */
+  pattern: string;
+
+  /** A digest of the source files the pattern was compiled from. */
+  source: string;
 }
 
 /** A cell whose number differs between two builds of one source. */

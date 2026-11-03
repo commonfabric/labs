@@ -1,6 +1,6 @@
 ---
 name: pattern-iframe
-description: Build or generate a Common Fabric pattern whose primary UI is a self-contained `cf-iframe` guest. Use when an agent should turn an input-data shape and a small state/output contract into a working iframe-first pattern without learning the broader pattern framework, including plain DOM, React, D3, Phaser 2D games, Babylon.js 3D scenes, PerSpace/PerUser/PerSession data, path-scoped Cell access, stable array-item handles, mergeable pushes, bridged SQLite, ephemeral presence such as live cursors, or pattern verbs the guest sends events to through streams, such as a user-triggered `agent()` or LLM request.
+description: Build a Common Fabric pattern whose primary UI is a self-contained `cf-iframe` guest. Use when an agent should turn an input-data shape and a small state/output contract into a working iframe-first pattern without learning the broader pattern framework, including plain DOM, React, D3, Phaser 2D games, Babylon.js 3D scenes, PerSpace/PerUser/PerSession data, path-scoped Cell access, stable array-item handles, mergeable pushes, bridged SQLite, ephemeral presence such as live cursors, or pattern verbs the guest sends events to through streams, such as a user-triggered `agent()` or LLM request.
 ---
 
 # Iframe-first patterns
@@ -26,55 +26,40 @@ For an explicit hybrid, choose the guide for the framework that owns the DOM or
 canvas lifecycle. Load a second guide only when the request genuinely combines
 two owners, such as React mounting and unmounting a D3-managed subtree. Do not
 load the general pattern-development guides unless the requested behavior
-extends beyond the generated wrapper.
+extends beyond one `cf-iframe` and the cells, databases, presence rooms, and
+verbs it is handed.
 
-Keep the authored surface small:
+What the guides cannot leave to judgment:
 
-- Put the files under `patterns/iframe-<name>/`. The `iframe-` prefix is
+- Put the files under `patterns/<category>/iframe-<name>/`, with the category
+  chosen from those `patterns/README.md` lists. The `iframe-` prefix is
   load-bearing: pattern discovery uses it to recognize `guest.ts` and
-  `guest.tsx` as browser sources rather than additional pattern entries.
-- `contract.ts` names the input, durable state, and output data shapes and their
-  defaults.
-- `guest.ts` or `guest.tsx` owns the application. It may use plain DOM code or
-  React and the guest bridge.
-- `main.tsx` is generated glue. Do not hand-edit it.
-- A contract that declares `streams` makes each one a required input of the
-  wrapper, so pass `--out .../frame.tsx` to the command below instead, and write
-  `main.tsx` by hand to declare the verbs and pass them in; `cf check` on
-  `main.tsx` then checks both. When the pattern exposes an action as a verb,
-  prefer having the guest send that verb an event over making the same change
-  through its own cell writes. The general guide's "Optional streams" section
-  covers this, including LLM built-ins.
+  `guest.tsx` as browser sources rather than pattern entries, and the root
+  `deno.jsonc` excludes `guest.js` from fmt, lint, and the type check by it.
+- `main.tsx` is hand-written from the guide's templates. It reads `guest.html`
+  and `guest.js` with `dataFile()` and hands `cf-iframe` its cells as one
+  `$context={{ ... }}` record. The `$` is what makes them live; a field that is
+  a database, a presence room, or a verb is named in `resourceKinds`, since the
+  host cannot tell those from a cell on its own.
+- `guest.js` is `deno bundle` output and is kept in the tree: `main.tsx` reads
+  it as it is, so rebundle after every guest change. A React `guest.tsx` names
+  React's JSX factory in pragmas, because the repository's JSX configuration is
+  the pattern runtime's.
+- When the pattern exposes an action as a verb, prefer having the guest send
+  that verb an event over making the same change through its own cell writes.
+  The general guide's "Optional streams" section covers this, including LLM
+  built-ins.
 - One joint initial `pull()` barrier owns readiness for every resource an action
   uses. Keep action controls disabled until it resolves; an individual
   synchronous `sink()` callback must never declare the guest ready.
 
-Generate the wrapper with:
-
-```bash
-deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/iframe-<name>/contract.ts \
-  --guest patterns/iframe-<name>/guest.ts \
-  --out patterns/iframe-<name>/main.tsx
-```
-
-Add `--react` when the authored guest is React TSX, as required by the React
-guide. For a contract that declares `streams`, the output is `frame.tsx`.
-
-Add `--html patterns/iframe-<name>/guest.html` when the guest needs a custom
-document shell, and `--force` only when regenerating the named output. The HTML
-shell must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once.
-
-Validate the generated pattern with:
-
-```bash
-deno fmt patterns/iframe-<name>
-deno check patterns/iframe-<name>/<guest-file>
-deno task cf check patterns/iframe-<name>/main.tsx --no-run
-```
-
-Replace `<guest-file>` with the authored `guest.ts` or `guest.tsx` filename.
+`patterns/examples/iframe-verb-list/` is the smallest complete example, with a
+verb; `patterns/showcase/iframe-signal-atlas/` adds a per-user SQLite database
+and per-session output, and `patterns/examples/iframe-cursor-canvas/` a presence
+room. `patterns/showcase/iframe-ring-loops/` is the exception, not a template:
+its `main.tsx` composes a `frame.tsx` that `scripts/write-iframe-wrapper.ts`
+generates, and it has no `guest.js`. Do not copy its shape into a new pattern.
 
 Run the pattern or add a focused test when behavior, rather than only its data
-contract, changed. Preserve `contract.ts` and the guest source beside the
-generated wrapper so the pattern remains reproducible.
+contract, changed. `deno task cf check` proves the pattern compiles, not that
+the guest loads or that a bridge write completes.

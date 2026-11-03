@@ -11,7 +11,7 @@
  * walker dispatches -- reads that declaration.
  */
 
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 
 import type { FabricInstance, FabricValuePlus } from "@/interface.ts";
 
@@ -377,7 +377,7 @@ export interface FabricClassWithNonterminalCodec<PlusType = never> {
  * more. This package names what it requires rather than the classes that
  * happen to supply it, so a client brings its own. `BaseLiveEnvironment` is
  * the base to build one on, and `NullLiveEnvironment` covers a caller that
- * expects to need no cell. See Section 2.5 of the formal spec.
+ * expects to need no cell. See Section 2.6 of `1-fabric-values.md`.
  */
 export interface LiveEnvironment {
   /**

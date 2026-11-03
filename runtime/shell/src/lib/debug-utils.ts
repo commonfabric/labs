@@ -26,7 +26,7 @@ import type {
 } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
 import { hasEntityUriScheme } from "@commonfabric/runner/entity-kind";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { MetaField } from "@commonfabric/runner";
 import { createVDomDebugHelpers, viewSettled } from "@commonfabric/html/debug";
 

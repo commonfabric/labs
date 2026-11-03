@@ -7,7 +7,8 @@
 // the on-disk source with the server, and link it into the target field.
 
 import { createRef } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 const SQLITE_SCHEME = "sqlite:";
 
@@ -89,7 +90,7 @@ function inlineTables(id: string, tables: unknown): Record<string, unknown> {
     throw new Error(
       `cf piece link: the contract on handle ${id} cannot be copied, so the ` +
         `handle is left as it stands rather than re-seeded without its ` +
-        `labels: ${err instanceof Error ? err.message : String(err)}`,
+        `labels: ${describeFailure(err)}`,
     );
   }
   if (!isObjectNotArray(copy)) {

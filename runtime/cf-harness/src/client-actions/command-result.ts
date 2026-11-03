@@ -7,7 +7,7 @@
  */
 
 import type { JSONObject } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HARNESS_COMMAND_ID_MAX_LENGTH,
   type HarnessCommandAttribution,

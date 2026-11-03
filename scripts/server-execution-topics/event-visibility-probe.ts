@@ -13,7 +13,7 @@ import {
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { Runtime } from "../../runtime/runner/src/runtime.ts";
 import {

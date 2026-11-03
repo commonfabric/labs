@@ -6,7 +6,8 @@ import {
   type CfcReadOnExceed,
   isCfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   normalizePromptSlotBinding,
   type PromptSlotBinding,
@@ -330,9 +331,7 @@ export const parseLoomRunManifestJson = (
     parsed = JSON.parse(text);
   } catch (error) {
     throw new Error(
-      `failed to parse run manifest JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `failed to parse run manifest JSON: ${describeFailure(error)}`,
     );
   }
   return normalizeLoomRunManifest(parsed);

@@ -24,7 +24,7 @@ import {
   type OperationFieldSnapshot,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type CodeMirrorOperationPayload = {
   updates: Array<{
@@ -766,6 +766,7 @@ export class CodeMirrorCollaborationController {
       cursor: resolution.to,
       baselineHash: this.#baselineHash,
       materialized: this.#view.state.doc.toString(),
+      anchors: [],
       operations: resolution.operations,
     };
     const updates = codeMirrorIntegratedUpdates(snapshot, current);

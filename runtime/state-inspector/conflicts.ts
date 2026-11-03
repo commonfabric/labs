@@ -31,7 +31,7 @@ import {
   patchOverlapsNonRecursiveRead,
   patchOverlapsRead,
 } from "@commonfabric/memory/v2/engine";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { rowLimit } from "./model.ts";
 

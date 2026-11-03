@@ -18,14 +18,14 @@ import {
 } from "@commonfabric/data-model";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { getLogger } from "@commonfabric/utils/logger";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { getLogger } from "@commonfabric/logger";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
-import { type CellScope, type JSONSchema } from "./builder/types.ts";
+import type { CellScope, JSONSchema } from "./builder/types.ts";
 import {
   CellImpl,
   getCarriedCfcLabelView,
@@ -73,7 +73,7 @@ import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
-import { type Runtime } from "./runtime.ts";
+import type { Runtime } from "./runtime.ts";
 import {
   allowMutableTransactionRead,
   markReadAsAttemptedWrite,

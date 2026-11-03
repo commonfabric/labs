@@ -1,4 +1,4 @@
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Pattern } from "../builder/types.ts";
 import type { Cell, MemorySpace } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";

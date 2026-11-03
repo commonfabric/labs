@@ -10,9 +10,10 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { legacySpaceDid } from "@commonfabric/identity";
-import { isDID } from "@commonfabric/identity/did";
+import { isDID, isDIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
@@ -33,13 +34,14 @@ import { StaticCache } from "@commonfabric/static";
 import {
   type AsyncLocalStore,
   FallbackAsyncLocalStore,
-} from "@commonfabric/utils/async-local-store";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isDeno } from "@commonfabric/utils/env";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+} from "@commonfabric/async/async-local-store";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isDeno } from "@commonfabric/platform/env";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
+import { namesInstances } from "./builder/instance-name.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
@@ -116,6 +118,9 @@ import {
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import type { OwningRootAddress } from "./ensure-piece-running.ts";
+import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
+import type { CompileTurns } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
@@ -147,6 +152,7 @@ import {
   PatternManager,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
+import { profileLinkListSchema } from "./profile-order.ts";
 import { snapshotQueryResult } from "./query-result-proxy.ts";
 import { AsyncSemaphoreQueue, type QueueConfig } from "./queue.ts";
 import {
@@ -256,8 +262,8 @@ const isFullNormalizedLinkShape = (
 };
 
 // Deno/Node `AsyncLocalStorage` when available, the promise-aware fallback
-// otherwise. The `await import` stays here (not in the shared utils module): a
-// top-level await in widely-imported utils stalls Deno module evaluation.
+// otherwise. The `await import` stays here (not in `@commonfabric/async`): a
+// top-level await in a widely-imported package stalls Deno module evaluation.
 const WriteDebugContextStorage = (isDeno()
   // deno-lint-ignore cf-imports/no-inline-module-import
   ? (await import("node:async_hooks")).AsyncLocalStorage
@@ -419,7 +425,10 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
-  /** Global default for server-selected view replication. Defaults to off. */
+  /**
+   * Global default for server-selected view replication, which only a web
+   * client under server execution requests. Unset, such a client requests it.
+   */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
@@ -452,19 +461,34 @@ export interface ExperimentalOptions {
   localFold?: boolean | undefined;
 
   /**
+   * Record the principal a piece was created for on its result document, in
+   * the `creator` meta field, when a setup brings the piece into being, and
+   * give a piece from before the record one at its next source transition,
+   * from the owner its space's access list names for a space root and from
+   * the principal its owner-protected fields represent for any other piece
+   * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
+   * what binds a field a later release adds to the piece's creator. Defaults
+   * to off; off, no record is written and a stored one is left as it is.
+   */
+  pieceCreatorRecord?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots
    * (`docs/specs/computed-cell-identity.md`, "Sub-pattern instance identity").
-   * Defaults to off, which compiles every instance positionally. Turning it on
-   * moves every deployed `const`-bound child from its positional identity to a
-   * named one. The first setup that names an instance carries its deployed
-   * child over where the pattern the parent last set up loads and names it
-   * too, and the parent's setup record, where it has one, numbers its cell as
-   * this runtime's build of that pattern does; otherwise the instance starts
-   * fresh. It needs every runtime that opens the
-   * same space to run the same naming mode first, so no environment variable
-   * reaches it (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`).
+   * A deployed parent's positional child is carried over to its name on the
+   * first setup that names it. Where the parent's setup record numbers the
+   * pattern it last set up otherwise than this runtime's build of it, an
+   * instance at a number the record cannot vouch for takes a child only as
+   * the one positional child of its pattern identity, and none takes the
+   * child at its own positional spot. Defaults to off, which compiles every
+   * instance positionally, so nothing names an instance and nothing is
+   * carried over.
+   * Turning it on is one-way for the data it writes, and needs every runtime
+   * that opens the same space to run the same naming mode first
+   * (`docs/development/EXPERIMENTAL_OPTIONS.md#instancenames`), so no
+   * environment variable reaches it.
    */
   instanceNames?: boolean | undefined;
 }
@@ -983,6 +1007,14 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile this runtime takes with the other runtimes that
+   * share its {@link RuntimeOptions.moduleByteCache}, so that a compile that
+   * yields does not leave them to read a miss and compile the same modules.
+   * When unset, this runtime compiles without waiting for any other.
+   */
+  compileTurns?: CompileTurns;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1203,6 +1235,15 @@ export interface InSpaceCreationRequest {
 
   /** The kind the genesis commit declares. */
   spaceKind?: string;
+
+  /**
+   * Whether the created space owns itself: its access list grants its own
+   * DID OWNER and the creator nothing, and the creator holds instead a
+   * delegation the space's key issued over it
+   * (`docs/specs/profile-delegation.md`), which the calling space records
+   * under {@link delegationsCause} beside the allocation.
+   */
+  selfOwned?: boolean;
 }
 
 /**
@@ -1215,7 +1256,8 @@ const inSpaceCreationKey = (
   space: MemorySpace,
   name: string,
   owner: DID,
-  { grants = {}, root = false, spaceKind }: InSpaceCreationRequest,
+  { grants = {}, root = false, spaceKind, selfOwned = false }:
+    InSpaceCreationRequest,
 ): string =>
   JSON.stringify([
     space,
@@ -1224,7 +1266,26 @@ const inSpaceCreationKey = (
     Object.entries(grants).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
     root,
     spaceKind ?? null,
+    selfOwned,
   ]);
+
+/**
+ * The cause of the document in which a space records the delegations its
+ * holder holds over another space, keyed by that space's DID. The document
+ * holds each delegation's bytes as its issuer encoded them; a self-owned
+ * space's creation records the one its key issued, and a later delegation
+ * over the space, with another command or policy, lands beside it.
+ */
+export const delegationsCause = (
+  space: MemorySpace,
+): { delegations: MemorySpace } => ({ delegations: space });
+
+const delegationRecordSchema = {
+  type: "object",
+  properties: {
+    delegations: { type: "array", items: { type: "FabricBytes" } },
+  },
+} as const satisfies JSONSchema;
 
 export interface SpaceCellContents {
   defaultPattern: Cell<unknown>;
@@ -1338,6 +1399,28 @@ const externalObservationRefusal = (
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
 
+/**
+ * Helper for `Runtime.prepareExternalContentObservation()`, which reads every
+ * document an observed value links to, wherever the link sits in the value,
+ * since writing the value stores each link whether its schema describes the
+ * place or not.
+ */
+const linksInValue = (
+  value: unknown,
+  links: CellLink[] = [],
+  seen = new WeakSet<object>(),
+): CellLink[] => {
+  if (isCellLink(value)) {
+    links.push(value);
+  } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+    // A Cell is a link (`isCellLink`), so only plain data is walked, and an
+    // object reached twice is walked once.
+    seen.add(value);
+    for (const item of Object.values(value)) linksInValue(item, links, seen);
+  }
+  return links;
+};
+
 /** A document a commit retry's catch-up could not load, and the reason. */
 export type CommitRetryPullFailure = {
   space: MemorySpace;
@@ -1377,6 +1460,7 @@ export class Runtime {
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
+  readonly #compileTurns: CompileTurns | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1581,6 +1665,11 @@ export class Runtime {
     return this.#derivedInternalCellIds;
   }
 
+  /** See `RuntimeOptions.compileTurns`. */
+  get compileTurns(): CompileTurns | undefined {
+    return this.#compileTurns;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1602,6 +1691,14 @@ export class Runtime {
    * retry's only bound.
    */
   readonly #inSpaceCreated = new Map<string, MemorySpace>();
+
+  /**
+   * The delegation each self-owned space this runtime created issued to its
+   * creator, by space, for the runtime's lifetime: a calling space's record
+   * of it is written from here, and a conflicted commit that retries writes
+   * it again.
+   */
+  readonly #delegationsIssued = new Map<MemorySpace, Uint8Array>();
 
   /**
    * Resolutions in flight, by {@link inSpaceCreationKey}: a second request
@@ -1954,19 +2051,10 @@ export class Runtime {
       }
     }
 
-    // These flags are consumed from this Runtime instance. Normalize their
+    // Some flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
     // appear as an explicit override.
-    this.experimental.computedCellIds ??= true;
-    this.experimental.plainResultReceipts ??= true;
-    this.experimental.lazyMaterialization ??= true;
-    this.experimental.agentBuiltin ??= true;
-    this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a deployed parent's positional
-    // children are carried over to their names, and a runtime whose naming
-    // mode differs from a space's data is kept away from that space.
-    this.experimental.instanceNames ??= false;
-    this.experimental.localSessionDocuments ??= false;
+    applyLocalExperimentalDefaults(this.experimental);
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2072,6 +2160,7 @@ export class Runtime {
       // Create harness first (no dependencies on other services)
       this.harness = new Engine(this, {
         hideInternalStackFrames: options.hideInternalStackFrames,
+        interleaveCompile: this.servingPosture ? true : undefined,
       });
 
       this.storageManager = options.storageManager;
@@ -2090,7 +2179,13 @@ export class Runtime {
       this.storageManager.setSharedMemoryConnection?.(
         this.experimental.sharedMemoryConnection === true,
       );
+      // Declared before any session opens as well, since each open declares
+      // the mode and the server admits it by that (INV-16).
+      this.storageManager.setInstanceNames?.(
+        namesInstances(this.experimental),
+      );
       this.moduleByteCache = options.moduleByteCache;
+      this.#compileTurns = options.compileTurns;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
@@ -2353,18 +2448,28 @@ export class Runtime {
     | undefined;
 
   /**
-   * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the
-   * serving scheduler's mid-wave hook. A SERVING runtime's scheduler
-   * yields one macrotask between runs whenever its slice of continuous
-   * work is spent (scheduler/cooperative-yield.ts — that is what makes the
-   * wave's flush deadline honest and lets the lease-renew and push-flush
-   * timers fire mid-settle), and calls this observer synchronously at
-   * every such yield. The SpaceServer installs it at activation to renew
-   * the lease mid-wave once the wave has run longer than TTL/3 — a renew
-   * that never depends on the timer queue being serviced. Undefined
-   * everywhere else (the OFF arm and clients construct no yielder at all).
+   * Whether a piece's origin has been followed, asked before a start of the
+   * piece this runtime makes on its own, as `EnsurePieceOptions.originFollowed`
+   * (the event auto-start's). The SpaceServer installs it at activation: the
+   * serving runtime is the opener of every piece it serves, so the piece's
+   * source is brought up to date before the tenure's first start of it, and
+   * the serving loop follows the origin between waves, where the adopting
+   * write can commit (serving-loop.md §3e). Undefined everywhere else: a
+   * client follows a piece's origin when it opens it.
    */
-  servingYieldObserver: (() => void) | undefined;
+  pieceOriginFollowed: ((root: OwningRootAddress) => boolean) | undefined;
+
+  /**
+   * Resolves once every wave this runtime's seals have opened so far has
+   * finished committing: the state they staged is then the store's or
+   * withdrawn, and a transaction that commits directly (`directCommit`) may
+   * read it. The SpaceServer installs it on the serving runtime, where a
+   * sealed transaction's `commit()` resolves at the seal and the wave
+   * commits later; undefined everywhere else, where a committed transaction
+   * is durable on its own. A caller the loop awaits inside a cycle must not
+   * wait on it: the wave it waits for commits when that cycle ends.
+   */
+  sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
@@ -2940,12 +3045,16 @@ export class Runtime {
     return this.#viewReplication ??= new ViewReplicationClient(this);
   }
 
-  /** Whether this client requests view replication, subject to session support. */
+  /**
+   * Whether this client requests view replication, subject to session
+   * support: a web client under server execution does unless the web
+   * override, or else the global default, is `false`.
+   */
   get viewScopedReplicationRequested(): boolean {
     return this.#clientClass === "web" &&
       this.experimental.serverExecution === true && !this.servingPosture &&
       (this.experimental.webViewScopedReplication ??
-        this.experimental.viewScopedReplication ?? false);
+        this.experimental.viewScopedReplication ?? true);
   }
 
   /** DIAGNOSTIC (tests): the lazily-created speculation overlay, if this
@@ -3977,6 +4086,22 @@ export class Runtime {
       options.schema,
       tx,
     );
+    let finalTx: IExtendedStorageTransaction | undefined;
+    // Reads every document a link in the value names, through the link's
+    // own schema, wherever the link sits; relative links resolve against
+    // the target. Links inside a linked document follow that document's
+    // schema, as any read of it does.
+    const readStoredLinks = (
+      readTx: IExtendedStorageTransaction,
+      target: Cell<unknown>,
+    ) => {
+      for (const link of linksInValue(options.value)) {
+        const linked = parseLink(link, target);
+        this.getCellFromLink(linked, linked.schema, readTx).get({
+          traverseCells: true,
+        });
+      }
+    };
     try {
       await cell.sync();
       cell.set(options.value);
@@ -4036,8 +4161,11 @@ export class Runtime {
         posture: [...externalObservationPosture(preparedState)],
       };
 
-      // This read runs only after the staged write passed preparation, or in
-      // disabled mode where preparation is intentionally a no-op. Traversal
+      // The staged transaction is never committed: it admits the write before
+      // anything linked is loaded, and its traversal below loads what the
+      // value reaches. This read runs only after the staged write passed
+      // preparation, or in disabled mode where preparation is intentionally
+      // a no-op. Traversal
       // can discover an unloaded linked document and start its sync, so each
       // arrival is followed by another read until no link-target load remains.
       // Each pass drops current-instant read memoization so a value materialized
@@ -4049,6 +4177,7 @@ export class Runtime {
       for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
         tx.resetCurrentReadMemoization();
         cell.get({ traverseCells: true });
+        readStoredLinks(tx, cell);
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the
         // manager's settled pool, or a just-kicked load looks absent here.
@@ -4066,8 +4195,52 @@ export class Runtime {
           tx.getCfcState(),
         );
       }
-      tx.prepareCfc();
-      const finalPreparedState = tx.getCfcState();
+      // The traversal above loaded what the value reaches, but its reads
+      // come after the staged write, and a write's input check counts only
+      // the reads before that write (§8.10.3). The final check therefore runs
+      // in a fresh transaction that reads through the value first and writes
+      // it after, so what the traversal reaches is an input to the write.
+      // Writing the same value again in the staged transaction would not do:
+      // a write that changes nothing records no write attempt, so the bound
+      // stays at the first one. Everything the fresh transaction reads is
+      // loaded by now.
+      tx.abort("external content observation staged");
+      finalTx = this.edit();
+      const finalCell = this.getCell<unknown>(
+        options.space,
+        options.cause,
+        options.schema,
+        finalTx,
+      );
+      this.getImmutableCell(
+        options.space,
+        options.value,
+        options.schema,
+        finalTx,
+      ).get({ traverseCells: true });
+      // The schema-guided read above follows only what the target schema
+      // describes; each link the value stores is read as well, so a link in
+      // a place the schema leaves out still gates.
+      readStoredLinks(finalTx, finalCell);
+      // The staged traversal loaded everything these reads reach; a load
+      // they start would leave a hole the input check reads as nothing.
+      // Link resolution registers its load in a promise continuation, so
+      // let that run before asking.
+      await Promise.resolve();
+      if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
+        throw externalObservationRefusal(
+          "external content observation reached an unloaded document",
+          finalTx.getCfcState(),
+        );
+      }
+      finalCell.set(options.value);
+      // Read the written value back as well: the read through the immutable
+      // cell carries only the labels of the documents the value links to,
+      // and the receipt's flow and consumed labels also need the ones the
+      // target schema gives the written value itself.
+      finalCell.get({ traverseCells: true });
+      this.prepareTxForCommit(finalTx);
+      const finalPreparedState = finalTx.getCfcState();
       if (
         !enforcementDisabled &&
         finalPreparedState.prepare.status !== "prepared"
@@ -4112,9 +4285,9 @@ export class Runtime {
           finalPreparedState,
         );
       }
-      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
-      const consumed = collectConsumedLabel(tx);
-      const source = cell.getAsNormalizedFullLink();
+      const flow = deriveFlowJoin(finalTx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(finalTx);
+      const source = finalCell.getAsNormalizedFullLink();
       const observation = cloneIfNecessary({
         source: {
           space: source.space,
@@ -4141,7 +4314,7 @@ export class Runtime {
       const receipt = Object.freeze({});
       externalObservationReceipts.set(receipt, {
         runtime: this,
-        sourceTx: tx,
+        sourceTx: finalTx,
         targetTx: options.targetTx,
         space: options.space,
         producer: options.producer,
@@ -4153,6 +4326,9 @@ export class Runtime {
     } finally {
       if (tx.status().status === "ready") {
         tx.abort("external content observation recorded");
+      }
+      if (finalTx?.status().status === "ready") {
+        finalTx.abort("external content observation recorded");
       }
     }
   }
@@ -4618,23 +4794,144 @@ export class Runtime {
       spaceKind?: string;
     } = {},
   ): Promise<MemorySpace> {
+    const { owner, genesis } = this.#creationOf(options);
+    if (this.storageManager.createSpace === undefined) {
+      throw new Error("This storage manager cannot create spaces");
+    }
+    return await this.storageManager.createSpace(
+      { ...options.grants, [owner]: "OWNER" },
+      genesis,
+    );
+  }
+
+  /**
+   * Creates a space that owns itself, with `options.grants` beside the
+   * space's own OWNER entry and no owner entry for anyone else, and returns
+   * its DID with the delegation the space's key issued to `options.owner`,
+   * the identity this runtime acts as by default, before the key was
+   * dropped (`docs/specs/profile-delegation.md`). The delegation is held
+   * here at once, so this runtime's sessions on the space act under its
+   * grant; the caller records it where a later runtime of the same key
+   * finds it, as `PatternFactory.inSpace(..., { selfOwned: true })` does in
+   * the calling space. Like `createSpace`, except in who owns the space.
+   *
+   * @throws If `options.grants` makes any principal OWNER, if the storage
+   *   manager cannot create such a space, if the memory server does not
+   *   admit a proof chain, or if it refuses the genesis commit.
+   */
+  async createSelfOwnedSpace(
+    options: {
+      owner?: DID;
+      grants?: ACL;
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    } = {},
+  ): Promise<{ space: MemorySpace; delegation: Uint8Array }> {
+    const { owner, genesis } = this.#creationOf(options);
+    if (this.storageManager.createSelfOwnedSpace === undefined) {
+      throw new Error(
+        "This storage manager cannot create a space that owns itself",
+      );
+    }
+    if (!isDIDKey(owner)) {
+      throw new Error(
+        debugStr`A delegation names a did:key, and ${owner} is not one`,
+      );
+    }
+    const created = await this.storageManager.createSelfOwnedSpace({
+      ...(options.grants === undefined ? {} : { grants: options.grants }),
+      delegateTo: owner,
+      ...genesis,
+    });
+    this.#delegationsIssued.set(created.space, created.delegation);
+    return created;
+  }
+
+  /**
+   * Helper for `createSpace()` and `createSelfOwnedSpace()`: the owner the
+   * creation is for and the genesis declarations it makes.
+   */
+  #creationOf(options: {
+    owner?: DID;
+    root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+    spaceKind?: string;
+  }): {
+    owner: DID;
+    genesis: {
+      root?: GenesisRoot | ((space: MemorySpace) => GenesisRoot);
+      spaceKind?: string;
+    };
+  } {
     if (this.servingPosture && options.owner === undefined) {
       throw new Error(
         "A serving runtime creates a space only on behalf of a user, and " +
           "no owner was supplied",
       );
     }
-    if (this.storageManager.createSpace === undefined) {
-      throw new Error("This storage manager cannot create spaces");
-    }
-    const owner = options.owner ?? this.userIdentityDID;
     const { root, spaceKind } = options;
-    return await this.storageManager.createSpace(
-      { ...options.grants, [owner]: "OWNER" },
-      {
+    return {
+      owner: options.owner ?? this.userIdentityDID,
+      genesis: {
         ...(root === undefined ? {} : { root }),
         ...(spaceKind === undefined ? {} : { spaceKind }),
       },
+    };
+  }
+
+  /**
+   * Holds, for the sessions this runtime opens from here on, every
+   * delegation the Home space records for a profile in its `profiles` list,
+   * so that a profile space that owns itself opens under its own grant
+   * (`docs/specs/profile-delegation.md`). Returns how many it held. A
+   * profile with no record, as every profile created before profiles owned
+   * themselves, is passed over.
+   */
+  async loadProfileDelegations(): Promise<number> {
+    if (this.storageManager.addDelegationChain === undefined) return 0;
+    const home = this.getHomeSpaceCell();
+    const profiles = home.key("defaultPattern").key("profiles").asSchema(
+      profileLinkListSchema,
+    );
+    await profiles.sync();
+    const links = profiles.get();
+    if (!Array.isArray(links)) return 0;
+    const spaces = links.flatMap((link) => {
+      if (!isCell(link)) return [];
+      const space = link.getAsNormalizedFullLink().space;
+      return space === home.space ? [] : [space];
+    });
+    // The records are read together, so that their reads reach the server
+    // holding Home as one request rather than as a round trip per profile.
+    const recorded = await Promise.all(
+      spaces.map((space) => this.recordedDelegations(space)),
+    );
+    let held = 0;
+    for (const delegations of recorded) {
+      // Each recorded delegation is one the space issued to this key, so
+      // each is a chain of its own.
+      for (const delegation of delegations) {
+        await this.storageManager.addDelegationChain([delegation]);
+        held += 1;
+      }
+    }
+    return held;
+  }
+
+  /**
+   * The delegations the Home space records over `space`, as their bytes,
+   * oldest first: the one the space issued to this key when it was created
+   * to own itself, and any added beside it since. Empty for a space Home
+   * records none for. Each is a copy, the caller's to keep or change.
+   */
+  async recordedDelegations(space: MemorySpace): Promise<Uint8Array[]> {
+    const record = this.getCell(
+      this.getHomeSpaceCell().space,
+      delegationsCause(space),
+      delegationRecordSchema,
+    );
+    await record.sync();
+    return (record.get()?.delegations ?? []).flatMap((delegation) =>
+      delegation instanceof FabricBytes ? [delegation.slice()] : []
     );
   }
 
@@ -4764,7 +5061,21 @@ export class Runtime {
     const created = owner === undefined ? undefined : this.#inSpaceCreated.get(
       inSpaceCreationKey(space, name, owner, request),
     );
-    if (created !== undefined) record.set({ did: created });
+    if (created !== undefined) {
+      record.set({ did: created });
+      // A self-owned space's delegation is recorded in the same transaction
+      // as the allocation, keyed by the space, where whoever holds this
+      // space finds it again (`loadProfileDelegations`).
+      const delegation = this.#delegationsIssued.get(created);
+      if (delegation !== undefined) {
+        this.getCell(
+          space,
+          delegationsCause(created),
+          delegationRecordSchema,
+          tx,
+        ).set({ delegations: [new FabricBytes(delegation)] });
+      }
+    }
     return created;
   }
 
@@ -4775,8 +5086,10 @@ export class Runtime {
    *
    * The calling space's allocation record decides when it exists. Otherwise
    * a runtime that creates spaces for names creates one owned by
-   * `options.owner` with `options.grants`, whose DID the next run making the
-   * same request records. Under server execution only the serving runtime
+   * `options.owner` with `options.grants`, or, with `options.selfOwned`,
+   * one that owns itself and delegates to `options.owner`
+   * (`createSelfOwnedSpace`), whose DID the next run making the same
+   * request records. Under server execution only the serving runtime
    * creates them: the run a client makes of the same handler is a
    * speculative echo of the serving runtime's, and a space it created would
    * be one no record ever names, so a client leaves a name with no record
@@ -4828,14 +5141,21 @@ export class Runtime {
       if (this.experimental.serverExecution === true && !this.servingPosture) {
         throw new InSpaceTargetUnresolved([name]);
       }
-      const { root, ...access } = options;
+      const { root, selfOwned, ...access } = options;
+      const creation = {
+        ...access,
+        ...(root
+          ? {
+            root: (created: MemorySpace) => ({
+              cause: inSpaceRootCause(created),
+            }),
+          }
+          : {}),
+      };
       const created = this.#inSpaceCreated.get(creationKey) ??
-        await this.createSpace({
-          ...access,
-          ...(root
-            ? { root: (created) => ({ cause: inSpaceRootCause(created) }) }
-            : {}),
-        });
+        (selfOwned
+          ? (await this.createSelfOwnedSpace(creation)).space
+          : await this.createSpace(creation));
       this.#inSpaceCreated.set(creationKey, created);
       return created;
     })();

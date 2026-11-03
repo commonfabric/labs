@@ -5,11 +5,11 @@
  * valueFromDataUriPayloadText}).
  */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import {
   fromBase64url,
   toUnpaddedBase64urlFromText,
-} from "@commonfabric/utils/base64url";
+} from "@commonfabric/bytes/base64url";
 import { NullLiveEnvironment } from "./codec-common/index.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
 import type { FabricValue } from "@/interface.ts";

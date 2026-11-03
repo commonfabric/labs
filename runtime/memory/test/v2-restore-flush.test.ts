@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { Server } from "../v2/server.ts";
 import { connect, type Transport } from "../v2/client.ts";
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";

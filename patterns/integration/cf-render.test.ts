@@ -21,7 +21,7 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import { debugStr } from "@commonfabric/data-model";
 
 const { API_URL, FRONTEND_URL } = env;

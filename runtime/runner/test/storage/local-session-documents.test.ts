@@ -10,6 +10,7 @@ import {
 
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { getCommitLocalSeq } from "../../src/storage/commit-identity.ts";
 import { restrictToLocalReads } from "../../src/storage/local-read-policy.ts";
@@ -278,6 +279,7 @@ describe("local-session-documents", () => {
     }, {
       async create(space, signer, options) {
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(server),
         });
         const session = await client.mount(

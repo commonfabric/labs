@@ -266,7 +266,7 @@ interface HarnessCommonConfig {
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
-  /** Explicit host command broker; never inferred from a model input. */
+  /** Explicit host command endpoint; never inferred from a model input. */
   loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
@@ -347,7 +347,7 @@ export interface ResolveHarnessConfigOptions {
   /** Explicit host retrieval backing; never inferred from a model input. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
 
-  /** Explicit host command broker; never inferred from a model input. */
+  /** Explicit host command endpoint; never inferred from a model input. */
   loomCommands?: HarnessLoomCommandsConfig;
 
   patternIndex?: HarnessPatternIndexConfig;

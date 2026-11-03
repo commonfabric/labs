@@ -55,6 +55,7 @@ export {
   redactCaveatSourcesForDisplay,
 } from "./label-view.ts";
 export { cfcLabelViewFromSchema } from "./schema-label-view.ts";
+export { cfcDocumentKey } from "./types.ts";
 export type {
   AttemptedWrite,
   CfcAddress,
@@ -63,6 +64,7 @@ export type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
@@ -273,6 +275,7 @@ export {
   releaseMergeOptions,
   storedCfcEnvelopeMergeIssue,
 } from "./prepare.ts";
+export { wholeValueLabel } from "./consumed-label.ts";
 export type {
   CfcPrefixBoundSource,
   CfcPrefixProvenanceSummary,
@@ -291,8 +294,11 @@ export {
   resetCfcDenialAnnouncements,
 } from "./denial-report.ts";
 export {
+  type CfcLabelDocumentReader,
   cfcMetadataPresent,
+  interpretStoredEnvelope,
   readStoredCfcMetadata,
+  resolveStoredCfcMetadata,
   StoredCfcMetadataError,
   UnknownCfcMetadataVersionError,
   UnreadableCfcMetadataError,

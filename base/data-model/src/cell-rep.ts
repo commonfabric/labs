@@ -4,13 +4,13 @@
  * entity-id reference form.
  */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 import {
   isObjectNotArray,
   isObjectOrArray,
   isPlainObject,
   isUnsafeObjectKey,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 import { FabricHash } from "@/fabric-primitives";
 import { FabricLink } from "@/fabric-instances";
 import type { FabricPlainObject } from "@/interface.ts";

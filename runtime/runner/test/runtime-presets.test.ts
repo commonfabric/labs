@@ -38,7 +38,7 @@ import type {
   RuntimeFetch,
   RuntimeOptions,
 } from "../src/runtime.ts";
-import type { IStorageManager } from "../src/storage/interface.ts";
+import type { IStorageManager, MemorySpace } from "../src/storage/interface.ts";
 import { Runtime, signer, StorageManager } from "./engine-test-support.ts";
 
 /**
@@ -157,6 +157,8 @@ const MINIMAL_TREATMENT: Record<RuntimeOptionKey, MinimalTreatment> = {
   // a preset-built runtime under the flag is a speculating client by
   // construction.
   servingPosture: { treat: "absent" },
+  // The same factory shares these among the serving runtimes it builds.
+  compileTurns: { treat: "absent" },
 };
 
 describe("runtimePresets conformance", () => {
@@ -255,6 +257,7 @@ describe("runtimePresets conformance", () => {
     const spaceHostMap = { "did:key:zSpace": "https://host.example" };
     const memoryUrl = new URL("https://router.example");
     const readCeiling = ["did:key:zOwner", { anyOf: ["a", "b"] }];
+    const profileSpace: MemorySpace = "did:key:zProfile";
     const onPatternInstantiated = () => {};
     const trustConfig = {
       delegations: [{
@@ -299,6 +302,7 @@ describe("runtimePresets conformance", () => {
         cfcWriteFloor: "enforce",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        preferredProfileSpace: profileSpace,
       })).toEqual({
         ...minimalOutputs.remoteClient,
         memoryUrl,
@@ -313,6 +317,7 @@ describe("runtimePresets conformance", () => {
         cfcWriteFloor: "enforce",
         cfcReadMaxConfidentiality: readCeiling,
         cfcReadOnExceed: "skip",
+        preferredProfileSpace: profileSpace,
       });
     });
 

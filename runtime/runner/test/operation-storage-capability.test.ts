@@ -13,7 +13,7 @@ import {
   type WatchSpec,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { hashStringOf } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
@@ -462,6 +462,7 @@ describe("operation storage capability", () => {
           cursor: null,
           baselineHash: "baseline",
           materialized: "value",
+          anchors: [],
           operations: [],
         },
       }],
@@ -606,6 +607,7 @@ describe("operation storage capability", () => {
           cursor: null,
           baselineHash: "observer-baseline",
           materialized: "observer-value",
+          anchors: [],
           operations: [],
         },
       }],
@@ -713,6 +715,7 @@ describe("operation storage capability", () => {
       cursor: { epoch: 1, version },
       baselineHash: "baseline",
       materialized: `v${version}`,
+      anchors: [],
       operations: [],
     });
     const delivery = (version: number): SessionSync => ({

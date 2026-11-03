@@ -396,7 +396,7 @@ which a program can signal what it knows without ever writing it down,
 so those are absent, and the clock and the random source are coarsened.
 Covert channels that do not leave through a named exit are handled
 elsewhere and this document does not cover them:
-`base/utils/src/sandbox-contract.ts` lists the withheld globals,
+`base/pattern-contract/src/sandbox-contract.ts` lists the withheld globals,
 recording beside each the channel it closes or that nothing has
 supplied it,
 and `docs/specs/sandboxing/TIMING_SIDE_CHANNELS.md` tables every

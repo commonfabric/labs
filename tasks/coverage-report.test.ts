@@ -44,7 +44,7 @@ const REPOSITORY = path.dirname(
 );
 
 /** The workspace member those tests write a set report for. */
-const MEMBER = "base/leb128";
+const MEMBER = "base/json";
 
 /** The suite whose units measure that member. */
 const SUITE = "workspace-unit";

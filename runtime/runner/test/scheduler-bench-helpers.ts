@@ -6,7 +6,7 @@ import {
   resetAllTimingStats,
   setGlobalLogFloor,
   type TimingStats,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 

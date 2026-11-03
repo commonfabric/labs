@@ -14,7 +14,7 @@
  * repository's page, and each cell of its strip to its run.
  */
 
-import { maxOf, minOf } from "@commonfabric/utils/math";
+import { maxOf, minOf } from "@commonfabric/collections/math";
 import {
   runSource,
   type Run,

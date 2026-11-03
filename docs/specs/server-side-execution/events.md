@@ -240,8 +240,10 @@ handler fires
   lazy-computed case is literally in the code; CT-1795's staleness park
   is an extra gate on top) — the common case being not rapid-fire but a
   lazy computed nothing has pulled yet, which the handler must and does
-  see fresh. Handlers never read last-wave state: events drain as part
-  of regular execution — the loop is simply not idle until all events
+  see fresh. An input the handler's argument schema declares opaque is one it
+  hands on without reading, so its writer owes the handler nothing and the
+  preflight leaves it alone. Handlers never read last-wave state: events drain
+  as part of regular execution — the loop is simply not idle until all events
   are processed — and the preflight ahead of each dispatch makes the
   inputs a handler reads current. Within that rule the serving
   scheduler's pass takes every ready event behind the head as well, each
@@ -258,7 +260,10 @@ handler fires
   off the queue first, as the flush deadline's purge of an in-process
   leftover does, and each queues that pass; a head the event phases
   drop on their own leaves its park to end at its loads' release, which
-  queues it then. A head that
+  queues it then. A head held for its handler's input presync
+  (scheduler-v2 README §7.5) ends the pass the same way; the hold ends
+  when the presync settles or when a drop takes the head off the queue,
+  and each queues that pass. A head that
   parks before the pass ran any handler leaves the settle to run as
   before. The scheduler is not idle while a head is parked, so a serving
   cycle whose flush deadline comes before the park ends commits the
@@ -342,13 +347,14 @@ ambient-state one.
   witness stands — in the handler run's own transaction, so the write
   seals into the run's wave with the entry's `consequenced` mark (§4's
   mark/effects atomicity) and rides the same carriage as every other
-  served event-handler write. The cell identity stays the cause-derived
-  address the client-era write used (same event ⇒ same minted cell id),
-  so an unchanged consumer reads served results exactly as it read
-  client-written ones; a flag-ON client's diverted echo publishes that
-  same address on its transaction, and the durable-ack coupling settles
-  the sender's callback only after the handling consequenced — the
-  receipt is durable before the address is ever dereferenced. The
+  served event-handler write. The cell identity derives from the durable
+  event id alone (`servedReceiptCause`: same event ⇒ same minted cell id),
+  so a sender names the receipt without running the handler. A flag-ON
+  client's diverted echo publishes that address on its transaction, and
+  so does a send with `echo: false`, which queues no echo and starts no
+  piece, and the durable-ack coupling settles the sender's callback only
+  after the handling consequenced — the receipt is durable before the
+  address is ever dereferenced. The
   callback reads that outcome rather than the echo's: where the echo's
   own transaction failed — an echo that withdrew (speculation.md §2), or
   one whose commit was refused — the transaction it is handed reports
@@ -690,7 +696,12 @@ loop's duty).
   independently of the storage-manager lifetime. Only successful settlement
   of a new generation for that same document is positive recovery evidence;
   starting the generation is not. A successful load after storage-manager
-  recreation can therefore wake one recovery attempt.
+  recreation can therefore wake one recovery attempt. A
+  `program-unavailable` checkpoint (§5's program-closure wait, above)
+  names the closure's entry document instead, and the commit that writes
+  that document into the space is its positive recovery evidence. A
+  tenure that replays such a checkpoint and finds the document already
+  in the store takes that as the evidence.
 - A current-ACL authorization denial is immediately permanent only when
   its typed verdict carries the durable ACL revision and distinguishes the
   denial from a revoked or missing session. A required-load denial uses the
@@ -837,6 +848,38 @@ loop's duty).
   entry always spends the budget, so an event addressing a piece that
   nothing creates still hardens into this drop once the events ahead
   of it have their consequences.
+
+  A served event's piece can also name a pattern whose program closure
+  the space does not hold yet. A piece placed in a space of its own (an
+  `inSpace` child, such as a FabriChat room or a Home profile) runs a
+  program that the creating runtime replicates into that space after
+  the run that creates the piece (module-loading.md). The space's own
+  serving runtime cannot observe that replication, only its commit
+  landing. A not-loadable verdict reached while the space's store lacks
+  the closure's entry document is the run racing that replication, so
+  this predicate does not apply to it, and the earliest pending entry
+  does not spend the budget for it either. The wait has two phases:
+
+  - For a grace of ten seconds (`PROGRAM_CLOSURE_GRACE_MS`) the deferral
+    is settlement, like a replica load in flight: it spends no deferral
+    budget, writes no checkpoint, and arms no backstop.
+  - Past the grace, the absence is a typed delivery failure in
+    `dispatch-load` of class `program-unavailable`, under the
+    failed-state budget below. A closure that never arrives therefore
+    ends in the `needs-attention` notice, never in this drop.
+
+  In both phases the commit that writes the closure's entry document
+  into the space wakes the event, and in the second it is the positive
+  recovery evidence that wakes the failure's one retry. In both phases
+  the event holds §2's arrival-order barrier, so later same-space
+  arrivals wait behind it. The grace is an explicit exception to the
+  repository's no-timeout rule. Nothing else can end a wait for a
+  replication this runtime cannot see; the wait ends in the
+  delivery-failure handling below rather than a drop; it cancels
+  nothing in flight; and it is held in memory only, so a restart or a
+  lease handoff starts it afresh. A store that holds the closure's
+  entry when the load fails is not this case, and that deferral spends
+  the budget as any other does.
 
   With server execution off, a CLIENT event — one with no served
   carriage, so no durable entry for a later pass to re-drain, and no

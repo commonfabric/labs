@@ -6,6 +6,7 @@ import {
   assertThrows,
 } from "@std/assert";
 import { join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   completeOpenAICodexDeviceAuthorization,
   createOpenAICodexBrowserAuthorization,
@@ -31,7 +32,7 @@ const errorGraphText = (input: unknown): string => {
   let current = input;
   while (current !== undefined && current !== null && !seen.has(current)) {
     seen.add(current);
-    parts.push(current instanceof Error ? current.message : String(current));
+    parts.push(describeFailure(current));
     current = current instanceof Error ? current.cause : undefined;
   }
   return parts.join("\n");

@@ -176,15 +176,26 @@ change goes through the memory server instead:
    Each space's changes are one authored commit of the list, made under the
    run's delegated carriage (the event's actor and the grant), with the serving
    loop's session as its envelope (`commitServedAclChange()`), and checked again
-   there.
+   there: on the host's own memory server, or, where the host has a route to
+   each space's owner and the space is not the home, on that owner
+   ([owner routing](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally)).
 
 So a member a served handler adds is in the list before anything the handler
-sent on reaches its target, which is what a target checking the sender's
-access needs. A change the seal admitted and the commit refuses, because the
-list changed in between, requeues the run's event, and its replay is decided
-against the list as it then stands. A change that landed stands whatever the
-wave does after it, as on a client: a replay of the event finds nothing left to
-change and sends nothing.
+sent on reaches its target, which is what a target checking the sender's access
+needs. A change the seal admitted and the commit refuses, because the list
+changed in between, requeues the run's event, and its replay is decided against
+the list as it then stands. Where the change commits on the space's owner, the
+owner decides it against its own store, so its refusal on any admission ground,
+the actor's level there included, requeues the event the same way, and so does a
+failure to reach the owner at all, until the owner answers. The one refusal that
+requeues nothing is of a change to the serving space's own list because that
+space is deleted: the wave aborts, and the tenure ends for good, as it does when
+the home commit is refused for the deletion
+([a deleted space](../specs/server-side-execution/serving-loop.md#a-deleted-space)).
+A change that landed stands whatever the wave does after it, as on a client: a
+replay of the event finds nothing left to change and sends nothing, which is
+also what a replay finds when the owner applied the change and its answer was
+lost.
 
 A client runs a served event's handler as well, as its speculative echo. The
 echo checks and stages the change like any run, and commits nothing: the

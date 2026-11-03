@@ -1,6 +1,6 @@
 // Pull scheduler core behavior and stale dependency propagation tests.
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import {
   afterEach,

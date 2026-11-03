@@ -11,7 +11,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import {
   createSession,
   Identity,
@@ -32,9 +32,10 @@ import {
 } from "@commonfabric/runner";
 import {
   EmulatedStorageManager,
+  namesInstancesByDefault,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { registerSchemaDocument } from "../runner/src/schema-registry.ts";
 import {
@@ -5805,6 +5806,7 @@ describe("cell-bridge", () => {
         );
         const audience = "did:key:z6Mk-fuse-entity-list-test-audience";
         const server = new MemoryV2Server.Server({
+          namesInstances: namesInstancesByDefault,
           authorizeSessionOpen: () => signer.did(),
           sessionOpenAuth: { audience },
           store: new URL(`memory://fuse-entity-list-${crypto.randomUUID()}`),
@@ -5821,6 +5823,7 @@ describe("cell-bridge", () => {
           authorization: {},
         });
         const writerClient = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(server),
         });
         let runtime: Runtime | undefined;
@@ -5868,7 +5871,10 @@ describe("cell-bridge", () => {
                   inner.setCloseReceiver?.(receiver);
                 },
               };
-              const client = await MemoryV2Client.connect({ transport });
+              const client = await MemoryV2Client.connect({
+                instanceNames: namesInstancesByDefault(),
+                transport,
+              });
               const mounted = await client.mount(spaceId, {}, sessionOpenAuth);
               return { client, session: mounted };
             }

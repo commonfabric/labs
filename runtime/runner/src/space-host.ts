@@ -1,6 +1,6 @@
-import { isLoopbackHostname } from "@commonfabric/utils/loopback";
+import { isLoopbackHostname } from "@commonfabric/platform/loopback";
 
-export { isLoopbackHostname } from "@commonfabric/utils/loopback";
+export { isLoopbackHostname } from "@commonfabric/platform/loopback";
 
 /** Options for deriving a route from a scheme-less fabric authority. */
 export interface FabricSpaceHostOptions {

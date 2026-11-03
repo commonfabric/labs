@@ -28,6 +28,7 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   INVALID_RESULT,
   PROVIDER_FAILURE,
@@ -60,6 +61,12 @@ export interface HarnessAgentRunExecutorOptions {
 
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
+
+  /**
+   * The host's command endpoint behind `list_commands` and `run_command`, and
+   * the actor commands run as. Each run sends an id of its own.
+   */
+  commands?: { url: string; actor: string };
 
   /** Model name passed to `cf-harness`. */
   model?: string;
@@ -95,7 +102,7 @@ export async function agentRunObservationCeiling(
     } catch (error) {
       options.report?.(
         `agent runner: could not verify space membership: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -138,10 +145,8 @@ export const createHarnessAgentRunExecutor = (
   }
   return async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     const { record } = run;
-    const runRoot = join(
-      options.workRoot,
-      hashStringOf([run.host, addressKey(run.link)]),
-    );
+    const runKey = hashStringOf([run.host, addressKey(run.link)]);
+    const runRoot = join(options.workRoot, runKey);
 
     // The record reads as live proxies; the harness and the writer take plain
     // values.
@@ -174,6 +179,9 @@ export const createHarnessAgentRunExecutor = (
       ...(options.model !== undefined ? { model: options.model } : {}),
       ...(options.loomRetrievalConfigPath !== undefined
         ? { loomRetrievalConfigPath: options.loomRetrievalConfigPath }
+        : {}),
+      ...(options.commands !== undefined
+        ? { commands: { ...options.commands, runId: `agent-run-${runKey}` } }
         : {}),
       fabric: {
         host: run.host,
@@ -243,7 +251,7 @@ export const createHarnessAgentRunExecutor = (
         : "";
       options.report?.(
         `agent runner: writing the result failed: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }${detail}`,
       );
       return {

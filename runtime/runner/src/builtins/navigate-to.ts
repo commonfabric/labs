@@ -4,8 +4,8 @@ import {
 } from "@commonfabric/memory/v2";
 import { type Cell, createCell } from "../cell.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
-import { type RawBuiltinResult } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
+import type { RawBuiltinResult } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
@@ -15,7 +15,7 @@ import { mergeableOpRead } from "../storage/reactivity-log.ts";
 import { waveRunContextOf } from "../executor/wave.ts";
 import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { navigateEventContextOf } from "./navigate-context.ts";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 const logger = getLogger("navigate-to", { enabled: true, level: "warn" });
 

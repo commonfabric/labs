@@ -75,6 +75,9 @@ function selfApiOrigin(host: string, port: number): string {
  */
 const RELEASED_AT_CLOCK_SKEW_MS = 5 * 60_000;
 
+/** The values of ENV that mark a local development or test server. */
+const TEST_ENVIRONMENTS = new Set(["development", "test"]);
+
 // NOTE: This is where we define the environment variable types and defaults.
 // Exported so the parsing rules (e.g. OTEL_ENABLED) can be unit-tested without
 // going through the module-level singleton below.
@@ -329,6 +332,13 @@ export const EnvSchema = z.object({
   // ACL state and fresh-space genesis violations still block. `enforce` also
   // denies access shortfalls. See runtime/memory/v2/server.ts.
   MEMORY_ACL_MODE: z.enum(["off", "observe", "enforce"]).default("enforce"),
+  // Whether a `session.open` may present a UCAN proof chain, resolving the
+  // session's capability from the chain's root issuer; on unless set to
+  // "false" or "0", and any other spelling refuses startup rather than
+  // enable it. See docs/development/EXPERIMENTAL_OPTIONS.md,
+  // `sessionOpenProofs`.
+  MEMORY_ACL_DELEGATIONS: z.enum(["true", "1", "false", "0"]).default("true")
+    .transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
     error:
@@ -362,6 +372,13 @@ export const EnvSchema = z.object({
   // proxy is worse than leaving it off: the header becomes client-controlled,
   // so a fresh value per request yields a fresh bucket and the limit vanishes.
   RATE_LIMIT_TRUST_FORWARDED_FOR: boolFlag(),
+
+  // Whether `/api/health/collected-memory` answers: it runs a full garbage
+  // collection on every thread it measures, pausing each, for whoever asks.
+  // Off, the route answers 404. Local development servers and test servers
+  // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
+  // that declares itself staging or production refuses to start with it.
+  EXPOSE_GC: boolFlag(),
 
   // The space this deployment keeps its ingest registry in: channel
   // registrations, their indexes, and Gmail mailbox bindings. Empty means the
@@ -467,7 +484,13 @@ export const EnvSchema = z.object({
   // URL that sandboxes should use to reach the toolshed API (injected as
   // CF_API_URL into every sandbox exec). Defaults to API_URL if not set.
   SANDBOX_TOOLSHED_URL: z.string().optional(),
-}).transform((parsed) => ({
+}).refine(
+  (parsed) => !parsed.EXPOSE_GC || TEST_ENVIRONMENTS.has(parsed.ENV),
+  {
+    path: ["EXPOSE_GC"],
+    message: "EXPOSE_GC=true needs ENV=development or ENV=test",
+  },
+).transform((parsed) => ({
   ...parsed,
   // Resolved here, where HOST and PORT (the `--port=` override included) are
   // known, so every reader sees a concrete origin or nothing.

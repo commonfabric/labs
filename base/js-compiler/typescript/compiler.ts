@@ -1,8 +1,8 @@
 import * as path from "@std/path";
 
 import type { BuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
-import { getLogger } from "@commonfabric/utils/logger";
-import { yieldToEventLoop } from "@commonfabric/utils/sleep";
+import { getLogger } from "@commonfabric/logger";
+import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import type {
   CompilerHost,
   CompilerOptions,
@@ -17,8 +17,12 @@ import type {
 } from "typescript";
 import ts from "typescript";
 
-import { Program, ProgramResolver, Source } from "../interface.ts";
-import type { SourceMap } from "../interface.ts";
+import type {
+  Program,
+  ProgramResolver,
+  Source,
+  SourceMap,
+} from "../interface.ts";
 import { parseSourceMap } from "../source-map.ts";
 import {
   authoredLocation,

@@ -8,7 +8,8 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   BRIDGE_PROTOCOL,
@@ -363,7 +364,7 @@ function normalizeBridgeError(
   }
   return bridgeError(
     "operation-failed",
-    error instanceof Error ? error.message : String(error),
+    describeFailure(error),
     resource,
   );
 }

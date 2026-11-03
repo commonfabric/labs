@@ -1,7 +1,7 @@
 import { CFC_ATOM_TYPE, type CfcAtom } from "@commonfabric/api/cfc";
 import { parseDID } from "@commonfabric/identity/did";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { atomEntails } from "./atom-pattern.ts";
 import { isCfcFieldCommitment } from "./label-representation.ts";
 import { compareByCanonicalHash, uniqueCfcAtoms } from "./atoms.ts";

@@ -6,8 +6,8 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { BoundedKeyMap } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
+import { BoundedKeyMap } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
 
 import { getValueAtPath } from "../path-utils.ts";
 import { arraysOverlap } from "../reactive-dependencies.ts";

@@ -14,10 +14,11 @@
 import { decodeHTMLStrict as decodeEntities } from "entities";
 import { Lexer } from "marked";
 
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { cpLen } from "../../ansi.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
+import { columns } from "../../width.ts";
 import type {
   Document,
   Line,
@@ -120,12 +121,19 @@ interface RichStyle {
   readonly italic?: boolean;
   readonly underline?: boolean;
   readonly strikethrough?: boolean;
+  readonly href?: string;
 }
 
 class RichLine {
   text = "";
   readonly spans: Span[] = [];
   #sourceHidden = false;
+  #continues = false;
+  #hang?: string;
+  #preformatted = false;
+
+  /** Where in `text` each line break `br` made sits. */
+  readonly #hardBreaks = new Set<number>();
 
   append(value: string, style: RichStyle): void {
     if (value.length === 0) return;
@@ -137,6 +145,7 @@ class RichLine {
       ...(style.italic ? { italic: true } : {}),
       ...(style.underline ? { underline: true } : {}),
       ...(style.strikethrough ? { strikethrough: true } : {}),
+      ...(style.href === undefined ? {} : { href: style.href }),
     };
     const last = this.spans[this.spans.length - 1];
     if (last && sameRichStyle(last, span)) {
@@ -163,12 +172,39 @@ class RichLine {
         italic: extra.italic || span.italic,
         underline: extra.underline || span.underline,
         strikethrough: extra.strikethrough || span.strikethrough,
+        href: extra.href ?? span.href,
       });
     }
   }
 
+  /** Where in `text` each hard line break sits. */
+  get hardBreaks(): ReadonlySet<number> {
+    return this.#hardBreaks;
+  }
+
+  /** Appends a hard line break, which a view reflowing prose keeps. */
+  breakHard(style: RichStyle): void {
+    this.#hardBreaks.add(this.text.length);
+    this.append("\n", style);
+  }
+
   hideSource(): void {
     this.#sourceHidden = true;
+  }
+
+  /** Marks the line as continuing the paragraph of the line before it. */
+  markContinues(): void {
+    this.#continues = true;
+  }
+
+  /** Records what the line's container starts each further row with. */
+  setHang(hang: string): void {
+    this.#hang = hang;
+  }
+
+  /** Marks the line as one whose columns matter. */
+  markPreformatted(): void {
+    this.#preformatted = true;
   }
 
   line(): Line {
@@ -176,6 +212,9 @@ class RichLine {
       text: this.text,
       spans: this.spans,
       ...(this.#sourceHidden ? { renderedSourceHidden: true } : {}),
+      ...(this.#continues ? { continues: true } : {}),
+      ...(this.#hang === undefined ? {} : { hang: this.#hang }),
+      ...(this.#preformatted ? { preformatted: true } : {}),
     };
   }
 }
@@ -185,7 +224,8 @@ function sameRichStyle(a: Span, b: Span): boolean {
     a.bold === b.bold &&
     a.italic === b.italic &&
     a.underline === b.underline &&
-    a.strikethrough === b.strikethrough;
+    a.strikethrough === b.strikethrough &&
+    a.href === b.href;
 }
 
 function emptyLine(): Line {
@@ -204,6 +244,11 @@ function singleStyledLine(text: string, cls: TokenClass): Line {
   return text.length === 0
     ? emptyLine()
     : { text, spans: [{ col: 0, text, cls }] };
+}
+
+/** `line` marked as one whose columns matter. */
+function preformatted(line: Line): Line {
+  return { ...line, preformatted: true };
 }
 
 function renderMarkdownBlocks(
@@ -423,13 +468,24 @@ function renderParagraphBlock(
   }
   const line = new RichLine();
   appendInlineTokens(line, tokens, { cls: "plain" }, true);
-  return splitRichLine(line.line(), source.length);
+  return splitRichLine(line.line(), source.length, line.hardBreaks);
 }
 
-function splitRichLine(line: Line, lineCount: number): Line[] {
+/**
+ * `line` split at each line break it holds into `lineCount` lines, padded
+ * with empty ones. A line after a break that `hardBreaks` does not name
+ * continues the paragraph of the line before it.
+ */
+function splitRichLine(
+  line: Line,
+  lineCount: number,
+  hardBreaks: ReadonlySet<number> = new Set(),
+): Line[] {
   let current = new RichLine();
   const out: Line[] = [];
   if (line.renderedSourceHidden) current.hideSource();
+  // Where in `line.text` the part being appended starts.
+  let offset = 0;
   for (const span of line.spans) {
     const parts = span.text.split("\n");
     for (let i = 0; i < parts.length; i++) {
@@ -439,11 +495,15 @@ function splitRichLine(line: Line, lineCount: number): Line[] {
         italic: span.italic,
         underline: span.underline,
         strikethrough: span.strikethrough,
+        href: span.href,
       });
+      offset += parts[i].length;
       if (i + 1 < parts.length) {
         out.push(current.line());
         current = new RichLine();
         if (line.renderedSourceHidden) current.hideSource();
+        if (!hardBreaks.has(offset)) current.markContinues();
+        offset += 1;
       }
     }
   }
@@ -495,7 +555,9 @@ function renderCodeBlock(
 ): Line[] {
   if (token.codeBlockStyle === "indented") {
     return source.map((line) =>
-      singleStyledLine(line.replace(/^(?: {4}|\t)/, ""), "string")
+      preformatted(
+        singleStyledLine(line.replace(/^(?: {4}|\t)/, ""), "string"),
+      )
     );
   }
 
@@ -505,13 +567,16 @@ function renderCodeBlock(
     return source.map((_, i) => ({
       ...singleStyledLine(content[i] ?? "", "string"),
       renderedSourceHidden: true,
+      preformatted: true,
     }));
   }
   return source.map((line, i) => {
     if (i === 0 || (i === source.length - 1 && isClosingFence(line, fence))) {
       return hiddenLine();
     }
-    return singleStyledLine(stripFenceIndent(line, fence.indent), "string");
+    return preformatted(
+      singleStyledLine(stripFenceIndent(line, fence.indent), "string"),
+    );
   });
 }
 
@@ -532,9 +597,10 @@ function renderBlockquoteBlock(
     return source.map((line) => renderMarkdownSourceLine(line, inlineLexer));
   }
   const rendered = renderMarkdownBlocks(inner.join("\n"), inlineLexer);
-  return rendered.map((line, i) =>
-    prependLine(prefixes[i] ?? "│ ", line, "markdownQuote")
-  );
+  return rendered.map((line, i) => {
+    const prefix = prefixes[i] ?? "│ ";
+    return prependLine(prefix, line, "markdownQuote", prefix);
+  });
 }
 
 function renderListBlock(
@@ -583,18 +649,17 @@ function renderListBlock(
     }
 
     const rendered = renderMarkdownBlocks(inner.join("\n"), inlineLexer);
+    const hang = `${marker[1]}${" ".repeat(cpLen(displayMarker))}`;
     for (let line = start; line < end; line++) {
       if (source[line].trim().length === 0) {
         out[line] = emptyLine();
         continue;
       }
-      const prefix = line === start
-        ? `${marker[1]}${displayMarker}`
-        : `${marker[1]}${" ".repeat(cpLen(displayMarker))}`;
       out[line] = prependLine(
-        prefix,
+        line === start ? `${marker[1]}${displayMarker}` : hang,
         rendered[line - start] ?? emptyLine(),
         line === start ? "punctuation" : "plain",
+        hang,
       );
     }
   }
@@ -607,15 +672,28 @@ function stripContainerIndent(line: string, width: number): string {
   return line.slice(removed);
 }
 
+/**
+ * `content` after `prefix`, a container's marker, keeping whether `content`
+ * continues a paragraph or is preformatted; `hang` is what the container
+ * starts each further row of the line with.
+ */
 function prependLine(
   prefix: string,
   content: Line,
   cls: TokenClass,
+  hang: string,
 ): Line {
   const line = new RichLine();
   line.append(prefix, { cls });
   line.appendLine(content);
-  return line.line();
+  line.setHang(hang + (content.hang ?? ""));
+  if (content.continues) line.markContinues();
+  if (content.preformatted) line.markPreformatted();
+  const prefixed = line.line();
+  // A table's row stays one inside its container.
+  return content.table === undefined
+    ? prefixed
+    : { ...prefixed, table: content.table };
 }
 
 function renderMarkdownSourceLine(
@@ -862,6 +940,7 @@ function appendInlineTokens(
             ...style,
             cls: "callName",
             underline: true,
+            href: token.href,
           }, multiline);
           appendHiddenLineBreaks(line, token.raw, start, style);
         }
@@ -898,7 +977,7 @@ function appendInlineTokens(
         break;
       }
       case "br":
-        if (multiline) line.append("\n", style);
+        if (multiline) line.breakHard(style);
         break;
       default:
         if (token.tokens && token.tokens.length > 0) {
@@ -1217,14 +1296,20 @@ function renderTableBlock(
   const widths = align.map((_, column) =>
     Math.max(
       1,
-      maxOf(richRows.map((row) => cpLen(row[column]?.text ?? ""))),
+      // Measured as a terminal draws them, so that the rules line up.
+      maxOf(richRows.map((row) => columns(row[column]?.text ?? ""))),
     )
   );
-  return source.map((_, index) =>
-    index === 1
-      ? renderTableDivider(widths)
-      : renderTableRow(richRows[index], widths, align, index === 0)
-  );
+  return source.map((_, index) => ({
+    ...preformatted(
+      index === 1
+        ? renderTableDivider(widths)
+        : renderTableRow(richRows[index], widths, align, index === 0),
+    ),
+    table: index === 1
+      ? { align, header: false }
+      : { cells: richRows[index], align, header: index === 0 },
+  }));
 }
 
 function tableAlignment(line: string): TableAlign[] | null {
@@ -1301,7 +1386,7 @@ function renderTableRow(
   line.append("│ ", { cls: "punctuation" });
   for (let column = 0; column < widths.length; column++) {
     const cell = cells[column] ?? emptyLine();
-    const missing = widths[column] - cpLen(cell.text);
+    const missing = widths[column] - columns(cell.text);
     const left = align[column] === "right"
       ? missing
       : align[column] === "center"

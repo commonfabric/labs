@@ -3,8 +3,11 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
-import { minOf } from "@commonfabric/utils/math";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { minOf } from "@commonfabric/collections/math";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import ts from "typescript";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";

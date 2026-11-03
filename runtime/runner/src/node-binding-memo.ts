@@ -1,6 +1,6 @@
 import { estimateFabricValueSize } from "@commonfabric/data-model";
 import { hashSchema } from "@commonfabric/data-model-schema";
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 
 import { immutableSnapshot, isImmutableCellId } from "./immutable-cell.ts";
 import type { URI } from "./sigil-types.ts";

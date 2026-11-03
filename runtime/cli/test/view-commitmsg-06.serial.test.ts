@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   extractMessage,
   findCommitHeaders,
@@ -164,7 +165,7 @@ Deno.test("realGit: refuses a pager edit that conflicts with a staged edit", asy
         head,
       );
     } catch (caught) {
-      error = caught instanceof Error ? caught.message : String(caught);
+      error = describeFailure(caught);
     }
     assert(error.includes("conflict"), error || "the amend did not fail");
     assertEquals(

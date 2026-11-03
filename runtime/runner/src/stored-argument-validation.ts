@@ -11,8 +11,11 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
-import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "./builder/types.ts";
 import { type Cell, isCell } from "./cell.ts";

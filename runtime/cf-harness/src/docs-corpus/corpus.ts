@@ -11,7 +11,7 @@
  * Reads only. Nothing here creates, moves, or writes a file.
  */
 
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 import { basename, join } from "@std/path";
 
 import { harnessCheckoutRootFrom } from "../checkout.ts";

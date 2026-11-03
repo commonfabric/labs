@@ -8,7 +8,7 @@
  * rather than one inside each of them.
  */
 
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   BaseFabricPrimitive,
@@ -23,7 +23,7 @@ import {
 import type { FabricPrimitiveValueTag } from "@/fabric-primitives/interface.ts";
 import { debugStr } from "@/value-debug";
 
-import { type PlusTypePredicate } from "./interface.ts";
+import type { PlusTypePredicate } from "./interface.ts";
 import {
   type ConvertibleJsValueTag,
   type FabricValuePlusTag,

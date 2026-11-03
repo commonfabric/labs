@@ -1,5 +1,6 @@
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessRunManifest } from "./contracts/run-manifest.ts";
 import { ProcessTimeoutError } from "./sandbox/process-runner.ts";
 import type {
@@ -925,7 +926,7 @@ export const classifyHarnessRunError = (
         : {}),
     });
   }
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   const normalized = message.toLowerCase();
   if (
     // Operation-neutral: the gateway client prefixes this with the operation

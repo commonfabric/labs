@@ -48,16 +48,16 @@ import {
   type StreamLinkRef,
 } from "@commonfabric/memory/v2";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { ensureNotRenderThread } from "@commonfabric/utils/env";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { getLogger } from "@commonfabric/utils/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { ensureNotRenderThread } from "@commonfabric/platform/env";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { getLogger } from "@commonfabric/logger";
 import {
   type Immutable,
   isObjectNotArray,
   isObjectOrArray,
   isPlainContainer,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 import { toCell } from "./back-to-cell.ts";
 import {
@@ -162,7 +162,7 @@ import {
   parseLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
+import type { MetaField, RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
@@ -178,7 +178,11 @@ import {
   ignoreReadForScheduling,
   txToReactivityLog,
 } from "./scheduler.ts";
-import { mintEventId, scopeCallerEventId } from "./scheduler/event-identity.ts";
+import {
+  mintEventId,
+  scopeCallerEventId,
+  servedReceiptCause,
+} from "./scheduler/event-identity.ts";
 import { withdrawHandlerWhileLoading } from "./scheduler/handler-load-wait.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
 import {
@@ -186,14 +190,11 @@ import {
   processDefaultValue,
   resolveSchema,
   schemaHasIfc,
+  singleReadTx,
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
-import {
-  type SigilLink,
-  type SigilWriteRedirectLink,
-  type URI,
-} from "./sigil-types.ts";
+import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
@@ -684,6 +685,15 @@ export type StreamSendOptions = {
     delivery: EventAppendDeliveryOutcome,
     tx: IExtendedStorageTransaction,
   ) => void;
+
+  /**
+   * `false` sends the event without running its handler in this runtime, for a
+   * client under server execution that has no use for a speculative echo: the
+   * event append is the whole of the send, the piece is not started for it, and
+   * the commit callback receives a transaction that wrote nothing and names the
+   * handling's receipt. A runtime that runs its own events ignores it.
+   */
+  echo?: false;
 };
 
 // The mint registry backing `runtimeInjectedEventKeys` (see
@@ -1422,6 +1432,11 @@ let setOf: (
 let labelViewOf: (cell: CellImpl<FabricValue>) => CfcLabelView | undefined;
 let markSynced: (cell: CellImpl<FabricValue>) => void;
 let isStreamCell: (cell: CellImpl<FabricValue>) => boolean;
+let pullProjectedOf: <R>(
+  cell: CellImpl<FabricValue>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean },
+) => Promise<R>;
 let sinkProjectedOf: <R>(
   cell: CellImpl<FabricValue>,
   project: (value: unknown) => R,
@@ -1974,9 +1989,9 @@ export class CellImpl<T extends FabricValue>
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
 
     // Wrap the transaction to make all reads non-reactive. Child cells created
-    // during validateAndTransform will use the original transaction (via
-    // getTransactionForChildCells).
-    const readTx = this.#runtime.readTx(this.#tx);
+    // during validateAndTransform use the cell's own transaction while it is
+    // open, and none otherwise (via getTransactionForChildCells).
+    const readTx = singleReadTx(this.#runtime, this.#tx);
     const nonReactiveTx = createNonReactiveTransaction(readTx);
 
     return validateAndTransform(this.#runtime, nonReactiveTx, this.#viewRef);
@@ -2019,6 +2034,15 @@ export class CellImpl<T extends FabricValue>
    * @returns The cell's reactive value after the selected readiness barrier.
    */
   pull(options: { awaitDurability?: boolean } = {}): Promise<Readonly<T>> {
+    return this.#pullProjected((value) => value, options, true);
+  }
+
+  /** Runs the shared readiness barrier for a projected or recursive pull. */
+  #pullProjected<R>(
+    project: (value: Readonly<T>) => R,
+    options: { awaitDurability?: boolean },
+    traverse: boolean,
+  ): Promise<R> {
     if (this.#boundToRun()) {
       return Promise.reject(new Error(runOwnTransactionRefusal("pull")));
     }
@@ -2039,12 +2063,11 @@ export class CellImpl<T extends FabricValue>
       );
     }
 
-    // Check if we need to traverse the result to register all dependencies.
-    // This is needed when there's no schema or when the schema is TrueSchema ("any"),
-    // because without schema constraints we need to read all nested values.
+    // Ordinary pull recursively demands schemaless values. A projected pull
+    // demands the schema view and the projection's reads without that traversal.
     const schema = this.#_link.schema;
-    const needsTraversal = schema === undefined ||
-      ContextualFlowControl.isTrueSchema(schema);
+    const needsTraversal = traverse && (schema === undefined ||
+      ContextualFlowControl.isTrueSchema(schema));
 
     const idle = () =>
       options.awaitDurability === true
@@ -2058,11 +2081,11 @@ export class CellImpl<T extends FabricValue>
           // Read the value inside the effect - this ensures dependencies are pulled
           const value = validateAndTransform(this.#runtime, tx, this.#viewRef);
 
-          // If no schema or TrueSchema, traverse the result to register all
-          // nested values as read dependencies.
+          // Ordinary schemaless pull also registers nested read dependencies.
           if (needsTraversal && value !== undefined && value !== null) {
             deepTraverse(value);
           }
+          project(value);
         } finally {
           // Schemaless traversal can add reads in other spaces. Each effect
           // run replaces the set so obsolete dependencies do not fail the pull.
@@ -2138,7 +2161,9 @@ export class CellImpl<T extends FabricValue>
             sessionError.name !== "AuthorizationError"
           ) throw sessionError;
         }
-        return validateAndTransform(this.#runtime, undefined, this.#viewRef);
+        return project(
+          validateAndTransform(this.#runtime, undefined, this.#viewRef),
+        );
       };
       ready().then(resolve, reject);
     });
@@ -2757,8 +2782,18 @@ export class CellImpl<T extends FabricValue>
             // with the recorded mergeable append below — keeps it out
             // of the commit's conflict read set, and with it out of
             // the sealed reads that feed wave basis rows (§3b).
+            // `writeDestinationRead` keeps it out of the run's CFC flow
+            // join as well, as `Cell.pushAll()`'s snapshot is: the entries
+            // already there stay where they are and only this run's entry
+            // is appended, so a label an earlier entry's `consequenced` mark
+            // carries is no input of this run (CFC §18.6.2, write-destination
+            // reads; `docs/specs/cfc-write-destination-reads.md`).
             const currentEntries = this.#tx.readValueOrThrow(entriesLink, {
-              meta: { ...ignoreReadForScheduling, ...mergeableOpRead },
+              meta: {
+                ...ignoreReadForScheduling,
+                ...mergeableOpRead,
+                ...writeDestinationRead,
+              },
             });
             const emittedEntry = {
               eventId: emittedId,
@@ -2954,29 +2989,43 @@ export class CellImpl<T extends FabricValue>
           onCommit?.(tx);
         }
         : onCommit;
-      this.#runtime.scheduler.queueEvent(
-        resolvedToValueLink,
-        event,
-        undefined,
-        settleCallback,
-        false,
-        {
-          // Under events-down the COMMITTED append's id is the one the
-          // echo must carry (overlay origin `intent(eventId)`,
-          // speculation.md §1) — the same session-scoped id, one mint.
-          eventId: firedEventId ?? deliveryEventId,
-          ...(clientCascadeParent !== undefined
-            ? { parentEventId: clientCascadeParent }
-            : {}),
-          originTx: this.#tx ?? undefined,
-          // Forward injection provenance only when it carries the mint (see
-          // markRuntimeInjectedEventKeys): a plain array here — the shape any
-          // in-process or sandboxed caller could pass — is dropped, and the
-          // closed-world gate then judges the key like any other undeclared
-          // field.
-          runtimeInjectedEventKeys: mintedKeys,
-        },
-      );
+      if (firedEventId !== undefined && sendOptions?.echo === false) {
+        if (settleCallback !== undefined) {
+          const unechoed = this.#runtime.edit();
+          // In the stream's space: a served handling's transaction writes the
+          // one space its stream lives in, so a handling that settles wrote
+          // its receipt there (protocol.md §2b).
+          unechoed.handlingReceiptLink = this.#runtime.getCell(
+            resolvedToValueLink.space,
+            servedReceiptCause(firedEventId),
+          ).getAsNormalizedFullLink();
+          void unechoed.commit().settled.then(() => settleCallback(unechoed));
+        }
+      } else {
+        this.#runtime.scheduler.queueEvent(
+          resolvedToValueLink,
+          event,
+          undefined,
+          settleCallback,
+          false,
+          {
+            // Under events-down the COMMITTED append's id is the one the
+            // echo must carry (overlay origin `intent(eventId)`,
+            // speculation.md §1) — the same session-scoped id, one mint.
+            eventId: firedEventId ?? deliveryEventId,
+            ...(clientCascadeParent !== undefined
+              ? { parentEventId: clientCascadeParent }
+              : {}),
+            originTx: this.#tx ?? undefined,
+            // Forward injection provenance only when it carries the mint (see
+            // markRuntimeInjectedEventKeys): a plain array here — the shape any
+            // in-process or sandboxed caller could pass — is dropped, and the
+            // closed-world gate then judges the key like any other undeclared
+            // field.
+            runtimeInjectedEventKeys: mintedKeys,
+          },
+        );
+      }
 
       this.#cleanup?.();
       const [cancel, addCancel] = useCancelGroup();
@@ -4166,7 +4215,8 @@ export class CellImpl<T extends FabricValue>
     const subPath = path || [];
     return createQueryResultProxy(
       this.#runtime,
-      requireTransaction(tx) ?? this.#tx ?? this.#runtime.edit(),
+      requireTransaction(tx) ?? this.#tx ??
+        singleReadTx(this.#runtime, undefined),
       {
         ...this.#link,
         path: [...this.path, ...subPath.map((p) => p.toString())] as string[],
@@ -5075,6 +5125,8 @@ export class CellImpl<T extends FabricValue>
       cell.#synced = true;
     };
     isStreamCell = (cell) => cell.isStream();
+    pullProjectedOf = (cell, project, options) =>
+      cell.#pullProjected(project, options, false);
     sinkProjectedOf = (cell, project, callback, options) =>
       cell.#sinkProjected(project, callback, options);
   }
@@ -5859,6 +5911,24 @@ export function readProjected<R>(
   const tx = cellRuntime(cell).readTx();
   const value = project(cell.withTx(tx).get());
   return { value, consumed: collectConsumedLabel(tx) };
+}
+
+/**
+ * Pulls the dependencies of the cell's schema view and `project`, returning
+ * the projection's result from a fresh read. The projection runs inside the
+ * temporary effect, then again after readiness, so it must be synchronous and
+ * free of side effects. Early demand runs can supply `undefined` or partially
+ * loaded values, which the projection must tolerate. Schemaless values are
+ * traversed only as far as the projection reads.
+ * Readiness and terminal connection errors follow `pull()`; `awaitDurability`
+ * also waits for producers installed by pending commits.
+ */
+export function pullProjected<R>(
+  cell: Cell<unknown>,
+  project: (value: unknown) => R,
+  options: { awaitDurability?: boolean } = {},
+): Promise<R> {
+  return pullProjectedOf(requireCellImpl(cell), project, options);
 }
 
 /**

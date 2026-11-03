@@ -7,7 +7,8 @@ import {
   type CfcEnforcementMode as RunnerCfcEnforcementMode,
   isCfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   canonicalCfcJsonStringify,
@@ -196,7 +197,7 @@ export function safeReconcileCfcWritebacks(options: {
     options.recordDiagnostics(result.diagnostics);
     return true;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     options.recordDiagnostics([
       `${options.context} reconciliation failed: ${message}`,
     ]);

@@ -10,10 +10,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
-import {
-  getLogger,
-  getLoggerCountsBreakdown,
-} from "@commonfabric/utils/logger";
+import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { wishNowDiagnostics } from "../src/builtins/wish.ts";

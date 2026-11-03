@@ -14,7 +14,7 @@ import type {
   SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import type { CellRef, JSONValue } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { VDomOp } from "../vdom-ops.ts";
 
 /**
@@ -399,6 +399,12 @@ export interface SpaceAccessRetryControl {
 export interface SpaceAccessProvider {
   /** Current authoritative access loss, if any, for the named space. */
   error(space: string): Error | undefined;
+
+  /**
+   * Whether the access loss `error()` reports for the named space is its
+   * deletion, which no retry can undo. Optional: without it, no loss is.
+   */
+  deleted?(space: string): boolean;
 
   /**
    * Observes loss and recovery, and, while the space is refused, the start

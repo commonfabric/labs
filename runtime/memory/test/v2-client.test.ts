@@ -1,8 +1,9 @@
 import { assertEquals, assertExists, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import {
   decodeMemoryBoundary,
@@ -1315,7 +1316,7 @@ Deno.test("memory v2 client readyToRetry rejects when session ID changes on rest
     let settled = false;
     const readyPromise = readyToRetry().then(
       () => "resolved",
-      (error) => error instanceof Error ? error.message : String(error),
+      (error) => describeFailure(error),
     ).finally(() => {
       settled = true;
     });
@@ -1365,7 +1366,7 @@ Deno.test("memory v2 client readyToRetry rejects when same session ID is not res
     let settled = false;
     const readyPromise = readyToRetry().then(
       () => "resolved",
-      (error) => error instanceof Error ? error.message : String(error),
+      (error) => describeFailure(error),
     ).finally(() => {
       settled = true;
     });

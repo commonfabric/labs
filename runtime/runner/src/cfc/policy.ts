@@ -3,7 +3,10 @@ import {
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import {
   type AtomPattern,
   isAtomPattern,

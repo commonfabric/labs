@@ -27,8 +27,8 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { hashStringOf } from "@commonfabric/data-model";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { localDefinitionName } from "../../src/cfc/schema-refs.ts";
 

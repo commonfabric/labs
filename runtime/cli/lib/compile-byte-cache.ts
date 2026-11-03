@@ -1,4 +1,4 @@
-import { type ModuleByteCache } from "@commonfabric/runner";
+import type { ModuleByteCache } from "@commonfabric/runner";
 import {
   createCompileByteCache,
   flushCompileByteCache,

@@ -58,7 +58,10 @@ import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import { SpaceOutbox } from "../src/executor/outbox.ts";
 import { sqliteQueryMemoDecision } from "../src/builtins/sqlite-builtins.ts";
 import { emptyServingLoopStats } from "../src/executor/stats.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  writeDeletionTombstone,
+} from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("executor outbox test");
 const space = signer.did() as MemorySpace;
@@ -117,9 +120,13 @@ describe("stage G outbox + sqlite discharge", () => {
         : {}),
     });
 
-  const liveLease = (): ExecutionLeaseCycle => {
-    const cycle = new ExecutionLeaseCycle({ engine, space, holder });
-    if (!cycle.acquire()) throw new Error("test lease acquire failed");
+  const liveLease = async (): Promise<ExecutionLeaseCycle> => {
+    const cycle = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    if (!await cycle.acquire()) throw new Error("test lease acquire failed");
     return cycle;
   };
 
@@ -166,7 +173,7 @@ describe("stage G outbox + sqlite discharge", () => {
   //
 
   it("defers a sealed tx's post-commit effects to the destination; without the hook the inline flush stays (serving-loop.md §3)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     const deferred: PostCommitSideEffect[][] = [];
     // A destination that OWNS effects: wave sealing plus the stage-G
@@ -231,7 +238,7 @@ describe("stage G outbox + sqlite discharge", () => {
     expect(flushed).toBe(1);
     runtime.clearSealDestination();
     wave2.abandon("test over");
-    lease.release();
+    await lease.release();
   });
 
   //
@@ -389,7 +396,7 @@ describe("stage G outbox + sqlite discharge", () => {
   //
 
   it("lands outbound append rows INSIDE the wave's engine transaction, for surviving contributions only (FP1; the model's committed-only fold)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -474,7 +481,7 @@ describe("stage G outbox + sqlite discharge", () => {
     expect(rows[0].actingSession).toBe("sess-1");
     expect(rows[0].capabilityRef).toBe("cap-1");
     expect(rows[0].createdSeq).toBe(outcome.seq);
-    lease.release();
+    await lease.release();
   });
 
   //
@@ -482,7 +489,7 @@ describe("stage G outbox + sqlite discharge", () => {
   //
 
   it("delivers pending rows: delegated admission at the target stamps firedAt from the CARRIED actor (LT5 envelope), then deletes the row; a re-sent duplicate dedupes at the eventId horizon", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
     const x = runtime.getCell<{ value: number }>(space, "deliver-x", undefined);
@@ -549,7 +556,7 @@ describe("stage G outbox + sqlite discharge", () => {
     // re-inserting the SAME row (as a re-send would find it) and
     // delivering again — the duplicate dedupes at the target's eventId
     // horizon (no second entry) and the row still retires.
-    const lease2 = liveLease();
+    const lease2 = await liveLease();
     const wave2 = newWave({ lease: lease2 });
     runtime.installSealDestination(wave2);
     const tx2 = runtime.edit();
@@ -588,7 +595,7 @@ describe("stage G outbox + sqlite discharge", () => {
     // the re-send never touches) — the RECOVERED outbox's.
     expect(stats.outbox.failed).toBe(0);
     expect(recoveredStats.outbox.failed).toBe(0);
-    lease.release();
+    await lease.release();
     lease2.release();
   });
 
@@ -606,7 +613,7 @@ describe("stage G outbox + sqlite discharge", () => {
     // a SURVIVING contribution and must land as durable rows in the
     // HOME wave transaction — the pre-fix fold sat under the home-seal
     // guard and lost them silently.
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -679,7 +686,7 @@ describe("stage G outbox + sqlite discharge", () => {
         id: foreignCell.getAsNormalizedFullLink().id,
       }),
     ).toEqual({ value: { value: 5 } });
-    lease.release();
+    await lease.release();
   });
 
   it("mints a zero-write contribution for a tx that sealed NOTHING but staged appends — the Phase-3 pure-forwarding handler; its appends land (M-A)", async () => {
@@ -688,7 +695,7 @@ describe("stage G outbox + sqlite discharge", () => {
     // consequenceOf folds run for every committed contribution). The
     // pre-fix seal() dropped the tx at the empty-assembly fast path and
     // orphaned its staged appends silently.
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
 
@@ -725,11 +732,11 @@ describe("stage G outbox + sqlite discharge", () => {
     expect(rows[0].targetStream).toBe("of:zero-seal-stream");
     expect(rows[0].actingPrincipal).toBe("user:bob");
     expect(rows[0].createdSeq).toBe(outcome.seq);
-    lease.release();
+    await lease.release();
   });
 
   it("refuses a userless (or grantless) append at the SOURCE — fail-closed ahead of the delegated floor that would destroy it at delivery", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const wave = newWave({ lease });
     runtime.installSealDestination(wave);
     const x = runtime.getCell<{ value: number }>(space, "guard-x", undefined);
@@ -783,7 +790,7 @@ describe("stage G outbox + sqlite discharge", () => {
     expect((await tx1.commit().settled).error).toBeUndefined();
     runtime.clearSealDestination();
     wave.abandon("test over");
-    lease.release();
+    await lease.release();
   });
 
   //
@@ -917,8 +924,8 @@ describe("stage G outbox + sqlite discharge", () => {
     // The source event's entry, as the source SpaceServer would hold it
     // (a consequenced client fire whose handler emitted the append).
     // Derived commits — the setup AND the outbox's notice write — need
-    // the live lease (protocol.md §2's one equality check).
-    const lease = liveLease();
+    // the lease (protocol.md §2's one equality check).
+    const lease = await liveLease();
     const sourceStream = { id: "of:ow14-stream", path: ["s"] };
     const sourceSidecar = streamEntriesDocId(sourceStream);
     const ow14TargetStream = { id: "of:ow14-target", path: [] as string[] };
@@ -1002,7 +1009,7 @@ describe("stage G outbox + sqlite discharge", () => {
     expect(read().length).toBe(1);
     expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
       .toBe(0);
-    lease.release();
+    await lease.release();
   });
 
   it("stops the drain at a transport failure: the failed row AND its successors stay, preserving per-stream FIFO; the re-drain delivers in order (round-2 thread 7)", async () => {
@@ -1028,14 +1035,14 @@ describe("stage G outbox + sqlite discharge", () => {
     // A transport that fails the FIRST delivery attempt only.
     let failuresLeft = 1;
     const flakyOnce = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "commitDelegatedAppend" && failuresLeft > 0) {
           return () => {
             failuresLeft -= 1;
             return Promise.reject(new Error("transport down"));
           };
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
@@ -1077,6 +1084,107 @@ describe("stage G outbox + sqlite discharge", () => {
     ]);
   });
 
+  //
+  // A deleted space (serving-loop.md, "A deleted space")
+  //
+
+  /** Inserts `count` rows to one stream of the target, in order. */
+  const insertRows = (label: string, count: number) => {
+    const stream = { id: `of:${label}-stream-link`, path: [] as string[] };
+    const sidecar = streamEntriesDocId(stream);
+    insertExecutionOutboxRows(engine, {
+      branch: "",
+      createdSeq: 1,
+      rows: Array.from({ length: count }, (_, i) => ({
+        targetSpace,
+        targetStream: sidecar,
+        targetStreamLink: stream,
+        eventId: `evt-${label}-${i + 1}`,
+        payload: { n: i + 1 },
+        actingPrincipal: "user:alice",
+        actingSession: "sess-1",
+        capabilityRef: `cap-${label}`,
+      })),
+    });
+    return sidecar;
+  };
+
+  /** The event ids the target's stream at `sidecar` holds. */
+  const delivered = async (sidecar: string): Promise<string[]> => {
+    const target = await server.engineForSpace(targetSpace);
+    const doc = Engine.read(target, { id: sidecar });
+    return ((doc?.value as { entries?: Array<{ eventId?: string }> })
+      ?.entries ?? []).map((entry) => entry.eventId ?? "");
+  };
+
+  it("starts no row once its own space is deleted, and leaves every row for the reap", async () => {
+    const sidecar = insertRows("own-deleted", 2);
+    writeDeletionTombstone(engine, space, signer.did());
+
+    const { outbox, stats } = newOutbox();
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 2 });
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(2);
+    expect(await delivered(sidecar)).toEqual([]);
+    expect(stats.outbox.failed).toBe(0);
+  });
+
+  it("reads its own space before each row: a deletion during one row's delivery stops the drain at the next", async () => {
+    const sidecar = insertRows("mid-deleted", 3);
+    // The space is deleted while the first row's delivery is under way.
+    let deleted = false;
+    const deletingServer = new Proxy(server, {
+      get(target, prop) {
+        if (prop === "commitDelegatedAppend") {
+          return async (...args: unknown[]) => {
+            const result = await (target.commitDelegatedAppend as (
+              ...args: unknown[]
+            ) => Promise<unknown>)(...args);
+            if (!deleted) {
+              deleted = true;
+              writeDeletionTombstone(engine, space, signer.did());
+            }
+            return result;
+          };
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const outbox = new SpaceOutbox({
+      stats: emptyServingLoopStats(),
+      server: deletingServer as typeof server,
+      engine,
+      space,
+      sessionId: holder,
+      localSeqRef,
+    });
+
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 2 });
+    expect(await delivered(sidecar)).toEqual(["evt-mid-deleted-1"]);
+    expect(
+      selectPendingExecutionOutboxRows(engine, { branch: "" }).map((row) =>
+        row.eventId
+      ),
+    ).toEqual(["evt-mid-deleted-2", "evt-mid-deleted-3"]);
+  });
+
+  it("refuses a row whose target is deleted deterministically: retired, counted failed, and the drain goes on", async () => {
+    const sidecar = insertRows("target-deleted", 2);
+    writeDeletionTombstone(
+      await server.engineForSpace(targetSpace),
+      targetSpace,
+      targetSigner.did(),
+    );
+
+    const { outbox, stats } = newOutbox();
+    expect(await outbox.deliverPendingAppends()).toEqual({ remaining: 0 });
+    expect(selectPendingExecutionOutboxRows(engine, { branch: "" }).length)
+      .toBe(0);
+    expect(stats.outbox.failed).toBe(2);
+    expect(await delivered(sidecar)).toEqual([]);
+  });
+
   it("keeps the row on a transport-class delivery failure (admit-before-delete): the next drain delivers exactly one entry", async () => {
     const transportStream = { id: "of:transport-stream", path: [] as string[] };
     const transportSidecar = streamEntriesDocId(transportStream);
@@ -1100,11 +1208,11 @@ describe("stage G outbox + sqlite discharge", () => {
     // survive (delete-before-admit would pass the happy-path tests but
     // lose the append here).
     const failing = new Proxy(server, {
-      get(target, prop, receiver) {
+      get(target, prop) {
         if (prop === "commitDelegatedAppend") {
           return () => Promise.reject(new Error("transport down"));
         }
-        const value = Reflect.get(target, prop, receiver);
+        const value = Reflect.get(target, prop);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
@@ -1236,7 +1344,7 @@ describe("stage G outbox + sqlite discharge", () => {
   });
 
   it("applies a folded sqlite op in a HOME wave batch atomically via the server's attachment hook (the stage-D bound discharged)", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     const sink = newSink({
       sqliteAttachmentsFor: (s, operations, scopeKeyByOpIndex) =>
         server.attachWaveCommitSqliteDbs(
@@ -1271,11 +1379,11 @@ describe("stage G outbox + sqlite discharge", () => {
     } finally {
       attached.detach();
     }
-    lease.release();
+    await lease.release();
   });
 
   it("refuses a sqlite-carrying batch loudly on a sink without the attachment hook, on a batch without per-op scope keys, and on a FOREIGN batch", async () => {
-    const lease = liveLease();
+    const lease = await liveLease();
     // No hook: refused, never silently applied.
     const bare = await newSink().commitWave(sqliteBatch());
     expect(bare.error?.message).toContain("no attachment hook");
@@ -1302,6 +1410,6 @@ describe("stage G outbox + sqlite discharge", () => {
       sqliteBatch({ home: false }),
     );
     expect(foreign.error?.message).toContain("FOREIGN wave batch");
-    lease.release();
+    await lease.release();
   });
 });

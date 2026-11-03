@@ -32,7 +32,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   DIALS,
   EXCLUDED_FROM_COVERAGE_GATE,

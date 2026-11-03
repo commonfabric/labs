@@ -1,6 +1,10 @@
 import type { FavoriteEntry } from "@commonfabric/home-schemas";
 import { type DID, KeyStore } from "@commonfabric/identity";
-import { navigate } from "@commonfabric/navigation";
+import {
+  type AppView,
+  appViewToUrlPath,
+  navigate,
+} from "@commonfabric/navigation";
 import { hasEntityUriScheme } from "@commonfabric/runner/entity-kind";
 import { type NameSchema, nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
@@ -541,11 +545,9 @@ export class XHeaderView extends BaseView {
   @property({ attribute: false })
   accessor pieceReference: string | undefined = undefined;
 
+  /** The view on screen, whose space the breadcrumb names. */
   @property({ attribute: false })
-  accessor spaceName: string | undefined = undefined;
-
-  @property({ attribute: false })
-  accessor spaceDid: DID | undefined = undefined;
+  accessor view: AppView | undefined = undefined;
 
   /** The resolved space DID of the current view (view state). */
   @property({ attribute: false })
@@ -658,15 +660,17 @@ export class XHeaderView extends BaseView {
   #resizeTimer?: ReturnType<typeof setTimeout>;
 
   /**
-   * The favorites subscription step, the favorited-piece test, the three
-   * click handlers, the Escape handler, and the piece-name task, which a test
-   * drives directly.
+   * The favorites subscription step, the favorited-piece test, the click
+   * handlers, the piece switcher's selection handler, the Escape handler, and
+   * the piece-name task, which a test drives directly.
    */
   get accessForTestingOnly(): {
     ensureFavoritesSubscription(): void;
     isFavorite(): boolean;
     handleLogoClick(e: Event): void;
     handleToggleFavorite(e: Event): Promise<void>;
+    handleSpaceClick(e: Event): void;
+    handlePieceSelected(e: Event): void;
     copyReference(e: Event): Promise<void>;
     handleKeyDown(e: KeyboardEvent): void;
     pieces: Task<
@@ -679,6 +683,8 @@ export class XHeaderView extends BaseView {
       isFavorite: () => this.#isFavorite(),
       handleLogoClick: (e) => this.#handleLogoClick(e),
       handleToggleFavorite: (e) => this.#handleToggleFavorite(e),
+      handleSpaceClick: (e) => this.#handleSpaceClick(e),
+      handlePieceSelected: (e) => this.#handlePieceSelected(e),
       copyReference: (e) => this.#handleCopyReference(e),
       handleKeyDown: this.#handleKeyDown,
       pieces: this.#pieces,
@@ -869,11 +875,13 @@ export class XHeaderView extends BaseView {
   #handleSpaceClick(e: Event) {
     e.preventDefault();
     e.stopPropagation();
-    if (this.spaceName) {
-      navigate({ spaceName: this.spaceName });
-    } else if (this.spaceDid) {
-      navigate({ spaceDid: this.spaceDid });
-    }
+    this.#navigateToSpace();
+  }
+
+  /** Navigates to `#spaceView`, when there is one. */
+  #navigateToSpace() {
+    const spaceView = this.#spaceView;
+    if (spaceView) navigate(spaceView);
   }
 
   /**
@@ -941,10 +949,14 @@ export class XHeaderView extends BaseView {
     this.menuOpen = false;
     this.pieceListExpanded = false;
     this.headerPieceDropdownOpen = false;
-    if (this.spaceName) {
-      navigate({ spaceName: this.spaceName, pieceId });
-    } else if (this.spaceDid) {
-      navigate({ spaceDid: this.spaceDid, pieceId });
+    const spaceView = this.#spaceView;
+    if (!spaceView) return;
+    if (!("builtin" in spaceView)) {
+      navigate({ ...spaceView, pieceId });
+    } else if (this.space) {
+      // The home view shows the signed-in user's own space, where a piece is
+      // addressed by the space's DID.
+      navigate({ spaceDid: this.space, pieceId });
     }
   }
 
@@ -958,32 +970,37 @@ export class XHeaderView extends BaseView {
     this.menuOpen = false;
     if (this.#isViewingPiece) {
       // Viewing a piece — go back to the space
-      if (this.spaceName) {
-        navigate({ spaceName: this.spaceName });
-      } else if (this.spaceDid) {
-        navigate({ spaceDid: this.spaceDid });
-      }
+      this.#navigateToSpace();
     } else {
       // At space root — go home
       globalThis.location.href = "/";
     }
   }
 
-  /** Whether we have a space identifier (name or DID) to navigate with. */
-  get #hasSpace(): boolean {
-    return !!(this.spaceName || this.spaceDid);
+  /**
+   * The view the breadcrumb's space link opens: the home view when on it, and
+   * otherwise the root of the space the view is in.
+   */
+  get #spaceView(): AppView | undefined {
+    const view = this.view;
+    if (!view || "builtin" in view) return view;
+    return "spaceName" in view
+      ? { spaceName: view.spaceName }
+      : { spaceDid: view.spaceDid };
   }
 
   /** Human-readable space name, falling back to a truncated DID. */
   get #spaceDisplayName(): string {
-    if (this.spaceName) return this.spaceName;
-    if (this.spaceDid) return this.spaceDid.slice(0, 20) + "...";
-    return "";
+    const view = this.view;
+    if (!view) return "";
+    if ("builtin" in view) return "Home";
+    if ("spaceName" in view) return view.spaceName;
+    return view.spaceDid.slice(0, 20) + "...";
   }
 
   /** True when viewing a specific piece (not the space's default pattern). */
   get #isViewingPiece(): boolean {
-    return !!(this.pieceId && this.#hasSpace && !this.isViewingDefaultPattern);
+    return !!(this.pieceId && this.view && !this.isViewingDefaultPattern);
   }
 
   /** Label for the navigate-up button: "Back to <space>" or "Go Home". */
@@ -1055,7 +1072,13 @@ export class XHeaderView extends BaseView {
       } else {
         await this.rt
           .favorites()
-          .addFavorite(piece, undefined, this.spaceName);
+          .addFavorite(
+            piece,
+            undefined,
+            this.view && "spaceName" in this.view
+              ? this.view.spaceName
+              : undefined,
+          );
       }
     } catch (err) {
       // A disposal race (logout, runtime swap) cancels the write; that is not
@@ -1077,6 +1100,7 @@ export class XHeaderView extends BaseView {
     const connectionStatus = this.#getConnectionStatus();
     const connectionColor = getConnectionColor(connectionStatus);
     const isFavorite = this.#isFavorite();
+    const spaceView = this.#spaceView;
 
     return html`
       <div class="header">
@@ -1098,13 +1122,11 @@ export class XHeaderView extends BaseView {
             </span>
           </button>
           <div class="header-breadcrumbs">
-            ${this.#hasSpace
+            ${spaceView
               ? html`
                 <a
                   class="header-space"
-                  href="${this.spaceName
-                    ? `/${this.spaceName}`
-                    : `/${this.spaceDid ?? ""}`}"
+                  href="${appViewToUrlPath(spaceView)}"
                   @click="${this.#handleSpaceClick}"
                 >${this.#spaceDisplayName}</a>
                 <span class="header-separator">/</span>
@@ -1158,7 +1180,7 @@ export class XHeaderView extends BaseView {
               <span class="menu-close-icon">${iconClose()}</span>
             </button>
             <div class="menu-title">
-              ${this.#hasSpace
+              ${spaceView
                 ? html`
                   <div class="breadcrumb">
                     <span class="breadcrumb-icon">${iconFolder()}</span>

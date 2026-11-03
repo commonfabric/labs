@@ -1,4 +1,5 @@
 import { createSession, Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   applyPieceSourceTransition,
   getPieceSourceRevisions,
@@ -7,7 +8,7 @@ import {
   Runtime,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { holdWorkerLifetimeLock } from "@commonfabric/utils/worker-lifetime";
+import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { sourceDocKey } from "../../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
@@ -121,7 +122,7 @@ try {
   };
 } catch (error) {
   outcome = {
-    error: error instanceof Error ? error.message : String(error),
+    error: describeFailure(error),
   };
 }
 await runtime.dispose();

@@ -2,8 +2,9 @@ import type {
   FabricRegExp as ApiFabricRegExp,
   FabricRegExpConstructor as ApiFabricRegExpConstructor,
 } from "@/api.ts";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
@@ -58,7 +59,8 @@ type FabricRegExpState = {
  * validates the pattern syntax eagerly and makes `value` cheap. Other flavors
  * are stored faithfully (`source` / `flags` / `flavor`) but cannot yet produce
  * a JS `RegExp`, so `value` throws for them -- leaving room to represent
- * other regex syntaxes in the future. See Section 1.4.1 of the formal spec.
+ * other regex syntaxes in the future. See Section 1.4.5 of
+ * `1-fabric-values.md`.
  */
 export class FabricRegExp extends BaseFabricPrimitive
   implements ApiFabricRegExp {
@@ -230,7 +232,7 @@ export class FabricRegExp extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            `RegExp: ${e instanceof Error ? e.message : String(e)}`,
+            `RegExp: ${describeFailure(e)}`,
             mutable,
           );
         }
@@ -282,7 +284,7 @@ export class FabricRegExp extends BaseFabricPrimitive
           return ProblematicValue.make(
             typeTag,
             state,
-            (e instanceof Error) ? e.message : String(e),
+            describeFailure(e),
             mutable,
           );
         }

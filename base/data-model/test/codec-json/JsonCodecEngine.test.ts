@@ -63,8 +63,8 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
 /**
  * Shared test `LiveEnvironment`: `getCell()` always throws (no test
@@ -2101,6 +2101,18 @@ describe("JsonCodecEngine", () => {
       expect(result).toBeInstanceOf(UnknownValue);
       const unknown = result as unknown as UnknownValue;
       expect(unknown.wireTypeTag).toBe("FutureType@2");
+      expect(unknown.state).toEqual({ some: "data" });
+    });
+
+    it("round-trips `UnknownValue` with a namespaced tag through encode/decode", () => {
+      const us = new UnknownValue("sys.beep.Boop@1", { some: "data" });
+      expect(toEncodedFormat(us)).toEqual({
+        "/sys.beep.Boop@1": { some: "data" },
+      });
+      const result = roundTrip(us);
+      expect(result).toBeInstanceOf(UnknownValue);
+      const unknown = result as unknown as UnknownValue;
+      expect(unknown.wireTypeTag).toBe("sys.beep.Boop@1");
       expect(unknown.state).toEqual({ some: "data" });
     });
 

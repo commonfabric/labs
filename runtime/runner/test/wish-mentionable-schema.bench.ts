@@ -1,6 +1,6 @@
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Cell } from "../src/cell.ts";
 import { type JSONSchema, NAME } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";

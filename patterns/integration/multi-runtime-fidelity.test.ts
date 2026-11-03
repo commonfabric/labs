@@ -18,7 +18,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { isLinkRef } from "@commonfabric/data-model/cell-rep";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

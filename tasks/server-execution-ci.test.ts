@@ -55,9 +55,7 @@ describe("server-execution-ci", () => {
           role: "default",
           enabled: defaultEnabled,
           label: defaultEnabled ? "ON" : "OFF",
-          environment: defaultEnabled
-            ? { EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true" }
-            : {},
+          environment: {},
         });
         expect(oppositeLane).toEqual({
           role: "opposite",
@@ -67,12 +65,9 @@ describe("server-execution-ci", () => {
             ? "server-execution-off"
             : "server-execution",
           experimentalValue: defaultEnabled ? "false" : "true",
-          environment: defaultEnabled
-            ? { EXPERIMENTAL_SERVER_EXECUTION: "false" }
-            : {
-              EXPERIMENTAL_SERVER_EXECUTION: "true",
-              EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION: "true",
-            },
+          environment: {
+            EXPERIMENTAL_SERVER_EXECUTION: defaultEnabled ? "false" : "true",
+          },
         });
       });
 
@@ -83,10 +78,7 @@ describe("server-execution-ci", () => {
             assertServerExecutionCiPosture(
               role,
               {
-                experimental: {
-                  serverExecution: lane.enabled,
-                  ...(lane.enabled ? { webViewScopedReplication: true } : {}),
-                },
+                experimental: { serverExecution: lane.enabled },
                 shellServerExecutionDefine: lane.experimentalValue ?? null,
               },
               { servingLoop: lane.enabled ? {} : null },
@@ -113,33 +105,33 @@ describe("server-execution-ci", () => {
         true,
       )
     ).toThrow("serving loop is absent");
-    // An ON lane whose servers left web view-scoped replication off runs a
-    // posture the arm does not ship with.
+    // An ON lane whose servers turn web view-scoped replication off runs a
+    // posture the arm does not ship with, by either flag.
     expect(() =>
       assertServerExecutionCiPosture(
         "opposite",
         {
-          experimental: { serverExecution: true },
+          experimental: {
+            serverExecution: true,
+            webViewScopedReplication: false,
+          },
           shellServerExecutionDefine: "true",
         },
         { servingLoop: {} },
         false,
       )
-    ).toThrow("publishes webViewScopedReplication=undefined");
+    ).toThrow("publishes webViewScopedReplication=false");
     expect(() =>
       assertServerExecutionCiPosture(
-        "default",
+        "opposite",
         {
-          experimental: {
-            serverExecution: false,
-            webViewScopedReplication: true,
-          },
-          shellServerExecutionDefine: null,
+          experimental: { serverExecution: true, viewScopedReplication: false },
+          shellServerExecutionDefine: "true",
         },
-        { servingLoop: null },
+        { servingLoop: {} },
         false,
       )
-    ).toThrow("publishes webViewScopedReplication=true");
+    ).toThrow("viewScopedReplication=false");
     expect(() =>
       assertServerExecutionCiPosture(
         "opposite",
@@ -173,10 +165,7 @@ describe("server-execution-ci", () => {
         requested.push(url);
         const body = url.endsWith("/api/meta")
           ? {
-            experimental: {
-              serverExecution: lane.enabled,
-              ...(lane.enabled ? { webViewScopedReplication: true } : {}),
-            },
+            experimental: { serverExecution: lane.enabled },
             shellServerExecutionDefine: lane.experimentalValue ?? null,
           }
           : { servingLoop: lane.enabled ? {} : null };

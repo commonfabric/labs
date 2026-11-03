@@ -32,8 +32,8 @@
 // Real implementation pass-through
 //
 
-// The generated child import map resolves the transitive
-// `data-model`/`content-hash`/`leb128` graph these pull in.
+// The generated child import map resolves the transitive graph of
+// `data-model` and the base packages it imports, which these pull in.
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 export { valueEqual };
 export {

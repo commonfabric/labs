@@ -1,5 +1,8 @@
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 // Imported from its own module rather than the `codec-common` barrel,
 // deliberately. The barrel loads every codec, the codecs load the

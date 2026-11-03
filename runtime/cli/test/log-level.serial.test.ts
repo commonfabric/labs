@@ -1,8 +1,5 @@
 import { assertEquals } from "@std/assert";
-import {
-  getGlobalLogFloor,
-  setGlobalLogFloor,
-} from "@commonfabric/utils/logger";
+import { getGlobalLogFloor, setGlobalLogFloor } from "@commonfabric/logger";
 import { applyLogLevel, extractLogLevel } from "../lib/log-level.ts";
 
 // applyLogLevel mutates the global log floor and the CF_LOG_LEVEL env var;

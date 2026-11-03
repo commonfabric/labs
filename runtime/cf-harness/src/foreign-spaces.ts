@@ -6,7 +6,7 @@
 import { debugStr } from "@commonfabric/data-model";
 import { isDIDKey } from "@commonfabric/identity/did";
 import { type MemorySpace, normalizeSpaceHost } from "@commonfabric/runner";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 /** Foreign space DIDs and their HTTP(S) origins, supplied by the operator. */
 export type HarnessForeignSpaces = Readonly<Record<string, string>>;

@@ -4,7 +4,7 @@
  * schema would admit a write from any writer.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type {
   GenerationContext,

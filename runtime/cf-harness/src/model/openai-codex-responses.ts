@@ -1,4 +1,8 @@
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type { OpenAICodexOAuthCredential } from "../auth/types.ts";
 import {
@@ -19,6 +23,7 @@ import {
   type HarnessModelTurnResult,
   observedModelId,
 } from "./client.ts";
+import { emptyReplyDiagnostic } from "./empty-reply.ts";
 import {
   assertHarnessModelInputBound,
   assertHarnessModelLimits,
@@ -271,7 +276,10 @@ interface CodexExchange {
  * transient failure that justified it.
  */
 type CodexAttemptOutcome =
-  | { terminal: Record<string, unknown> }
+  | {
+    terminal: Record<string, unknown>;
+    rawPayload: { terminal: Record<string, unknown>; streamedItems: unknown[] };
+  }
   | { error: HarnessControlError; retry?: HarnessTransientFailureKind };
 
 const selectedHeaders = (
@@ -578,7 +586,11 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     for (let attempt = 1;; attempt += 1) {
       const outcome = await this.#attempt(exchange, attempt);
       if ("terminal" in outcome) {
-        return this.#turnResult(outcome.terminal, request.model);
+        return this.#turnResult(
+          outcome.terminal,
+          request.model,
+          outcome.rawPayload,
+        );
       }
       if (outcome.retry === undefined) throw outcome.error;
       await this.#retrySchedule.waitBefore(attempt + 1, request.signal);
@@ -670,7 +682,7 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
         responseCompleteDurationMs: durationMs,
         outcome: "transport_error",
         errorDetail: redact(
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         ),
       }, providerUnavailable("OpenAI Codex transport request failed"));
     }
@@ -797,13 +809,20 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     // does not cover, so an abort landing during it would otherwise surface as
     // a completed turn.
     if (request.signal?.aborted) throw abortReason(request.signal);
-    return { terminal };
+    return {
+      terminal,
+      rawPayload: {
+        terminal: reading.terminal,
+        streamedItems: reading.streamedItems,
+      },
+    };
   }
 
   /** Normalizes a completed terminal response into the turn's result. */
   #turnResult(
     terminal: Record<string, unknown>,
     model: string,
+    rawPayload: unknown,
   ): HarnessModelTurnResult {
     const rawUsage = isObjectNotArray(terminal.usage)
       ? terminal.usage
@@ -824,11 +843,13 @@ export class OpenAICodexResponsesClient implements HarnessModelClient {
     } catch (error) {
       throw providerUnavailable(
         "OpenAI Codex returned an invalid terminal response: " +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
       );
     }
+    const emptyReply = emptyReplyDiagnostic(assistant, "responses", rawPayload);
     return {
       assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       observedModel: observedModelId(terminal.model),
       ...(usage !== undefined ? { usage } : {}),
     };

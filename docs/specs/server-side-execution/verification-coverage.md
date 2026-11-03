@@ -226,16 +226,20 @@ Delta 2026-08-05 — stage F lands (the serving loop; this PR):
   `runtime/memory/test/v2-explicit-read.test.ts` pins
   holder-admitted / non-holder-refused / off-flag-refused on both
   the query and watch paths. The trace/model coverage stands
-  unchanged. One recorded Phase-1 acceptance rides this row
-  (2026-08-05): the landed operand check compares the
-  SERVICE-IDENTITY component of the live holder, not the full
-  per-process DR1 holder, so a second process sharing the service
-  DID would pass on the first process's lease row — no instances
-  exist co-hosted in Phase 1 (one serving process per memory
-  server); the per-process sharpening lands with Phase 5's
-  cross-engine lease lookup design, alongside FP2's widening.
-- serving-loop §2's renew cadence + stop-committing MUST: the
-  serving loop drives them for real; lease-loss and idle-park pinned
+  unchanged. One Phase-1 acceptance rode this row (2026-08-05): the
+  operand check compared the SERVICE-IDENTITY component of the live
+  holder, not the full per-process DR1 holder, so a second process
+  sharing the service DID passed on the first process's lease row.
+  Phase 5 sharpened it to the full holder, and owner routing R3
+  (2026-11-01) closed it by restating the row: the full-holder
+  equality admits the space's own serving session, from the owner's
+  process only (`Connection.inProcess`), and a service-identity
+  session from any process is admitted under the grant-scoped read —
+  the 2026-11-01 delta.
+- serving-loop §2's stop-committing MUST: the serving loop drives it for
+  real. *(The renew cadence and the renew-blip arm below are retired by the
+  lease in memory — the Delta 2026-11-01 stage L entry.)* Lease-loss and
+  idle-park pinned
   end to end in `runtime/runner/test/executor-serving-loop.test.ts`
   (C6/C7's impl witnesses at the loop level) — including the
   renew-blip arm (2026-08-05): when the reacquire SUCCEEDS but a
@@ -804,19 +808,18 @@ extension owed and WHEN it earns its cost:
 - OW1 — forged `firedAt` admission negative: a client-supplied
   `firedAt` disagreeing with the envelope is REJECTED (events §1,
   scopes §5). One C6-style negative.
-- OW2 — a lease renewal is NEVER a commit (serving-loop §2): renew
-  transition asserts zero commit records.
-  Implementation coverage in `executor/activation-lease.test.ts` verifies renewal
-  without commits while the
-  runtime factory and delegated append recovery are held beyond the lease's
-  initial lifetime, then checks the first derived commit's actual wave verdict
-  and stored value. Controlled-clock refusal cases cover takeover before and
-  at renewal, lease-store errors, factory and runtime validation failures,
-  disposal despite observer cleanup errors, and host shutdown waiting for the
-  returning runtime's disposal. A factory read-through control verifies that
-  another user's stored instance becomes unavailable after lease takeover.
+- OW2 — a lease operation is NEVER a commit (serving-loop §2).
+  `v2-execution-lease.test.ts` checks that the stored table stays empty and the
+  commit table takes nothing from an acquire or a release.
+  Implementation coverage in `executor/activation-lease.test.ts` holds the
+  runtime factory and delegated append recovery for a long stretch of controlled
+  time, then checks the first derived commit's actual wave verdict and stored
+  value. Refusal cases cover factory and runtime validation failures, disposal
+  despite observer cleanup errors, and host shutdown waiting for the returning
+  runtime's disposal. A factory read-through control verifies that another user's
+  stored instance becomes unavailable once the tenure has parked.
   Host controls also require fresh-runtime activation and an accepted stored
-  result after initialization lease loss with surviving session, event, or warm
+  result after a failed initialization with surviving session, event, or warm
   demand. They cover warm notices arriving during initialization and cleanup,
   no-demand and rival refusal, closed hosts, and controlled exponential backoff
   whose pending rebuild is canceled by shutdown.
@@ -1182,7 +1185,10 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   question; a lapse is recorded and the first live pass RE-ARMS with a
   full evaluation; the SpaceServer's renew arm reports a survived blip
   (`noteLeaseReacquired`) so that pass runs promptly (protocol.md §3 as
-  amended). Pinned red-first: memory `v2-explicit-read.test.ts` (keyed
+  amended). *(Retired by owner routing R3, 2026-11-01: delivery is the
+  session's for its life, and the lapse, the re-arm, the notice and the
+  tests that pinned them are gone — the 2026-11-01 delta.)* Pinned
+  red-first: memory `v2-explicit-read.test.ts` (keyed
   retraction with the own instance untouched; the re-arm via the notice
   and via the first evaluating pass; the notice inert when nothing
   lapsed), `storage-instance-keying.test.ts` (the replica half),
@@ -1243,11 +1249,8 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   reacquire aborts `lease-lost` and PARKS the space — the "survived
   blip keeps serving" path is reachable only on a space quiet across the
   tick; owner: the P7 renew-blip / wedge arms. (a) CLOSED
-  (2026-09-24): a derived commit the engine refuses while the row no
-  longer names the holder live runs the renew arm, so the tenure ends
-  at the first refused commit and its wave aborts and parks
-  (serving-loop §2); pinned in `executor-serving-loop.test.ts` with
-  both renewal drivers held off.
+  (2026-09-24), and retired with the renew arm by the lease in memory (the
+  Delta 2026-11-01 stage L entry): nothing ends a tenure but its own park.
   **CLOSED — leg 2 of 2 LANDED (fan-out stage B, 2026-08-17; owner
   ruling 2026-08-16 "if a space scoped calculation gets narrowed to
   user, it'll have to run for all users that demand it").** The
@@ -1453,7 +1456,10 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   handover work, whichever lands first. DISCHARGED with Phase 5
   (2026-08-14; the delta below carries the evidence — the re-verify
   and the post-handover tests exist, the half-(ii) mitigation
-  stands).
+  stands). *(Restated by owner routing R3, 2026-11-01: the flag is the
+  session's admission for its life, and the row admits by connection
+  and principal class rather than by a lease that may lapse — the
+  2026-11-01 delta.)*
 - OW23 — unvalidated scope strings reach `resolveScopeKey` with no
   default arm (pre-existing adjacency): the switch covers the three
   `CellScope` members and TypeScript exhaustiveness assumes the
@@ -2534,7 +2540,10 @@ delta):
   keyed-retracted), the exemption still re-verifies on CURRENT
   holdership at every push-path use, a lapse is recorded and re-armed on
   the first live pass; the post-handover tests still hold — a former
-  holder receives no foreign instance — see OW17.)*
+  holder receives no foreign instance — see OW17.)* *(Superseded again
+  by owner routing R3, 2026-11-01: `#currentLeaseHolderExemption`, the
+  lapse and the re-arm are gone, and a session's admission delivers
+  the instances it named for its life — the 2026-11-01 delta.)*
 - OW17 — RE-TAGGED with the Phase-5 posture (flag-don't-fill upheld):
   the trigger anticipated foreign scoped instances making the
   replica's scope-name collapse load-bearing; Phase 5 instead
@@ -3310,9 +3319,10 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   holds on an admitted instance keeps delivering until the replica next
   pulls it, a derivation that read the instance before the revocation
   keeps its output until another input runs it again, and the memory
-  server's push pass re-keys lease-holder deliveries on CURRENT
-  holdership (`#currentLeaseHolderExemption`) and not on the named
-  actor's current grant. Owed: a per-pass grant re-check on keyed foreign instances, or
+  server's push pass delivers the instances the session was admitted
+  for the session's life (`SessionState.leaseHolderReads`) and
+  re-checks neither the lease nor the named actor's current grant.
+  Owed: a per-pass grant re-check on keyed foreign instances, or
   a retraction of them on the access-list commit, with a test that a
   revoked actor's instance stops arriving at the serving replica
   without a re-pull. (b) DEMAND: a granted read is a service-session
@@ -4047,6 +4057,77 @@ grant):
   ("lets a sender read the offers back and find its own") holds the rows
   a sender reads to be the documents the inbox's owner reads.
 
+Delta 2026-11-01 — owner routing R3 (reads through the owner, and the
+read row; `docs/history/plans/serving-loop-owner-routing.md`):
+
+- protocol.md §2's read row, restated: the space's own serving session
+  — a session from the owner's process (`Connection.inProcess`, set by
+  the in-process transport and the worker's port, never by a socket)
+  whose principal holds the space's live lease — names any instance; a
+  service-identity session from any process names an actor's instance
+  under the actor's READ grant (the grant-scoped read); everyone else
+  naming a key is refused. Retired with it: the co-hosted cross-engine
+  lease lookup (`#liveCoHostedLeaseSpaceFor`), the per-pass live-lease
+  re-check of delivery (`#currentLeaseHolderExemption`), the lapse and
+  its re-arm (`leaseHolderReadsLapsed`), and `noteLeaseReacquired` with
+  its port notice; a session's admission (`leaseHolderReads`) delivers
+  the instances it named for the session's life. The Phase-1
+  acceptance under the stage-F read-row entry is closed: the holder
+  equality is the full per-process holder, checked for the serving
+  session alone, and a second process sharing the service DID is
+  admitted as the service identity under the grant, which is what makes
+  it a peer. → COVERED, impl-gate, red-first.
+  `memory/test/v2-explicit-read.test.ts` (the serving session and a
+  service session admitted, an ordinary client and the off flag
+  refused; a service session from another process admitted under
+  alice's grant holding no lease anywhere, and refused naming an
+  ungranted actor where the in-process serving session is admitted; a
+  lapsed lease still delivers keyed, and a resume carries the update
+  keyed; a serving session's unnamed scoped read of a space it does not
+  serve refused from another process and in process, the space's own
+  serving session and an ordinary client untouched).
+- protocol.md §3's keyed wire: delivery no longer hangs from the lease.
+  The stage-A tests that a lapse withholds and the notice re-delivers,
+  the renew arm's notice test in `executor-space-server.test.ts` and
+  the lapse test in `executor-instance-keyed-replica.test.ts` retire
+  with the mechanism.
+- serving-loop.md's cross-space wake under the route: a serving
+  runtime's session in every space but its home reaches that space's
+  owner (`LoopbackSessionFactory`, routing by `servingHomeSpace`), so
+  the foreign read registers on the owner and the owner's commits wake
+  the home loop from another process.
+  `runner/test/executor-owner-routing.test.ts` ("reads a space owned by
+  another server through its owner …": a home derivation over a
+  foreign doc re-derives on a foreign commit alone, and the sender's
+  server holds no session in the foreign space and activates nothing
+  there; "admits a named scoped read of a foreign instance on the owner
+  …": admitted on the owner under alice's grant, bob's refused before
+  it leaves the sender).
+
+Delta 2026-11-01 — stage L (the lease in memory,
+`docs/history/plans/serving-loop-owner-routing.md`):
+
+- serving-loop §2's map: admission is the one equality against the memory
+  server's map, a released lease matches nobody, and a stored row names nobody.
+  `memory/test/v2-execution-lease.test.ts`. The renew and expiry tests retire
+  with the mechanism, as do the lapse arms that named them: the renew-blip park,
+  the lapse-recovery counter, the commit-refusal renew arm, and the read-through's
+  renew arm.
+- §2's restart and rival rules: `executor/activation-lease.test.ts` ("serves a
+  space at once after a restart …", with a predecessor that never released and
+  a row it left, under stopped time; "refuses a rival ExecutorHost on the same
+  server …"; "keeps its lease through minutes of held-up work …").
+  `executor-cooperative-yield.test.ts` (ii) runs the same property on a real
+  1.8-s settle.
+- §2's watchdog: `executor/serving-worker-recovery.test.ts` ("the watchdog", over
+  a stand-in worker and the fake clock): the six-interval limit, any message
+  restarting the count, no count before the first message, the leases released and counted
+  in `lease.lost` across a successor, a commit left in flight refused at admission,
+  and a close under a stalled host. `executor/serving-worker-watchdog.test.ts`
+  stops a real worker's thread holding a lease and serves the space from its
+  successor; a stand-in cannot show that nothing waits for a stalled thread's
+  teardown, which Deno does not finish.
+
 Delta 2026-08-16 — fan-out stage A (OW17 leg 1: the instance-keyed
 serving replica + wire; the client arrival gate):
 
@@ -4414,15 +4495,13 @@ supply; OW29/OW32/OW34 closed):
     the one primitive that lets due timers fire in deadline order;
     MessageChannel and setImmediate measured to starve them); the OFF arm
     and clients construct no yielder (posture-gated at construction).
-    The SpaceServer installs `Runtime.servingYieldObserver` at
-    activation and renews the lease from it once the tenure has gone
-    TTL/3 without a renewal (`leaseTtlMs` policy knob for tests). Pinned:
-    `executor-cooperative-yield.test.ts` — (i) a 1.2-s synthetic walk
+    *(The mid-wave renew this delta added, on `Runtime.servingYieldObserver`,
+    is retired by the lease in memory — the Delta 2026-11-01 stage L entry.)*
+    Pinned: `executor-cooperative-yield.test.ts` — (i) a 1.2-s synthetic walk
     under a 100-ms deadline commits its first exhausted wave in < 600 ms
     (mutation: yield removed → 1 239 ms, red); (ii) a 45-step, 1.8-s
-    walk outliving a 900-ms TTL twice over commits under a live lease
-    with the timer inert (mutation: renew-on-yield removed → the commit
-    is refused, red); (iii) posture gate; unit. Live (I1, instrumented
+    walk commits under the holder it started with; (iii) posture gate; unit.
+    Live (I1, instrumented
     scratch build): deadline lateness on exhausted cycles p50 **25 ms**,
     p90 152, max 399 ms (was p50 125 / p90 443 / max 1 155 on the note
     run, and seconds on chat event waves); renew gaps p50 **5 020 ms**,
@@ -8632,7 +8711,7 @@ supply; OW29/OW32/OW34 closed):
     `closure-replication-await-inflight` lines in the whole log** — that
     warn prints whenever EITHER compile registry is non-empty at a dry
     consult (the pattern-manager logger's default level is "info",
-    the `Logger` constructor's fallback in `base/utils/src/logger.ts`
+    the `Logger` constructor's fallback in `base/logger/src/logger.ts`
     — warn is admitted; the same logger's ERROR printed in
     this very log), so its absence is real: BOTH registries were EMPTY
     at consult — the supplier compile had NOT STARTED. That is 3b's
@@ -10548,6 +10627,17 @@ supply; OW29/OW32/OW34 closed):
     bounded. The candidate close is the server-assigned source this
     seam exists for: a ceiling keyed by principal (or persisted with
     the event's `firedAt` pair) rather than by a live session.
+
+- **A superseded write over a document left with no value (RULED
+  2026-11-03; serving-loop.md §3d).** The Q1 entry's
+  "the drop re-arms nothing" stands for a commit that wrote a value.
+  Commits that left every document the run lost with no value re-arm
+  the run once the replica has taken them, impl-gate: pinned in
+  `runtime/runner/test/scheduler-wave-withdrawal.test.ts` (the re-run,
+  over a commit this replica held and one it had not taken, and the
+  mixed run that stays down) and
+  `runtime/runner/test/scheduler/supersededOutputsOwed.test.ts` (the
+  verdict, and the wait for the commit that decides it).
 
 ## 4. Standing rule
 

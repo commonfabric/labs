@@ -8,8 +8,8 @@
  * same sections, which is what makes a query reproducible from a run's record.
  */
 
-import { minOf } from "@commonfabric/utils/math";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { minOf } from "@commonfabric/collections/math";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { HarnessDocsCorpusSection } from "../contracts/docs-corpus.ts";
 

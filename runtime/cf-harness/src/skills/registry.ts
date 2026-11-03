@@ -10,6 +10,7 @@ import {
   join as joinSandboxPath,
   normalize as normalizeSandboxPath,
 } from "@std/path/posix";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   HARNESS_SKILL_ACTIVATIONS_TYPE,
   HARNESS_SKILL_REGISTRY_TYPE,
@@ -307,7 +308,7 @@ const collectSkillFiles = async (
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "unreadable-directory",
-        detail: error instanceof Error ? error.message : String(error),
+        detail: describeFailure(error),
         path: dir,
       }));
       return;
@@ -540,7 +541,7 @@ const collectSkillResources = async (
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "unreadable-skill-resource-directory",
-        detail: error instanceof Error ? error.message : String(error),
+        detail: describeFailure(error),
         path: dir,
       }));
       return;
@@ -623,7 +624,7 @@ const collectSkillResources = async (
         diagnostics.push(createDiagnostic({
           severity: "warning",
           code: "unreadable-skill-resource",
-          detail: error instanceof Error ? error.message : String(error),
+          detail: describeFailure(error),
           path: entryPath,
         }));
         continue;
@@ -719,7 +720,7 @@ export const discoverHarnessSkills = async (
       diagnostics.push(createDiagnostic({
         severity: "warning",
         code: "unreadable-skill",
-        detail: error instanceof Error ? error.message : String(error),
+        detail: describeFailure(error),
         path: skillPath,
       }));
       continue;

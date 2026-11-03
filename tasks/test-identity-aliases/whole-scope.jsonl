@@ -6,3 +6,7 @@
 {"date": "2026-08-25", "from": {"k": "typecheck", "s": "agents-host"}, "to": {"k": "typecheck", "s": "connectors/agents/host"}}
 {"date": "2026-08-25", "from": {"k": "typecheck", "s": "connectors/github"}, "to": {"k": "typecheck", "s": "connectors/github/connector"}}
 {"date": "2026-08-25", "from": {"k": "typecheck", "s": "github-host"}, "to": {"k": "typecheck", "s": "connectors/github/host"}}
+{"date": "2026-12-01", "from": {"k": "unit", "s": "leb128"}, "to": {"k": "unit", "s": "bytes"}}
+{"date": "2026-12-01", "from": {"k": "unit", "s": "pure-json"}, "to": {"k": "unit", "s": "json"}}
+{"date": "2026-12-01", "from": {"k": "typecheck", "s": "leb128"}, "to": {"k": "typecheck", "s": "bytes"}}
+{"date": "2026-12-01", "from": {"k": "typecheck", "s": "pure-json"}, "to": {"k": "typecheck", "s": "json"}}

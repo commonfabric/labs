@@ -42,7 +42,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
         lastOffset: 6,
         sourceWidth: 3,
         sourceEnd: 3,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 0,
@@ -54,7 +54,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
         lastOffset: 6,
         sourceWidth: 3,
         sourceEnd: 6,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 0,
@@ -66,7 +66,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
         lastOffset: 6,
         sourceWidth: 4,
         sourceEnd: 8,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: false,
         wrapMarker: false,
         suffixWidth: 0,
@@ -78,7 +78,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
         lastOffset: 0,
         sourceWidth: 4,
         sourceEnd: 0,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: false,
         wrapMarker: false,
         suffixWidth: 0,
@@ -90,7 +90,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
         lastOffset: 0,
         sourceWidth: 4,
         sourceEnd: 2,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: false,
         wrapMarker: false,
         suffixWidth: 0,
@@ -103,7 +103,7 @@ Deno.test("wrap plan: splits long lines and keeps empty lines", () => {
   assertEquals(plan.lastRow, [2, 3, 4]);
 });
 
-Deno.test("word wrap plan: breaks at words and repeats the line prefix", () => {
+Deno.test("word wrap plan: breaks at words and indents by the line prefix", () => {
   const doc = parseDocument("  #  foo bar");
   const plan = buildWrapPlan(
     doc.lines,
@@ -123,7 +123,7 @@ Deno.test("word wrap plan: breaks at words and repeats the line prefix", () => {
         lastOffset: 9,
         sourceWidth: 10,
         sourceEnd: 9,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 0,
@@ -135,7 +135,7 @@ Deno.test("word wrap plan: breaks at words and repeats the line prefix", () => {
         lastOffset: 9,
         sourceWidth: 6,
         sourceEnd: 12,
-        prefixWidth: 5,
+        indentWidth: 5,
         continues: false,
         wrapMarker: false,
         suffixWidth: 0,
@@ -156,7 +156,7 @@ Deno.test("word wrap plan: tabs and ASCII symbols belong to the prefix", () => {
     "word",
   );
 
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 4);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 4);
   assertEquals(wrappedRowAt(plan, 1)?.offset, 9);
 });
 
@@ -174,7 +174,7 @@ Deno.test("word wrap plan: punctuation can touch the first word", () => {
     Array.from(plan.wordRows?.[0]?.offsets ?? []),
     [0, 3, 5],
   );
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 1);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 1);
 });
 
 Deno.test("word wrap plan: punctuation-only text breaks at whitespace", () => {
@@ -243,8 +243,8 @@ Deno.test("word wrap plan: a diff annotation only narrows its own row", () => {
     "word",
   );
 
-  assertEquals(wrappedRowAt(plan, 0)?.prefixWidth, 0);
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 4);
+  assertEquals(wrappedRowAt(plan, 0)?.indentWidth, 0);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 4);
   assertEquals(wrappedRowAt(plan, 1)?.suffixWidth, 1);
 });
 
@@ -259,7 +259,7 @@ Deno.test("word wrap plan: a final row drops a prefix that hides source", () => 
   );
 
   assertEquals(plan.rowCount, 2);
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 0);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 0);
   assertEquals(wrappedRowAt(plan, 1)?.sourceEnd, 6);
 });
 
@@ -314,6 +314,55 @@ Deno.test("word wrap plan: hidden control runs retain every boundary", () => {
   }
 });
 
+Deno.test("word wrap plan: a break after a tab follows all of its cells", () => {
+  const doc = parseDocument("ab\tcdefgh");
+  const plan = buildWrapPlan(
+    doc.lines,
+    "ansi",
+    6,
+    new Map(),
+    "word",
+  );
+
+  assertEquals(
+    Array.from(plan.wordRows?.[0]?.offsets ?? []),
+    [0, 4],
+  );
+});
+
+Deno.test("word wrap plan: a tab wraps like the spaces it draws", () => {
+  // In ANSI mode each tab below draws the spaces that replace it, so the rows
+  // break at the same cells, including inside the blank cells.
+  const cases: [string, string, number][] = [
+    ["abcde\tfghij", "abcde   fghij", 7],
+    ["ab\tcdefgh", "ab  cdefgh", 6],
+    ["abcde\t", "abcde   ", 7],
+    [".. \t\t", ".. " + " ".repeat(5), 7],
+    ["\tfoo bar baz", "    foo bar baz", 9],
+    ["x\ty\tz w", "x   y   z w", 5],
+  ];
+  const rows = (text: string, width: number) => {
+    const plan = buildWrapPlan(
+      parseDocument(text).lines,
+      "ansi",
+      width,
+      new Map(),
+      "word",
+    );
+    return Array.from({ length: plan.rowCount }, (_, row) => {
+      const wrapped = wrappedRowAt(plan, row)!;
+      return [wrapped.offset, wrapped.sourceEnd, wrapped.indentWidth];
+    });
+  };
+  for (const [tabbed, spaced, width] of cases) {
+    assertEquals(
+      rows(tabbed, width),
+      rows(spaced, width),
+      JSON.stringify(tabbed),
+    );
+  }
+});
+
 Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {
   const doc = parseDocument("\x1b[31m# alpha beta");
   const plan = buildWrapPlan(
@@ -324,7 +373,7 @@ Deno.test("word wrap plan: ANSI prefixes use their visible cells", () => {
     "word",
   );
 
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 2);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 2);
 });
 
 Deno.test("word wrap plan: large lines without a usable break stay fixed", () => {
@@ -412,7 +461,7 @@ Deno.test("word wrap plan: narrow rows fall back to forward hard wrapping", () =
   );
 
   assertEquals(plan.rowCount, 3);
-  assertEquals(wrappedRowAt(plan, 1)?.prefixWidth, 0);
+  assertEquals(wrappedRowAt(plan, 1)?.indentWidth, 0);
   assertEquals(wrappedRowAt(plan, 1)?.offset, 5);
   assertEquals(wrappedRowAt(plan, 2)?.offset, 10);
   assertEquals(wrappedRowAt(plan, 2)?.sourceEnd, 13);
@@ -442,7 +491,7 @@ Deno.test("wrap plan: exact-width lines do not add an empty row", () => {
     lastOffset: 0,
     sourceWidth: 4,
     sourceEnd: 4,
-    prefixWidth: 0,
+    indentWidth: 0,
     continues: false,
     wrapMarker: false,
     suffixWidth: 0,
@@ -462,7 +511,7 @@ Deno.test("wrap plan: a non-positive width behaves as one column", () => {
     lastOffset: 1,
     sourceWidth: 1,
     sourceEnd: 1,
-    prefixWidth: 0,
+    indentWidth: 0,
     continues: true,
     wrapMarker: false,
     suffixWidth: 0,
@@ -474,7 +523,7 @@ Deno.test("wrap plan: a non-positive width behaves as one column", () => {
     lastOffset: 1,
     sourceWidth: 1,
     sourceEnd: 2,
-    prefixWidth: 0,
+    indentWidth: 0,
     continues: false,
     wrapMarker: false,
     suffixWidth: 0,
@@ -499,7 +548,7 @@ Deno.test("wrap plan: a triangle reserves only its annotated line", () => {
     lastOffset: 5,
     sourceWidth: 5,
     sourceEnd: 5,
-    prefixWidth: 0,
+    indentWidth: 0,
     continues: true,
     wrapMarker: true,
     suffixWidth: 1,
@@ -511,7 +560,7 @@ Deno.test("wrap plan: a triangle reserves only its annotated line", () => {
     lastOffset: 5,
     sourceWidth: 6,
     sourceEnd: 10,
-    prefixWidth: 0,
+    indentWidth: 0,
     continues: false,
     wrapMarker: false,
     suffixWidth: 1,
@@ -546,7 +595,7 @@ Deno.test("wrap plan: the first continuation can hold a wider label", () => {
         lastOffset: 8,
         sourceWidth: 5,
         sourceEnd: 5,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 1,
@@ -558,7 +607,7 @@ Deno.test("wrap plan: the first continuation can hold a wider label", () => {
         lastOffset: 8,
         sourceWidth: 3,
         sourceEnd: 8,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 3,
@@ -570,7 +619,7 @@ Deno.test("wrap plan: the first continuation can hold a wider label", () => {
         lastOffset: 8,
         sourceWidth: 6,
         sourceEnd: 10,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: false,
         wrapMarker: false,
         suffixWidth: 1,
@@ -602,7 +651,7 @@ Deno.test("wrap plan: a metadata label connects through continuation rows", () =
         lastOffset: 8,
         sourceWidth: 3,
         sourceEnd: 3,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 3,
@@ -614,7 +663,7 @@ Deno.test("wrap plan: a metadata label connects through continuation rows", () =
         lastOffset: 8,
         sourceWidth: 5,
         sourceEnd: 8,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: true,
         wrapMarker: true,
         suffixWidth: 1,
@@ -626,7 +675,7 @@ Deno.test("wrap plan: a metadata label connects through continuation rows", () =
         lastOffset: 8,
         sourceWidth: 6,
         sourceEnd: 10,
-        prefixWidth: 0,
+        indentWidth: 0,
         continues: false,
         wrapMarker: false,
         suffixWidth: 1,

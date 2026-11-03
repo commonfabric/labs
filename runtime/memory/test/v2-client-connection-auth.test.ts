@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import type { FabricPlainObject } from "@commonfabric/api";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import {

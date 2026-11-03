@@ -1,4 +1,4 @@
-import { isPlainContainer } from "@commonfabric/utils/types";
+import { isPlainContainer } from "@commonfabric/js-values/types";
 import {
   FabricInstance,
   type FabricValue,

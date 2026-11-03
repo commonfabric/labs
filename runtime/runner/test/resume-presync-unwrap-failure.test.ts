@@ -2,7 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import type { Pattern } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
@@ -44,7 +44,8 @@ describe("resume pre-sync unwrap failure", () => {
       const rc1 = rt1.getCell(space, "presync-unwrap-failure");
       await rt1.runSynced(rc1, trustExecutable(rt1, seedPattern), {});
       await rc1.pull();
-      await rt1.dispose();
+      // `rt2` resumes from what this run stored, over the same storage manager.
+      await rt1.dispose({ closeStorage: false });
 
       const badPattern = {
         argumentSchema: {},

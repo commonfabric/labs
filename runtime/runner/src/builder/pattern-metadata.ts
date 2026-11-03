@@ -1,4 +1,4 @@
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import type { RuntimeProgram } from "../harness/types.ts";
 import { isPattern, type Pattern } from "./types.ts";

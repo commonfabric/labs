@@ -1,12 +1,13 @@
 // The executor-facing space-owner read (OW45 arm-B server-ensure stage 1;
 // design PR #6209 §4 option (b)): the SpaceServer's space-root ensure
 // resolves the space's ACL OWNER for its per-run CFC trust snapshot and its
-// home-space predicate (self-owned = home). `resolveSpaceOwner` is the thin
-// public API over the server's own `#resolveSpaceOwnerBinding` — the one
-// ruled service-identity ACL read (OW31, RULED 2026-08-19) — so the ensure
-// binds to the SAME resolution the delegated-read binding uses:
+// home-space predicate (self-owned and declaring no kind = home).
+// `resolveSpaceOwner` is the ruled service-identity ACL read (OW31, RULED
+// 2026-08-19) the server's own `#resolveSpaceOwnerBinding` starts from, so
+// the ensure reads the same owner the delegated-read binding does:
 //
-// - self-owned space (every home space): the space DID itself;
+// - self-owned space (every home space, and a profile): the space DID
+//   itself, whatever kind it declares;
 // - several concrete OWNERs: the lexicographically first (deterministic);
 // - no valid concrete-owner ACL (missing, invalid, retracted, or only
 //   ANYONE): undefined — the ensure's fail-closed skip arm (OW53's shape).
@@ -101,13 +102,15 @@ const initializeSpaceAcl = async (
   server: Server,
   space: string,
   acl: Record<string, "READ" | "WRITE" | "OWNER">,
+  spaceKind?: string,
 ): Promise<void> => {
+  const kind = spaceKind === undefined ? {} : { spaceKind };
   const harness = await connect(server);
   await harness.connection.receive(encodeMemoryBoundary({
     type: "session.open",
     requestId: `open-${++requestCounter}`,
     space,
-    session: {},
+    session: kind,
     invocation: {
       iss: space,
       aud: harness.sessionOpen.audience,
@@ -124,6 +127,7 @@ const initializeSpaceAcl = async (
     commit: {
       localSeq: 1,
       reads: { confirmed: [], pending: [] },
+      ...kind,
       operations: [
         {
           op: "set",
@@ -142,6 +146,21 @@ Deno.test("resolveSpaceOwner: a self-owned space resolves to the space DID (the 
   const space = "did:key:z6Mk-owner-space-self";
   try {
     await initializeSpaceAcl(server, space, { [space]: "OWNER" });
+    const engine = await server.engineForSpace(space);
+    assertEquals(server.resolveSpaceOwner(engine, space), space);
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("resolveSpaceOwner: a self-owned space declaring a kind resolves to the space DID", async () => {
+  // A profile owns itself (docs/specs/profile-delegation.md). The acting-as
+  // binding refuses to stand for its DID, but its owner is still its DID,
+  // which the serving root ensure needs for the space's trust snapshot.
+  const server = createServer("memory://space-owner-self-kinded");
+  const space = "did:key:z6Mk-owner-space-self-kinded";
+  try {
+    await initializeSpaceAcl(server, space, { [space]: "OWNER" }, "profile");
     const engine = await server.engineForSpace(space);
     assertEquals(server.resolveSpaceOwner(engine, space), space);
   } finally {

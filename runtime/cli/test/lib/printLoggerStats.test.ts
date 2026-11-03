@@ -6,7 +6,7 @@ import {
   getLogger,
   resetAllLoggerCounts,
   resetAllTimingStats,
-} from "@commonfabric/utils/logger";
+} from "@commonfabric/logger";
 
 import { printLoggerStats } from "../../lib/test-runner.ts";
 

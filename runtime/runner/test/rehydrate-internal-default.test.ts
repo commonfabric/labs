@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { JSONValue } from "@commonfabric/runner/shared";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { Cell, type Pattern } from "../src/builder/types.ts";
 import { isPrimitiveCellLink } from "../src/link-types.ts";

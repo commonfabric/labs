@@ -73,6 +73,32 @@ ${GUEST_EPILOG}`;
   }
 });
 
+Deno.test("runs a script given apart from its document, once the document is parsed", async () => {
+  cleanupFixtures();
+  try {
+    const context = new ContextShim({ a: "" });
+    const html = '<!doctype html><html><body><p id="mark">parsed</p>' +
+      "</body></html>";
+    // The text holds what the sandbox escapes, so reading it back whole shows
+    // the script ran as written.
+    const script = `
+import { connectFabric } from "/guest.js";
+const mark = document.querySelector("#mark").textContent;
+connectFabric().cell("a").set(mark + " </script> <!--<script>");
+`;
+    const iframe = await render(html, context, script);
+
+    await waitForContextValue(
+      context,
+      iframe,
+      "a",
+      (value) => value === "parsed </script> <!--<script>",
+    );
+  } finally {
+    cleanupFixtures();
+  }
+});
+
 Deno.test("subscribes", async () => {
   cleanupFixtures();
   try {

@@ -5,7 +5,7 @@
  * material, is docs/specs/test-records.md.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /** Schema version carried by every context line and object path. */
 export const RECORD_SCHEMA_VERSION = 1;
@@ -90,7 +90,7 @@ export interface CiContext {
 
   /**
    * Triggering event, from the trusted payload: "push", "pull_request",
-   * "schedule", "workflow_dispatch".
+   * "schedule", "workflow_dispatch", "workflow_run".
    */
   event?: string;
 
@@ -151,14 +151,15 @@ export interface RunContext {
 
 /**
  * Whether a report ran code the default branch carries: a run of the head
- * of `main` that the fork flag does not mark. A push, a scheduled run and
- * a run dispatched by hand each check out the head of the branch they
- * name, where a pull request's run checks out a merge commit no branch
- * carries. The flag also marks a run the relay could not place, so
- * neither kind is a run of the default branch.
+ * of `main` that the fork flag does not mark. A push, a scheduled run, a
+ * run dispatched by hand and a run another workflow's run started each
+ * check out the head of the branch they name, where a pull request's run
+ * checks out a merge commit no branch carries. The flag also marks a
+ * run the relay could not place, so neither kind is a run of the default
+ * branch.
  */
 export function isMainRun(context: RunContext): boolean {
-  return ["push", "schedule", "workflow_dispatch"].includes(
+  return ["push", "schedule", "workflow_dispatch", "workflow_run"].includes(
     context.ci?.event ?? "",
   ) && context.branch === "main" && context.ci?.fork !== true;
 }

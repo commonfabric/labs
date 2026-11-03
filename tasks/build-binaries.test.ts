@@ -230,6 +230,10 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
       config.cliMultiUserTestWorkerPath(),
       join(root, "runtime", "cli", "lib", "multi-user-test-worker.ts"),
     );
+    assertEquals(
+      config.toolshedServingWorkerPath(),
+      join(root, "runtime", "toolshed", "lib", "serving-worker.ts"),
+    );
     assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));
@@ -684,6 +688,7 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
       "--allow-net",
       "--allow-write",
       "--allow-run",
+      "--v8-flags=--max-old-space-size=8192",
     ]);
   } finally {
     await Deno.remove(root, { recursive: true });

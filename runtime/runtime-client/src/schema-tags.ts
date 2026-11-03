@@ -3,8 +3,11 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { extractHashtags } from "@commonfabric/utils/hashtags";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { extractHashtags } from "@commonfabric/runner/hashtags";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 /**
  * Schema keywords whose values are themselves schemas (or collections of

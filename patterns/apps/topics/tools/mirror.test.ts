@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { cfcLabelDocumentHash } from "@commonfabric/runner/cfc";
 
 import {
   assembleTopic,
@@ -19,6 +20,7 @@ import {
   topicRecord,
   toPlain,
 } from "./mirror.ts";
+import type { PartLabels } from "./labels.ts";
 
 const SPACE = "did:key:z6Mk-topics-tool-mirror";
 
@@ -33,12 +35,14 @@ function mark(id: string | undefined, path: string[] = [], space?: string) {
   };
 }
 
-/** A copy holding `docs` at revision 1 each. */
+/** A copy holding `docs` at revision 1 each, storing no label envelopes. */
 function copyOf(docs: Record<string, Plain>): MirrorData {
   return {
     pieces: {},
     docs: Object.fromEntries(
-      Object.entries(docs).map(([id, value]) => [id, { seq: 1, value }]),
+      Object.entries(docs).map((
+        [id, value],
+      ) => [id, { seq: 1, value, cfc: null }]),
     ),
   };
 }
@@ -52,6 +56,7 @@ function topic(fields: Partial<Topic>): Topic {
     title: "",
     body: "",
     createdAt: 0,
+    updatedAt: 0,
     createdBy: "",
     lastActivityAt: 0,
     comments: [],
@@ -233,7 +238,7 @@ describe("mirror", () => {
   });
 
   describe("assembleTopic()", () => {
-    const PIECE = { piece: "of:piece", input: "of:input" };
+    const PIECE = { piece: "of:piece", input: "of:input", via: [] };
 
     const data = copyOf({
       "of:input": {
@@ -290,6 +295,7 @@ describe("mirror", () => {
         body: "The fryer test fails.",
         createdAt: 1000,
         createdBy: "Sol (agent)",
+        updatedAt: 2000,
         lastActivityAt: 9000,
         comments: [
           {
@@ -305,7 +311,13 @@ describe("mirror", () => {
             editedAt: 3500,
             removed: false,
           },
-          { author: "Cy", body: "Withdrawn", sentAt: 5000, removed: true },
+          {
+            author: "Cy",
+            body: "Withdrawn",
+            sentAt: 5000,
+            removedAt: 8000,
+            removed: true,
+          },
         ],
         links: [
           {
@@ -321,6 +333,7 @@ describe("mirror", () => {
             url: "https://example.com/old",
             label: "",
             addedBy: "",
+            removedAt: 9000,
             removed: true,
           },
         ],
@@ -353,6 +366,206 @@ describe("mirror", () => {
         removed: false,
       }]);
       expect([...reader.missing]).toEqual(["of:absent"]);
+    });
+  });
+
+  describe("assembleTopic() with CFC labels", () => {
+    const PIECE = { piece: "of:piece", input: "of:input", via: [] };
+    const USER = "https://commonfabric.org/cfc/atom/User";
+
+    /** An atom saying `subject` wrote what it labels. */
+    const by = (subject: string) => ({ kind: "authored-by", subject });
+
+    /** A stored envelope holding `entries`, at `version`. */
+    function envelope(entries: Plain[], version = 2): Plain {
+      return { version, schemaHash: "h", labelMap: { version: 1, entries } };
+    }
+
+    /** A label held by reference, and the document holding it. */
+    function referenced(label: { integrity: Plain[] }) {
+      const id = `cid:${cfcLabelDocumentHash(label)}`;
+      return { reference: { $ref: id }, id, label };
+    }
+
+    const ADA = referenced({ integrity: [by("did:key:zAda")] });
+
+    /** The board's documents, each comment carrying the envelope given. */
+    function labeledCopy(c1: Plain, c3: Plain): MirrorData {
+      const data = copyOf({
+        "of:input": {
+          title: "T",
+          body: "B",
+          comments: [
+            mark("of:c1"),
+            { body: "inline", sentAt: 1 },
+            mark("of:c3"),
+          ],
+          links: [],
+        },
+        "of:c1": { body: "one", sentAt: 2 },
+        "of:c3": { body: "three", sentAt: 3 },
+        [ADA.id]: ADA.label,
+      });
+      data.docs["of:input"].cfc = envelope([
+        {
+          path: ["body"],
+          origin: "declared",
+          label: { confidentiality: [{ type: USER, subject: "did:key:zAl" }] },
+        },
+        {
+          path: ["comments", "1"],
+          origin: "declared",
+          label: { integrity: [by("did:key:zBob")] },
+        },
+      ]);
+      data.docs["of:c1"].cfc = c1;
+      data.docs["of:c3"].cfc = c3;
+      data.docs["of:board"] = { seq: 1, value: {}, cfc: null };
+      return data;
+    }
+
+    /**
+     * What the labels say of the Topic, and of each comment, less the
+     * label a display fits, reached through the board's entry for it.
+     */
+    function labelsOf(data: MirrorData) {
+      const reader = new DocReader(data, SPACE);
+      const assembled = assembleTopic(reader, "1", "of:entry", PIECE, [{
+        doc: "of:board",
+        path: ["names", "1"],
+      }]);
+      const said = (labels: PartLabels | undefined) => {
+        if (labels === undefined) return undefined;
+        const { label: _, ...rest } = labels;
+        return rest;
+      };
+      return {
+        topic: said(assembled.labels),
+        comments: assembled.comments.map((c) => said(c.labels)),
+        missing: [...reader.missing],
+      };
+    }
+
+    it("returns who may learn the title and body, and who wrote each comment, a label held by reference included", () => {
+      const { topic, comments } = labelsOf(labeledCopy(
+        envelope([{ path: [], origin: "declared", label: ADA.reference }]),
+        envelope([], 9),
+      ));
+
+      expect(topic).toEqual({
+        confidentiality: [["User(did:key:zAl)"]],
+        integrity: [],
+        authors: [],
+      });
+      expect(comments).toEqual([
+        {
+          confidentiality: [],
+          integrity: ["authored-by(did:key:zAda)"],
+          authors: ["did:key:zAda"],
+        },
+        {
+          confidentiality: [],
+          integrity: ["authored-by(did:key:zBob)"],
+          authors: ["did:key:zBob"],
+        },
+        { confidentiality: [], integrity: [], authors: [], unreadable: true },
+      ]);
+    });
+
+    it("names no author where the integrity covers only part of the comment, or names someone in other words", () => {
+      const { comments } = labelsOf(labeledCopy(
+        envelope([{
+          path: [],
+          origin: "declared",
+          label: { integrity: [{ kind: "authored-by", subject: " zAda" }] },
+        }]),
+        envelope([{
+          path: ["body"],
+          origin: "declared",
+          label: { integrity: [by("did:key:zCy")] },
+        }]),
+      ));
+
+      expect(comments[0]?.authors).toEqual([]);
+      expect(comments[0]?.unreadable).toBe(true);
+      expect(comments[2]?.authors).toEqual([]);
+      expect(comments[2]?.integrity).toEqual([]);
+      expect(comments[2]?.unreadable).toBeUndefined();
+    });
+
+    it("names no author whose integrity covers some of a comment's fields but not all", () => {
+      const { comments } = labelsOf(labeledCopy(
+        envelope(["author", "body"].map((field) => ({
+          path: [field],
+          origin: "declared",
+          label: { integrity: [by("did:key:zAda")] },
+        }))),
+        envelope([]),
+      ));
+
+      expect(comments[0]?.authors).toEqual([]);
+      expect(comments[0]?.integrity).toEqual([]);
+    });
+
+    it("leaves out the labels of a part whose document stores none, and reads one whose envelope is not known as unreadable", () => {
+      const data = labeledCopy(envelope([]), envelope([]));
+      data.docs["of:input"].cfc = null;
+
+      expect(labelsOf(data).topic).toBeUndefined();
+
+      delete data.docs["of:input"].cfc;
+
+      expect(labelsOf(data).topic?.unreadable).toBe(true);
+      expect(labelsOf(data).comments[1]?.unreadable).toBe(true);
+
+      data.docs["of:input"].cfc = null;
+      expect(labelsOf(data).comments[0]).toEqual({
+        confidentiality: [],
+        integrity: [],
+        authors: [],
+      });
+    });
+
+    it("restricts a part by the slots it was reached through: the board's entry, and the link to a comment", () => {
+      const data = labeledCopy(envelope([]), envelope([]));
+      data.docs["of:input"].cfc = envelope([{
+        path: ["comments", "0"],
+        origin: "link",
+        label: { confidentiality: [{ type: USER, subject: "did:key:zLink" }] },
+      }]);
+      data.docs["of:board"] = {
+        seq: 1,
+        value: {},
+        cfc: envelope([{
+          path: ["names", "1"],
+          origin: "declared",
+          label: { confidentiality: [{ type: USER, subject: "did:key:zBd" }] },
+        }]),
+      };
+      const { topic, comments } = labelsOf(data);
+
+      expect(topic?.confidentiality).toEqual([["User(did:key:zBd)"]]);
+      expect(comments[0]?.confidentiality).toEqual([
+        ["User(did:key:zBd)"],
+        ["User(did:key:zLink)"],
+      ]);
+      expect(comments[1]?.confidentiality).toEqual([["User(did:key:zBd)"]]);
+    });
+
+    it("needs a label document the copy lacks, and reads one that does not match its address as unreadable", () => {
+      const absent = referenced({ integrity: [by("did:key:zNone")] });
+      const needing = labelsOf(labeledCopy(
+        envelope([{ path: [], origin: "minted", label: absent.reference }]),
+        envelope([]),
+      ));
+      const forged = labeledCopy(
+        envelope([{ path: [], origin: "minted", label: ADA.reference }]),
+        envelope([]),
+      );
+      forged.docs[ADA.id].value = { integrity: [by("did:key:zMallory")] };
+
+      expect(needing.missing).toEqual([absent.id]);
+      expect(labelsOf(forged).comments[0]?.unreadable).toBe(true);
     });
   });
 
@@ -483,6 +696,15 @@ describe("mirror", () => {
       expect(
         searchTopics([fryer, donut], [], { exclude: [/sugar/i] }).length,
       ).toBe(2);
+    });
+
+    it("matches a global pattern in each Topic alike, as a term and in `exclude`", () => {
+      const fryer = topic({ number: "1", title: "Oil fryer" });
+      const glaze = topic({ number: "2", title: "Oil glaze" });
+
+      expect(searchTopics([fryer, glaze], [/oil/gi]).length).toBe(2);
+      expect(searchTopics([fryer, glaze], [], { exclude: [/oil/gi] }))
+        .toEqual([]);
     });
 
     it("returns at most three lines per Topic", () => {

@@ -1,7 +1,7 @@
 // Types used by the `common-iframe-sandbox` IPC.
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { IframePresentation } from "./presentation.ts";
 

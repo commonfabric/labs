@@ -19,7 +19,7 @@
  */
 
 import ts from "typescript";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 
 /**
  * How many readings of one declaration, each instantiated with arguments at

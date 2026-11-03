@@ -12,7 +12,7 @@
  * in app.ts.
  */
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { cors } from "@hono/hono/cors";
 
 import { AirtableDescriptor } from "./airtable-oauth/airtable.descriptor.ts";

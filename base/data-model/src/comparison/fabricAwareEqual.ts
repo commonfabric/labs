@@ -1,4 +1,4 @@
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { isFabricSpecialObject } from "@/types";
 import { valueEqual } from "./valueEqual.ts";

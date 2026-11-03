@@ -10,8 +10,8 @@ import type { JSONValue } from "@commonfabric/api";
 import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { type Cell, cellRuntime } from "../cell.ts";
 import { parseLink } from "../link-utils.ts";

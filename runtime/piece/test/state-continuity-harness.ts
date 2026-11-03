@@ -65,7 +65,7 @@ import {
   UI,
 } from "@commonfabric/runner";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { Database } from "@db/sqlite";
 
 import type { NormalizedFullLink } from "../../runner/src/link-types.ts";
@@ -92,7 +92,11 @@ import {
   vintageCompanionDir,
 } from "./vintage-layout.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 class LoopbackSessions implements SessionFactory {
   readonly #server: () => MemoryV2Server.Server;
@@ -103,6 +107,7 @@ class LoopbackSessions implements SessionFactory {
 
   async create(spaceId: string, signer?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server()),
     });
     const session = await client.mount(

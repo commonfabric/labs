@@ -25,7 +25,7 @@ import { validateSchemaValue } from "@commonfabric/runner/cfc";
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Identity } from "@commonfabric/identity";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   assertSchemaSubset,
   DEFAULT_INERT_SUBSCHEMA_KEYS,

@@ -1,7 +1,7 @@
 import type { FabricValue } from "@commonfabric/api";
 import { valueEqual } from "@commonfabric/data-model";
 import type { PatchOp } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { encodePointer, isPrefixPath } from "../../../memory/v2/path.ts";
 
 /**

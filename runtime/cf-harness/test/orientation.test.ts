@@ -29,7 +29,7 @@ describe("orientation", () => {
   it("gives the parent a shared inspection path for calendar and document requests before asking for the source", () => {
     const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex: true });
     expect(prompt).toContain(
-      "inspect unresolved relevant handles with describe_handle before asking the user to connect or attach that source",
+      "describe_handle reports the shape and capabilities of a handle",
     );
     expect(prompt).toContain("A grant's name is a lead, not its contents");
     expect(prompt).toContain("not given does not mean absent");
@@ -37,20 +37,44 @@ describe("orientation", () => {
       "The parent can run an indexed pattern with run_pattern",
     );
     expect(finishTaskTool.descriptor.description).toContain(
-      "any applicable bounded discovery route over the granted scope",
+      "Found requires released evidence",
     );
   });
 
   it("tells a run with no pattern index neither to search one nor to run an indexed pattern, and keeps the rest of finding", () => {
     const withIndex = buildCfHarnessBaseSystemPrompt({ patternIndex: true });
     const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex: false });
-    expect(withIndex).toContain("Search the pattern index");
+    expect(withIndex).not.toContain(
+      "Search the pattern index for an applicable space-search pattern",
+    );
     expect(prompt).not.toContain("pattern index");
     expect(prompt).not.toContain("indexed pattern");
     expect(prompt).toContain("not given does not mean absent");
     expect(prompt).toContain(
       "Research is a private pass that reads docs and source",
     );
+  });
+
+  it("leaves target discovery to the caller across assembled parent prompts", () => {
+    for (const patternIndex of [false, true]) {
+      for (
+        const tags of [
+          undefined,
+          new Set(["find" as const]),
+          new Set(["author" as const]),
+        ]
+      ) {
+        const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex, tags });
+        expect(prompt).not.toContain("make zero registry reads");
+        expect(prompt).not.toContain("at most one registry read");
+        expect(prompt).not.toContain(
+          "Search the pattern index for an applicable space-search pattern",
+        );
+        expect(prompt).toContain(
+          "An unavailable, refused, or pending read stays unknown",
+        );
+      }
+    }
   });
 
   it("checks the send path before asking for a recipient in the landlord-email rehearsal", () => {
@@ -68,11 +92,8 @@ describe("orientation", () => {
 
   it("keeps discovery scoped and a release refusal out of the question path", () => {
     const prompt = buildCfHarnessBaseSystemPrompt({ patternIndex: true });
-    expect(PIECE_TARGETING_GUIDANCE).toContain("call resolve_piece");
-    expect(PIECE_TARGETING_GUIDANCE).toContain("make zero registry reads");
-    expect(PIECE_TARGETING_GUIDANCE).toContain("at most one registry read");
     expect(PIECE_TARGETING_GUIDANCE).toContain(
-      "not to an explicit request to list or analyze the space",
+      "resolve_piece resolves a piece slug",
     );
     expect(prompt).toContain(
       "An unavailable, refused, or pending read stays unknown",
@@ -189,7 +210,7 @@ describe("orientation", () => {
       });
 
       expect(prompt).toContain(
-        "inspect unresolved relevant handles with describe_handle",
+        "describe_handle reports the shape and capabilities of a handle",
       );
       expect(prompt).not.toContain("opening research");
     });
@@ -249,14 +270,16 @@ describe("orientation", () => {
       expect(prompt).not.toContain("resolve_piece");
     });
 
-    it("gives an author task the opening-research rule, index search, and delegation", () => {
+    it("gives an author task the opening-research rule and delegation", () => {
       const prompt = buildCfHarnessBaseSystemPrompt({
         patternIndex: true,
         tags: new Set(["author"]),
       });
 
       expect(prompt).toContain("attached patternRefs or explicit");
-      expect(prompt).toContain("Search the pattern index");
+      expect(prompt).not.toContain(
+        "Search the pattern index for an applicable space-search pattern",
+      );
       expect(prompt).toContain("When you delegate");
     });
 

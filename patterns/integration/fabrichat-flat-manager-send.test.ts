@@ -265,7 +265,7 @@ describe("FabriChat flat manager sends", () => {
     const creator = runtime.run(
       tx,
       pattern,
-      { myProfile: profile },
+      { myProfile: profile, sessionProfile: profile },
       runtime.getCell(home, "group creator", undefined, tx),
     );
     runtime.prepareTxForCommit(tx);

@@ -10,12 +10,14 @@
 // binary build is in flight (or after an interrupted one), so its presence
 // says nothing about how this invocation is running.
 
-import { dirname, fromFileUrl, join } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
 
 import {
   type BuildInfo,
   readBuildInfoFrom,
-} from "@commonfabric/utils/build-info";
+} from "@commonfabric/platform/build-info";
 
 const COMPILED_PATH = new URL("../COMPILED", import.meta.url);
 

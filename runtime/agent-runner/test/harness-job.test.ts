@@ -282,30 +282,19 @@ describe("runHarnessJob()", () => {
     });
   });
 
-  it("passes the trusted job identity through the commands config into the harness", async () => {
-    const configPath = join(runRoot, "commands.json");
-    await Deno.writeTextFile(
-      configPath,
-      JSON.stringify({
-        cliPath: "/trusted/loom",
-        transport: { kind: "broker", queuePath: "/trusted/queue" },
-        jobIdEnvVar: "HOST_JOB_ID",
-        jobId: "untrusted-file-id",
-      }),
-    );
+  it("passes the job's command endpoint, actor, own id and relevant commands into the harness", async () => {
+    const commands = {
+      url: "http://127.0.0.1:8080",
+      actor: "agent:agent-runner",
+      runId: "job-own-id",
+      relevant: ["search.run", "person.find"],
+    };
     const { result, seen } = await runScripted(
-      plainSpec({
-        tools: ["list_commands", "run_command"],
-        loomCommandsConfigPath: configPath,
-        commandJobId: "job-own-id",
-      }),
+      plainSpec({ tools: ["list_commands", "run_command"], commands }),
       answering("Titan"),
     );
     expect(result.outcome).toBe("completed");
-    expect(seen.loopOptions!.loomCommands).toMatchObject({
-      jobIdEnvVar: "HOST_JOB_ID",
-      jobId: "job-own-id",
-    });
+    expect(seen.loopOptions!.loomCommands).toEqual(commands);
   });
 
   it("hands a browser host to the run's engine, with the subagent profiles the spec allows", async () => {

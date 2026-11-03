@@ -1,4 +1,4 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type { Cancel } from "../cancel.ts";
 import { toMemorySpaceAddress } from "../link-utils.ts";
@@ -16,13 +16,9 @@ import {
   type DependencyUpdateState,
   setSchedulerDependencies,
 } from "./dependency-updates.ts";
-import {
-  type NodeKind,
-  NodeRegistry,
-  type SchedulerNode,
-} from "./node-record.ts";
+import type { NodeKind, NodeRegistry, SchedulerNode } from "./node-record.ts";
 import { filterIgnoredAddresses } from "./reactivity.ts";
-import { type WriterIndexState } from "./scheduling-writes.ts";
+import type { WriterIndexState } from "./scheduling-writes.ts";
 import {
   applyActionReadDelta,
   ensureCancelForActionTriggers,

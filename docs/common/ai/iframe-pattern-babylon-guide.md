@@ -1,10 +1,12 @@
 # Babylon.js iframe-first pattern guide
 
 Use this guide to build a Common Fabric pattern whose primary interface is a
-3D Babylon.js scene inside one sandboxed `cf-iframe`. The generated wrapper
-bundles the guest and its selected Babylon.js modules into one HTML string,
-exposes named Cell and SQLite resources, and returns durable state and output
-through the normal pattern result.
+3D Babylon.js scene inside one sandboxed `cf-iframe`. The pattern is one
+`main.tsx` you write by hand: it declares the Cells and any SQLite databases the
+scene uses, renders a `cf-iframe` that hands them to the guest by name, and
+returns durable state and output through the normal pattern result.
+`deno bundle` compiles the guest and its selected Babylon.js modules into one
+module.
 
 This guide is self-contained. Use Phaser instead for a primarily 2D game. Do
 not load another iframe guide unless the task is an explicit migration or
@@ -12,16 +14,25 @@ hybrid.
 
 ## Source layout and durable model
 
+Keep these files together:
+
 ```text
-patterns/examples/babylon-shared-scene/
-├── contract.ts
-├── guest.ts
-├── guest.html
-└── main.tsx     # generated; do not hand-edit
+patterns/examples/iframe-babylon-shared-scene/
+├── contract.ts  # types and defaults shared by main.tsx and the guest
+├── guest.ts     # the Babylon.js scene and Fabric bridge client
+├── guest.html   # the guest's document: the canvas and status UI
+├── guest.js     # `deno bundle` output of guest.ts; never edited by hand
+└── main.tsx     # the pattern: cells, databases, and the cf-iframe
 ```
 
-Give every durable scene entity a stable ID. Store semantic state, not renderer
-objects or every animation frame:
+In this repository, the directory's name starts with `iframe-`. That prefix
+keeps the guest out of the pattern type check and the bundle out of `deno fmt`,
+`deno lint` and `deno task check`. `main.tsx` reads `guest.html` and `guest.js`
+with `dataFile()`, so both travel with the pattern's code.
+
+`contract.ts` holds only types and defaults, which `main.tsx` and the guest both
+import. Give every durable scene entity a stable ID. Store semantic state, not
+renderer objects or every animation frame:
 
 ```typescript
 export interface SceneEntity {
@@ -51,21 +62,95 @@ export const DEFAULT_STATE: IframeStateData = {
   }],
 };
 export const DEFAULT_OUTPUT: IframeOutputData = { selectedId: null };
-
-export const IFRAME_PATTERN = {
-  name: "BabylonSharedScene",
-  displayName: "Babylon shared scene",
-  stateScope: "space",
-  outputScope: "session",
-  frameHeight: "100vh",
-  databases: {},
-} as const;
 ```
 
-Use `space` for a collaborative world, `user` for one user's durable settings,
-and `session` for one browser's selection or camera mode. Keep camera matrices,
-hover state, interpolation, particle state, and render-loop timing in the guest
-unless another component must observe or restore them.
+The guest receives `input`, `state`, and `output` by the names `main.tsx` gives
+them. Use `space` for a collaborative world, `user` for one user's durable
+settings, and `session` for one browser's selection or camera mode. Keep camera
+matrices, hover state, interpolation, particle state, and render-loop timing in
+the guest unless another component must observe or restore them.
+
+## Write the pattern
+
+`main.tsx` for the shared scene, with the entities shared by everyone on the
+piece and the selection kept for each browser session:
+
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerSession,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface SharedSceneInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  output?: PerSession<
+    Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>
+  >;
+}
+
+export interface SharedSceneOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<SharedSceneInput, SharedSceneOutput>(
+  ({ input, output }) => {
+    const state = new Writable<IframeStateData>(DEFAULT_STATE);
+
+    return {
+      [NAME]: "Babylon shared scene",
+      [UI]: (
+        <div style={{ width: "100%", height: "100vh" }}>
+          <cf-iframe
+            src={GUEST_HTML}
+            script={GUEST_SCRIPT}
+            $context={{ input, state, output }}
+            resourceKinds={{ input: "readonly" }}
+          />
+        </div>
+      ),
+      state,
+      output,
+    };
+  },
+);
+```
+
+`src` is the guest's document and `script` is its bundle. `$context` binds a
+record of cells: each field is a resource the guest asks for by name, and each
+reaches the guest live, `output` resolved to this session's cell before the
+guest loads. `resourceKinds` grants `input` reads only; a field it gives no kind
+is a cell the guest may write. A `space`-scoped resource such as the scene's
+entities is created in the pattern body, and a `user`- or `session`-scoped one
+is an optional input that callers omit. `state` and `output` are returned, so
+the piece's result carries the scene's data to callers.
+
+[Choose a scope for state and output](./iframe-pattern-guide.md#choose-a-scope-for-state-and-output)
+in the iframe pattern guide shows the other scopes, and its
+[Optional SQLite](./iframe-pattern-guide.md#optional-sqlite),
+[Optional presence](./iframe-pattern-guide.md#optional-presence), and
+[Optional streams](./iframe-pattern-guide.md#optional-streams) carry the
+templates that add a database, a presence room, or a verb to the record.
 
 ## Import only the Babylon.js modules the scene uses
 
@@ -318,9 +403,10 @@ Serialize guest actions, expose pending state in ordinary HTML, and show
 rejections. A failed durable write must not be hidden behind a successful local
 animation.
 
-## Accessible shell
+## Accessible document
 
-Keep important state and actions outside the canvas as accessible HTML:
+Keep important state and actions outside the canvas as accessible HTML in
+`guest.html`, the guest's complete document:
 
 ```html
 <!doctype html>
@@ -338,10 +424,16 @@ Keep important state and actions outside the canvas as accessible HTML:
       <p role="alert"></p>
       <canvas id="scene" aria-label="Collaborative 3D scene"></canvas>
     </main>
-    <!-- PATTERN_IFRAME_SCRIPT -->
   </body>
 </html>
 ```
+
+The document holds no `<script>` for the guest. The sandbox runs `guest.js` as
+the document's last module script once the document is parsed, so `#scene` and
+the controls exist when the guest creates the engine. A Content Security Policy
+the document declares in a `<meta>` must admit inline scripts (`script-src
+'unsafe-inline'`), since that is how the bundle arrives; a policy that does not
+leaves the guest blank.
 
 Use `type="button"`; a scene action must never submit a form or navigate the
 frame. Style the HTML around the canvas with the ambient theme the iframe
@@ -349,21 +441,31 @@ receives — its elements, `cf-*` classes, and `--cf-theme-*` variables — and
 spell no color or font; see
 [Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme).
 Read a scene's clear color from those variables too when it should match the
-page. The custom shell must contain `<!-- PATTERN_IFRAME_SCRIPT -->` exactly
-once.
+page.
 
-## Generate and validate
+## Bundle the guest
+
+From the pattern's directory, write the guest's bundle:
 
 ```bash
-deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/examples/babylon-shared-scene/contract.ts \
-  --guest patterns/examples/babylon-shared-scene/guest.ts \
-  --html patterns/examples/babylon-shared-scene/guest.html \
-  --out patterns/examples/babylon-shared-scene/main.tsx
+deno bundle --platform browser --minify guest.ts -o guest.js
+```
 
-deno fmt patterns/examples/babylon-shared-scene
-deno check patterns/examples/babylon-shared-scene/guest.ts
-deno task cf check patterns/examples/babylon-shared-scene/main.tsx --no-run
+Run it again after every change to the guest or to anything it imports, and
+keep `guest.js` with the change: `main.tsx` reads the file as it is, so a stale
+bundle runs the guest as it was. `deno bundle` inlines the Babylon.js modules
+the guest imports, `@commonfabric/iframe-sandbox/guest`, and the contract into
+the one module the sandbox runs.
+
+## Validate
+
+From the repository root, format and compile the guest and the pattern:
+
+```bash
+deno fmt patterns/examples/iframe-babylon-shared-scene
+deno check patterns/examples/iframe-babylon-shared-scene/guest.ts
+deno task cf check \
+  patterns/examples/iframe-babylon-shared-scene/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

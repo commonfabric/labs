@@ -12,7 +12,7 @@ import { createRoute } from "@hono/zod-openapi";
 import * as HttpStatusCodes from "stoker/http-status-codes";
 import { jsonContent } from "stoker/openapi/helpers";
 import { z } from "zod";
-import { toZod } from "@commonfabric/utils/zod-utils";
+import { toZod } from "../../../lib/zod-utils.ts";
 import {
   LLM_NATIVE_MODEL_TOOL_IDS,
   type LLMGenerateObjectRequest,

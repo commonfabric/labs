@@ -26,6 +26,7 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { type SessionFactory, StorageManager } from "../src/storage/v2.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const user = await Identity.fromPassphrase("connection-restored user");
 const SPACES = [
@@ -111,7 +112,9 @@ describe("storage-connection-restored", () => {
     let server: StandaloneMemoryServer;
 
     beforeEach(() => {
-      server = StandaloneMemoryServer.start();
+      server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+      });
       cleanups.push(() => server.close());
     });
 

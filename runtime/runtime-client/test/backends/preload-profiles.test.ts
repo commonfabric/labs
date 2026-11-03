@@ -8,7 +8,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { preloadProfiles } from "../../src/backends/preload-profiles.ts";
 import { RuntimeProcessor } from "../../src/backends/runtime-processor.ts";

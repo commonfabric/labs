@@ -45,7 +45,7 @@ import {
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import {
   initializePiecesController,

@@ -17,7 +17,7 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { SpaceDb } from "./db.ts";
 import {

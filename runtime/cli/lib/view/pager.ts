@@ -10,6 +10,7 @@
  * {@link realPagerDeps} supplies the genuine Deno calls.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { CSI, term } from "./ansi.ts";
 import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
@@ -126,7 +127,7 @@ export async function runPager(
   } catch (error) {
     throw new ViewError(
       `cf view: cannot open /dev/tty for keyboard input (${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }). Pipe through a real terminal, or use --plain.`,
     );
   }
@@ -181,7 +182,7 @@ export async function runPager(
         (error) =>
           session.failBlameLoad(
             load,
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           ),
       ).then(() => {
         if (!cancelReveal && !cancelPush) draw();
@@ -365,9 +366,7 @@ export async function runPager(
       }, controller.signal);
       summary = await pushBranch(io, controller.signal);
     } catch (error) {
-      summary = `Push failed: ${
-        error instanceof Error ? error.message : error
-      }`;
+      summary = `Push failed: ${describeFailure(error)}`;
     }
     session.finishBranchPush(summary);
     draw();

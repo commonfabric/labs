@@ -34,7 +34,7 @@
 
 import { idStringForEntityAddress, isStreamValue } from "@commonfabric/runner";
 import { renderCellReference } from "@commonfabric/runner/shared";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { keysOf } from "../cell-listing.ts";
 import {

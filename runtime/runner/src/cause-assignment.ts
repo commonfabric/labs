@@ -29,7 +29,7 @@ import {
   isFunction,
   isObjectNotArray,
   isObjectOrArray,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 /** One numbered cell of a pattern level. */
 export interface NumberedCell {

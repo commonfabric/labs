@@ -548,8 +548,9 @@ export type ChatRequestOutcome =
  * A refusal a client can act on, which stays the same whatever its `reason`
  * says. `space-own-chat`: `accept` or `joinRoom` named a container's chat
  * without supplying the matching root `chatRoom` declaration it needs.
- * `shared-inbox`: `createGroup` named profiles of two people that point at
- * the same share inbox, so an offer meant for one would reach the other.
+ * `shared-inbox`: a refused `createGroup` whose profiles of two people pointed
+ * at the same share inbox. No act records it; it stays a code a stored
+ * outcome may carry.
  */
 export type ChatRefusalCode = "space-own-chat" | "shared-inbox";
 

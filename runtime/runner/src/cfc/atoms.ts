@@ -6,8 +6,8 @@
 import type { JSONValue } from "@commonfabric/api";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
-import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 // How many kept atoms a candidate is compared against before the kept set is
 // grouped instead. Keying an atom walks the whole of it, while a comparison

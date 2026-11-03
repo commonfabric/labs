@@ -7,7 +7,7 @@ import {
 } from "@commonfabric/data-model/cell-rep";
 import { BaseFabricPrimitive } from "@commonfabric/data-model/fabric-bases";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { isReactive } from "./builder/types.ts";
 import { exportCell, isCell } from "./cell.ts";

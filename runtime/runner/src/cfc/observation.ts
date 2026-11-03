@@ -1,8 +1,8 @@
 import type { JSONSchema, JSONValue } from "@commonfabric/api";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   cfcLabelPathPrefixMatches,

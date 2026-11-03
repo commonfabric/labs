@@ -250,10 +250,10 @@ const PAGE_ORIGIN = "http://page.invalid";
  * origin.
  *
  * Each reader rewrites spellings the other keeps. The grammar refuses a space
- * name holding a character it reserves. A page URL percent-encodes some
- * characters and resolves dot segments, and the page reader takes an escaped
- * `@` at the head of the space for the space's mark. A name rewritten on the
- * way in comes back out naming another space.
+ * name holding a character it reserves. A page URL resolves dot segments, and
+ * the page reader decodes the percent escapes in the space and takes an `@` at
+ * its head for the space's mark. A name rewritten on the way in comes back out
+ * naming another space.
  */
 function readsBackAs(
   reference: string,
@@ -1373,23 +1373,13 @@ export class XAppView extends BaseView {
     `;
 
     const pieceId = this.#getActivePatternId();
-    const spaceName = this.app && "spaceName" in this.app.view
-      ? this.app.view.spaceName
-      : this.app && "builtin" in this.app.view &&
-          this.app.view.builtin === "home"
-      ? "<home>"
-      : undefined;
-    const spaceDid = this.app && "spaceDid" in this.app.view
-      ? this.app.view.spaceDid
-      : undefined;
     const content = this.app?.identity ? authenticated : unauthenticated;
     return html`
       <div class="shell-container">
         ${embedded ? nothing : html`
           <x-header-view
             .isLoggedIn="${!!this.app.identity}"
-            .spaceName="${spaceName}"
-            .spaceDid="${spaceDid}"
+            .view="${this.app.view}"
             .rt="${this.rt}"
             .space="${this.space}"
             .keyStore="${this.keyStore}"

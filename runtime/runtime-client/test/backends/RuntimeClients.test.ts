@@ -63,7 +63,7 @@ function testClient(id: number) {
  * one up wants identities and storage, and what these tests turn on is which
  * client each call carries and what a refusal says.
  */
-function fakeProcessor() {
+function fakeProcessor(requestFailure?: unknown) {
   const requests: Array<{ type: RequestType; clientId: number }> = [];
   const notifications: Array<{ type: string; clientId: number }> = [];
   const disposedClients: number[] = [];
@@ -84,7 +84,9 @@ function fakeProcessor() {
       client: WorkerClient,
     ) => {
       requests.push({ type: request.type, clientId: client.id });
-      return Promise.resolve(undefined);
+      return requestFailure === undefined
+        ? Promise.resolve(undefined)
+        : Promise.reject(requestFailure);
     },
     handleNotification: (
       notification: { type: string },
@@ -111,9 +113,13 @@ function fakeProcessor() {
 }
 
 function harness(
-  options: { initializeSlowly?: boolean; failInitialization?: boolean } = {},
+  options: {
+    initializeSlowly?: boolean;
+    failInitialization?: boolean;
+    requestFailure?: unknown;
+  } = {},
 ) {
-  const fake = fakeProcessor();
+  const fake = fakeProcessor(options.requestFailure);
   const owner = testClient(0);
   const consoleBridge: boolean[] = [];
   let release: (() => void) | undefined;
@@ -254,6 +260,28 @@ describe("RuntimeClients", () => {
         expect(h.owner.posted).toEqual([{
           msgId: 1,
           error: "WorkerRuntime not initialized.",
+        }]);
+      });
+
+      it("replies with the message of a thrown record that is not an `Error`", async () => {
+        // A storage result's error is a plain `{ name, message }` record, which
+        // a request handler can throw as it is.
+
+        const h = harness({
+          requestFailure: {
+            name: "AuthorizationError",
+            message: "session refused by the memory server",
+          },
+        });
+        await h.initialize(1);
+        h.owner.posted.length = 0;
+        await h.deliver(h.owner.client, {
+          msgId: 2,
+          data: { type: RequestType.Idle },
+        });
+        expect(h.owner.posted).toEqual([{
+          msgId: 2,
+          error: "session refused by the memory server",
         }]);
       });
 

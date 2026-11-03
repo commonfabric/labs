@@ -18,7 +18,6 @@ import {
   areLinksSame,
   type Cancel,
   type Cell,
-  CFC_ATOM_TYPE,
   ContextualFlowControl,
   type JSONSchema,
   type SinkConsumedLabel,
@@ -35,19 +34,28 @@ import {
   type ExchangeRuleKind,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
-  readConsumesEntry,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { getLogger } from "@commonfabric/logger";
 
 import {
-  normalizeRenderConfidentialityCeiling,
-  type RenderPolicy,
-  type WorkerReconcilerOptions,
-} from "./types.ts";
+  atomRenderableUnderPolicy,
+  canRenderConfidentialityAtom,
+  integrityLabels,
+} from "./display-fit-atoms.ts";
+import type { RenderPolicy, WorkerReconcilerOptions } from "./types.ts";
+
+export {
+  atomRenderableUnderPolicy,
+  canRenderConfidentialityAtom,
+  defaultDisplayFit,
+  integrityLabels,
+  type LabelDisplayFit,
+  normalizeAtomBound,
+  rootRenderPolicyFor,
+} from "./display-fit-atoms.ts";
 
 const logger = getLogger("display-fit", { enabled: false, level: "debug" });
 
@@ -91,24 +99,6 @@ export type FitWatch = {
   readonly addCancel: (cancel: Cancel) => void;
   reeval: () => void;
 };
-
-/**
- * The policy a display decision starts from at the root, before any authored
- * boundary narrows it: the host's default ceiling when one is configured
- * (spec §8.10.6), or `undefined` for none, when nothing is gated. A malformed
- * ceiling reads as the empty one, which admits public content only, rather
- * than as none.
- */
-export function rootRenderPolicyFor(
-  configured: unknown,
-): RenderPolicy | undefined {
-  const ceiling = normalizeRenderConfidentialityCeiling(configured);
-  return ceiling === undefined ? undefined : {
-    declassifyConfidentiality: [],
-    maxConfidentiality: [...(ceiling.atoms ?? [])],
-    caveatKindAllow: [...(ceiling.caveatKinds ?? [])],
-  };
-}
 
 /** Whether `policy` admits every cell, having no ceiling to fit. */
 export function admitsEverything(policy: RenderPolicy): boolean {
@@ -353,62 +343,6 @@ export function canRenderLabelUnderPolicy(
   );
 }
 
-/**
- * Per-atom admission under a render policy. The read-failure marker is
- * ungrantable: it means "the label could not be read", so neither author
- * declassification nor a ceiling entry, even one naming the exported marker
- * string, may admit it. Every other atom checks declassification first, then
- * the ceiling.
- */
-export function atomRenderableUnderPolicy(
-  atom: unknown,
-  policy: RenderPolicy,
-): boolean {
-  if (deepEqual(atom, CFC_LABEL_READ_FAILED_ATOM)) {
-    return false;
-  }
-  if (
-    policy.declassifyConfidentiality.some((declassified) =>
-      deepEqual(declassified, atom)
-    )
-  ) {
-    return true;
-  }
-  return canRenderConfidentialityAtom(atom, policy);
-}
-
-/**
- * Whether `atom` sits under `policy`'s ceiling: listed in it, or a caveat of a
- * kind the policy's caveat-kind allowance admits (spec §8.10.6). Admission is
- * not discharge: the caveat stays on the value.
- */
-export function canRenderConfidentialityAtom(
-  atom: unknown,
-  policy: RenderPolicy,
-): boolean {
-  const max = normalizeAtomBound(policy.maxConfidentiality);
-  if (max === undefined) {
-    return true;
-  }
-  if (max.some((allowed) => deepEqual(allowed, atom))) {
-    return true;
-  }
-  const kinds = policy.caveatKindAllow;
-  return kinds !== undefined && kinds.length > 0 &&
-    isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat &&
-    typeof atom.kind === "string" && kinds.includes(atom.kind);
-}
-
-/** A ceiling's atoms, deduplicated, or undefined for no ceiling. */
-export function normalizeAtomBound(
-  labels: readonly unknown[] | undefined,
-): readonly CfcConfClause[] | undefined {
-  if (labels === undefined) {
-    return undefined;
-  }
-  return ContextualFlowControl.uniqueAtoms(labels);
-}
-
 /** The confidentiality clauses `labelView` holds, at any path. */
 export function confidentialityLabels(
   labelView: CfcLabelView,
@@ -417,21 +351,6 @@ export function confidentialityLabels(
     labelView.entries.flatMap((entry) => [
       ...(entry.label.confidentiality ?? []),
     ]),
-  );
-}
-
-/**
- * The integrity a read of the value at the root of `labelView` consumes. An
- * entry describing a link the value was once reached through, rather than
- * the value, contributes none.
- */
-export function integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
-  return ContextualFlowControl.uniqueAtoms(
-    labelView.entries.flatMap((entry) =>
-      entry.path.length === 0 && readConsumesEntry("value", entry)
-        ? [...(entry.label.integrity ?? [])]
-        : []
-    ),
   );
 }
 

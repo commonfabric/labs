@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { createFactoryShadowGuardSource } from "@commonfabric/utils/sandbox-contract";
+import { createFactoryShadowGuardSource } from "@commonfabric/pattern-contract/sandbox-contract";
 
 import {
   type BindingInfo,

@@ -1,4 +1,4 @@
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { github } from "./lib.ts";
 import type { GitHubCredential } from "./github-auth.ts";
 import type { Run } from "./types.ts";

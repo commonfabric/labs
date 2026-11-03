@@ -1,8 +1,8 @@
 import { debugStr } from "@commonfabric/data-model";
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 import { MappedPosition, SourceMapConsumer } from "source-map-js";
 
-import { SourceMap } from "./interface.ts";
+import type { SourceMap } from "./interface.ts";
 
 export type { MappedPosition };
 

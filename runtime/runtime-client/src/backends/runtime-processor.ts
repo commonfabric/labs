@@ -28,9 +28,10 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type {
-  PresenceEvent,
-  PresenceMembership,
+import {
+  isDeletedSpaceError,
+  type PresenceEvent,
+  type PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
@@ -137,6 +138,7 @@ import {
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   getLogger,
   getLoggerCountsBreakdown,
@@ -145,9 +147,9 @@ import {
   Logger,
   resetAllCountBaselines,
   resetAllTimingBaselines,
-} from "@commonfabric/utils/logger";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isObjectNotArray, isPlainObject } from "@commonfabric/utils/types";
+} from "@commonfabric/logger";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import { HostReadGate } from "./host-read-gate.ts";
 import { postToClient } from "./post-to-client.ts";
@@ -325,7 +327,7 @@ import {
   normalizeSpaceHostMap,
   securityContextDifferences,
 } from "@/shared/security-context.ts";
-import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
+import { cellRefToKey } from "@/shared/utils.ts";
 
 /** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
@@ -783,6 +785,8 @@ export function renderSpaceAccessProviderFor(
   const storage = runtime.storageManager;
   return {
     error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    deleted: (space) =>
+      isDeletedSpaceError(storage.spaceAccessError?.(space as MemorySpace)),
     subscribe: (space, onChange) => {
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
@@ -987,6 +991,10 @@ export class RuntimeProcessor {
   #privateInboxEnsured: Promise<void> | undefined;
   #profileRootsRepaired: Promise<void> | undefined;
   #shareIntake: Promise<ShareIntake | undefined> | undefined;
+  // The marks of deleted spaces on their way to Home's catalog, which
+  // `handleIdle()` takes in: a reload before a mark is sent would leave the
+  // space listed as saved.
+  #deletionMarks = new Set<Promise<void>>();
   // Aborted as disposal begins, so an inbox ensure still in flight sends
   // nothing after it, a profile root repair starts no commit after it, and
   // the share intake stops.
@@ -1125,10 +1133,16 @@ export class RuntimeProcessor {
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
-      ?.subscribeSpaceAccessLoss?.((space) => {
+      ?.subscribeSpaceAccessLoss?.((space, error) => {
+        const deleted = isDeletedSpaceError(error);
         for (const client of clients()) {
-          client.post({ type: NotificationType.SpaceAccessLost, space });
+          client.post({
+            type: NotificationType.SpaceAccessLost,
+            space,
+            ...(deleted && { deleted: true as const }),
+          });
         }
+        if (deleted) this.#markDeletedSpace(space);
       });
     // An access change is a denial or a recovery, and only a recovery leaves
     // the space with no access error. A storage manager that cannot say what
@@ -2870,12 +2884,21 @@ export class RuntimeProcessor {
    * still being created does not, is left alone, and the response holds no
    * cell. Either way, bringing Home up starts the worker's housekeeping over
    * it, as `#startHomeHousekeeping()` says.
+   *
+   * @throws The error Home's memory session ended with, as when its first
+   *   handshake failed on every attempt the client may make.
    */
   async handleEnsureHomePatternRunning(
     request: EnsureHomePatternRunningRequest,
   ): Promise<HomePatternResponse> {
     const homeSpaceCell = this.#runtime.getHomeSpaceCell();
     await homeSpaceCell.sync();
+    // A Home whose session failed reads as absent, which would be taken for
+    // no Home, or for one to create.
+    const sessionFailure = this.#runtime.storageManager.spaceSessionError?.(
+      this.#runtime.userIdentityDID,
+    );
+    if (sessionFailure !== undefined) throw sessionFailure;
     if (request.existingOnly && !(await this.#homeExists())) return {};
 
     // Always the PiecesController path: ensureDefaultPattern() follows the
@@ -3000,6 +3023,31 @@ export class RuntimeProcessor {
     return new PiecesController(homeSession, this.#runtime);
   }
 
+  /**
+   * Records in the user's Home catalog that `space` is deleted, as the
+   * runtime that hears of a deletion does (`docs/features/shared-space-catalog.md`,
+   * "Deleted spaces"), without creating a Home the user has none of. Home's
+   * handler asks the server itself before it writes, and a mark that loses
+   * the race to another runtime's is an expected conflict, so nothing here
+   * waits for the handling; `handleIdle()` waits for the send, and for the
+   * handling as for any scheduler work. A failure to send is reported and not
+   * retried: the storage manager gives one notice per space for its deletion,
+   * so the mark is sent again only by a later worker, or once the space's
+   * access record is reset and the deleted refusal met again.
+   */
+  #markDeletedSpace(space: MemorySpace): void {
+    const mark: Promise<void> = this.#homeController().markDeletedSpace(space)
+      .then(() => {}, (error) => {
+        if (this.#isDisposed) return;
+        console.warn(
+          `[RuntimeProcessor] Marking the deleted space ${space} in Home:`,
+          error,
+        );
+      })
+      .finally(() => this.#deletionMarks.delete(mark));
+    this.#deletionMarks.add(mark);
+  }
+
   async handleIdle(): Promise<void> {
     // The client reads "idle" as a safe point to navigate or reload, so it
     // must include durability of just-issued writes: idleWithPendingCommits()
@@ -3010,14 +3058,16 @@ export class RuntimeProcessor {
     // reactive quiescence use runtime.idle() and are unaffected.
     //
     // It also takes in the housekeeping a bring-up of Home has started, which
-    // goes on loading and sending to Home after the bring-up has answered.
-    // That work issues scheduler work, and scheduler work can hand the share
+    // goes on loading and sending to Home after the bring-up has answered,
+    // and the marks of deleted spaces on their way to Home's catalog. That
+    // work issues scheduler work, and scheduler work can hand the share
     // intake more to take up, so the two are awaited until both hold at once.
     for (;;) {
       const intake = await this.#homeHousekeepingIdle();
       await this.#runtime.scheduler.idleWithPendingCommits();
       if (
         (intake === undefined || intake.isIdle()) &&
+        this.#deletionMarks.size === 0 &&
         this.#runtime.scheduler.isIdleWithPendingCommits()
       ) {
         return;
@@ -3030,7 +3080,8 @@ export class RuntimeProcessor {
    * `#startHomeHousekeeping()` has started in this worker: the adoption of the
    * Home space list's name-only entries, the private inbox ensure, the profile
    * root repair, the start of the share intake, and the intake taking up every
-   * change it has been told of. Returns the intake, when one is running. Never
+   * change it has been told of, and for the marks of deleted spaces on their
+   * way to Home's catalog. Returns the intake, when one is running. Never
    * rejects: each step is held as a promise that does not, and a failure of
    * the intake's own wait is reported rather than passed on.
    */
@@ -3038,6 +3089,7 @@ export class RuntimeProcessor {
     await this.#legacySpacesAdopted;
     await this.#privateInboxEnsured;
     await this.#profileRootsRepaired;
+    await Promise.all(this.#deletionMarks);
     const intake = await this.#shareIntake;
     await intake?.idle().catch((error) => {
       console.warn("[RuntimeProcessor] Waiting for the share intake:", error);
@@ -3054,7 +3106,9 @@ export class RuntimeProcessor {
       undefined,
       "space",
     );
-    if (indexSync.error !== undefined) throw indexSync.error;
+    if (indexSync.error !== undefined) {
+      throw new Error(indexSync.error.message, { cause: indexSync.error });
+    }
     if (provider.replica === undefined) {
       throw new Error("storage provider does not expose an attention replica");
     }
@@ -3077,7 +3131,11 @@ export class RuntimeProcessor {
         undefined,
         "space",
       );
-      if (sidecarSync.error !== undefined) throw sidecarSync.error;
+      if (sidecarSync.error !== undefined) {
+        throw new Error(sidecarSync.error.message, {
+          cause: sidecarSync.error,
+        });
+      }
       const sidecar = provider.replica.getDocument(
         sidecarId as never,
         "space",
@@ -4662,6 +4720,17 @@ export class RuntimeProcessor {
     // can reject an entry. A default-host provider is provisional. Failures
     // here must not block worker boot.
     processor.watchSiteTable();
+    // The delegations Home records for the user's profiles, started here
+    // and never awaited: a stalled Home read must not keep the worker from
+    // acknowledging its start. A profile space opened before they are held,
+    // by the preload below among others, opens on the key's own grant, and
+    // the storage manager reopens that session once its chain arrives.
+    runtime.loadProfileDelegations().catch((error) => {
+      console.warn(
+        "[RuntimeProcessor] Could not load the profile delegations:",
+        error,
+      );
+    });
     try {
       processor.#profilePreloadCancel = preloadProfiles(runtime);
     } catch (error) {

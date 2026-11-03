@@ -5,7 +5,7 @@
  */
 
 import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** Whether a decoded value has the supported shape of one CFC atom. */
 export const isCfcAtomShape = (value: unknown): boolean =>

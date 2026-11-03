@@ -2,7 +2,11 @@ import type {
   FabricLink as ApiFabricLink,
   FabricLinkConstructor as ApiFabricLinkConstructor,
 } from "@/api.ts";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import type { FabricPlainObject, FabricValue } from "@/interface.ts";
 import {
@@ -160,7 +164,7 @@ export class FabricLink extends BaseFabricInstance implements ApiFabricLink {
           return ProblematicValue.make(
             typeTag,
             state,
-            `Link: ${e instanceof Error ? e.message : String(e)}`,
+            `Link: ${describeFailure(e)}`,
             mutable,
           );
         }

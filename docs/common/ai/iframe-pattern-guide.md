@@ -1,11 +1,11 @@
 # Iframe-first pattern guide
 
 Use this guide to build a Common Fabric pattern whose application lives inside
-one sandboxed `cf-iframe`. The wrapper is deliberately mechanical: it exposes
-three named Cell resources (`input`, `state`, and `output`), optionally exposes
-SQLite databases, presence rooms, and streams the guest sends events to, embeds
-the guest and its dependencies into one HTML string, and returns the state and
-output through the normal pattern result.
+one sandboxed `cf-iframe`. The pattern is one `main.tsx` you write by hand,
+following the templates below: it declares the cells, databases, presence rooms,
+and verbs the application uses, and renders a `cf-iframe` that hands them to the
+guest by name. The guest is an ordinary browser application in its own files,
+bundled with `deno bundle`.
 
 No other pattern guide is required for this shape.
 
@@ -14,29 +14,36 @@ No other pattern guide is required for this shape.
 Keep these files together:
 
 ```text
-patterns/examples/quick-notes/
-├── contract.ts  # input, durable state, output, scopes, optional resources
+patterns/examples/iframe-quick-notes/
+├── contract.ts  # types and defaults shared by main.tsx and the guest
 ├── guest.ts     # the iframe application; guest.tsx is also accepted
-├── guest.html   # optional custom document shell
-└── main.tsx     # generated wrapper; do not hand-edit
+├── guest.html   # the guest's document
+├── guest.js     # `deno bundle` output of guest.ts; never edited by hand
+└── main.tsx     # the pattern: cells, databases, verbs, and the cf-iframe
 ```
 
-The generated `main.tsx` contains the bundled guest. Deploying the pattern does
-not require a guest module server or a second build artifact. Keep the source
-guest and contract beside it so regeneration remains possible.
+In this repository, the directory's name starts with `iframe-`. That prefix is
+what keeps the guest out of the pattern type check, which would compile it
+under the pattern runtime's JSX, and what keeps the bundle out of `deno fmt`,
+`deno lint` and `deno task check`, which read the guest's source instead.
+
+`main.tsx` reads `guest.html` and `guest.js` with `dataFile()`. Each file
+travels with the pattern's code, so deploying the pattern needs no guest module
+server and no separate build artifact, and every command that builds the
+program from local files attaches both because the source names them.
 
 ## Describe the data contract
 
-Create `contract.ts`. The three data types are intentionally explicit:
+Create `contract.ts`. It holds only types and defaults, which `main.tsx` and the
+guest both import. Three data types are the usual shape:
 
 - `IframeInputData` is supplied when the pattern is instantiated. The guest
   receives it as a read-only Cell.
 - `IframeStateData` is durable application state the guest may change.
-- `IframeOutputData` is the public result the guest may change and the wrapper
+- `IframeOutputData` is the public result the guest may change and the pattern
   returns to callers.
 
-Keep this module declarative and free of side effects. The wrapper helper
-imports it to read the defaults and `IFRAME_PATTERN` configuration.
+Keep this module declarative and free of side effects.
 
 ```typescript
 interface Note {
@@ -73,50 +80,212 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   noteCount: 0,
   selectedId: null,
 };
-
-export const IFRAME_PATTERN = {
-  name: "QuickNotes",
-  displayName: "Quick notes",
-  stateScope: "space",
-  outputScope: "space",
-  frameHeight: "100vh",
-  databases: {},
-} as const;
 ```
 
 Declare each default with its interface as the annotation, as above, rather
-than `as const`: the wrapper types every resource as
+than `as const`: `main.tsx` types every resource as
 `Default<IframeStateData, typeof DEFAULT_STATE>`, so a default that does not
 satisfy its interface is a type error at the contract, and an `as const`
 default makes array members `readonly`, which a mutable `Note[]` rejects.
 
-`name` is a TypeScript identifier used for the generated interfaces. The three
-available scopes are:
+## Write the pattern
 
-| Scope | Meaning |
-| --- | --- |
-| `space` | Shared by every user and session in the piece |
-| `user` | Separate for each user, shared by that user's sessions |
-| `session` | Separate for each browser session |
+`main.tsx` for state and output that everyone on the piece shares:
 
-Choose scope independently for state and output. Do not put transient DOM state
-such as hover or an open tooltip in a Fabric Cell; keep that inside the guest.
-State that other people should see while it happens and nobody needs afterwards,
-such as a pointer position or a drag in flight, belongs in a presence room
-rather than a Cell; see [Optional presence](#optional-presence).
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
 
-The generated wrapper owns `space`-scoped state and output inside the piece. It
-declares `user`- and `session`-scoped state or output as optional scoped pattern
-inputs, so the runtime resolves them for the active user or browser session.
-Callers normally omit those inputs. Their `Default` supplies the readable
-schema fallback; the guest materializes each writable value after pulling it.
-This distinction stays in the wrapper; the guest always addresses the same
-`state` and `output` resources by name.
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface QuickNotesInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+}
+
+export interface QuickNotesOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<QuickNotesInput, QuickNotesOutput>(({ input }) => {
+  const state = new Writable<IframeStateData>(DEFAULT_STATE);
+  const output = new Writable<IframeOutputData>(DEFAULT_OUTPUT);
+
+  return {
+    [NAME]: "Quick notes",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{ input, state, output }}
+          resourceKinds={{ input: "readonly" }}
+        />
+      </div>
+    ),
+    state,
+    output,
+  };
+});
+```
+
+The parts the guest depends on:
+
+- `src` is the guest's document and `script` is its bundle. The sandbox runs the
+  script as the document's last module script once the document is parsed, so
+  `guest.html` holds the markup and styles and no `<script>` for the guest. A
+  Content Security Policy the document declares in a `<meta>` must admit inline
+  scripts (`script-src 'unsafe-inline'`), since that is how the bundle arrives;
+  a policy that does not leaves the guest blank.
+- `$context` binds a record of cells. Each field is a resource the guest asks
+  for by name, and each reaches the guest live: the host resolves it to its
+  concrete cell before the guest loads, so a `user`-scoped field is this user's
+  cell, and a write lands where the cell does. A field can be a cell, a path of
+  one (`state.key("notes")`), a database, a presence room's cell, or a verb,
+  and nothing else: a record with a field that is not a cell is refused when
+  the view is built. Without the `$`, `context` hands the guest a copy of the
+  values instead.
+- `resourceKinds` says what the guest may do with a field. `readonly` grants
+  reads only, which suits `input`: it belongs to whoever instantiated the piece.
+  A field the record names with no kind is a cell the guest may write. Give
+  every database the kind `sqlite`, every presence room `presence`, and every
+  verb `stream`; the host cannot tell them apart from a cell on its own.
+- `state` and `output` are returned, so the piece's result carries the guest's
+  data to callers and to other patterns.
+
+Callers normally omit `input`, and its `Default` supplies the readable value.
+Do not put transient DOM state such as hover or an open tooltip in a Fabric
+Cell; keep that inside the guest. State that other people should see while it
+happens and nobody needs afterwards, such as a pointer position or a drag in
+flight, belongs in a presence room rather than a Cell; see
+[Optional presence](#optional-presence).
+
+### Choose a scope for state and output
+
+| Scope | Meaning | Declared as |
+| --- | --- | --- |
+| `space` | Shared by every user and session in the piece | `new Writable(...)` in the pattern body |
+| `user` | Separate for each user, shared by that user's sessions | an optional `PerUser<...>` input |
+| `session` | Separate for each browser session | an optional `PerSession<...>` input |
+
+Choose scope independently for state and output. A `space`-scoped cell is
+created in the pattern body, as above. A `user`- or `session`-scoped one is an
+optional input of the pattern, so the runtime resolves it for the active user or
+browser session; callers omit it, and its `Default` supplies the readable
+fallback. The guest addresses the resource by the same name whatever its scope.
+
+`main.tsx` with state kept for each browser session and output kept for each
+user:
+
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerSession,
+  type PerUser,
+  UI,
+  type VNode,
+  type Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface QuickNotesInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  state?: PerSession<Writable<Default<IframeStateData, typeof DEFAULT_STATE>>>;
+  output?: PerUser<Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>>;
+}
+
+export interface QuickNotesOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<QuickNotesInput, QuickNotesOutput>(
+  ({ input, state, output }) => ({
+    [NAME]: "Quick notes",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{ input, state, output }}
+          resourceKinds={{ input: "readonly" }}
+        />
+      </div>
+    ),
+    state,
+    output,
+  }),
+);
+```
+
+For state per user, write `PerUser` in its place; for output per session,
+`PerSession`. For a `space`-scoped one of the two beside a scoped one, drop it
+from the inputs and create it in the body as the first template does.
 
 ## Write the guest
 
-The guest is an ordinary browser entry. The wrapper bundles it, including its
-imports, into the iframe document. A small DOM guest can start like this:
+The guest is an ordinary browser entry, and `deno bundle` inlines its imports
+into one module. Its document is `guest.html`, a complete page holding the
+element the guest renders into:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Quick notes</title>
+    <style>
+    html, body, #root {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+    }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+```
+
+A small DOM guest can start like this:
 
 ```typescript
 // Shown at module scope.
@@ -343,31 +512,82 @@ game's art.
 
 ## Optional SQLite
 
-Declare database tables in `IFRAME_PATTERN`. The wrapper creates the database,
-adds it to the iframe context, and marks it as a SQLite resource:
+Create the database in the pattern body with `sqliteDatabase()`, put it in the
+`$context` record under the name the guest asks for, and give that name the kind
+`sqlite`. The variable's annotation sets its scope: `PerUser<SqliteDb>` keeps one
+database for each user, `PerSession<SqliteDb>` one for each browser session, and
+no annotation one for the whole piece.
 
-```typescript
-export const IFRAME_PATTERN = {
-  name: "QuickNotes",
-  displayName: "Quick notes",
-  stateScope: "session",
-  outputScope: "space",
-  frameHeight: "100vh",
-  databases: {
-    appDatabase: {
-      scope: "user",
-      tables: {
-        notes: {
-          id: "integer primary key",
-          text: "text not null",
-        },
-      },
+```tsx
+// Shown at module scope.
+import {
+  cfSqlite,
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerUser,
+  sqliteDatabase,
+  type SqliteDb,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface QuickNotesInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+}
+
+export interface QuickNotesOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<QuickNotesInput, QuickNotesOutput>(({ input }) => {
+  const state = new Writable<IframeStateData>(DEFAULT_STATE);
+  const output = new Writable<IframeOutputData>(DEFAULT_OUTPUT);
+  const { table } = cfSqlite;
+  const appDatabase: PerUser<SqliteDb> = sqliteDatabase({
+    tables: {
+      notes: table({
+        id: "integer primary key",
+        text: "text not null",
+      }),
     },
-  },
-} as const;
+  });
+
+  return {
+    [NAME]: "Quick notes",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{ input, state, output, appDatabase }}
+          resourceKinds={{ input: "readonly", appDatabase: "sqlite" }}
+        />
+      </div>
+    ),
+    state,
+    output,
+  };
+});
 ```
 
-Use it from the guest by its declared name:
+Use it from the guest by the name the record gives it:
 
 ```typescript
 // Shown at module scope.
@@ -395,10 +615,10 @@ Before the first query or exec, hydrate every input or scoped preference used to
 construct the SQL or validate its parameters. Keep the controls disabled until
 that joint barrier completes; an early sink callback must not query with
 fallback configuration and then persist a correction over real user state.
-Database resource names, table names, and column names are data rather than
-generated TypeScript bindings. They may use reserved words. When the exact name
-`__proto__` is required in `contract.ts`, write it as a computed property
-(`["__proto__"]`) so JavaScript creates an own property.
+Table and column names are data rather than TypeScript bindings, and may use
+reserved words. When a table or column needs the exact name `__proto__`, write
+it as a computed property (`["__proto__"]`) in `main.tsx`, so JavaScript
+creates an own property.
 
 ## Optional presence
 
@@ -408,25 +628,71 @@ facets, and the record is gone when the member leaves. Use it for pointers,
 selections, a drag in flight, or a player's position. Use a Cell for anything
 that must be agreed on or must survive.
 
-Declare each room in `IFRAME_PATTERN`, naming the resource whose field it
-follows:
+A room is the room of a cell: add the cell to the `$context` record a second
+time, under the room's name, and give that name the kind `presence`. Everyone
+who shares the cell shares the room, so a room following `space`-scoped state
+gathers every user and session on the piece, and a room following `user`-scoped
+output gathers only one user's sessions. The name grants the room and none of
+the cell's data.
 
-```typescript
-export const IFRAME_PATTERN = {
-  name: "CursorCanvas",
-  displayName: "Cursor canvas",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-  presence: { cursors: "state" },
-} as const;
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerUser,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface CursorCanvasInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  output?: PerUser<Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>>;
+}
+
+export interface CursorCanvasOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<CursorCanvasInput, CursorCanvasOutput>(
+  ({ input, output }) => {
+    const state = new Writable<IframeStateData>(DEFAULT_STATE);
+
+    return {
+      [NAME]: "Cursor canvas",
+      [UI]: (
+        <div style={{ width: "100%", height: "100vh" }}>
+          <cf-iframe
+            src={GUEST_HTML}
+            script={GUEST_SCRIPT}
+            $context={{ input, state, output, cursors: state }}
+            resourceKinds={{ input: "readonly", cursors: "presence" }}
+          />
+        </div>
+      ),
+      state,
+      output,
+    };
+  },
+);
 ```
-
-The value is `state` or `output`. Everyone who shares that resource shares the
-room, so a room following `space`-scoped state gathers every user and session
-on the piece, and a room following `user`-scoped output gathers only one user's
-sessions. The name grants the room and none of the resource's data.
 
 Join from the guest by listening, and publish your own record:
 
@@ -525,101 +791,87 @@ whose verb does not fit the interaction.
 
 Work that only the pattern can start is how a guest calls `agent()`,
 `generateText()`, `generateObject()`, and the other LLM built-ins in a
-user-triggered way. Each
-built-in is a reactive node in the pattern body, which the guest cannot call,
-and it makes a new request whenever its inputs change. A verb makes the user's
-action the trigger: the guest sends the event when the user clicks, the
-handler writes the task or prompt the built-in reads, and the result reaches
-the guest through `input`. Writing the prompt from the guest's own `state`
-would also start a request, but on every change to it, such as each keystroke
-in a prompt field.
+user-triggered way. Each built-in is a reactive node in the pattern body, which
+the guest cannot call, and it makes a new request whenever its inputs change. A
+verb makes the user's action the trigger: the guest sends the event when the
+user clicks, the handler writes the task or prompt the built-in reads, and the
+result reaches the guest through a read-only resource. Writing the prompt from
+the guest's own `state` would also start a request, but on every change to it,
+such as each keystroke in a prompt field.
 
-Declare each stream by name in `IFRAME_PATTERN`, and the event it carries in an
-exported `IframeStreamEvents` interface:
-
-```typescript
-// Shown at module scope.
-export interface AddItemEvent {
-  id: string;
-  text: string;
-}
-
-export interface IframeStreamEvents {
-  addItem: AddItemEvent;
-}
-
-export const IFRAME_PATTERN = {
-  name: "VerbListFrame",
-  displayName: "Verb list",
-  stateScope: "space",
-  outputScope: "space",
-  frameHeight: "100vh",
-  databases: {},
-  streams: ["addItem"],
-} as const;
-```
-
-A stream's name is a TypeScript identifier, distinct from `input`, `state`,
-`output`, every database, and every presence room. The wrapper takes each
-stream as a required pattern input of type
-`Stream<IframeStreamEvents["addItem"], unknown>`, so it accepts a verb whatever
-result the verb declares, and grants it to the guest under the same name.
-
-Since the verb is an input of the wrapper, a pattern of your own declares it
-and passes it in. Generate the wrapper to `frame.tsx` instead of `main.tsx`,
-and write `main.tsx` by hand:
+Declare the verb with `action()` in the pattern body, return it as part of the
+result so other callers reach it, and put it in the `$context` record with the
+kind `stream`. The verb binds to `state` like any handler. In this list, the
+items belong to the verb: the guest is granted `state.items` to read and
+`state.checked` to write, so it can only ask for an item, and a caller with no
+browser, such as `cf piece call`, sends the same verb.
 
 ```tsx
 // Shown at module scope.
 import {
   action,
-  type Default,
+  dataFile,
   NAME,
   pattern,
   type Stream,
   UI,
   type VNode,
-  type Writable,
+  Writable,
 } from "commonfabric";
 import {
   type AddItemEvent,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
   type IframeOutputData,
   type IframeStateData,
   type ListItem,
 } from "./contract.ts";
-import Frame from "./frame.tsx";
 
-interface VerbListInput {
-  items?: Writable<ListItem[] | Default<[]>>;
-}
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
 
-interface VerbListOutput {
+export interface VerbListOutput {
   [NAME]: string;
   [UI]: VNode;
-  items: ListItem[];
   state: IframeStateData;
   output: IframeOutputData;
   addItem: Stream<AddItemEvent>;
 }
 
-export default pattern<VerbListInput, VerbListOutput>(({ items }) => {
+export default pattern<Record<string, never>, VerbListOutput>(() => {
+  const state = new Writable<IframeStateData>(DEFAULT_STATE);
+  const output = new Writable<IframeOutputData>(DEFAULT_OUTPUT);
   const addItem = action(({ id, text }: AddItemEvent) => {
     const trimmed = text.trim();
     if (trimmed === "") throw new Error("An item needs text.");
-    if (items.get().some((item) => item.id === id)) return;
+    const items = state.key("items");
+    if (items.get().some((item: ListItem) => item.id === id)) return;
     items.push({ id, text: trimmed });
   });
-  const { state, output, [UI]: view } = Frame({ input: { items }, addItem });
-  return { [NAME]: "Verb list", [UI]: view, items, state, output, addItem };
+
+  return {
+    [NAME]: "Verb list",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{
+            items: state.key("items"),
+            checked: state.key("checked"),
+            output,
+            addItem,
+          }}
+          resourceKinds={{ items: "readonly", addItem: "stream" }}
+        />
+      </div>
+    ),
+    state,
+    output,
+    addItem,
+  };
 });
 ```
-
-The items belong to this pattern: the guest reads them as `input` and changes
-them only through the verb, and a caller with no browser, such as
-`cf piece call`, sends the same verb. Return the frame's `state` and `output`
-as a generated wrapper would, and destructure them from the frame's result
-rather than reading `frame.state`, which would put a derived copy in the
-piece's result instead of the frame's cell.
 
 The guest sends through `fabric.stream(name)`, from the handler of the user's
 action, so an event goes out only when someone acts and never on a load or
@@ -645,21 +897,21 @@ add.addEventListener("click", () => {
 
 `send()` goes out once every cell operation the guest made before it has
 settled, so the handler reads what they wrote. It resolves once the handler's
-run has committed, with no value: a verb's
-declared result does not reach the guest, so read the effect through `input`
-or `state`. It rejects with the reason when the runtime refuses the event or
-the run, including an error the handler throws, so show that message where the
-user acted. The guest's sink can deliver the change before `send()` resolves,
-so keep the draft that produced the event until the send settles. The event is
-not a trusted gesture: the guest's code sent it, not a control the host draws,
-so a write gated on a reviewed action refuses it.
+run has committed, with no value: a verb's declared result does not reach the
+guest, so read the effect through the resources it changed. It rejects with the
+reason when the runtime refuses the event or the run, including an error the
+handler throws, so show that message where the user acted. The guest's sink can
+deliver the change before `send()` resolves, so keep the draft that produced the
+event until the send settles. The event is not a trusted gesture: the guest's
+code sent it, not a control the host draws, so a write gated on a reviewed
+action refuses it.
 
-For an LLM call, the verb writes what the built-in reads, and the frame's input
-carries the built-in's state back. An empty task or prompt makes no request, so
-nothing runs before the first event. `agent()` identifies a request by its task
-text and the addresses of its inputs, not by the values they hold, and answers
-a request it has seen from its record, so the verb counts each ask into the
-task: asking the same question again is then a new request.
+For an LLM call, the verb writes what the built-in reads, and read-only
+resources carry the built-in's state back. An empty task or prompt makes no
+request, so nothing runs before the first event. `agent()` identifies a request
+by its task text and the addresses of its inputs, not by the values they hold,
+and answers a request it has seen from its record, so the verb counts each ask
+into the task: asking the same question again is then a new request.
 
 ```tsx
 // Shown at module scope.
@@ -667,12 +919,15 @@ import {
   action,
   agent,
   computed,
+  dataFile,
   NAME,
   pattern,
   UI,
   Writable,
 } from "commonfabric";
-import Frame from "./frame.tsx";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
 
 export default pattern(() => {
   const request = new Writable<{ question: string; asked: number }>({
@@ -695,52 +950,71 @@ export default pattern(() => {
       required: ["answer"],
     },
   });
-  const { [UI]: view } = Frame({
-    input: { pending: answer.pending, answer: answer.result },
+
+  return {
+    [NAME]: "Ask",
+    [UI]: (
+      <div style={{ width: "100%", height: "100vh" }}>
+        <cf-iframe
+          src={GUEST_HTML}
+          script={GUEST_SCRIPT}
+          $context={{ pending: answer.pending, answer: answer.result, ask }}
+          resourceKinds={{
+            pending: "readonly",
+            answer: "readonly",
+            ask: "stream",
+          }}
+        />
+      </div>
+    ),
     ask,
-  });
-  return { [NAME]: "Ask", [UI]: view, ask };
+  };
 });
 ```
 
 A built-in that already returns a stream needs no verb of its own:
-`llmDialog()` returns `addMessage`, which the frame can take directly, with the
-stream's event type `BuiltInLLMMessage` in `IframeStreamEvents`.
+`llmDialog()` returns `addMessage`, which goes in the `$context` record as it
+is, with the kind `stream`.
 
 `patterns/examples/iframe-verb-list/` is a complete example.
 
-## Generate the wrapper
+## Bundle the guest
 
-Run the checked-in helper from the repository root:
+From the pattern's directory, write the guest's bundle:
 
 ```bash
-deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/examples/quick-notes/contract.ts \
-  --guest patterns/examples/quick-notes/guest.ts \
-  --out patterns/examples/quick-notes/main.tsx
+deno bundle --platform browser --minify guest.ts -o guest.js
 ```
 
-The helper refuses to overwrite a file. Pass `--force` when regenerating the
-same `main.tsx` after changing the contract or guest. Regenerating with an
-unchanged contract and guest does not change the compiled schema. Whether a
-deployed piece accepts the result through `cf piece setsrc` depends on the
-schema it was deployed with: a piece whose schema carried no defaults (one
-deployed before the generator read imported defaults) is refused, since the
-defaults now present would change what its stored values mean; start a new
-piece for it.
+For a `guest.tsx`, name it in place of `guest.ts` here and in the `deno check`
+below. Run it again after every change to the guest or to anything it imports, and
+keep `guest.js` with the change: `main.tsx` reads the file as it is, so a stale
+bundle runs the guest as it was. `deno bundle` inlines the guest's imports,
+`@commonfabric/iframe-sandbox/guest` and pinned `npm:` modules among them, into
+the one module the sandbox runs.
 
-For a custom HTML shell, put `<!-- PATTERN_IFRAME_SCRIPT -->` exactly once where
-the bundled module should run, then add `--html .../guest.html`. Without it, the
-helper supplies a complete document with `<div id="root"></div>`.
+A `guest.tsx` names React's JSX factory in pragmas at its top, because the JSX
+settings `deno bundle` reads from the repository's configuration are the
+pattern runtime's, and without the pragmas the bundle draws in that runtime
+instead of React:
+
+```tsx
+// Shown for illustration only.
+/** @jsxRuntime classic */
+/** @jsx React.createElement */
+/** @jsxFrag React.Fragment */
+// deno-lint-ignore no-external-import
+import React from "npm:react@19.2.8";
+```
 
 ## Verify
 
 Format and compile the result:
 
 ```bash
-deno fmt patterns/examples/quick-notes
-deno check patterns/examples/quick-notes/guest.ts
-deno task cf check patterns/examples/quick-notes/main.tsx --no-run
+deno fmt patterns/examples/iframe-quick-notes
+deno check patterns/examples/iframe-quick-notes/guest.ts
+deno task cf check patterns/examples/iframe-quick-notes/main.tsx --no-run
 ```
 
 If the pattern is intentionally outside the repository, pass its directory as
@@ -772,7 +1046,7 @@ test -e .cf/iframe-pattern.key || \
 export CF_API_URL=http://localhost:8000
 export CF_IDENTITY=.cf/iframe-pattern.key
 export CF_SPACE="$(deno task cf space create --label "Iframe quick notes")"
-deno task cf piece new patterns/examples/quick-notes/main.tsx \
+deno task cf piece new patterns/examples/iframe-quick-notes/main.tsx \
   --root . --slug quick-notes
 ```
 
@@ -813,8 +1087,9 @@ does not prove that the guest loaded or that a bridge write completed.
 
 Then run the pattern and exercise its meaningful interaction. Check that input
 renders, state survives at its declared scope, output changes only when the
-guest intends, and any SQLite data has the declared isolation. A generated
-wrapper that compiles but never loads the guest is not complete.
+guest intends, and any SQLite data has the declared isolation. A pattern that
+compiles but never loads the guest is not complete, and neither is one whose
+`guest.js` predates its guest's last change.
 
 For multi-user behavior, cover two sessions of one identity, a second identity,
 and a reload. The second identity opens the piece only after the `cf acl set`

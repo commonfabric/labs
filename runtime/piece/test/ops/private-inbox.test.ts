@@ -11,7 +11,7 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import * as ops from "../../src/ops/mod.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { seedProfileOwner } from "../../../runner/test/cfc-seed-envelope.ts";

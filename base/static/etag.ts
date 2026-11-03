@@ -3,7 +3,7 @@
  * Uses SHA-256 content hashing for strong ETags.
  */
 
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 
 /**
  * Generate a strong ETag from content using SHA-256 hash.

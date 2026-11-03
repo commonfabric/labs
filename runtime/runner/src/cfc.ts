@@ -1,7 +1,7 @@
-import {
+import type {
   JSONSchemaObj,
-  type JSONSchemaTypes,
-  type JSONValue,
+  JSONSchemaTypes,
+  JSONValue,
 } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -9,8 +9,11 @@ import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 import {
   isExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import type {
   AsCellEntry,

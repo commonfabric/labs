@@ -42,7 +42,7 @@ const want = new Set(
 
 // Claim the logger names that would otherwise be constructed disabled, so an
 // error-level report on those paths is actually visible.
-const { getLogger } = await import("@commonfabric/utils/logger");
+const { getLogger } = await import("@commonfabric/logger");
 for (const n of ["ensure-piece-running", "runner", "scheduler", "sandbox"]) {
   getLogger(n, { enabled: true, level: "debug" });
 }

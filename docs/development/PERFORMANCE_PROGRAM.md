@@ -55,7 +55,7 @@ step, and we'll ratchet targets down as we improve.
 ## What We Know (and Don't Know)
 
 **What exists today:**
-- Dozens of micro-benchmark files across runner, memory, utils, and other
+- Dozens of micro-benchmark files across runner, memory, collections, and other
   packages
 - CI benchmarks every four hours on main (dedicated runner group), JSON
   artifacts with 90-day retention, charted on the team ops dashboard's /bench

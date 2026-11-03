@@ -5,7 +5,7 @@ import type {
 import {
   bigintFromUnpaddedBase64url,
   bigintToUnpaddedBase64url,
-} from "@commonfabric/utils/bigint";
+} from "@commonfabric/bytes/bigint";
 
 import type { FabricValue } from "@/interface.ts";
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
@@ -29,7 +29,7 @@ import {
 /**
  * Temporal type representing a particular day, as a count of days from the
  * POSIX Epoch (1970-01-01). Wraps a `bigint` value. Used for date-only (no
- * time) values. See Section 1.4.8 of the formal spec.
+ * time) values. See Section 1.4.8 of `1-fabric-values.md`.
  */
 export class FabricEpochDay extends BaseFabricPrimitive
   implements ApiFabricEpochDay {

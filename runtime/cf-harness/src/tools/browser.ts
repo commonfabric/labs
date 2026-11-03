@@ -9,7 +9,8 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   normalizeCdpOrigin,
@@ -1019,7 +1020,7 @@ export const browserTool: HarnessToolDefinition<
         "host_unavailable",
         `agent-browser could not run: ${
           redactEndpoint(
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           )
         }`,
       );

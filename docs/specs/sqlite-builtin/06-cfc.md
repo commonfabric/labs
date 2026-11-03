@@ -27,11 +27,11 @@ classification lattice
 
 Labels join by **union with structural dedup** (`deepEqual`), and confidentiality
 is checked by "every atom in the label fits under the destination's
-`maxConfidentiality` ceiling." This flat representation is the all-singleton
-degenerate case of the CFC spec's CNF algebra (every atom an independent
-conjunctive clause; the subset ceiling check is CFC spec §8.10.3's clause
-subsumption restricted to singletons) — the clause-aware migration path is CFC
-spec §18.5. Async effects already declare a **write policy**
+`maxConfidentiality` ceiling." A flat list of atoms is the all-singleton case of
+the CFC spec's CNF algebra (every atom an independent conjunctive clause; the
+subset ceiling check is CFC spec §8.10.3's clause subsumption restricted to
+singletons), and an authored OR-clause (`{anyOf: [...]}`) is a clause with
+several alternatives (CFC spec §3.1.8, §18.5). Async effects already declare a **write policy**
 before committing side effects via the sink-request mechanism
 ([`runtime/runner/src/cfc/sink-request.ts`](../../../runtime/runner/src/cfc/sink-request.ts)),
 which is the seam SQLite writes use — and, under the `sqliteQuery` sink, the
@@ -187,7 +187,7 @@ expressions:
 
 ```tsx
 // Shown inside a pattern body.
-const { table, all, principal, match, whenMatches, authoredBy, dbOwner } =
+const { table, any, principal, match, whenMatches, authoredBy, dbOwner } =
   cfSqlite;
 // Pull address tokens out of a messy "Name <addr>, addr" recipient line.
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
@@ -201,8 +201,9 @@ const emails = table(
     body: "text",
   },
   (f) => ({
-    // Row confidentiality = sender ∧ every recipient ∧ the mailbox owner.
-    confidentiality: all(
+    // Row confidentiality = sender ∨ any recipient ∨ the mailbox owner: one
+    // OR-clause, so any one of them can read the row.
+    confidentiality: any(
       principal("mailto", match(f.from_addr, ADDR, { min: 1 })),
       principal("mailto", match(f.to_addrs, ADDR)),
       dbOwner(),
@@ -220,13 +221,12 @@ const emails = table(
 
 **"The sender and all recipients" really means *any-of*** — one OR-clause
 `[[sender ∨ recipients ∨ owner]]` (an authored disjunction, CFC spec §3.1.8),
-written `any(...)`. Under the runner's current flat **conjunctive** lowering
-the same atom set means *all-of*: a row fits only a ceiling listing every
-participant, so per-user views return nothing. The surface keeps the two
-combinators explicit — `all(...)` (conjunctive clauses, works today) and
-`any(...)` (one OR-clause, **errors at `table()` time** until the clause-aware
-label profile lands, CFC spec §18.5.3) — so the wrong semantics is never
-shipped silently.
+written `any(...)`, which is what the example above declares. Written with
+`all(...)`, the same atom set means *all-of*: a row fits only a ceiling listing
+every participant, so per-user views return nothing. The surface keeps the two
+combinators explicit — `all(...)` (a conjunction: each term contributes its own
+clauses) and `any(...)` (one OR-clause, CFC spec §18.5.3), both accepted by
+`table()` — so the wrong semantics is never chosen silently.
 
 The closed helper set
 ([`row-label.ts`](../../../runtime/memory/v2/sqlite/row-label.ts); each helper
@@ -237,8 +237,8 @@ returns a plain-JSON AST node):
 | `match(f.col, /re/, {group?, min?})` | run the regex (forced global) over the column's text ⟹ the ordered list of matches (or capture `group`). The universal field extractor — split + clean in one; subsumes JSON arrays and dirty `Name <addr>` lists. **Strict-if-present:** a non-empty value yielding zero matches fails closed at evaluation (never under-label); `min` makes the field a required anchor |
 | `principal(protocol, match(…))` | `did:<protocol>:<v>` for each extracted `v` (distributes over the match list). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
 | `dbOwner()` | the db's owner — the principal that created the SqliteDb cell, resolved from the db ref (a fixed db property, so the rule stays pure; for a per-user-scoped db this is that user). Creation under SERVED execution mints the CREATING RUN's acting principal — the demanded run's carried identity, never the serving runtime's ambient (service) identity (`docs/specs/server-side-execution/serving-loop.md` §3c); a served creating run with no carried actor mints NO owner, and `dbOwner()` fails closed (RATIFIED — RULED 2026-08-22; `docs/specs/server-side-execution/verification-coverage.md` OW53 records the ruling) |
-| `all(...t)` | separate **conjunctive** clauses, one per atom — the default confidentiality combinator |
-| `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause (un-reserved by Epic E1) — never silently lowered to the conjunctive form |
+| `all(...t)` | a **conjunction**: each term contributes its own clauses, so each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`); the counterpart of `any(...)` |
+| `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause; each alternative is a single principal-like term, not an `all(...)` or `any(...)` — never silently lowered to the conjunctive form |
 | `intersect(...t)` | set ∩ over integrity atom sets (the trust-floor meet) — integrity only |
 | `whenMatches(f.col, /re/, term)` | include `term` only when the regex TESTS true against the column (gate trust, or a data-dependent conjunct, on extracted metadata). One **fused** helper — a bare `when(matches(…))` pair would collide with the builder's control-flow `when`, whose transformer lowering matches by NAME and mangles any local so named. NB: a gated confidentiality alternative is absent from some rows, so it never has the common-alternative property (CFC spec §8.17.4) |
 | `authoredBy(p)` / `endorsedBy(p)` | integrity (provenance) claims over a `principal(…)` term — minted as self-describing claim atoms, see below |
@@ -439,7 +439,7 @@ observer (clause subsumption restricted to singletons, CFC spec §8.10.3); the
 reader-enumeration reading ("observed by any of these") is an explicit
 `any([...])` ceiling, **implemented** with OR-clauses (Epic A2). A row modeled
 with an `any(...)` rule fits such a reader-enumeration ceiling, so per-user
-views are now genuinely useful; a flat conjunctive label of the same
+views are genuinely useful; a flat conjunctive label of the same
 participants would still require a ceiling listing every one.
 
 `onExceed` governs a ceiling miss: **`"fail"`** (default) refuses the whole
@@ -686,9 +686,9 @@ re-derives.
 1. **Authoring:** unknown column, unknown op, unsafe regex, an integrity/
    confidentiality op in the wrong position, a malformed `any()` alternative
    (a nested `all()`/`any()`), or a rule input declared REAL or BLOB ⟶
-   `table()` throws. A well-formed `any(...)` is
-   accepted as an authored OR-clause (Epic E1). The same validation re-runs on
-   wire-supplied specs before evaluation.
+   `table()` throws. A well-formed `any(...)` is accepted as an authored
+   OR-clause. The same validation re-runs on wire-supplied specs before
+   evaluation.
 2. **Read, unresolvable input:** a rule input missing from the projection by
    origin, or ambiguous (two columns, same origin) ⟶ refuse the query.
 3. **Read, bad data:** evaluator `{error}` (a regex input with no text this
@@ -990,10 +990,10 @@ function of its stored columns, recomputable at any time.
    - **OR-clauses: _implemented_.** The CNF clause kernel + digest-stable
      `anyOf` canonicalization, clause-subsumption ceiling fit, clause-
      concatenation join, and author-written disjunctive confidentiality (Epic
-     A1–A5, #4466–#4481); sqlite `any(...)` un-reserved (Epic E1, #4475);
-     common-alternative aggregate reads (CFC spec §8.17.4) via Epic E2 (#4477).
-     An authored `any(sender ∨ recipients ∨ owner)` now serializes into the rule
-     as one OR-clause instead of erroring at `table()` time.
+     A1–A5, #4466–#4481); sqlite `any(...)` (Epic E1, #4475); common-alternative
+     aggregate reads (CFC spec §8.17.4) via Epic E2 (#4477). An authored
+     `any(sender ∨ recipients ∨ owner)` serializes into the rule as one
+     OR-clause.
    - **3.b — read-time clearance: _implemented_** (Epic E3, #4478). Filtering by
      *who is asking* via a separate `db.query({ readClearance: true })` option —
      distinct from the declared-ceiling `onExceed`; it drops rows the reader

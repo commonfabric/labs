@@ -16,10 +16,17 @@
     // rather than an answer to a caller: a member declaring a `name` owes an
     // `exports` map, and importing this one builds the whole command tree.
     ".": "./mod.ts",
-    // The Topics board's live view draws in `cf view`'s colors and frames.
+    // The Topics board's live view and browser draw in `cf view`'s colors and
+    // frames, render Markdown as it does, and read keys and edit text with
+    // its engines.
     "./view/ansi": "./lib/view/ansi.ts",
     "./view/display": "./lib/view/display.ts",
-    "./view/theme": "./lib/view/theme.ts"
+    "./view/editbuffer": "./lib/view/editbuffer.ts",
+    "./view/keys": "./lib/view/keys.ts",
+    "./view/markdown": "./lib/view/languages/markdown/markdown.ts",
+    "./view/model": "./lib/view/model.ts",
+    "./view/theme": "./lib/view/theme.ts",
+    "./view/width": "./lib/view/width.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

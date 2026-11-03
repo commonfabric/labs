@@ -14,10 +14,7 @@ const secureHost = new URL(Deno.args[0]);
 const plainHost = new URL(Deno.args[1]);
 
 for (
-  const [host, protocol, backend] of [
-    [secureHost, "wss:", NodeWebSocket],
-    [plainHost, "ws:", WebSocket],
-  ] as const
+  const [host, protocol] of [[secureHost, "wss:"], [plainHost, "ws:"]] as const
 ) {
   const address = new URL(host);
   address.protocol = protocol;
@@ -33,7 +30,7 @@ for (
   });
   try {
     await opened;
-    expect(socket, `${protocol} socket backend`).toBeInstanceOf(backend);
+    expect(socket, `${protocol} socket backend`).toBeInstanceOf(NodeWebSocket);
     expect(socket).toHaveProperty("binaryType", "arraybuffer");
   } finally {
     socket.close();

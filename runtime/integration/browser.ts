@@ -4,7 +4,7 @@ import {
   WaitForOptions,
 } from "@astral/astral";
 
-import { removeDirectory } from "@commonfabric/utils/remove-directory";
+import { removeDirectory } from "@commonfabric/test-support/remove-directory";
 
 import { astralBinaryPath } from "./astral-adapter.ts";
 import { BrowserProcess } from "./browser-process.ts";
@@ -23,8 +23,8 @@ export const PROFILE_DIRECTORY_PREFIX = "integration-browser-";
 //
 // Each browser keeps its profile in a temporary directory of its own, which
 // `close()` removes after the browser exits and its output streams end. A
-// browser nothing closes leaves that directory behind, so a caller holds one
-// for as long as it holds the browser.
+// browser nothing closes ends with the process that launched it and leaves that
+// directory behind, so a caller holds one for as long as it holds the browser.
 export class Browser {
   #process: BrowserProcess | null;
   #profileDir: string;

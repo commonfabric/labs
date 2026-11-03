@@ -5,7 +5,7 @@ import {
   createBindingIdentityHelperSource,
   createFunctionHardeningHelperSource,
   FUNCTION_HARDENING_HELPER_NAME,
-} from "@commonfabric/utils/sandbox-contract";
+} from "@commonfabric/pattern-contract/sandbox-contract";
 import { stripJsTrivia } from "../src/sandbox/compiled-js-parser.ts";
 import { COMMONFABRIC_TYPES } from "../../../base/ts-transformers/test/commonfabric-test-types.ts";
 import { transformSource } from "../../../base/ts-transformers/test/utils.ts";

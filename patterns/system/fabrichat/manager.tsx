@@ -29,8 +29,9 @@
  * no inbox. A member someone adds to a room later, from the room, is offered
  * it the same way, through `offerRoom`. A direct room's counterpart who got a
  * notice instead is offered the room the same way once a later start with
- * them names a profile of theirs pointing at an inbox, until they join it, and
- * the notice is withdrawn.
+ * them names a profile of theirs pointing at an inbox, until they join it. The
+ * notice stays, and is no longer listed once the offer puts them on the room's
+ * roster.
  *
  * The people the user's rooms list, each by the principal their profile
  * attests, are what the manager's rendering offers to name a new group's
@@ -102,6 +103,7 @@ import {
   isPrincipalDID,
   type ManagerProfileCell,
   nsecOf,
+  type ProfileCell,
 } from "./schemas.tsx";
 
 /**
@@ -322,8 +324,14 @@ export interface ManagerActState {
   /** The act this binding performs. */
   act: ManagerAct;
 
-  /** The user's profile, which holds no value until it resolves. */
-  myProfile: ManagerProfileCell | undefined;
+  /**
+   * The profile of the session acting, which holds no value until it
+   * resolves: a start needs one, and the user joins a room they create or
+   * accept as it. An act reads no more of it than a room does: the profile's
+   * inbox pointer can carry its inbox's label, which a start's writes into a
+   * new room's space would then be held to.
+   */
+  myProfile: ProfileCell | undefined;
 
   /** The user's shared-space catalog, which supplies room discovery. */
   catalog: CatalogCell;
@@ -562,6 +570,19 @@ export interface OfferRoomEvent {
 
   /** The members to offer it to. */
   members: OfferedMember[];
+
+  /**
+   * Whether the request `id` names recorded `offered` as its delivery, which
+   * a member offered nothing turns to `noticed`. Absent for a request that
+   * records no delivery.
+   */
+  recordsDelivery?: boolean;
+
+  /**
+   * Whether each member has a notice of the room waiting already, which a
+   * member offered nothing keeps in place of a new one.
+   */
+  noticeWaiting?: boolean;
 }
 
 /** What `offerRooms` is bound to. */
@@ -571,6 +592,9 @@ interface OfferRoomsState {
 
   /** Adds a profile to a room's participants. */
   joinRooms: Stream<JoinRoomsEvent>;
+
+  /** Each request's outcome. */
+  requests: RequestsCell;
 }
 
 /** The share inbox `profile` points at; absent when it points at none. */
@@ -633,26 +657,33 @@ const offerEnvelope = (
 };
 
 /**
- * Helper for `offerRooms` and `offerRoom`, which offers `room` to `member`,
- * sending `offer` to each distinct share inbox their profiles point at, and
- * adds to the room's participants the first profile it offered the room
- * through, so that the member is listed once however many inboxes they have.
- * A member whose profiles point at no inbox is offered nothing, and a notice
- * for them, keyed by the offer's `id`, is queued instead. Returns which of the
- * two it did.
+ * Helper for `offerRooms`, which offers `room` to `member`, sending `offer` to
+ * each distinct share inbox their profiles point at that isn't among `sent`,
+ * the inboxes `offer` has gone to already, which it adds to. It adds to the
+ * room's participants the first profile it offered the room through, so that
+ * the member is listed once however many inboxes they have. A member whose
+ * profiles point at no inbox is offered nothing, and a notice for them, keyed
+ * by the offer's `id`, is queued instead, unless `noticeWaiting` says one
+ * waits already. Returns which of the two it did.
  */
 const offerToMember = (
   offer: RoomOffer,
   room: Cell<ChatRoomLink>,
   { recipient, profiles }: OfferedMember,
   { outgoingNotices, joinRooms }: OfferRoomsState,
+  sent: Cell<ShareInboxPiece>[],
+  noticeWaiting: boolean,
 ): ChatOfferDelivery => {
   const inboxes = distinctInboxes(profiles ?? []);
   if (inboxes.length === 0) {
-    outgoingNotices.push(noticeFor(recipient, offer.id, room));
+    if (!noticeWaiting) {
+      outgoingNotices.push(noticeFor(recipient, offer.id, room));
+    }
     return "noticed";
   }
   for (const { pointer } of inboxes) {
+    if (sent.some((known) => equals(known, pointer))) continue;
+    sent.push(pointer);
     inboxOf(pointer.resolveAsCell()).key("receive").send(offer);
   }
   joinRooms.send({ room, profile: inboxes[0].profile });
@@ -661,21 +692,44 @@ const offerToMember = (
 
 /**
  * Offers a room to each of the event's `members`, as `offerToMember()` does,
- * naming the principal sending it as its sender.
+ * naming the principal sending it as its sender. An inbox that profiles of
+ * more than one member point at is sent the offer once, and each of those
+ * members is offered the room through it. For a request that
+ * `recordsDelivery`, a member offered nothing, since no profile of theirs
+ * points at an inbox, turns the request's delivery to `noticed`.
  *
- * It runs as an event of its own, queued by the one that creates the room, so
- * that it reads the room's space once the room's creation has committed, and
- * the members' profiles are read apart from that creation. While the space is
- * not known, nothing is sent.
+ * It runs as an event of its own, queued by the act that creates or offers
+ * the room, so that it reads the room's space once the room's creation has
+ * committed, and the members' profiles are read apart from the act's own
+ * writes. A profile's inbox pointer can carry a label, such as its owner's
+ * `PersonalSpace`, that neither the room's space nor this user's records
+ * admit, and a transaction's writes are held to the labels of everything it
+ * reads. While the space is not known, nothing is sent.
  */
 const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
   (event, state) => {
+    // TODO(danfuzz): Under server execution, a run that reads a pointer
+    // carrying its owner's label is refused whole: its sends and the mark
+    // that it handled this event live in this user's space, which doesn't
+    // admit the label, so nothing is offered. Expect it to commit once a
+    // served handler reading another person's labeled data can.
     const space = spaceOf(event?.room);
     const from = currentPrincipal();
     if (!isWellFormedDID(space) || from === undefined) return;
     const offer = offerEnvelope(event.id, space, event.title ?? "", from);
+    const sent: Cell<ShareInboxPiece>[] = [];
     for (const member of event.members ?? []) {
-      offerToMember(offer, event.room, member, state);
+      const delivery = offerToMember(
+        offer,
+        event.room,
+        member,
+        state,
+        sent,
+        event.noticeWaiting === true,
+      );
+      if (event.recordsDelivery === true && delivery === "noticed") {
+        state.requests.key(event.id).set({ status: "done", delivery });
+      }
     }
   },
 );
@@ -802,13 +856,16 @@ interface RoomOptions {
 }
 
 /**
- * Creates a room in a space of its own, as the space's root, and its notices,
- * and records its entry, all in one transaction: the space's grants and its
- * declared kind are part of creating it, so nothing has to commit apart. A
- * notice for each other member not in `offerTo` is queued for a client to
- * deliver, and registering the room's space in the user's catalog, adding this
- * user to the room's participants, and offering the room to each member in
- * `offerTo`, are queued to follow.
+ * Creates a room in a space of its own, as the space's root, and records its
+ * entry, all in one transaction: the space's grants and its declared kind are
+ * part of creating it, so nothing has to commit apart. Registering the room's
+ * space in the user's catalog, adding this user to the room's participants,
+ * and telling each other member of the room, by an offer to each member in
+ * `offerTo` and a notice for a client to deliver to every other, are queued to
+ * follow, so that the transaction writing the room reads neither the user's
+ * catalog nor the manager's own records: either can carry their owner's label,
+ * which the room's space doesn't admit, and a transaction's writes are held to
+ * the labels of everything it reads.
  *
  * The space's name is pending on the first run, which the runtime discards and
  * runs again with the name resolved. Nothing is sent until the name resolves,
@@ -844,14 +901,16 @@ const createRoom = (
       },
     }),
   );
-  // A member offered the room has a notice only if the offer can't be sent,
-  // which `offerRooms` decides, since that reads their profile.
+  // A member named by principal alone has no profile to offer the room
+  // through, so `offerRooms` queues a notice for them, as it does for a member
+  // whose profiles point at no inbox.
   const offered = offerTo.map(({ recipient }) => recipient);
-  members.filter((member) => !offered.includes(member)).forEach(
-    (recipient) => {
-      state.outgoingNotices.push(noticeFor(recipient, requestId, room));
-    },
-  );
+  const told: OfferedMember[] = [
+    ...offerTo,
+    ...members.filter((member) => !offered.includes(member)).map((
+      recipient,
+    ) => ({ recipient, profiles: [] })),
+  ];
   const space = spaceOf(room);
   if (isWellFormedDID(space)) {
     state.listRooms.send({
@@ -862,12 +921,12 @@ const createRoom = (
     if (state.myProfile !== undefined) {
       state.joinRooms.send({ room, profile: state.myProfile });
     }
-    if (offerTo.length > 0) {
+    if (told.length > 0) {
       state.offerRooms.send({
         room,
         id: requestId,
         title: title ?? "",
-        members: [...offerTo],
+        members: told,
       });
     }
   }
@@ -881,14 +940,16 @@ const createRoom = (
 
 /**
  * Helper for `openDirect`, which offers `room`, a direct room it found, to
- * `counterpart` through the share inbox `profile` points at, as `offerRooms`
- * offers a new one, when the room was offered them nothing: a notice for them
- * of the room is still waiting. The offer replaces each such notice, so they
- * are withdrawn. A counterpart the room's roster lists has joined the room
- * already, and is offered nothing, and so is one whose profile points at no
- * inbox, whose notice stays. So does the notice when `requestId`, which keys
- * the offer, is longer than a share inbox keeps an offer's `id`, since the
- * inbox would cut it short and could take it for another's.
+ * `counterpart` through the share inbox `profile` points at, by `offerRooms`
+ * as a new one is offered, when the room was offered them nothing: a notice
+ * for them of the room is still waiting. The notice stays, so that it still
+ * tells them of the room should the offer not be sent, as when the profile
+ * points at no inbox; once the offer adds them to the room's roster,
+ * `outgoingNotices` leaves it out. A counterpart the room's roster lists has
+ * joined the room already, and is offered nothing, and so is one named by no
+ * profile. Nothing is offered either when `requestId`, which keys the offer,
+ * is longer than a share inbox keeps an offer's `id`, since the inbox would
+ * cut it short and could take it for another's.
  */
 const reofferDirect = (
   state: ManagerActState,
@@ -897,27 +958,22 @@ const reofferDirect = (
   counterpart: string,
   profile: Cell<ChatManagerProfile> | undefined,
 ): void => {
-  const notices = state.outgoingNotices.get() ?? [];
-  const waiting = notices.filter((notice) =>
+  const waiting = (state.outgoingNotices.get() ?? []).some((notice) =>
     notice.recipient === counterpart && equals(notice.room, room)
   );
-  if (waiting.length === 0 || requestId.length > OFFER_ID_MAX_LENGTH) return;
-  if (profile === undefined || inboxPointerOf(profile) === undefined) return;
+  if (!waiting || requestId.length > OFFER_ID_MAX_LENGTH) return;
+  if (profile === undefined) return;
   const joined = (room.key("roster").get() ?? []).some((member) =>
     profileOwnerOf(member) === counterpart
   );
-  const space = spaceOf(room);
-  const from = currentPrincipal();
-  if (joined || !isWellFormedDID(space) || from === undefined) return;
-  state.outgoingNotices.set(
-    notices.filter((notice) => !waiting.includes(notice)),
-  );
-  offerToMember(
-    offerEnvelope(requestId, space, "", from),
+  if (joined || !isWellFormedDID(spaceOf(room))) return;
+  state.offerRooms.send({
     room,
-    { recipient: counterpart, profiles: [profile] },
-    state,
-  );
+    id: requestId,
+    title: "",
+    members: [{ recipient: counterpart, profiles: [profile] }],
+    noticeWaiting: true,
+  });
 };
 
 /**
@@ -1124,35 +1180,14 @@ const performManagerAct = (
       });
       return;
     }
-    // An offer goes to an inbox, so profiles of two people pointing at one
-    // inbox would hand each the other's offer. No setup makes them, so the
-    // request is refused whole, before anything is created.
-    const inboxes = named.map(({ recipient, profile }) => ({
-      recipient,
-      pointer: inboxPointerOf(profile),
-    }));
-    if (
-      inboxes.some((one, index) =>
-        one.pointer !== undefined &&
-        inboxes.slice(index + 1).some((other) =>
-          other.recipient !== one.recipient &&
-          other.pointer !== undefined && equals(other.pointer, one.pointer)
-        )
-      )
-    ) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Two members' profiles point at the same inbox.",
-        code: "shared-inbox",
-      });
-      return;
-    }
+    // This user is offered nothing, so their own profiles are left out.
+    const others = named.filter(({ recipient }) => recipient !== self);
     // Each other member named by profile is offered the room through every
-    // profile naming them, each inbox once, and added to its participants
-    // once.
-    const offerTo = named.reduce<OfferedMember[]>(
+    // profile naming them, by `offerRooms`, which reads where the profiles
+    // point apart from this transaction, and added to its participants once.
+    const offerTo = others.reduce<OfferedMember[]>(
       (found, { recipient, profile }) => {
-        if (!isPrincipalDID(recipient) || recipient === self) return found;
+        if (!isPrincipalDID(recipient)) return found;
         const known = found.find((each) => each.recipient === recipient);
         return known === undefined
           ? [...found, { recipient, profiles: [profile] }]
@@ -1329,18 +1364,23 @@ const performManagerAct = (
     const profiles = named === undefined
       ? [...(state.people?.[member] ?? [])]
       : [named];
-    const delivery = offerToMember(
-      offerEnvelope(
-        requestId,
-        space,
-        room.key("about").get()?.title ?? "",
-        from,
-      ),
+    // A member with no profile to offer through gets a notice at once. Any
+    // other is offered the room by an event of its own, which reads where the
+    // profiles point apart from this request's outcome, and which turns the
+    // outcome to `noticed` when none points at an inbox.
+    if (profiles.length === 0) {
+      outgoingNotices.push(noticeFor(member, requestId, room));
+      recordOutcome(state, requestId, { status: "done", delivery: "noticed" });
+      return;
+    }
+    state.offerRooms.send({
       room,
-      { recipient: member, profiles },
-      state,
-    );
-    recordOutcome(state, requestId, { status: "done", delivery });
+      id: requestId,
+      title: room.key("about").get()?.title ?? "",
+      members: [{ recipient: member, profiles }],
+      recordsDelivery: true,
+    });
+    recordOutcome(state, requestId, { status: "done", delivery: "offered" });
     return;
   }
 
@@ -1809,11 +1849,41 @@ interface FoundRoomInput {
   kind: string;
 }
 
-/** A catalog entry's room, once found. */
+/** A room, once found. */
 interface FoundRoomOutput {
   /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
 }
+
+/** What knowing a room needs: a link that may reach one. */
+interface KnownRoomInput {
+  /** The link, as a catalog entry's root or a membership holds it. */
+  room?: Cell<ChatRoomLink>;
+}
+
+/**
+ * The room `room` reaches, once its records say it is one. Each room a list
+ * reads is known on its own, so one whose records can't be read holds back
+ * nothing else.
+ */
+const KnownRoom = pattern<KnownRoomInput, FoundRoomOutput>(({ room }) => ({
+  // The room is the document the link finally reaches. A declaration may
+  // reach it through a document holding only a link, as a Loom root's
+  // ensured room is reached through the handler's output for it; that
+  // document stores no labels, so a link to it gives a labeled list nothing
+  // to carry, and the room's own labels are what a link to the room carries.
+  //
+  // It is known once its records say it is a room. A space this replica
+  // can't serve, as one on another host is, leaves those records
+  // unresolved, which holds back this room alone; the list that reads every
+  // room's records never reads one that hasn't resolved.
+  room: computed(() => {
+    const found = room?.resolveAsCell();
+    return found !== undefined && roomKindOf(found) !== undefined
+      ? found
+      : undefined;
+  }),
+}));
 
 /** Locates a standalone root or a container's explicit chat declaration. */
 const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
@@ -1823,27 +1893,10 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       scope: computed(() => isWellFormedDID(space) ? [space] : []),
     });
     const standalone = computed(() => kind === CHAT_ROOM_OFFER_KIND);
-    // The room is the document its root or declaration finally reaches. A
-    // declaration may reach it through a document holding only a link, as a
-    // Loom root's ensured room is reached through the handler's output for
-    // it; that document stores no labels, so a link to it gives a labeled
-    // list nothing to carry, and the room's own labels are what a link to
-    // the room carries.
-    //
-    // It is found once its records say it is a room. A space this replica
-    // can't serve, as one on another host is, leaves those records
-    // unresolved, which holds back this finding alone; the list that reads
-    // every entry's room never reads one that hasn't resolved.
-    return {
-      room: computed(() => {
-        const found =
-          (standalone ? root.result : root.result?.key("chatRoom").get())
-            ?.resolveAsCell();
-        return found !== undefined && roomKindOf(found) !== undefined
-          ? found
-          : undefined;
-      }),
-    };
+    const declared = computed(() =>
+      standalone ? root.result : root.result?.key("chatRoom").get()
+    );
+    return KnownRoom({ room: declared });
   },
 );
 
@@ -1869,8 +1922,19 @@ const counterpartOf = (
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
-  /** The user's profile, which holds no value until it resolves. */
+  /**
+   * The user's profile, which holds no value until it resolves. The rooms and
+   * people lists, which are the user's, are derived from it.
+   */
   myProfile: ManagerProfileCell | undefined;
+
+  /**
+   * The profile this session finds, which holds no value until it resolves,
+   * and none where it is absent. What the manager says about whether its
+   * reader can start a chat, and the address it shows them, are derived from
+   * it, and the manager's acts are taken as it.
+   */
+  sessionProfile?: ManagerProfileCell;
 }
 
 /**
@@ -1899,6 +1963,7 @@ export const FabriChatManagerCore = pattern<
   (
     {
       myProfile,
+      sessionProfile,
       sharedSpaceCatalog,
       direct,
       requests,
@@ -1942,12 +2007,21 @@ export const FabriChatManagerCore = pattern<
     const foundForUser = savedRooms.map((entry) =>
       FoundRoom.asScope("user")({ space: entry.space, kind: entry.kind })
     );
+    // The rooms this user keeps by an explicit choice, each known on its own
+    // and per user, as each catalog entry's room is found.
+    const savedMemberships = computed((): RoomMembership[] =>
+      effectiveMemberships(roomMembership.get() ?? [], catalogEntries)
+        .filter((membership) => membership.state === "saved")
+    );
+    const keptForUser = savedMemberships.map((membership) =>
+      KnownRoom.asScope("user")({ room: membership.room })
+    );
     // Each saved room once it resolves and reads as a room, newest first. The
     // room's own records are read here, beside the entry they belong to, so
-    // they are read in the run that lists them; `FoundRoom` has already read
-    // them for each room it found, so none of these reads waits on a space
-    // this replica can't serve. Its binding's name is its cause, as
-    // `foundForUser`'s is.
+    // they are read in the run that lists them; `FoundRoom` or `KnownRoom`
+    // has already read them for each room it gave, so none of these reads
+    // waits on a space this replica can't serve. Its binding's name is its
+    // cause, as `foundForUser`'s is.
     const roomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
       const self = profileOwnerOf(myProfile);
       const stored = direct.get() ?? {};
@@ -1955,6 +2029,10 @@ export const FabriChatManagerCore = pattern<
         roomMembership.get() ?? [],
         catalogEntries,
       );
+      const kept = savedMemberships.filter((_membership, index) => {
+        const room = keptForUser[index]?.room;
+        return room !== undefined && roomKindOf(room) !== undefined;
+      });
       const discovered = savedRooms.flatMap(
         (entry, index): ChatIndexEntry[] => {
           const room = foundForUser[index]?.room;
@@ -1981,7 +2059,7 @@ export const FabriChatManagerCore = pattern<
         },
       );
       const listed = [
-        ...memberships.filter((entry) => entry.state === "saved"),
+        ...kept,
         ...discovered.filter((entry) =>
           !memberships.some((known) => equals(known.room, entry.room))
         ),
@@ -2028,13 +2106,17 @@ export const FabriChatManagerCore = pattern<
     );
     const joining = joinRooms({});
     const records = {
-      myProfile,
+      myProfile: sessionProfile,
       catalog: sharedSpaceCatalog,
       roomMembership,
       direct,
       requests,
       outgoingNotices,
-      offerRooms: offerRooms({ outgoingNotices, joinRooms: joining }),
+      offerRooms: offerRooms({
+        outgoingNotices,
+        joinRooms: joining,
+        requests,
+      }),
       joinRooms: joining,
       listRooms: listRooms({ catalog: sharedSpaceCatalog }),
       draft,
@@ -2092,12 +2174,27 @@ export const FabriChatManagerCore = pattern<
         )
       )
     );
-    const cannotStart = computed(() => myProfile?.get() === undefined);
-    // The principal this user's profile attests, which someone starting a
+    // Whether this reader can start a chat, and their address, are each
+    // session's own, as the profile they are derived from is. A session
+    // whose profile hasn't resolved, or which finds none, would otherwise
+    // tell another session of the same user, whose profile has, that it
+    // can't start one. Each binding's name is its cause, the identity of the
+    // document that stores it, so renaming one moves its data. The first two
+    // default to what a reader with no profile reads until this session has
+    // derived them.
+    const cannotStartForSession = computed(
+      (): PerSession<boolean | Default<true>> =>
+        sessionProfile?.get() === undefined,
+    );
+    // The principal this session's profile attests, which someone starting a
     // chat with them needs; empty when the profile attests none.
-    const myAddress = computed(() => profileOwnerOf(myProfile) ?? "");
-    const addressDisplay = computed(
-      (): ChatDisplay => (myAddress === "" ? "none" : "block"),
+    const myAddressForSession = computed(
+      (): PerSession<string | Default<"">> =>
+        profileOwnerOf(sessionProfile) ?? "",
+    );
+    const addressDisplayForSession = computed(
+      (): PerSession<ChatDisplay> =>
+        myAddressForSession === "" ? "none" : "block",
     );
     const createDraftedGroup = commitStart({
       act: "createGroup",
@@ -2155,13 +2252,13 @@ export const FabriChatManagerCore = pattern<
           <div
             id="fabrichat-my-address"
             hidden
-            style={{ display: addressDisplay }}
+            style={{ display: addressDisplayForSession }}
           >
             <cf-hstack gap="2" align="center">
               <cf-text variant="caption">
-                Your chat address: {myAddress}
+                Your chat address: {myAddressForSession}
               </cf-text>
-              <cf-copy-button text={myAddress} size="sm" icon-only />
+              <cf-copy-button text={myAddressForSession} size="sm" icon-only />
             </cf-hstack>
           </div>
           <div
@@ -2174,7 +2271,7 @@ export const FabriChatManagerCore = pattern<
                 inputId="fabrichat-start-direct"
                 placeholder="Their chat address (did:key:…)"
                 buttonText="Chat"
-                disabled={cannotStart}
+                disabled={cannotStartForSession}
                 onClick={streams.openDirect}
               />
               <cf-input
@@ -2217,7 +2314,7 @@ export const FabriChatManagerCore = pattern<
               </cf-checkbox>
               <cf-button
                 data-ui-action={CHAT_START_ACTION}
-                disabled={cannotStart}
+                disabled={cannotStartForSession}
                 onClick={createDraftedGroup}
               >
                 Create group
@@ -2270,10 +2367,19 @@ const FabriChatManager = pattern<
   FabriChatManagerInput,
   FabriChatManagerOutput
 >((input) => {
+  // The rooms and people lists are the user's, and are derived from the
+  // user's profile. What the manager says about whether its reader can act
+  // is derived from the profile each session finds for itself: a session
+  // whose wish finds none, or fails, writes that into its own instance, never
+  // over the one a session that found the profile reads.
   const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
+  const sessionProfileWish = wish<PerSession<ChatManagerProfile>>({
+    query: "#profile",
+  });
   const core = FabriChatManagerCore(
     {
       myProfile: profileWish.result,
+      sessionProfile: sessionProfileWish.result,
       sharedSpaceCatalog: input.sharedSpaceCatalog,
       direct: input.direct,
       requests: input.requests,

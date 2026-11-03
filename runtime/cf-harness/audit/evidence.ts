@@ -14,7 +14,8 @@
  */
 
 import { basename, join, resolve } from "@std/path";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { HarnessCellLabels } from "../src/contracts/cell-labels.ts";
 import type { HarnessCfcPolicySnapshot } from "../src/contracts/cfc-policy-snapshot.ts";
@@ -120,9 +121,7 @@ const readJsonFile = async (path: string): Promise<JsonRead> => {
     }
     return {
       status: "unparseable",
-      detail: `could not be read: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      detail: `could not be read: ${describeFailure(error)}`,
     };
   }
   try {
@@ -130,9 +129,7 @@ const readJsonFile = async (path: string): Promise<JsonRead> => {
   } catch (error) {
     return {
       status: "unparseable",
-      detail: `is not valid JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      detail: `is not valid JSON: ${describeFailure(error)}`,
     };
   }
 };
@@ -180,9 +177,7 @@ const loadToolOutputs = async (runDir: string): Promise<ToolOutputsState> => {
     return {
       status: "unparseable",
       path,
-      detail: `could not be listed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      detail: `could not be listed: ${describeFailure(error)}`,
     };
   }
   const entries: ToolOutputArtifact[] = [];

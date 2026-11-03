@@ -40,7 +40,8 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { isLink } from "@commonfabric/runner";
-import { isPlainObject } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import {
   normalizePlan,
@@ -462,9 +463,7 @@ export function evaluateFixer(
   } catch (error) {
     return {
       kind: "refused",
-      problem: `The fixer threw: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      problem: `The fixer threw: ${describeFailure(error)}`,
     };
   }
   if (!isPlainRecord(answer)) {
@@ -503,9 +502,7 @@ export function evaluateFixer(
     } catch (error) {
       return {
         kind: "refused",
-        problem: `The fixer threw: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        problem: `The fixer threw: ${describeFailure(error)}`,
       };
     }
     if (!storedEqual(first, second)) {
@@ -549,7 +546,7 @@ export function evaluateFixer(
     return {
       kind: "refused",
       problem: `Classifying the fixer's answer failed: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -816,7 +813,7 @@ export async function repairPieces(
       } catch (error) {
         preflight.set(row.piece, {
           kind: "read-failed",
-          problem: error instanceof Error ? error.message : String(error),
+          problem: describeFailure(error),
         });
         startBlocked = true;
       }
@@ -1094,7 +1091,7 @@ export async function repairPieces(
       // refuses — is this row's outcome, not the report's: the rows that
       // landed stay reported. The state check runs after the failure, so
       // the problem says where the piece was left rather than guessing.
-      const problem = error instanceof Error ? error.message : String(error);
+      const problem = describeFailure(error);
       let state = "; the piece could not be re-read, so its state is unknown";
       try {
         const controller = await pieces.get(row.piece, false);

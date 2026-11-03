@@ -53,7 +53,10 @@ so test files of one name share one, and a test file that moves keeps the
 one it has. A line mapping a whole scope, for a package rename, goes in
 `whole-scope.jsonl`. A line mapping a moved directory or file to its new path
 goes in `moved-paths.jsonl`. It renames every identity whose name holds that
-path, such as a pattern test's file or an item that `deno task cfcheck` reports:
+path, such as a pattern test's file or an item that `deno task cfcheck` reports.
+It also moves the file a record names, so a unit test whose name holds no path
+is still found in the file it moved to. Date a path line later than the day the
+move lands, so that it applies to every record made before the move:
 
 ```json
 {"date": "2026-12-01", "from": {"p": "packages/runner"}, "to": {"p": "runtime/runner"}}
@@ -394,9 +397,9 @@ everything stored was authored under the write-access group's trust —
 for a decision consumer is code provenance, not author trust:
 pull-request runs execute unmerged code, and failure-rate or duration
 baselines come from runs of the head of `main` — `ci.event` `"push"`,
-`"schedule"` or `"workflow_dispatch"` — whose code the tree itself
-carries. `isMainRun` in `@commonfabric/test-support/records` is that
-rule. Both fields are stamped from the trusted event payload. A fork
+`"schedule"`, `"workflow_dispatch"` or `"workflow_run"` — whose code the
+tree itself carries. `isMainRun` in `@commonfabric/test-support/records` is
+that rule. Both fields are stamped from the trusted event payload. A fork
 run and a same-repository run of a pull request are therefore read
 alike, and what `ci.fork` keeps a run out of is a baseline rather than
 the data. It is set for a payload that did not name both repositories as

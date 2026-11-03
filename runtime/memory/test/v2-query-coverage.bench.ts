@@ -1,6 +1,6 @@
 import { toFileUrl } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 import type { URI } from "../interface.ts";
 import type { GraphQuery } from "../v2.ts";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";

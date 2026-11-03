@@ -10,7 +10,7 @@ import type {
   FabricKeyPair,
 } from "@commonfabric/data-model/fabric-primitives";
 import type { DID } from "@commonfabric/identity";
-import { type Program } from "@commonfabric/js-compiler/interface";
+import type { Program } from "@commonfabric/js-compiler/interface";
 import type { JoinVisitDecision } from "@commonfabric/piece/ops";
 import type {
   ApplyOpResolution,
@@ -2469,7 +2469,7 @@ export type UploadBlobResponse = {
 /**
  * How many messages were recorded at each level, with `total` alongside so
  * a reader need not sum the four. Mirrors the shape
- * `@commonfabric/utils/logger` uses, this being that data on the wire.
+ * `@commonfabric/logger` uses, this being that data on the wire.
  */
 export type LogCounts = {
   /**
@@ -2543,7 +2543,7 @@ export type LoggerMetadata = Record<string, LoggerInfo>;
 /**
  * One point of a cumulative distribution: a latency, and the fraction of
  * samples at or below it. Mirrors the shape
- * `@commonfabric/utils/logger` uses.
+ * `@commonfabric/logger` uses.
  */
 export type CDFPoint = {
   /**
@@ -2559,7 +2559,7 @@ export type CDFPoint = {
 
 /**
  * One of the slowest measurements of a timed operation. Mirrors the shape
- * `@commonfabric/utils/logger` uses.
+ * `@commonfabric/logger` uses.
  */
 export type SlowTiming = {
   /**
@@ -2968,6 +2968,7 @@ export type PiecePatternRefView = {
 export type PieceReconciliationOutcome =
   | "followed"
   | "unreachable"
+  | "unapplied"
   | "refused";
 
 /**
@@ -4124,6 +4125,12 @@ export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
 export type SpaceAccessLostNotification = {
   type: NotificationType.SpaceAccessLost;
   space: DID;
+
+  /**
+   * Present when the space is deleted: the memory server refuses it to every
+   * principal for good, so no retry can admit anyone.
+   */
+  deleted?: true;
 };
 
 /**

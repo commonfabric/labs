@@ -18,7 +18,8 @@ import type {
 import type { JSONSchema } from "@commonfabric/api";
 import { TRUSTED_PATTERN_PROPERTIES } from "../contracts/trusted-pattern-schema.ts";
 import { schemaToTypeString } from "@commonfabric/runner";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { TrustedPatternRecord } from "../contracts/trusted-pattern.ts";
 import type { HarnessToolDefinition } from "./types.ts";
@@ -190,9 +191,6 @@ export const searchPatternsToolDescriptor: HarnessToolDescriptor = {
 export const patternIndexImportHint = (patternId: string): string =>
   `import X from "cf:pattern:${patternId}"`;
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Renders a declared schema as a TypeScript type, or `undefined` when the
  * pattern declares none. A schema that cannot be rendered is reported as
@@ -294,7 +292,9 @@ export const searchPatternsTool: HarnessToolDefinition<
     try {
       client = await context.getPatternIndexClient();
     } catch (error) {
-      return errorOutput(`pattern index unavailable: ${errorMessage(error)}`);
+      return errorOutput(
+        `pattern index unavailable: ${describeFailure(error)}`,
+      );
     }
     let response;
     try {
@@ -304,7 +304,7 @@ export const searchPatternsTool: HarnessToolDefinition<
         limit: SEARCH_PATTERNS_MAX_RESULTS,
       });
     } catch (error) {
-      return errorOutput(errorMessage(error));
+      return errorOutput(describeFailure(error));
     }
     const hits = response.results.slice(0, SEARCH_PATTERNS_MAX_RESULTS);
     // The declared shapes ride on the pattern record rather than on a search

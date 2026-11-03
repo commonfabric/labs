@@ -219,8 +219,10 @@ const stateOf = (
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const catalog = emptyCatalog();
+  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Alice" }),
+    myProfile: aliceProfile,
+    sessionProfile: aliceProfile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -232,8 +234,10 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     )
   );
   const againRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const againProfile = Writable.of<TestProfile>({ name: "Alice, again" });
   const again = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Alice, again" }),
+    myProfile: againProfile,
+    sessionProfile: againProfile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: againRequests,
@@ -361,6 +365,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: bobProfile,
+    sessionProfile: bobProfile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -386,8 +391,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profilelessRequests = Writable.of<Record<string, ChatRequestOutcome>>(
     {},
   );
+  const unresolvedProfile = Writable.of<TestProfile>();
   const profileless = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>(),
+    myProfile: unresolvedProfile,
+    sessionProfile: unresolvedProfile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: profilelessDirect,
     requests: profilelessRequests,
@@ -412,8 +419,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const offeredCatalog = emptyCatalog();
   const offeredDirect = Writable.of<Record<string, ChatIndexEntry>>({});
   const offeredRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const offeredProfile = Writable.of<TestProfile>({ name: "Bob, offered" });
   const offered = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Bob, offered" }),
+    myProfile: offeredProfile,
+    sessionProfile: offeredProfile,
     sharedSpaceCatalog: offeredCatalog,
     direct: offeredDirect,
     requests: offeredRequests,

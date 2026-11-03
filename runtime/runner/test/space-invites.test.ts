@@ -207,4 +207,155 @@ describe("space-invites", () => {
     });
     await expect(client.list()).rejects.toBe(failure);
   });
+  describe("on a memory session", () => {
+    /** An error shaped as the memory client raises an invitation refusal. */
+    const refusal = (code: string) =>
+      Object.assign(new Error(`refused: ${code}`), {
+        name: "SpaceInviteRefusal",
+        code,
+      });
+
+    /** A client whose session answers with `answer` and whose HTTP records. */
+    const clientWith = async (
+      answer: () => Promise<unknown>,
+    ) => {
+      const signer = await Identity.generate();
+      const sent: unknown[] = [];
+      const posted: string[] = [];
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(new URL(String(input)).pathname.split("/").at(-1)!);
+          return Promise.resolve(Response.json([]));
+        },
+        session: (invite) => {
+          sent.push(invite);
+          return answer() as never;
+        },
+      });
+      return { client, sent, posted };
+    };
+
+    it("sends administration on the session and makes no HTTP request for it", async () => {
+      const { client, sent, posted } = await clientWith(() =>
+        Promise.resolve({ revoked: true })
+      );
+
+      expect(await client.revoke("a".repeat(22))).toEqual({ revoked: true });
+      expect(sent).toEqual([{
+        operation: "revoke",
+        body: { inviteId: "a".repeat(22) },
+      }]);
+      expect(posted).toEqual([]);
+    });
+
+    it("posts over HTTP when the session's server does not administer invitations", async () => {
+      const { client, posted } = await clientWith(() =>
+        Promise.reject(refusal("invite-service-unsupported"))
+      );
+
+      expect(await client.list()).toEqual([]);
+      expect(posted).toEqual(["list"]);
+    });
+
+    it("throws the service's refusal with its code", async () => {
+      const { client, posted } = await clientWith(() =>
+        Promise.reject(refusal("not-owner"))
+      );
+
+      await expect(client.list()).rejects.toEqual(
+        new SpaceInviteError("not-owner"),
+      );
+      expect(posted).toEqual([]);
+    });
+
+    it("redeems through the redeemer and makes no HTTP request for it", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const receipt = {
+        outcome: "redeemed" as const,
+        redemption: { inviteId: "a".repeat(22), did: signer.did() },
+        currentAccess: "READ" as const,
+      };
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(String(input));
+          return Promise.resolve(Response.json({}));
+        },
+        redeemer: () => Promise.resolve(receipt),
+      });
+
+      expect(
+        await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
+      ).toEqual(receipt);
+      expect(posted).toEqual([]);
+    });
+
+    it("redeems over HTTP when the redeemer's server does not redeem on a session, and throws another refusal's code", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const redeemWith = (code: string) =>
+        new SpaceInviteClient({
+          host: "https://example.com",
+          space: signer.did(),
+          signer,
+          fetch: (input) => {
+            posted.push(new URL(String(input)).pathname.split("/").at(-1)!);
+            return Promise.resolve(Response.json({ outcome: "redeemed" }));
+          },
+          redeemer: () => Promise.reject(refusal(code)),
+        }).redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) });
+
+      await redeemWith("invite-service-unsupported");
+      await expect(redeemWith("invite-unavailable")).rejects.toEqual(
+        new SpaceInviteError("invite-unavailable"),
+      );
+      expect(posted).toEqual(["redeem"]);
+    });
+
+    it("redeems over HTTP when the open that redeems is refused its grant", async () => {
+      const signer = await Identity.generate();
+      const posted: string[] = [];
+      const receipt = {
+        outcome: "already-redeemed",
+        redemption: { inviteId: "a".repeat(22), did: signer.did() },
+        currentAccess: null,
+      };
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: (input) => {
+          posted.push(new URL(String(input)).pathname.split("/").at(-1)!);
+          return Promise.resolve(Response.json(receipt));
+        },
+        redeemer: () =>
+          Promise.reject(
+            Object.assign(new Error("not admitted"), {
+              name: "AuthorizationError",
+            }),
+          ),
+      });
+
+      expect(
+        await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) }),
+      ).toEqual(receipt);
+      expect(posted).toEqual(["redeem"]);
+    });
+
+    it("redeems over HTTP whatever session it was given", async () => {
+      const { client, sent, posted } = await clientWith(() =>
+        Promise.resolve({})
+      );
+
+      await client.redeem({ inviteId: "a".repeat(22), code: "b".repeat(43) });
+      expect(sent).toEqual([]);
+      expect(posted).toEqual(["redeem"]);
+    });
+  });
 });

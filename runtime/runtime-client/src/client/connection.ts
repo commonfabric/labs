@@ -1,7 +1,7 @@
 import { debugStr } from "@commonfabric/data-model";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
-import { getLogger } from "@commonfabric/utils/logger";
-import { unrefTimer } from "@commonfabric/utils/sleep";
+import { defer, type Deferred } from "@commonfabric/async/defer";
+import { getLogger } from "@commonfabric/logger";
+import { unrefTimer } from "@commonfabric/async/sleep";
 import {
   CellRef,
   CellUpdateNotification,
@@ -49,7 +49,7 @@ import {
   VDomMountResponse,
 } from "@/protocol/mod.ts";
 import { assertNoKeyMaterial } from "@/shared/key-material.ts";
-import { RuntimeTransport } from "./transport.ts";
+import type { RuntimeTransport } from "./transport.ts";
 import { EventEmitter } from "./emitter.ts";
 import {
   $onCellRefused,

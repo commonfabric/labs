@@ -1,6 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { assets, StaticCache } from "@commonfabric/static";
-import { SANDBOX_WITHHELD_GLOBALS } from "@commonfabric/utils/sandbox-contract";
+import { SANDBOX_WITHHELD_GLOBALS } from "@commonfabric/pattern-contract/sandbox-contract";
 import { createCallbackCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 

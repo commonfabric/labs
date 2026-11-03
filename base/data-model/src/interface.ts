@@ -114,7 +114,7 @@ export type MutableFabricValuePlusLayer<PlusType> =
  * protocol as non-primitives. An instance may hold and expose arbitrary
  * outgoing `FabricValue` references, and is mutable until frozen.
  * `FabricSpecialObject` says how this differs from `FabricPrimitive`. See
- * Section 2.3 of the formal spec.
+ * Section 2.3 of `1-fabric-values.md`.
  *
  * This is the pure abstract protocol -- the `instanceof`-able contract that
  * external code is written against. Concrete `FabricInstance` classes in the
@@ -195,7 +195,7 @@ export abstract class FabricInstance extends BaseFabricSpecialObject {
  * at construction; a subclass keeps its state in private fields, which the
  * freeze does not reach.
  *
- * See Section 1.4.6 of the formal spec.
+ * See Section 1.4.6 of `1-fabric-values.md`.
  */
 export abstract class FabricPrimitive extends BaseFabricSpecialObject {
   /**

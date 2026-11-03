@@ -5,10 +5,11 @@ import type {
 import {
   fromBase64url,
   toUnpaddedBase64url,
-} from "@commonfabric/utils/base64url";
-import { toOwnedUint8Array } from "@commonfabric/utils/buffers";
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isPlainObject } from "@commonfabric/utils/types";
+} from "@commonfabric/bytes/base64url";
+import { toOwnedUint8Array } from "@commonfabric/bytes/buffers";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isPlainObject } from "@commonfabric/js-values/types";
 
 import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 import { BLESSING_TOKEN } from "@/fabric-bases/blessing.ts";
@@ -190,7 +191,7 @@ export class FabricHash extends BaseFabricPrimitive implements ApiFabricHash {
           return ProblematicValue.make(
             typeTag,
             state,
-            `Hash: ${e instanceof Error ? e.message : String(e)}`,
+            `Hash: ${describeFailure(e)}`,
             mutable,
           );
         }

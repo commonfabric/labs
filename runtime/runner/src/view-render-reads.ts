@@ -2,7 +2,10 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { ScopeKeyIdentity, ViewInterest } from "@commonfabric/memory/v2";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import { type Cell, deepTraverse, isCell } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";

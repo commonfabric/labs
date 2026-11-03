@@ -140,6 +140,11 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["ingest mint:gmail-id-token", "the same"],
   ["ingest mint:target", "a cell reference the caller chooses"],
   ["space invite create:ttl", "an admission lifetime in seconds"],
+  [
+    "delegation issue:to",
+    "a DID being delegated to; nothing here enumerates them",
+  ],
+  ["delegation issue:expires-in", "a delegation lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
   [
@@ -169,6 +174,14 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["history-limit", "an operation history row count"],
   ["max-concurrent", "how many agent runs one runner holds; a count"],
   ["lease-seconds", "a lease length in seconds"],
+  [
+    "commands-url",
+    "the host's own command endpoint, which only the host that started the runner knows",
+  ],
+  [
+    "commands-actor",
+    "an actor string the host chooses and labs passes on unread",
+  ],
   [
     "max-concurrent-local",
     "how many local jobs one runner runs at once; a count",

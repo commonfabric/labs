@@ -21,7 +21,7 @@ export type {
 import {
   decodeJsonPointer,
   encodeJsonPointer,
-} from "@commonfabric/utils/json-pointer";
+} from "@commonfabric/json/json-pointer";
 
 /** The parts of a cell reference, with names still unresolved. */
 export interface ReferenceParts {

@@ -28,7 +28,11 @@ import {
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   type CfcLabel,
@@ -2126,16 +2130,14 @@ export class CellBridge {
         } finally {
           await probe.runtime.dispose().catch((e) => {
             console.warn(
-              `[FUSE] Reconnect probe cleanup failed: ${
-                e instanceof Error ? e.message : String(e)
-              }`,
+              `[FUSE] Reconnect probe cleanup failed: ${describeFailure(e)}`,
             );
           });
         }
       } catch (e) {
         console.error(
           `[FUSE] Reconnect probe to ${spaceName} failed: ${
-            e instanceof Error ? e.message : String(e)
+            describeFailure(e)
           }`,
         );
         allSpacesRestored = false;
@@ -2549,9 +2551,7 @@ export class CellBridge {
         await pieces.runtime.dispose().catch((disposeError) => {
           console.warn(
             `[FUSE] Failed space cleanup for ${spaceName}: ${
-              disposeError instanceof Error
-                ? disposeError.message
-                : String(disposeError)
+              describeFailure(disposeError)
             }`,
           );
         });

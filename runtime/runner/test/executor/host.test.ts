@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { ServerExecutionObserver } from "@commonfabric/memory/v2/server";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";

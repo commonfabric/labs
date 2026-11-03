@@ -137,7 +137,7 @@ Deno.bench({
 // cost is gone, and PathKeyMap brings invalidation to O(D). The bench
 // remains shaped to flag any future change that re-introduces K-scaling.
 // To isolate just the invalidator's O(K)-vs-O(D) behavior, see
-// `base/utils/test/path-key-map.bench.ts`.
+// `base/collections/test/path-key-map.bench.ts`.
 //
 
 for (const K of [16, 64, 256]) {

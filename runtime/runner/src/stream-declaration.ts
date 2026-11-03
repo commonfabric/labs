@@ -18,7 +18,7 @@ import type {
   JSONSchemaObj,
 } from "@commonfabric/api";
 import { isExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   type ExternalReferenceResolver,

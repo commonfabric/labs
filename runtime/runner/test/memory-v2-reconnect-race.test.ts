@@ -1,6 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 import type { MIME, URI } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
@@ -9,7 +9,8 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { StorageManager as CutoverStorageManager } from "../src/storage/cache.deno.ts";
 import type {
   IStorageProvider,
@@ -275,6 +276,7 @@ Deno.test("memory v2 runner does not integrate its own replayed commit after rec
   }, sessionFactory);
   const notifications = new NotificationRecorder();
   const writerClient = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(server),
   });
   const writer = await writerClient.mount(
@@ -372,6 +374,7 @@ Deno.test("memory v2 runner loads and keeps watching a document when its load's 
   }, sessionFactory);
   const notifications = new NotificationRecorder();
   const writerClient = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(server),
   });
   const writer = await writerClient.mount(
@@ -428,6 +431,7 @@ Deno.test("memory v2 runner deduplicates replayed stacked commits while integrat
   }, sessionFactory);
   const notifications = new NotificationRecorder();
   const writerClient = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(server),
   });
   const writer = await writerClient.mount(
@@ -531,6 +535,7 @@ Deno.test("memory v2 runner restores watched graph state after reconnect and kee
   }, sessionFactory);
   const notifications = new NotificationRecorder();
   const writerClient = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(server),
   });
   const writer = await writerClient.mount(
@@ -706,6 +711,7 @@ Deno.test("memory v2 runner can retry immediately after a conflict revert", asyn
       throw new Error("Expected a memory/v2 emulated storage manager");
     }
     remoteClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(candidate.server()),
     });
     const remoteSession = await remoteClient.mount(

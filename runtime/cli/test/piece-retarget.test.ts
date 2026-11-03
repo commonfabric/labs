@@ -14,7 +14,7 @@ import type {
   ApplySessions,
   RetargetOptions,
 } from "@commonfabric/piece/ops/bulk-retarget";
-import { decode } from "@commonfabric/utils/encoding";
+import { decode } from "@commonfabric/text/utf8";
 
 import { runRetarget } from "../lib/bulk.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

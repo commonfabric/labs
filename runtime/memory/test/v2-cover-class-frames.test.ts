@@ -17,10 +17,7 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { Server } from "../v2/server.ts";
 import { applyCommit } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -246,7 +243,7 @@ Deno.test("ON arm: session frames carry the covering commit's class — authored
       const engine = await server.engineForSpace(space);
       const holder = executionLeaseHolder("did:key:z6Mk-serving-service");
       assertEquals(
-        acquireExecutionLease(engine, { space, holder }),
+        engine.executionLeases.acquire(space, holder),
         true,
       );
       applyCommit(engine, {

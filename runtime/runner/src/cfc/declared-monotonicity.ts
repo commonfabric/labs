@@ -1,4 +1,4 @@
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { hashStringOf } from "@commonfabric/data-model";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {

@@ -49,7 +49,7 @@ never a source of truth; when it disagrees with code, the map is wrong.
 The implementation-independent runtime and CFC contracts live in
 [`docs/specs/agent-harness/`](../../../docs/specs/agent-harness/README.md). This
 package owns exact CLI flags, tools, profiles, schemas, defaults, artifacts, and
-deviations. Loom and Pattern Factory own their adapter and rollout behavior.
+deviations. Loom owns its adapter and rollout behavior.
 
 ## Historical records
 

@@ -30,7 +30,7 @@ import {
   dataUriFromValue,
   valueFromDataUri,
 } from "@commonfabric/data-model/codec-data-uri";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { type Cell, isCell } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";

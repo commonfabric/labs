@@ -7,6 +7,7 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { BaseElement } from "../../core/base-element.ts";
 import {
   AmbientThemeWatch,
@@ -16,10 +17,7 @@ import {
 } from "../theme-context.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 import { uploadFile } from "../../utils/file-cell-storage.ts";
-import {
-  type Mentionable,
-  type MentionableArray,
-} from "../../core/mentionable.ts";
+import type { Mentionable, MentionableArray } from "../../core/mentionable.ts";
 import { MentionController } from "../../core/mention-controller.ts";
 import { createCellController } from "../../core/cell-controller.ts";
 import { hasIncompleteUpload, toSendAttachment } from "./send-attachments.ts";
@@ -1091,7 +1089,7 @@ export class CFPromptInput extends BaseElement {
       attachment.size = stored.size;
       attachment.error = undefined;
     } catch (err) {
-      attachment.error = err instanceof Error ? err.message : String(err);
+      attachment.error = describeFailure(err);
     } finally {
       attachment.uploading = false;
       this.requestUpdate();

@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { type ActiveLogLevel, getLogger } from "@commonfabric/utils/logger";
+import { type ActiveLogLevel, getLogger } from "@commonfabric/logger";
 import { withEnv } from "./utils.ts";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 

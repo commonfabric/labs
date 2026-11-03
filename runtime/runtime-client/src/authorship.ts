@@ -21,7 +21,10 @@ import {
   cfcSchemaIsInternalKey,
 } from "@commonfabric/runner/cfc/schema-primitives";
 import type { JSONSchema } from "@commonfabric/runner/shared";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
 import {
   type CellDelivery,

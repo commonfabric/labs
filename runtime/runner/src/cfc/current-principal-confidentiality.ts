@@ -8,7 +8,7 @@ import {
 } from "@commonfabric/data-model-schema/schema-refs";
 import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
 import { isDID } from "@commonfabric/identity/did";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema, JSONValue } from "../builder/types.ts";
 import { registerSchemaDocument } from "../schema-registry.ts";

@@ -22,7 +22,7 @@ import {
   schemaAcceptsOpaqueCellValue,
 } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { pieceId } from "../piece-id.ts";
 import {

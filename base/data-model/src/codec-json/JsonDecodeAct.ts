@@ -1,5 +1,8 @@
-import { backtickQuote } from "@commonfabric/utils/markdown";
-import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
+import { backtickQuote } from "@commonfabric/text/markdown";
+import {
+  isPlainObject,
+  isUnsafeObjectKey,
+} from "@commonfabric/js-values/types";
 
 import type { FabricValue } from "@/interface.ts";
 import {
@@ -70,7 +73,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
 
   /**
    * Decodes a codec-value tree back into `FabricValue`s. See Section 4.5 of
-   * the formal spec.
+   * `1-fabric-values.md`.
    *
    * Frozen-ness contract: every value this returns is deep-frozen, or built
    * mutable when this act is mutable, whichever arm produced it, the
@@ -96,7 +99,7 @@ export class JsonDecodeAct extends BaseDecodeAct<JsonCodecValue, string> {
         //
         // The format accepts any key, so this arm is the one behaving
         // correctly and the refusals elsewhere are the shortfall
-        // (`UNSAFE_OBJECT_KEYS` in `@commonfabric/utils/types`). What is wrong
+        // (`UNSAFE_OBJECT_KEYS` in `@commonfabric/js-values/types`). What is wrong
         // here is only the disagreement: until that set empties, one arm
         // admitting what the others refuse is a round trip that breaks in the
         // middle rather than a refusal a caller can see.

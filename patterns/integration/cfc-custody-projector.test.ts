@@ -44,7 +44,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { clauseAlternatives } from "@commonfabric/runner/cfc/clause";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import {
   commitCustodySeal,
   CUSTODY_SEAL_GESTURE,

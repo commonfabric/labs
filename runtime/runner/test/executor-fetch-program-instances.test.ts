@@ -10,7 +10,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { ProgramResult } from "../src/builtins/fetch-program.ts";
 import type { Cell } from "../src/cell.ts";

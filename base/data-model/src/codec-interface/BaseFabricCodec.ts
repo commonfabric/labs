@@ -1,4 +1,4 @@
-import type { Constructor } from "@commonfabric/utils/types";
+import type { Constructor } from "@commonfabric/js-values/types";
 import type { FabricValuePlus } from "@/interface.ts";
 import type { FabricCodec, LiveEnvironment } from "./interface.ts";
 

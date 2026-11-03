@@ -15,11 +15,13 @@ Status: built.
 [TESTING.md](../development/TESTING.md#tomorrows-seed-run-a-day-ahead)
 describes it.
 
-The scheduled workflow runs every CI test suite at the head of `main` under the
-next Pacific day's seed. It differs from the first design of this stage in two
-ways. It runs at 11:00 UTC, which is 04:00 Pacific in summer and 03:00 in
-winter, so one schedule entry serves the whole year and no step has to check
-the Pacific hour. Its result is its conclusion: a failed test fails the run.
+A workflow runs every CI test suite under the next Pacific day's seed, once
+for each seed, the first time it finds that CI passed on the head of `main`.
+It differs from the first design of this stage in two ways. It starts when CI
+finishes on `main`, and at 11:17 UTC, which is early on a Pacific day in summer
+and in winter, so one schedule entry serves the whole year and no step has to
+check the Pacific hour. Its result is its conclusion: a failed test fails the
+run.
 Its records reach the store under their own seed, as the first design
 proposed.
 

@@ -1,6 +1,6 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { representsPrincipalSubject } from "@commonfabric/runner/cfc/represents-principal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** Returns the unique principal attested at the persisted origin. */
 export function attestedOwnerPrincipal(

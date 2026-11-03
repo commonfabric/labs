@@ -18,7 +18,8 @@
  * GitHub made, as a 32-bit big-endian unsigned integer, and then that request.
  */
 
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
 
 /** One delivery of the organization's webhook. */
@@ -153,7 +154,7 @@ export class GitHubWebhooks {
         this.#refused = true;
         console.error(
           "GitHub webhook relay: could not connect:",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       },
     ).finally(() => {
@@ -197,7 +198,7 @@ export class GitHubWebhooks {
     } catch (error) {
       console.error(
         "GitHub webhook relay: the connection failed:",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
     } finally {
       this.#open = undefined;
@@ -225,7 +226,7 @@ export class GitHubWebhooks {
         taken = false;
         console.error(
           `GitHub webhook relay: a ${delivery.event} listener failed:`,
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -488,7 +489,7 @@ function parseDelivery(request: Uint8Array): GitHubDelivery | undefined {
   } catch (error) {
     console.error(
       `GitHub webhook relay: a ${event} delivery could not be read:`,
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
     );
     return undefined;
   }

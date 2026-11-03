@@ -5,7 +5,7 @@ import type {
   BuiltInLLMToolResultPart,
 } from "@commonfabric/api";
 import { MessagesSchema } from "@commonfabric/runner/component-read-contract";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html, nothing, render } from "lit";
 import { property } from "lit/decorators.js";
 

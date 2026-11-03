@@ -5,7 +5,11 @@ import {
 } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 import type { URI } from "@commonfabric/memory/interface";
 import { getCommitPreconditionsConfig } from "@commonfabric/memory/v2";
 import type {
@@ -341,9 +345,7 @@ export const flushCfcGrantConsumptionClaims = (
     } catch (error) {
       reasons.push(
         `cfc-grant: staging consumption receipt for single-use grant ` +
-          `${claim.grantId} failed (${
-            error instanceof Error ? error.message : String(error)
-          })`,
+          `${claim.grantId} failed (${describeFailure(error)})`,
       );
     }
   }

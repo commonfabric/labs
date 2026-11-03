@@ -1,8 +1,8 @@
-import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
-import { isObjectOrArray, isPrimitive } from "@commonfabric/utils/types";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isInertArray } from "@commonfabric/utils/arrays";
-import { isInertPlainObject } from "@commonfabric/utils/objects";
+import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
+import { isObjectOrArray, isPrimitive } from "@commonfabric/js-values/types";
+import { getLogger } from "@commonfabric/logger";
+import { isInertArray } from "@commonfabric/js-values/arrays";
+import { isInertPlainObject } from "@commonfabric/js-values/objects";
 import {
   assertValidFabricValueLayer,
   deepFreeze,

@@ -34,7 +34,7 @@ import {
   testIdentityOfKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { excusedMeasurement, isLaneMeasurement } from "../lane-measurement.ts";
 import type { WithheldReason } from "./manifest.ts";
 import {

@@ -83,8 +83,8 @@ import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import {
   getLoggerCountsBreakdown,
   getTimingStatsBreakdown,
-} from "@commonfabric/utils/logger";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+} from "@commonfabric/logger";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import {
   type CommitRejection,
   type PieceAddress,
@@ -99,6 +99,7 @@ import {
   type initializePiecesController,
   moduleByteCache,
 } from "./pieces-controller.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 /** Host CFC settings carried into each independent test runtime. */
 export type MultiRuntimeCfcOptions = Pick<
@@ -175,6 +176,14 @@ export interface MultiRuntimeSessionSpec {
    * floor and another does not.
    */
   cfcWriteFloor?: CfcWriteFloorMode;
+
+  /**
+   * The profile space this session's runtime answers `#profile` with
+   * (`RuntimeOptions.preferredProfileSpace`), as a client acting as one of
+   * the user's profiles does. A space the user's home does not list makes
+   * the session's `#profile` wish fail rather than answer as another profile.
+   */
+  preferredProfileSpace?: DID;
 }
 
 export interface MultiRuntimeHarnessOptions {
@@ -247,20 +256,6 @@ export interface MultiRuntimeHarnessOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-
-/**
- * The execution-lease TTL of the serving loop the harness hosts. That loop
- * runs on the test's thread, or on a worker's when the environment selects
- * one, and a pattern compile does not yield either, so on a slow runner one
- * compile can hold the loop's thread past the production TTL. Every
- * space the loop serves then loses its lease at once, any wave in flight
- * aborts, and a space that parks over it compiles again when it reactivates.
- * Two minutes is well clear of the longest stall between renewals seen (22 s
- * on a developer machine, with coverage on), and nothing in the harness
- * contends for a lease, so a longer tenure costs no failover. A stall that
- * outlasts it still loses the lease.
- */
-const SERVED_LEASE_TTL_MS = 120_000;
 
 /**
  * The claims harnesses in this process hold on its pattern environment,
@@ -961,11 +956,18 @@ export class MultiRuntimeHarness {
         // holds for this realm, shared by every serving runtime: a space that
         // reactivates, or another space serving the same program, skips the
         // transform-and-emit step on this thread. A loop the environment puts
-        // in a worker takes no closure, so its runtimes compile without it.
+        // in a worker takes no closure; the worker builds a cache of its own.
         ...(runsInWorker() ? {} : { moduleByteCache }),
-        policy: { leaseTtlMs: SERVED_LEASE_TTL_MS },
       })
       : StandaloneMemoryServer.start({
+        // The posture of a toolshed whose runtimes run the first session's
+        // flags (INV-16), as the server-execution posture above is read.
+        namesInstances: () =>
+          namesInstancesByDefault(
+            typeof firstSession === "string"
+              ? undefined
+              : firstSession.cfc?.experimental,
+          ),
         serve,
         ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
       });
@@ -1025,6 +1027,9 @@ export class MultiRuntimeHarness {
             : {}),
           ...(started.inboundHold === true ? { inboundHold: true } : {}),
           ...(cfcWriteFloor !== undefined ? { cfcWriteFloor } : {}),
+          ...(started.preferredProfileSpace !== undefined
+            ? { preferredProfileSpace: started.preferredProfileSpace }
+            : {}),
         }).catch(async (error) => {
           await client.terminate();
           throw error;

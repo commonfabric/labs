@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { TwoLevelWeakCache } from "@commonfabric/utils/two-level-weak-cache";
+import { TwoLevelWeakCache } from "@commonfabric/collections/two-level-weak-cache";
 import { traverseTypeHierarchy } from "./type-traversal.ts";
 
 export type CellBrand =

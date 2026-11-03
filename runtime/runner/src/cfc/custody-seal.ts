@@ -39,10 +39,10 @@ import {
   hasConcreteOwner,
   isACL,
 } from "@commonfabric/memory/acl";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { profileNameWrittenAt } from "../builder/principal-of.ts";
 import { type Cell, cellRuntime, isCell } from "../cell.ts";

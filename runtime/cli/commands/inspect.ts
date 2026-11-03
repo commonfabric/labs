@@ -74,7 +74,7 @@ import {
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { loadIdentity } from "../lib/identity.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 
@@ -812,6 +812,14 @@ export const inspect = new Command()
               ` integrated=${field.integrated.length}` +
               `${field.pagination.integratedTruncated ? "+" : ""}` +
               ` checkpoints=${field.checkpoints.length}`,
+          );
+          const anchorsDocument = field.consistency.anchorsDocumentMatches;
+          console.log(
+            `  anchors=${field.anchors.length}` +
+              ` anchors-document=${field.anchorsDocumentId}` +
+              ` anchors-document-matches=${
+                anchorsDocument === null ? "n/a" : anchorsDocument
+              }`,
           );
         }
         if (report.fieldsTruncated) {

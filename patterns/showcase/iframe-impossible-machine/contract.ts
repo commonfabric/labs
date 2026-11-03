@@ -178,12 +178,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
   simulationTick: 3,
   showSignals: true,
 };
-
-export const IFRAME_PATTERN = {
-  name: "IframeImpossibleMachine",
-  displayName: "Collaborative Impossible Machine",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-} as const;

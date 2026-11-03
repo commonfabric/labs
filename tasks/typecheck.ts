@@ -23,6 +23,9 @@ import { readWorkspaceMembers } from "./workspace-tests.ts";
 // Directory paths (no glob expansion needed).
 const DIRS = [
   ".claude/scripts",
+  "base/async",
+  "base/bytes",
+  "base/collections",
   "docs",
   "runtime/agent-runner",
   "base/api",
@@ -48,11 +51,14 @@ const DIRS = [
   "base/iframe-sandbox",
   "runtime/integration",
   "base/js-compiler",
-  "base/leb128",
+  "base/js-values",
+  "base/json",
   "runtime/lib-shell",
   "base/llm",
+  "base/logger",
   "runtime/memory",
   "runtime/navigation",
+  "base/pattern-contract",
   "patterns/apps/annotation",
   "patterns/apps/annotation-manager",
   "patterns/apps/bookmarks",
@@ -152,7 +158,7 @@ const DIRS = [
   "patterns/tools",
   "runtime/pattern-index",
   "runtime/piece",
-  "base/pure-json",
+  "base/platform",
   "runtime/runner",
   "runtime/runtime-client",
   "base/schema-generator/src",
@@ -162,13 +168,13 @@ const DIRS = [
   "base/static/scripts",
   "base/static/test",
   "base/test-support",
+  "base/text",
   "runtime/toolshed",
   "base/ts-transformers/lint-plugins",
   "base/ts-transformers/src",
   "base/ts-transformers/test/diagnostics",
   "base/ts-transformers/test/reactive",
   "runtime/ui",
-  "base/utils",
   "skills",
   "scripts/implementation-progress",
   "scripts/server-execution-topics",
@@ -183,8 +189,8 @@ const GLOBS = [
   "patterns/*.ts",
   // Iframe guests and the contracts they are written against compile as
   // ordinary browser modules, and `isPatternSource()` excludes them for
-  // exactly that reason, so this task is what checks them. Their generated
-  // pattern wrappers remain under the classic JSX environment owned by
+  // exactly that reason, so this task is what checks them. The patterns that
+  // host them remain under the classic JSX environment owned by
   // `deno task cfcheck`. The depth is open because a guest sits wherever the
   // pattern that hosts it puts it; the `iframe-` prefix is not, because that
   // is the condition under which the exclusion applies. A file of the same
@@ -526,26 +532,110 @@ export function localImporters(
   }
 }
 
+/** The files that decide how every module in the tree resolves. */
+const ROOT_CONFIGURATION = ["deno.json", "deno.jsonc", "deno.lock"];
+
+/** Whether a path names a manifest, at the root or in a member. */
+function isManifest(file: string): boolean {
+  return /(^|\/)deno\.jsonc?$/.test(file);
+}
+
+/**
+ * What a change reaches through the local modules `roots` returns and
+ * everything they import, in the tree at `root`: every path the change
+ * reaches against the number of steps between it and the nearest changed
+ * path, or `everything` where the change touches what decides how every
+ * module resolves.
+ *
+ * A step is an import, from a module to the module importing it. A change
+ * reaches the path it touches, at no steps, and every module importing a
+ * reached module, one step further out. A manifest decides how the modules
+ * under it resolve, what they export, and which declaration files every
+ * check of them loads, so a reached member manifest reaches every module of
+ * the graph in its scope one step further out, and a declaration file it
+ * names in `compilerOptions.types` reaches the manifest one step further
+ * out. The root manifest and the lock file decide that for every module.
+ *
+ * The returned function answers from the imports as they stand in the
+ * tree; the graph is read, once, the first time it is asked about a change
+ * that touches something.
+ */
+export async function changeReach(
+  root: string,
+  roots: () => readonly string[],
+): Promise<
+  (changed: ReadonlySet<string>) => Map<string, number> | "everything"
+> {
+  const members = (await readWorkspaceMembers(path.join(root, "deno.jsonc")))
+    .map((member) => member.replace(/^\.\//, ""));
+  // Each declaration file a manifest names, against that manifest.
+  const ambient = new Map<string, string>();
+  for (const directory of ["", ...members]) {
+    const read = await readManifest(root, directory);
+    if (read === undefined) continue;
+    for (const types of read.manifest.compilerOptions?.types ?? []) {
+      ambient.set(path.join(directory, types), read.file);
+    }
+  }
+
+  let read:
+    | { importers: Map<string, string[]>; inScope: Map<string, string[]> }
+    | undefined;
+  const graph = () => {
+    if (read !== undefined) return read;
+    const importers = localImporters(root, [...roots(), ...ambient.keys()]);
+    const modules = new Set(roots());
+    for (const [file, importing] of importers) {
+      modules.add(file);
+      for (const importer of importing) modules.add(importer);
+    }
+    const inScope = new Map<string, string[]>();
+    for (const file of modules) {
+      const scope = scopeOfPath(file);
+      const held = inScope.get(scope);
+      if (held === undefined) inScope.set(scope, [file]);
+      else held.push(file);
+    }
+    read = { importers, inScope };
+    return read;
+  };
+
+  return (changed) => {
+    const hops = new Map<string, number>();
+    if (changed.size === 0) return hops;
+    const { importers, inScope } = graph();
+    let frontier = [...changed];
+    for (let distance = 0; frontier.length > 0; distance++) {
+      const next: string[] = [];
+      for (const at of frontier) {
+        if (hops.has(at)) continue;
+        if (ROOT_CONFIGURATION.includes(at)) return "everything";
+        hops.set(at, distance);
+        if (isManifest(at)) {
+          for (const file of inScope.get(scopeOfPath(at)) ?? []) {
+            next.push(file);
+          }
+        }
+        const naming = ambient.get(at);
+        if (naming !== undefined) next.push(naming);
+        for (const importer of importers.get(at) ?? []) next.push(importer);
+      }
+      frontier = next;
+    }
+    return hops;
+  };
+}
+
 /**
  * How a change maps onto the scopes whose check it can alter, for the paths
  * `byScope` holds in the tree at `root`.
  *
  * A scope's check opens the files its paths name and every local module
- * those import, so a change reaches the scope when it touches one of them:
- * the file itself, or any module it imports, directly or through other
- * modules, whatever package that module sits in. A changed path the scope
- * owns reaches it too, module or not, since a manifest the check reads or a
- * module that was deleted alters it as surely as an edit does.
- *
- * A manifest decides how the modules under it resolve, what they export,
- * and which declaration files every check of them loads, so a change to a
- * member's manifest, or to a declaration file it names in
- * `compilerOptions.types`, reaches whatever imports the member's modules as
- * well. The root manifest and the lock file decide that for every module,
- * and reach every scope.
- *
- * The returned function answers from the imports as they stand in the
- * tree; the graph is read, once, the first time it is asked.
+ * those import, so a change reaches the scope when it reaches one of them,
+ * as `changeReach()` reads reach. A changed path the scope owns reaches it
+ * too, module or not, since a manifest the check reads or a module that was
+ * deleted alters it as surely as an edit does. A change that reaches
+ * everything reaches every scope.
  */
 export async function scopesReached(
   root: string,
@@ -554,27 +644,17 @@ export async function scopesReached(
   const members = (await readWorkspaceMembers(path.join(root, "deno.jsonc")))
     .map((member) => member.replace(/^\.\//, ""));
   const excluded = await excludedByManifest(root, members);
-  // Each declaration file a manifest names, against that manifest.
-  const ambient = new Map<string, string>();
-  for (const directory of ["", ...members]) {
-    const read = await readManifest(root, directory);
-    for (const types of read?.manifest.compilerOptions?.types ?? []) {
-      ambient.set(path.join(directory, types), read!.file);
-    }
-  }
   const everyScope = [...byScope.keys()].sort();
 
-  let read:
-    | { scopeOf: Map<string, string>; importers: Map<string, string[]> }
-    | undefined;
-  const graph = () => {
-    if (read !== undefined) return read;
-    const scopeOf = new Map<string, string>();
+  let walked: Map<string, string> | undefined;
+  const scopeOf = () => {
+    if (walked !== undefined) return walked;
+    walked = new Map<string, string>();
     for (const [scope, paths] of byScope) {
       for (const checkPath of paths) {
         const absolute = path.join(root, checkPath);
         if (Deno.statSync(absolute).isFile) {
-          scopeOf.set(checkPath, scope);
+          walked.set(checkPath, scope);
           continue;
         }
         for (
@@ -585,46 +665,24 @@ export async function scopesReached(
         ) {
           const file = path.relative(root, entry.path);
           if (excluded.some((pattern) => pattern.test(file))) continue;
-          scopeOf.set(file, scope);
+          walked.set(file, scope);
         }
       }
     }
-    read = {
-      scopeOf,
-      importers: localImporters(root, [...scopeOf.keys(), ...ambient.keys()]),
-    };
-    return read;
+    return walked;
   };
+  const reach = await changeReach(root, () => [...scopeOf().keys()]);
 
   return (changed) => {
-    if (changed.size === 0) return [];
-    const { scopeOf, importers } = graph();
-    const reached = new Set<string>();
-    const seen = new Set<string>();
-    const pending = [...changed];
-    while (pending.length > 0) {
-      const at = pending.pop()!;
-      if (seen.has(at)) continue;
-      seen.add(at);
-      if (["deno.json", "deno.jsonc", "deno.lock"].includes(at)) {
-        return everyScope;
-      }
-      const manifest = /(^|\/)deno\.jsonc?$/.test(at);
-      const scope = scopeOf.get(at) ??
-        (changed.has(at) || manifest ? scopeOfPath(at) : undefined);
-      if (scope !== undefined && byScope.has(scope)) {
-        reached.add(scope);
-        if (manifest) {
-          for (const [file, owner] of scopeOf) {
-            if (owner === scope) pending.push(file);
-          }
-        }
-      }
-      const naming = ambient.get(at);
-      if (naming !== undefined) pending.push(naming);
-      for (const importer of importers.get(at) ?? []) pending.push(importer);
+    const reached = reach(changed);
+    if (reached === "everything") return everyScope;
+    const scopes = new Set<string>();
+    for (const at of reached.keys()) {
+      const scope = scopeOf().get(at) ??
+        (changed.has(at) || isManifest(at) ? scopeOfPath(at) : undefined);
+      if (scope !== undefined && byScope.has(scope)) scopes.add(scope);
     }
-    return [...reached].sort();
+    return [...scopes].sort();
   };
 }
 

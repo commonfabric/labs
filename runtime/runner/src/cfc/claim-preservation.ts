@@ -11,8 +11,8 @@
  * the loss.
  */
 
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { type CfcConfClause, normalizeClause } from "./clause.ts";

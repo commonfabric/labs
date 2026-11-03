@@ -2,7 +2,7 @@ import {
   fabricAwareEqual,
   isFabricSpecialObject,
 } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
 
 import { instanceReadThroughView } from "./query-result-proxy.ts";
 

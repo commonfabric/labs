@@ -34,8 +34,11 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { Runtime } from "@commonfabric/runner";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { terminateWorker } from "@commonfabric/utils/worker-lifetime";
+import {
+  namesInstancesByDefault,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
+import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 import {
   assertParticipantRung,
@@ -182,7 +185,9 @@ describe(
       // wait starts on a marker alice has not been asked for — that request
       // goes out a round trip later — and alice's other marker wakes the wait
       // onto a document that still lacks the one it wants.
-      const server = StandaloneMemoryServer.start();
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+      });
       // This server enforces no ACL, so a DID nothing has written to is a space
       // both participants may use.
       const spaceDid = (await Identity.generate()).did();
@@ -311,7 +316,9 @@ describe(
       // whatever it was asked would satisfy a single-rung reading, and
       // `disabled` is the rung that turns CFC off altogether.
 
-      const server = StandaloneMemoryServer.start();
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+      });
       try {
         for (const rung of CFC_ENFORCEMENT_MODES) {
           const init = await initParticipant(server, {
@@ -331,7 +338,9 @@ describe(
     });
 
     it("builds every requested flow-label mode into the participant runtime", async () => {
-      const server = StandaloneMemoryServer.start();
+      const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
+      });
       // Disposal retains both errors if the assertion and shutdown fail.
       await using cleanup = new AsyncDisposableStack();
       cleanup.defer(() => server.close());

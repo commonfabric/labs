@@ -15,7 +15,7 @@
  * import no class, and everything here needs the classes.
  */
 
-import { backtickQuote } from "@commonfabric/utils/markdown";
+import { backtickQuote } from "@commonfabric/text/markdown";
 
 import type { FabricPrimitiveSchemaType } from "@/api.ts";
 

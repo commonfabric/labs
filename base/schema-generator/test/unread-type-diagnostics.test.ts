@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import ts from "typescript";
 
 import type { SchemaGenerationDiagnostic } from "../src/interface.ts";
@@ -394,6 +394,241 @@ type Node<T> = PerUser<Cell<{ value: T; next?: Holder<Node<Readonly<T>>> }>>;`,
           severity: "warning",
         });
         expect(diagnostics[0]!.message).toContain("Wrap<readonly []>");
+      });
+    }
+  });
+
+  describe("reportSymbolType()", () => {
+    // The schema dialect has no symbol type, so each symbol a schema meets
+    // that the runtime could store is an error naming the type written
+    // nearest to it. A well-known symbol, which the runtime never stores, is
+    // left out.
+
+    /** The schema for `T` in `source` and the diagnostics generating it reports. */
+    async function generate(source: string) {
+      const { type, checker, typeNode } = await getTypeFromCode(source, "T");
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      return { schema, diagnostics };
+    }
+
+    for (
+      const [position, source, message] of [
+        ["`symbol`", "type T = { k: symbol };", "`symbol` is a symbol type"],
+        [
+          "`symbol` at the root",
+          "type T = symbol;",
+          "`symbol` is a symbol type",
+        ],
+        [
+          "an alias of `symbol`",
+          "type S = symbol; type T = { k: S };",
+          "`S` is a symbol type",
+        ],
+        [
+          "a registered symbol's type",
+          'const r = Symbol.for("r"); type T = { k: typeof r };',
+          "`typeof r` is a symbol type",
+        ],
+        [
+          "a union member",
+          "type T = { k: string | symbol };",
+          "`symbol` is a symbol type",
+        ],
+        [
+          "an array element",
+          "type T = { k: symbol[] };",
+          "`symbol` is a symbol type",
+        ],
+        [
+          "a generic's argument",
+          "interface Box<V> { v: V } type T = { k: Box<symbol> };",
+          "`symbol` is a symbol type",
+        ],
+        [
+          "`PropertyKey`",
+          "type T = { k: PropertyKey };",
+          "`symbol` is a symbol type",
+        ],
+        [
+          "a key union holding an author's symbol, suggesting `Exclude`",
+          "declare const s: unique symbol; type K = keyof { a: 1; [s]: 2 }; type T = { k: K };",
+          "`K` includes the symbol type `typeof s`, which no schema can describe. " +
+          "Leave the symbols out of the type, as `Exclude<K, symbol>` does.",
+        ],
+        [
+          "`keyof any`, suggesting `Exclude`",
+          "type T = { k: keyof any };",
+          "`keyof any` includes the symbol type `symbol`, which no schema can " +
+          "describe. Leave the symbols out of the type, as " +
+          "`Exclude<keyof any, symbol>` does.",
+        ],
+        [
+          "a symbol branded with a symbol-keyed member",
+          "declare const brand: unique symbol; " +
+          "type T = { k: symbol & { readonly [brand]: true } };",
+          "`symbol & { readonly [brand]: true; }` includes the symbol type " +
+          "`symbol`",
+        ],
+        [
+          "a mapped member written without a node, suggesting no `Exclude`",
+          'type T = { k: Record<"a", symbol> };',
+          '`Record<"a", symbol>` includes the symbol type `symbol`, which no ' +
+          "schema can describe. Store a string in its place",
+        ],
+      ] as const
+    ) {
+      it(`reports an error naming ${position}`, async () => {
+        const { diagnostics } = await generate(source);
+
+        expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+          .toEqual([{ severity: "error", type: "schema-type:symbol" }]);
+        expect(diagnostics[0]!.message).toContain(message);
+      });
+    }
+
+    it("reports an error for a `symbol` keyword the node-based analyzer reads, where it accepts nothing", async () => {
+      const node = f.createTypeLiteralNode([
+        f.createPropertySignature(
+          undefined,
+          "k",
+          undefined,
+          f.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword),
+        ),
+      ]);
+      const { checker, sourceFile } = await createTestProgram(
+        "type Dummy = unknown;",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "schema-type:symbol" }]);
+      expect(schema).toMatchObject({ properties: { k: false } });
+    });
+
+    it("names a symbol reached with no node at all by its type", async () => {
+      const { type, checker } = await getTypeFromCode(
+        "type T = symbol;",
+        "T",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      new SchemaGenerator().generateSchema(type, checker, undefined, {
+        onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      });
+
+      expect(diagnostics.map(({ message }) => message)).toEqual([
+        "`symbol` is a symbol type, which no schema can describe. Store a " +
+        "string in its place, such as a registered symbol's key.",
+      ]);
+    });
+
+    it("returns a schema that accepts no value where a symbol is", async () => {
+      const { schema } = await generate(
+        "type T = { only: symbol; either: string | symbol };",
+      );
+
+      expect(schema).toMatchObject({
+        properties: { only: false, either: { type: "string" } },
+      });
+    });
+
+    describe("a well-known symbol", () => {
+      it("returns `keyof string` as its string and number keys, reporting nothing", async () => {
+        const { schema, diagnostics } = await generate(
+          "type T = { k: keyof string };",
+        );
+
+        expect(diagnostics).toEqual([]);
+        expect(schema).toMatchObject({
+          properties: {
+            k: {
+              anyOf: [
+                { type: "number" },
+                { type: "string", enum: expect.arrayContaining(["charAt"]) },
+              ],
+            },
+          },
+        });
+      });
+
+      it("returns a schema accepting nothing for `typeof Symbol.iterator`, reporting nothing", async () => {
+        const { schema, diagnostics } = await generate(
+          "type T = { k: typeof Symbol.iterator };",
+        );
+
+        expect(diagnostics).toEqual([]);
+        expect(schema).toMatchObject({ properties: { k: false } });
+      });
+
+      it("reports an author's `SymbolConstructor` member as any other symbol", async () => {
+        const { diagnostics } = await generate(
+          "interface SymbolConstructor { readonly mine: unique symbol }\n" +
+            "type T = { k: typeof Symbol.mine };",
+        );
+
+        expect(diagnostics.map(({ type }) => type)).toEqual([
+          "schema-type:symbol",
+        ]);
+      });
+    });
+
+    for (
+      const [position, source, schema] of [
+        [
+          "`keyof any` with its symbols left out",
+          "type T = { k: Exclude<keyof any, symbol> };",
+          {
+            properties: { k: { type: ["number", "string"] } },
+            required: ["k"],
+          },
+        ],
+        [
+          "a symbol-keyed member, which it leaves out",
+          "declare const s: unique symbol; type T = { [s]: number; a: string };",
+          { properties: { a: { type: "string" } }, required: ["a"] },
+        ],
+        [
+          "a record keyed by symbols, which holds no entries",
+          "type T = { k: Record<symbol, number> };",
+          {
+            properties: { k: { type: "object", properties: {} } },
+            required: ["k"],
+          },
+        ],
+        [
+          "a record keyed by `PropertyKey`",
+          "type T = { k: Record<PropertyKey, never> };",
+          {
+            properties: {
+              k: {
+                type: "object",
+                properties: {},
+                additionalProperties: false,
+              },
+            },
+            required: ["k"],
+          },
+        ],
+      ] as const
+    ) {
+      it(`reports nothing for ${position}`, async () => {
+        const generated = await generate(source);
+
+        expect(generated.diagnostics).toEqual([]);
+        expect(generated.schema).toEqual({ type: "object", ...schema });
       });
     }
   });

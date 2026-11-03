@@ -11,8 +11,8 @@ import {
   valueEqual,
 } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { DID } from "@commonfabric/identity";
-import { type CfcCellLinkRefPayload } from "@commonfabric/runner/cfc";
+import type { DID } from "@commonfabric/identity";
+import type { CfcCellLinkRefPayload } from "@commonfabric/runner/cfc";
 import type { NativeUiControl } from "@commonfabric/runner/native-ui";
 import {
   cfcLabelViewsEqual,
@@ -28,10 +28,13 @@ import {
   refuseFabricInstance,
   type SigilLink,
 } from "@commonfabric/runner/shared";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
 
-import { InitializedRuntimeConnection } from "./client/connection.ts";
+import type { InitializedRuntimeConnection } from "./client/connection.ts";
 import {
   type CellGetRequest,
   type CellPullRequest,

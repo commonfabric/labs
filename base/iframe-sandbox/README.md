@@ -44,8 +44,21 @@ const bridge: FabricBridge = createFabricBridge({
 
 const frame = document.createElement("common-iframe-sandbox");
 frame.bridge = bridge;
+frame.script = "document.querySelector('#root').textContent = 'Ready';";
 frame.src = "<main id='root'></main>";
 ```
+
+`src` is the guest's document. `script`, when set, is module source the guest
+runs once that document is parsed: the element appends it to the document as an
+inline module script, escaping the `</script` and `<!--` sequences that would
+otherwise keep the element from ending where it should, as `<\/script` and
+`<\x21--`. Strings, templates and regular expressions read those escapes as the
+characters they replace, so the module computes what it was written to; only a
+raw template string, read through `String.raw`, sees the escape itself. The
+guest's policy admits the script as it admits any inline script the document
+carries, so a document that declares a policy of its own must allow inline
+scripts. An empty `src` is no guest, and runs no script. A change to either
+reloads the guest.
 
 A resource has a `kind`, optional schema and description, and only the
 operations the host supplies. A cell capability follows the runtime's Cell
@@ -59,18 +72,24 @@ after `pull()` safely materializes it before a child write. The resource kinds
 are `cell`, `stream`, `sqlite`, `service`, and `presence`. Named methods let an
 application expose a narrow service without expanding the cell protocol.
 
-The higher-level `cf-iframe` component accepts the same `bridge` property. Its
-`context` convenience property turns top-level Fabric cells into cell resources,
-read-only cells into resources without `set`, stream cells into `send`
-resources, and SQLite database cells into `query`/`exec` resources. A pattern
-can supply a serializable capability hint when a context cell's schema is
-intentionally opaque at the renderer boundary:
+The higher-level `cf-iframe` component accepts the same `bridge`, `src`, and
+`script` properties. Its `context` convenience property turns Fabric cells into
+resources: a pattern binds a record of them, and each field becomes a cell
+resource, a read-only resource without `set`, a `send` resource for a stream, or
+a `query`/`exec` resource for a SQLite database. A pattern names the kinds the
+renderer cannot read off a cell, which in a record are every stream, database,
+and presence room:
 
 ```tsx
 <cf-iframe
   src={guestHtml}
-  $context={context}
-  resourceKinds={{ appDatabase: "sqlite" }}
+  script={guestScript}
+  $context={{ input, state, appDatabase, addItem }}
+  resourceKinds={{
+    input: "readonly",
+    appDatabase: "sqlite",
+    addItem: "stream",
+  }}
 />;
 ```
 
@@ -79,7 +98,9 @@ or `presence` kinds. It does not grant access to another cell: each name must
 still be present in the bound context, and the bridge resolves that cell's
 concrete scope before the guest loads. A name marked `presence` grants the
 presence room of that cell's field and none of the cell's data; see
-[Presence](#presence).
+[Presence](#presence). A context bound as one cell, `$context={context}`, works
+the same way, and a plain `context` object is served to the guest as the static
+values it holds.
 
 ## Guest presentation
 

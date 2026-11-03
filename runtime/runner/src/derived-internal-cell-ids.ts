@@ -1,6 +1,6 @@
 import type { JSONValue } from "@commonfabric/api";
 import { debugStr, isDeepFrozen } from "@commonfabric/data-model";
-import { LRUCache } from "@commonfabric/utils/cache";
+import { LRUCache } from "@commonfabric/collections/cache";
 
 import type { AnyCell } from "./cell.ts";
 import { createRef, type EntityId } from "./create-ref.ts";

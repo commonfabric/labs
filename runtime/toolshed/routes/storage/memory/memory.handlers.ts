@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
@@ -12,7 +13,7 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 
 import type * as Routes from "./memory.routes.ts";
 import { formatMemWriteTrace } from "./memwrite-trace.ts";
@@ -444,7 +445,7 @@ export const subscribe: AppRouteHandler<typeof Routes.subscribe> = (c) => {
       span.setAttribute("memory.status", "exception");
       span.setAttribute(
         "error.message",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       span.setAttribute(
         "error.type",

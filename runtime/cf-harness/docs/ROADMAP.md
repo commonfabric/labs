@@ -10,7 +10,7 @@ permanently growing implementation plan.
 ## 1. Complete the CFC transport boundary
 
 - Carry trusted observation metadata from `runsc-cfc`/runner mediation through
-  every tool path used by Loom and Pattern Factory.
+  every tool path used by Loom.
 - Exercise `enforce-explicit` in product adapter tests without losing ordinary
   tool observations.
 - Remove the product `observe` bridges only after those suites prove the full

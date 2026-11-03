@@ -6,7 +6,7 @@
  * 2. Large numbers that require the numeric comparison path
  */
 
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 
 // Pre-generate test data to avoid allocation during benchmarks
 

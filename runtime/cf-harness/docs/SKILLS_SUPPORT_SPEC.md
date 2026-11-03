@@ -10,11 +10,10 @@ Define first-class Agent Skills support in `cf-harness` so Common Fabric product
 workflows can supply durable, task-specific operating knowledge without stuffing
 large documentation bundles into every prompt.
 
-The near-term motivating case is Pattern Factory. Its Claude and Codex paths
-depend heavily on repo-local skills such as `pattern-dev`, `pattern-implement`,
-`pattern-ui`, `pattern-test`, `pattern-critic`, `agent-browser`, and `cf`. The
-`cf-harness` now supplies those skills to Pattern Factory through explicit,
-phase-owned preload and profile-scoped child policy.
+Pattern work depends heavily on repo-local skills such as `pattern-dev`,
+`pattern-implement`, `pattern-ui`, `pattern-test`, `pattern-critic`,
+`agent-browser`, and `cf`. `cf-harness` supplies those skills through explicit
+preload, chosen by the caller, and through profile-scoped child policy.
 
 This spec defines a supported path for skill discovery, activation, provenance,
 and CFC-aware handling in `cf-harness`.
@@ -28,8 +27,8 @@ and CFC-aware handling in `cf-harness`.
 - `.agents/skills/<name>` symlinks for Codex and other Agent Skills clients
 - `.claude/skills/<name>` symlinks for Claude compatibility
 
-Representative Pattern Factory skills use YAML frontmatter with at least `name`
-and `description`, then point to canonical repo docs. Examples:
+Representative pattern skills use YAML frontmatter with at least `name` and
+`description`, then point to canonical repo docs. Examples:
 
 - `skills/pattern-dev/SKILL.md` points to
   `docs/common/ai/pattern-development-guide.md`.
@@ -96,7 +95,7 @@ metadata and container path. See
 4. Keep CFC semantics authoritative. Skill text can guide work, but it must not
    grant authority or bypass tool policy.
 5. Avoid giving the parent model broad `bash` merely to discover skills.
-6. Support Pattern Factory's phase-specific skill needs quickly, then grow into
+6. Support callers that know which skills a task needs, then grow into
    model-driven skill activation.
 7. Keep subagent skill inheritance explicit, because `cf-harness` subagents use
    fresh context and summary-only returns.
@@ -115,7 +114,7 @@ metadata and container path. See
 - Managing user-global skill directories outside an explicitly configured root.
 - Running skill scripts automatically, or without the operator allowing them.
 - Treating `allowed-tools` as a permission grant.
-- Defining Pattern Factory's general orchestration or fulfillment contract.
+- Defining a product workflow's orchestration or fulfillment contract.
 - Implementing a broad filesystem discovery tool as a prerequisite.
 
 ## Skill Compatibility Contract
@@ -397,13 +396,11 @@ accepts repeatable `--skill` preload names, injects the selected `SKILL.md`
 files as configured context before the task prompt, and persists
 `skill-registry.json` and `skill-activations.json`.
 
-This is enough for Pattern Factory to invoke `cf-harness` with phase-relevant
-skills:
+This is enough for a caller to invoke `cf-harness` with the skills a task needs:
 
 ```bash
 deno task run -- \
   --workspace /path/to/common-fabric-2 \
-  --cwd pattern-factory \
   --skills-root /path/to/common-fabric-2/labs/skills \
   --skill pattern-dev \
   --skill pattern-implement \
@@ -494,8 +491,8 @@ When `file_path` is provided:
 
 ## Catalog Disclosure
 
-For v1, the catalog is optional because explicit preloading is the immediate
-Pattern Factory need.
+For v1, the catalog is optional, because explicit preloading serves callers that
+know which skills a task needs.
 
 For dynamic activation, disclose a compact catalog containing:
 
@@ -773,41 +770,6 @@ This preserves the current CFC posture: delegation is a visible policy
 transition, child artifacts retain detail, and the parent does not silently
 receive additional raw context through the return channel.
 
-## Pattern Factory Wiring
-
-Pattern Factory does not depend on model-driven skill selection. Its launcher
-knows the phase and passes exact skills.
-
-The default mapping is:
-
-| Phase         | Explicit skills                                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `spec`        | none                                                                                                                        |
-| `ux_design`   | none                                                                                                                        |
-| `ui_design`   | `pattern-ui`, `lit-component`                                                                                               |
-| `build`       | `pattern-dev`, `pattern-schema`, `pattern-implement`, `pattern-test`, `pattern-debug`, `pattern-ui`, `cf`, `pattern-deploy` |
-| `critic`      | `pattern-critic`, `pattern-dev`, `pattern-test`, `pattern-debug`, `pattern-ui`                                              |
-| `manual_test` | `agent-browser`, `cf`, `pattern-deploy`, `pattern-debug`, `pattern-test`                                                    |
-| `grade`       | none                                                                                                                        |
-| `summarize`   | none                                                                                                                        |
-
-The launcher keeps phase tools separate from skill content. Loading a skill does
-not grant `bash`, file writes, browser access, or script execution.
-
-For Pattern Factory's symlinked layout, prefer passing the canonical labs root:
-
-```text
---skills-root /path/to/common-fabric-2/labs/skills
-```
-
-The harness should expose sandbox paths in injected text, for example:
-
-```text
-/workspace/labs/skills/pattern-dev/SKILL.md
-```
-
-This avoids ambiguity between host paths and sandbox paths.
-
 ## Delivery Status
 
 | Capability                                                                          | Status                                                     |
@@ -817,7 +779,6 @@ This avoids ambiguity between host paths and sandbox paths.
 | Exact allowlisted sandbox Deno/Bash skill scripts                                   | implemented                                                |
 | Acquired skills' scripts, run under that same allowlist and keyed by pin            | implemented                                                |
 | Profile-scoped host skill scripts for the leased browser child                      | implemented                                                |
-| Pattern Factory phase-specific skills                                               | implemented                                                |
 | Explicit child-profile skill policy and summary-only parent return                  | implemented                                                |
 | Model-driven dynamic `load_skill` activation                                        | not implemented; future design above                       |
 | User/global/remote skill installation into the skills root                          | not planned without a product requirement and trust design |

@@ -39,7 +39,6 @@ export type BuiltinToolId =
   | "loom_profile"
   | "list_commands"
   | "run_command"
-  | "run_read_command"
   | "submit_result";
 
 export const DEFAULT_PARENT_TOOL_IDS = [
@@ -176,15 +175,13 @@ export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
 ]);
 
 /**
- * The tools over the commands a host admits, backed only by an
- * explicitly configured host command broker. Gated apart from the authoring
- * and retrieval tools: which commands a run may list and run is the broker's
- * grant, which the host configures for this family alone.
+ * The tools over the commands a host offers, backed only by an explicitly
+ * configured host command endpoint. Gated apart from the authoring and
+ * retrieval tools, which have backings of their own.
  */
 export const LOOM_COMMAND_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
   "list_commands",
   "run_command",
-  "run_read_command",
 ]);
 
 /**
@@ -334,13 +331,4 @@ export interface HarnessModelToolDescriptor {
 export interface HarnessToolDescriptor extends HarnessModelToolDescriptor {
   /** Stable builtin id used by policy, transcripts, and the registry. */
   toolId: BuiltinToolId;
-
-  /**
-   * Whether the host, not the run's task, authorizes what this read tool
-   * reaches: it sends only what a host-owned broker lists and grants per
-   * job, and the broker rechecks the grant when it executes. Policy admits
-   * such a read for a `context`-bound task at `enforce-strict`, where a read
-   * the task itself would authorize is refused.
-   */
-  hostGrantedRead?: true;
 }

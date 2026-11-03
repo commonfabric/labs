@@ -14,9 +14,23 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { dirname, fromFileUrl, join, resolve } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
+import { resolve } from "@std/path/resolve";
 import { debugStr } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import {
+  defaultDisplayFit,
+  type LabelDisplayFit,
+} from "@commonfabric/html/display-fit-atoms";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { urlToAppView } from "@commonfabric/navigation";
+import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import {
+  parseCellReference,
+  type ReferenceParts,
+} from "@commonfabric/runner/shared";
 
 import {
   FIELDS,
@@ -32,6 +46,7 @@ import {
 import {
   boardFile,
   copySource,
+  identityDid,
   loadMirror,
   openDocSource,
   type OpenedDocSource,
@@ -41,7 +56,11 @@ import {
   refreshMirror,
   resolvePieces,
   saveMirror,
+  spaceDid,
 } from "./sync.ts";
+import { redact } from "./labels.ts";
+import type { Opening, WriteOutcome, WriteRequest } from "./browser.ts";
+import { similarTopics } from "./similar.ts";
 import {
   type Clock,
   consoleTerminal,
@@ -120,6 +139,9 @@ export interface TopicsDeps {
   /** Runs `program` as {@link runProgram} does. */
   run: typeof runProgram;
 
+  /** Whether the deployment `board` is on runs its pieces itself. */
+  serverExecutes: (board: Board) => Promise<boolean>;
+
   /** Where a write's text is read from when it is not an argument. */
   stdin: Pick<typeof Deno.stdin, "isTerminal" | "readable">;
 
@@ -129,7 +151,23 @@ export interface TopicsDeps {
   warn: (text: string) => void;
 
   env: (name: string) => string | undefined;
+
+  /** Opens `url` in a web browser, for `browse`. */
+  openUrl: (url: string) => Promise<void>;
+
+  /** Puts `text` on the clipboard, for `browse`. */
+  copyText: (text: string) => Promise<void>;
+
+  /** The DID of the identity the keyfile at `path` holds, for `browse`. */
+  identityDid: (path: string) => Promise<string>;
 }
+
+/**
+ * The terminal browser and what it runs, which only the command that draws it
+ * reads, since every other command starts without its modules.
+ */
+// deno-lint-ignore cf-imports/no-inline-module-import -- every other command starts without the terminal browser's modules
+const loadBrowser = () => import("./browse.ts");
 
 const defaultDeps: TopicsDeps = {
   openDocSource,
@@ -139,11 +177,37 @@ const defaultDeps: TopicsDeps = {
   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   launcher: LAUNCHER,
   run: runProgram,
+  serverExecutes,
   stdin: Deno.stdin,
   write: console.log,
   warn: console.error,
   env: Deno.env.get,
+  openUrl: async (url) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly([...systemPrograms(Deno.build.os).open, url]);
+  },
+  copyText: async (text) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly(systemPrograms(Deno.build.os).copy, text);
+  },
+  identityDid,
 };
+
+/**
+ * Whether the deployment `board` is on publishes server execution. One that
+ * cannot be asked counts as not running its pieces, and the `cf` command that
+ * then runs the Topic reports what is wrong with it.
+ */
+export async function serverExecutes(board: Board): Promise<boolean> {
+  try {
+    const response = await fetch(new URL("/api/meta", board.apiUrl));
+    const meta: unknown = await response.json();
+    return isObjectNotArray(meta) && isObjectNotArray(meta.experimental) &&
+      meta.experimental.serverExecution === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Runs the Deno program at `program` with `args`, the variables in `env` added
@@ -247,31 +311,75 @@ async function readTopics(
       board.board,
       copySource(data.space),
     );
-    return read(deps, refreshed, [board.space, data.space]);
+    return read(deps, refreshed, board, data.space);
   }
   const source = await deps.openDocSource(board);
   try {
     const refreshed = await refreshMirror(data, board.board, source);
     await saveMirror(board.mirror, data);
-    return read(deps, refreshed, [board.space, source.space]);
+    return read(deps, refreshed, board, source.space);
   } finally {
     await source.close();
   }
 }
 
-/** The board's Topics, and the names a reference may give the board's space. */
+/**
+ * The board's Topics as {@link readTopics} reads them, less what the
+ * default display ceiling for the identity reading them does not admit:
+ * output is a display no authored policy covers, as `watch` is.
+ */
+async function shownTopics(
+  deps: TopicsDeps,
+  board: Board,
+  options: { offline?: boolean } = {},
+): Promise<Read> {
+  const read = await readTopics(deps, board, options);
+  return {
+    ...read,
+    topics: redact(read.topics, await displayFit(deps, board)),
+  };
+}
+
+/**
+ * What output shows to the identity `board` reads as: what the default
+ * display ceiling for it admits, or, with no identity to read, as offline
+ * a keyfile need not be, what names no one.
+ */
+async function displayFit(
+  deps: TopicsDeps,
+  board: Board,
+): Promise<LabelDisplayFit> {
+  let viewer: string | undefined;
+  try {
+    viewer = await deps.identityDid(board.identity);
+  } catch {
+    viewer = undefined;
+  }
+  return defaultDisplayFit(viewer);
+}
+
+/** The board's Topics, and where a reference may say the board is. */
 interface Read extends Refreshed {
+  /**
+   * The names of the board's space: the one configured, then its DID, the
+   * one it is read under.
+   */
   spaces: string[];
+
+  /** The server the board is on. */
+  apiUrl: string;
 }
 
 /**
  * Helper for {@link readTopics}, which reports Topics that read as blank and
- * records the space's names.
+ * records the board's server and the two names of its space: the one `board`
+ * gives and `space`, the one the copy was read under.
  */
 function read(
   deps: TopicsDeps,
   refreshed: Refreshed,
-  spaces: string[],
+  board: Board,
+  space: string,
 ): Read {
   if (refreshed.unreached.length > 0) {
     deps.warn(
@@ -288,17 +396,22 @@ function read(
         refreshed.unreadable.map((number) => `top/${number}`).join(", "),
     );
   }
-  return { ...refreshed, spaces };
+  return { ...refreshed, spaces: [board.space, space], apiUrl: board.apiUrl };
 }
 
 /**
- * The Topic `reference` names among `topics`: a number, written `42`, `#42`,
- * `top/42`, or `//<space>/top/42`, or an address, written `/of:…` or `of:…`.
+ * The Topic `reference` names among `topics`: a number, written `42` or `#42`,
+ * or `top/42` alone or after `/` or `//<space>/`; an address, written `fid1:…`
+ * or `of:fid1:…`, alone or after `/` or `//<space>/`; the URL of the board
+ * server's page for either; or any other part of the Topic's address or its
+ * piece's address, `/of:fid1:…`, that is part of no other Topic's and quotes
+ * enough of the id, such as the end of the id.
  *
- * @throws Error naming the Topic when the board has none by that name.
+ * @throws Error naming the Topic when the board has none by that name, or
+ * saying why `reference` names no Topic on this board.
  */
 export function findTopic(
-  read: Pick<Read, "topics" | "spaces">,
+  read: Pick<Read, "topics" | "spaces" | "apiUrl">,
   reference: string,
 ): Topic {
   const topic = lookUp(read, reference);
@@ -310,18 +423,127 @@ export function findTopic(
 
 /** Helper for {@link findTopic}, which is `undefined` for no such Topic. */
 function lookUp(
-  { topics, spaces }: Pick<Read, "topics" | "spaces">,
+  read: Pick<Read, "topics" | "spaces" | "apiUrl">,
   reference: string,
 ): Topic | undefined {
-  const [, space, number] = NUMBERED.exec(reference) ?? [];
-  const address = reference.replace(/^\//, "");
-  return space !== undefined && !spaces.includes(space)
-    ? undefined
-    : topics.find((t) =>
-      number === undefined
-        ? t.address === address || t.piece === address
-        : t.number === number
+  return opening(read, reference).find(read.topics);
+}
+
+/**
+ * How to find the Topic `reference` names on the board at `where`, as
+ * written in {@link findTopic}: its name in a message, and how to find it
+ * among the board's Topics.
+ *
+ * @throws Error saying why `reference` names no Topic on this board, at once
+ * where that does not turn on the board's Topics, and from `find` where it
+ * does.
+ */
+function opening(
+  where: Pick<Read, "spaces" | "apiUrl">,
+  reference: string,
+): Opening {
+  const refused = (error: unknown) =>
+    new Error(
+      debugStr`$quote,long${reference} names no Topic on this board: ` +
+        describeFailure(error),
+      { cause: error },
     );
+  let is: (topic: Topic) => boolean;
+  try {
+    is = matcher(where, reference);
+  } catch (error) {
+    throw refused(error);
+  }
+  return {
+    name: topicName(reference),
+    find: (topics) => {
+      const topic = topics.find(is);
+      if (topic !== undefined || !quotesAnId(reference)) return topic;
+      const holding = topics.filter(({ address, piece }) =>
+        [address, piece].some((id) => `/${id}`.includes(reference))
+      );
+      if (holding.length <= 1) return holding[0];
+      throw refused(
+        new Error(
+          "it is part of the address or piece address of each of " +
+            holding.map((topic) => `top/${topic.number}`).join(", ") + ".",
+        ),
+      );
+    },
+  };
+}
+
+/**
+ * The fewest characters of an id a reference quotes to name a Topic by part
+ * of its address, so that a short or mistyped one is not read as some other
+ * Topic's.
+ */
+const QUOTED_ID_LENGTH = 8;
+
+/**
+ * Whether `reference` may name a Topic by part of its address: it is not a
+ * number, and it ends in at least {@link QUOTED_ID_LENGTH} characters after
+ * its last `:`.
+ */
+function quotesAnId(reference: string): boolean {
+  return numberName(reference) === undefined &&
+    reference.length - reference.lastIndexOf(":") - 1 >= QUOTED_ID_LENGTH;
+}
+
+/**
+ * Helper for {@link opening}, which is a test for the Topic `reference` names.
+ *
+ * @throws Error saying why `reference` names no Topic on this board.
+ */
+function matcher(
+  { spaces, apiUrl }: Pick<Read, "spaces" | "apiUrl">,
+  reference: string,
+): (topic: Topic) => boolean {
+  const parts = referenceParts(apiUrl, numberName(reference) ?? reference);
+  if (parts.space !== undefined && !spaces.includes(parts.space)) {
+    throw new Error(
+      `it names the space ${parts.space}, not the board's, ${spaces[0]}.`,
+    );
+  }
+  const plain = (parts.member ?? "result") === "result" &&
+    parts.pin === undefined && (parts.scope ?? "space") === "space";
+  if (plain && parts.id === "top" && parts.path.length === 1) {
+    return (t) => t.number === parts.path[0];
+  }
+  if (!plain || !parts.id || parts.path.length > 0) {
+    throw new Error("it names neither a Topic's number nor a piece.");
+  }
+  const id = `of:${hashStringForEntityAddress(parts.id)}`;
+  return (t) => t.address === id || t.piece === id;
+}
+
+/**
+ * Helper for {@link matcher}, which reads the URL of a page on the server at
+ * `apiUrl`, or a cell reference, with the leading `/` that roots it optional.
+ */
+function referenceParts(apiUrl: string, reference: string): ReferenceParts {
+  const url = URL.parse(reference);
+  if (url?.protocol !== "http:" && url?.protocol !== "https:") {
+    return parseCellReference(
+      reference.startsWith("/") ? reference : `/${reference}`,
+    );
+  }
+  const server = new URL(apiUrl).origin;
+  if (url.origin !== server) {
+    throw new Error(
+      `it is a page on ${url.origin}, not on the board's server, ${server}.`,
+    );
+  }
+  const view = urlToAppView(url);
+  if ("builtin" in view) return { id: "", path: [] };
+  return {
+    space: "spaceName" in view ? view.spaceName : view.spaceDid,
+    id: view.pieceSlug ?? view.pieceId ?? "",
+    scope: view.pieceScope,
+    path: view.pieceMember === undefined
+      ? view.piecePath ?? []
+      : [view.pieceMember, ...view.pieceExtraPath?.split("/") ?? []],
+  };
 }
 
 /** A Topic named by its number, with the space it is in or without. */
@@ -329,13 +551,24 @@ const NUMBERED = /^(?:\/\/([^/]+)\/)?(?:top\/|#)?(\d+)$/;
 
 /** How a message names the Topic `reference` names: `top/42`, or the address. */
 function topicName(reference: string): string {
+  return numberName(reference) ?? debugStr`$quote,long${reference}`;
+}
+
+/**
+ * `reference` written as `top/42`, or as `//<space>/top/42` when it names its
+ * space, if it names a Topic by its number alone.
+ */
+function numberName(reference: string): string | undefined {
   const [, space, number] = NUMBERED.exec(reference) ?? [];
   return number === undefined
-    ? debugStr`$quote${reference}`
+    ? undefined
     : `${space === undefined ? "" : `//${space}/`}top/${number}`;
 }
 
-/** The text of a write: the argument given, else everything on stdin. */
+/**
+ * The text a command takes, such as a write's body: the argument given, else
+ * everything on stdin.
+ */
 async function textFrom(
   deps: TopicsDeps,
   given: string | undefined,
@@ -365,7 +598,9 @@ function agentFrom(deps: TopicsDeps, options: TopicsOptions): string {
  * The invocation session this machine's writes to `board` are chosen within,
  * minted on first use into a file only its owner can read.
  */
-export async function writeSession(board: Board): Promise<string> {
+export async function writeSession(
+  board: Pick<Board, "session">,
+): Promise<string> {
   const path = board.session;
   await Deno.mkdir(dirname(path), { recursive: true });
   // Linking a finished file into place mints the session atomically: a
@@ -469,14 +704,14 @@ async function invoke<T>(
   // names the phase it reached; only one that never dispatched cannot have
   // committed, so any other failure, named or not, names this id to settle it.
   const unsettled = (error: unknown): Error => {
-    const message = messageOf(error);
+    const message = describeFailure(error);
     const phases = [...message.matchAll(/^invocation: \S+ phase: (\S+)$/gm)];
     return phases.at(-1)?.[1] === "initial_sync"
       ? new Error(message, { cause: error })
-      : new Error(
+      : new UnsettledWrite(
         `${message}\nThe write may have committed: run the same command ` +
           `with \`--invocation ${id}\` to settle it without writing twice.`,
-        { cause: error },
+        { invocation: id, reason: message, cause: error },
       );
   };
   let stdout: string;
@@ -512,23 +747,81 @@ async function invoke<T>(
       debugStr`\`${verb}\` did not settle: $quote,long${outcome}.`,
     );
   }
-  return await settle({
-    result: outcome.result,
-    invocation: id,
-    repeated: outcome.deduplicated === true,
-  });
+  try {
+    return await settle({
+      result: outcome.result,
+      invocation: id,
+      repeated: outcome.deduplicated === true,
+    });
+  } catch (error) {
+    // The write settled, so whatever failed after it leaves the write
+    // made: running the Topic or reading the board again is finished by
+    // naming the invocation again, which a write that reads back otherwise
+    // than it was made cannot be.
+    throw error instanceof UnsettledWrite || error instanceof UnconfirmedWrite
+      ? error
+      : new UnsettledWrite(
+        describeFailure(error),
+        { invocation: id, reason: describeFailure(error), cause: error },
+      );
+  }
 }
 
-/** What `error` says. */
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/**
+ * A write that settled and does not read back as it was made, which naming
+ * its invocation again cannot change: something else changed the Topic
+ * since, or the deployed board stores it otherwise.
+ */
+export class UnconfirmedWrite extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnconfirmedWrite";
+  }
+}
+
+/**
+ * A write that failed once it may have committed: naming its invocation
+ * again settles it without writing twice.
+ */
+export class UnsettledWrite extends Error {
+  readonly #reason: string;
+  readonly #invocation: string;
+
+  /**
+   * A write of the invocation `invocation` that failed for `reason`, saying
+   * `message`, which may add how to settle it from the command line.
+   */
+  constructor(
+    message: string,
+    { invocation, reason, cause }: {
+      invocation: string;
+      reason: string;
+      cause: unknown;
+    },
+  ) {
+    super(message, { cause });
+    this.name = "UnsettledWrite";
+    this.#reason = reason;
+    this.#invocation = invocation;
+  }
+
+  /** What went wrong, without how to settle it from the command line. */
+  get reason(): string {
+    return this.#reason;
+  }
+
+  /** The invocation that settles the write. */
+  get invocation(): string {
+    return this.#invocation;
+  }
 }
 
 /**
  * Runs the Topic at `cell` to completion once, after the write `written` to
  * it. The board lists each Topic with a comment count and a last activity
  * that the Topic derives and stores only when a run of it completes, and
- * `cf piece call` returns before that.
+ * `cf piece call` returns before that. A deployment that runs its pieces itself
+ * has that run in hand already, and this asks for nothing.
  */
 async function step(
   deps: TopicsDeps,
@@ -536,15 +829,17 @@ async function step(
   cell: string,
   written: Written,
 ) {
+  if (await deps.serverExecutes(board)) return;
   try {
     await cf(deps, board, ["piece", "step", "--cell", cell]);
   } catch (error) {
-    throw new Error(
-      `${messageOf(error)}\nThe write was made, but the board will not ` +
-        `show it until ${cell} runs: run the same command with ` +
+    const reason = `${describeFailure(error)}\nThe write was made, but the ` +
+      `board will not show it until ${cell} runs`;
+    throw new UnsettledWrite(
+      `${reason}: run the same command with ` +
         `\`--invocation ${written.invocation}\` to run it without writing ` +
         "again.",
-      { cause: error },
+      { invocation: written.invocation, reason: `${reason}.`, cause: error },
     );
   }
 }
@@ -558,15 +853,16 @@ async function confirm(
   board: Board,
   reference: string,
   wrote: (topic: Topic) => boolean | Promise<boolean>,
-  done: string,
+  done: (topic: Topic) => string,
 ): Promise<void> {
   const topic = findTopic(await readTopics(deps, board), reference);
   if (!await wrote(topic)) {
-    throw new Error(
+    throw new UnconfirmedWrite(
       `The write settled but does not read back on top/${topic.number}.`,
     );
   }
-  deps.write(`${done}\n${formatTopicLine(topic, nowFor(deps))}`);
+  const [shown] = redact([topic], await displayFit(deps, board));
+  deps.write(`${done(shown)}\n${formatTopicLine(shown, nowFor(deps))}`);
 }
 
 /**
@@ -598,7 +894,7 @@ async function writeTopic(
         board,
         target.number,
         (after) => wrote(target, after, repeated),
-        `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
+        () => `${done} top/${target.number}${repeated ? REPEATED : ""}.`,
       );
     },
   );
@@ -610,7 +906,7 @@ export async function searchAction(
   terms: string[],
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const { topics } = await readTopics(
+  const { topics } = await shownTopics(
     deps,
     boardFrom(deps, options),
     { offline: options.offline },
@@ -623,13 +919,7 @@ export async function searchAction(
       {
         matching: hits.length,
         topics: listed.map(({ topic, snippets }) => ({
-          number: topic.number,
-          address: `/${topic.address}`,
-          title: topic.title,
-          createdAt: topic.createdAt,
-          createdBy: topic.createdBy,
-          lastActivityAt: topic.lastActivityAt,
-          comments: topic.comments.filter((c) => !c.removed).length,
+          ...listing(topic),
           matches: snippets,
         })),
       },
@@ -651,6 +941,67 @@ export async function searchAction(
   deps.write(lines.join("\n"));
 }
 
+/** Runs the `similar` command. */
+export async function similarAction(
+  options: TopicsOptions & Pick<SearchScope, "exclude"> & {
+    limit?: number;
+    json?: boolean;
+  },
+  given: string | undefined,
+  deps: TopicsDeps = defaultDeps,
+): Promise<void> {
+  const text = await textFrom(deps, given, "text");
+  const { topics } = await shownTopics(
+    deps,
+    boardFrom(deps, options),
+    { offline: options.offline },
+  );
+  const hits = similarTopics(topics, text, options);
+  const limit = options.limit ?? DEFAULT_LIMIT;
+  const listed = hits.slice(0, limit);
+  if (options.json) {
+    deps.write(JSON.stringify(
+      {
+        matching: hits.length,
+        topics: listed.map(({ topic, similarity, shared }) => ({
+          ...listing(topic),
+          similarity,
+          shared,
+        })),
+      },
+      null,
+      2,
+    ));
+    return;
+  }
+  const lines = listed.flatMap(({ topic, similarity, shared }) => [
+    formatTopicLine(topic, nowFor(deps)),
+    `    similarity ${similarity.toPrecision(2)}; shared words: ${
+      shared.join(", ")
+    }`,
+  ]);
+  lines.push(
+    hits.length > limit
+      ? `${hits.length} Topics share words with the text; these are the ` +
+        `${limit} most like it (\`--limit\` lists more).`
+      : `${hits.length} of ${topics.length} Topics share words with the text.`,
+  );
+  deps.write(lines.join("\n"));
+}
+
+/** What a listing in JSON says of `topic`, beyond why it is listed. */
+function listing(topic: Topic) {
+  return {
+    number: topic.number,
+    address: `/${topic.address}`,
+    title: topic.title,
+    createdAt: topic.createdAt,
+    createdBy: topic.createdBy,
+    lastActivityAt: topic.lastActivityAt,
+    comments: topic.comments.filter((c) => !c.removed).length,
+  };
+}
+
 /**
  * The case-insensitive pattern `term` is, or that matches it literally when
  * it is not a valid regular expression.
@@ -665,14 +1016,16 @@ function patternOf(term: string): RegExp {
 
 /**
  * Runs the `show` command: prints each Topic named that the board holds, in
- * the order named, then fails naming any it does not.
+ * the order named, then fails naming any it does not. A reference that names
+ * no Topic on this board, such as one in another space, fails the command
+ * before anything is printed.
  */
 export async function showAction(
   options: TopicsOptions & { window?: ThreadWindow; json?: boolean },
   references: readonly string[],
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const read = await readTopics(
+  const read = await shownTopics(
     deps,
     boardFrom(deps, options),
     { offline: options.offline },
@@ -739,8 +1092,11 @@ export async function newAction(
       target: board.board,
       verb: "addTopic",
       payload: { title, body: text, agentName },
+      // Only the address: a selection of nothing but addresses is answered
+      // from the stored links, without the pattern graph any other selection
+      // runs. The Topic's number comes back with the copy refreshed below.
       resultSchema: JSON.stringify({
-        properties: { topic: { $link: true }, name: { type: "string" } },
+        properties: { topic: { $link: true } },
       }),
     },
     async (written) => {
@@ -748,8 +1104,7 @@ export async function newAction(
       const topic = isObjectNotArray(result) && isObjectNotArray(result.topic)
         ? result.topic.$link
         : undefined;
-      const name = isObjectNotArray(result) ? result.name : undefined;
-      if (typeof topic !== "string" || typeof name !== "string") {
+      if (typeof topic !== "string") {
         throw new Error(
           "`addTopic` settled without naming the Topic it created.",
         );
@@ -758,9 +1113,12 @@ export async function newAction(
       await confirm(
         deps,
         board,
-        name,
+        topic,
         (created) => created.title === title.trim(),
-        `Created top/${name} (${topic})${repeated ? REPEATED : ""}.`,
+        (created) =>
+          `Created top/${created.number} (${topic})${
+            repeated ? REPEATED : ""
+          }.`,
       );
     },
   );
@@ -835,8 +1193,7 @@ export async function linkAction(
   label: string | undefined,
   deps: TopicsDeps = defaultDeps,
 ): Promise<void> {
-  const like = (topic: Topic) =>
-    topic.links.filter((l) => l.url === url.trim() && !l.removed).length;
+  const like = (topic: Topic) => linksTo(topic, url);
   await writeTopic(
     deps,
     options,
@@ -850,6 +1207,33 @@ export async function linkAction(
     }),
     (before, after, repeated) => like(after) > (repeated ? 0 : like(before)),
     "Linked",
+  );
+}
+
+/** How many links of `topic` to `url` are present. */
+function linksTo(topic: Topic, url: string): number {
+  return topic.links.filter((l) => l.url === url.trim() && !l.removed).length;
+}
+
+/** Runs the `unlink` command. */
+export async function unlinkAction(
+  options: TopicsOptions,
+  reference: string,
+  url: string,
+  deps: TopicsDeps = defaultDeps,
+): Promise<void> {
+  // `removeLink` takes back the most recently added link still present with
+  // the address, so the count of those has to fall.
+  const like = (topic: Topic) => linksTo(topic, url);
+  await writeTopic(
+    deps,
+    options,
+    reference,
+    "removeLink",
+    (agentName) => ({ url, agentName }),
+    (before, after, repeated) =>
+      repeated ? like(after) <= like(before) : like(after) < like(before),
+    "Took back a link of",
   );
 }
 
@@ -889,7 +1273,8 @@ export async function mentionAction(
         board,
         from.number,
         async (after) => await mentions(after) === (verb === "mention"),
-        `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
+        () =>
+          `top/${from.number} ${verb === "mention" ? "now" : "no longer"} ` +
           `mentions top/${to.number}${repeated ? REPEATED : ""}.`,
       );
     },
@@ -899,6 +1284,7 @@ export async function mentionAction(
 /** The options each command takes, beyond `--identity` and `--help`. */
 const OPTIONS: Record<string, readonly string[]> = {
   search: ["limit", "offline", "in", "exclude", "json"],
+  similar: ["limit", "offline", "exclude", "json"],
   show: ["offline", "json", "last", "comments-since"],
   sync: ["rebuild"],
   watch: [],
@@ -907,6 +1293,8 @@ const OPTIONS: Record<string, readonly string[]> = {
   body: ["agent-name", "invocation"],
   title: ["agent-name", "invocation"],
   link: ["agent-name", "invocation", "kind"],
+  unlink: ["agent-name", "invocation"],
+  browse: ["agent-name"],
   mention: ["invocation"],
   unmention: ["invocation"],
 };
@@ -929,6 +1317,13 @@ Reading:
                             body, comments, links, authors (default all).
       --exclude <pattern>   Leave out Topics whose title matches, such as
                             '^\\[(RESOLVED|DUPLICATE|OBSOLETE)'. Repeatable.
+  similar [text]            The Topics most like the text, such as an issue
+                            filed elsewhere or the body of a Topic about to be
+                            filed, most similar first, with the words they
+                            share. A Topic is compared by its title and body,
+                            word for word; a word counts for more the fewer
+                            Topics use it. Takes --limit and --exclude as
+                            search does.
   show <topic>...           Each Topic as Markdown: body, links, and comments.
       --last <count>        Only the last this many comments of each.
       --comments-since <date>
@@ -938,8 +1333,15 @@ Reading:
       --rebuild             Read the whole board again.
   watch                     The board, live, on the whole terminal: each
                             change shown as it happens. q quits.
-  --offline                 Read the copy as it stands (search, show).
-  --json                    Print JSON for a program to read (search, show).
+  browse [topic]            The board to read and write on the whole
+                            terminal: a list searched as you type beside
+                            a Topic read whole, live, with menus, the
+                            mouse, and drafts kept until saved. F1 lists
+                            its keys; Alt-X quits.
+  --offline                 Read the copy as it stands (search, similar,
+                            show).
+  --json                    Print JSON for a program to read (search,
+                            similar, show).
 
 Writing:
   new <title> [body]        File a Topic.
@@ -948,12 +1350,17 @@ Writing:
   title <topic> <title>     Rename a Topic.
   link <topic> <url> [label]
       --kind <kind>         Link kind: web (default) or pr.
+  unlink <topic> <url>      Take back the newest link to the address.
   mention <topic> <other>   Record that one Topic references another.
   unmention <topic> <other> Remove those references.
 
-A body omitted from the arguments is read from stdin; give one that begins with
-- there, or after --. A Topic is named by its number (42, #42, top/42,
-//<space>/top/42) or its address.
+A body or a text omitted from the arguments is read from stdin; give one that
+begins with - there, or after --. A Topic is named by its number (42, #42,
+top/42, //<space>/top/42), by its address (fid1:..., of:fid1:..., /of:fid1:...,
+//<space>/of:fid1:...), by the URL of its page on the board's server, or by
+any part of its address, other than a number, that holds at least
+${QUOTED_ID_LENGTH} characters of its id and is part of no other Topic's address or
+piece's address, such as the end of its id.
 
 Writes of authored content need --agent-name <name> (or CF_AGENT_NAME). Every
 write is a new one, and prints its invocation id before it is made. When a
@@ -1015,6 +1422,16 @@ export async function main(
     }
     return operands;
   };
+  // The positive whole number an option gives, if it gives one.
+  const count = (option: "limit" | "last"): number | undefined => {
+    const given = flags[option];
+    if (given === undefined) return undefined;
+    const value = Number(given);
+    if (!(Number.isInteger(value) && value > 0)) {
+      throw new Error(`\`--${option}\` takes a positive whole number.`);
+    }
+    return value;
+  };
   if (flags.help || command === undefined) {
     deps.write(USAGE);
     return;
@@ -1049,10 +1466,6 @@ export async function main(
   }
   switch (command) {
     case "search": {
-      const limit = flags.limit === undefined ? undefined : Number(flags.limit);
-      if (limit !== undefined && !(Number.isInteger(limit) && limit > 0)) {
-        throw new Error("`--limit` takes a positive whole number.");
-      }
       const fields = flags.in?.split(",").map((named) => {
         const field = FIELDS.find((field) => field === named.trim());
         if (field === undefined) {
@@ -1065,7 +1478,7 @@ export async function main(
       return await searchAction(
         {
           ...options,
-          limit,
+          limit: count("limit"),
           fields,
           exclude: flags.exclude.map(patternOf),
           json: flags.json,
@@ -1074,12 +1487,22 @@ export async function main(
         deps,
       );
     }
+    case "similar": {
+      const [text] = take(0, 1);
+      return await similarAction(
+        {
+          ...options,
+          limit: count("limit"),
+          exclude: flags.exclude.map(patternOf),
+          json: flags.json,
+        },
+        text,
+        deps,
+      );
+    }
     case "show": {
       take(1, Infinity);
-      const last = flags.last === undefined ? undefined : Number(flags.last);
-      if (last !== undefined && !(Number.isInteger(last) && last > 0)) {
-        throw new Error("`--last` takes a positive whole number.");
-      }
+      const last = count("last");
       // A day alone is the start of that day where the command runs, as a
       // time without a zone is.
       const given = flags["comments-since"];
@@ -1104,11 +1527,53 @@ export async function main(
         throw new Error("`watch` takes over a terminal; run it in one.");
       }
       const board = boardFrom(deps, options);
-      return await watchBoard(board, {
+      return await watchBoard({
+        ...board,
+        viewer: await deps.identityDid(board.identity),
+      }, {
         terminal: deps.terminal,
         clock: deps.clock,
         connect: () => deps.openSession(board),
       });
+    }
+    case "browse": {
+      const [open] = take(0, 1);
+      if (!deps.stdin.isTerminal()) {
+        throw new Error("`browse` takes over a terminal; run it in one.");
+      }
+      const board = boardFrom(deps, options);
+      // Named before the board is read, by either name of its space.
+      const opened = open === undefined ? undefined : opening({
+        spaces: [board.space, await spaceDid(board.space)],
+        apiUrl: board.apiUrl,
+      }, open);
+      const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))
+        ?.trim();
+      const viewer = await deps.identityDid(board.identity);
+      const { browseBoard } = await loadBrowser();
+      return await browseBoard(
+        {
+          ...board,
+          viewer,
+          state: boardFile(
+            { browse: viewer },
+            board.apiUrl,
+            board.space,
+            board.board,
+            deps.env,
+          ),
+        },
+        {
+          terminal: deps.terminal,
+          clock: deps.clock,
+          connect: () => deps.openSession(board),
+          write: (request, signer, invocation) =>
+            browseWrite(deps, options, request, signer, invocation),
+          open: deps.openUrl,
+          copy: deps.copyText,
+        },
+        { open: opened, ...(agentName ? { agentName } : {}) },
+      );
     }
     case "sync":
       take(0, 0);
@@ -1139,6 +1604,10 @@ export async function main(
         deps,
       );
     }
+    case "unlink": {
+      const [topic, url] = take(2, 2);
+      return await unlinkAction(options, topic!, url!, deps);
+    }
     case "mention":
     case "unmention": {
       const [topic, other] = take(2, 2);
@@ -1147,9 +1616,80 @@ export async function main(
   }
 }
 
+/**
+ * Makes the write `request` for `browse`, signed as `agentName`, as the
+ * invocation `invocation`, through the command that makes it from the
+ * command line: what the command prints is the report, and a failure says
+ * whether the write may have committed, did and does not read back, or
+ * failed before it was made.
+ */
+export async function browseWrite(
+  deps: TopicsDeps,
+  options: TopicsOptions,
+  request: WriteRequest,
+  agentName: string,
+  invocation: string,
+): Promise<WriteOutcome> {
+  const printed: string[] = [];
+  const quiet: TopicsDeps = {
+    ...deps,
+    write: (text) => printed.push(text),
+    warn: () => {},
+  };
+  const as = { ...options, agentName, invocation };
+  try {
+    switch (request.verb) {
+      case "new":
+        await newAction(as, request.title, request.body, quiet);
+        break;
+      case "comment":
+        await commentAction(as, request.topic, request.text, quiet);
+        break;
+      case "body":
+        await bodyAction(as, request.topic, request.text, quiet);
+        break;
+      case "title":
+        await titleAction(as, request.topic, request.text, quiet);
+        break;
+      case "link":
+        await linkAction(
+          { ...as, kind: request.kind },
+          request.topic,
+          request.url,
+          request.label === "" ? undefined : request.label,
+          quiet,
+        );
+        break;
+      case "unlink":
+        await unlinkAction(as, request.topic, request.url, quiet);
+        break;
+      case "mention":
+      case "unmention":
+        await mentionAction(
+          as,
+          request.verb,
+          request.topic,
+          request.other,
+          quiet,
+        );
+        break;
+    }
+    return {
+      result: "written",
+      report: printed.join("\n").split("\n")[0] || "Done.",
+    };
+  } catch (error) {
+    return error instanceof UnsettledWrite
+      ? { result: "unsettled", message: error.reason }
+      : error instanceof UnconfirmedWrite
+      ? { result: "unconfirmed", message: error.message }
+      : { result: "failed", message: describeFailure(error) };
+  }
+}
+
 /** Reports `error` as what the command failed with, giving the exit status. */
 function failure(error: unknown): number {
-  console.error(messageOf(error));
+  console.error(describeFailure(error));
   return 1;
 }
 

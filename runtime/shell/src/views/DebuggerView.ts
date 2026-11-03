@@ -8,7 +8,7 @@ import type {
   RuntimeTelemetryMarkerResult,
   TimingStats,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { css, html, LitElement, TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
@@ -17,7 +17,7 @@ import { ResizableDrawerController } from "../lib/resizable-drawer-controller.ts
 
 import "./SchedulerGraphView.ts";
 
-import type { Logger, LoggerBreakdown } from "@commonfabric/utils/logger";
+import type { Logger, LoggerBreakdown } from "@commonfabric/logger";
 
 /**
  * Rendering options for a value shown in the debugger: a bounded glimpse on

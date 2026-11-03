@@ -30,10 +30,7 @@ import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import {
-  waitForSettled,
-  watermarkCell,
-} from "@commonfabric/runner/executor/watermark";
+import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { type MemorySpace, sendEvent } from "@commonfabric/runner";
 import {
   initializePiecesController,
@@ -144,11 +141,31 @@ describe("sx2 events (Phase 3 gates)", () => {
     if (cc) await cc.dispose();
   });
 
-  const settleAfter = async (space: MemorySpace, before: number) => {
-    await cc.runtime.storageManager.synced();
-    await waitForSettled(cc.runtime, space, before + 1, {
-      timeoutMs: 30_000,
+  /** Sends one event to `stream` and resolves once the server has admitted
+   * its append, which `storageManager.synced()` does not wait for. */
+  const fire = (
+    stream: Parameters<typeof sendEvent>[0],
+    options: { eventId?: string; session?: string } = {},
+  ): Promise<void> =>
+    new Promise<void>((resolve, reject) => {
+      sendEvent(stream, undefined, undefined, {
+        ...options,
+        onAppended: (delivery) => {
+          if (delivery.delivered) resolve();
+          else reject(new Error(`the append was refused: ${delivery.refused}`));
+        },
+      });
     });
+
+  /** Waits until the serving loop has covered every authored commit the
+   * server holds, the appends the caller awaited among them. Past it, the
+   * loop has drained and handled those events, and the stats count them. */
+  const settle = async (space: MemorySpace) => {
+    await cc.runtime.idle();
+    await cc.runtime.storageManager.synced();
+    const head = await cc.runtime.storageManager.open(space).serverHeadSeq?.();
+    assert(head !== undefined, "the ON arm's provider reports the head");
+    await waitForSettledThroughHead(cc.runtime, space, head);
   };
 
   it("server-processed handlers, duplicate submission, and rapid-fire coalescing (events.md §2/§4/§5; D-v2-2)", async () => {
@@ -174,15 +191,11 @@ describe("sx2 events (Phase 3 gates)", () => {
     // ---- server-processed handler + observation latency (context) ----
     const stats0 = await fetchStats();
     assert(stats0 !== undefined, "the ON arm exposes servingLoop stats");
-    const watermarkBefore =
-      (watermarkCell(cc.runtime, space).get() as { seq?: number } | undefined)
-        ?.seq ?? 0;
     const fireStart = performance.now();
-    resultCell.key("increment").send(undefined as never);
-    await cc.runtime.idle();
+    await fire(resultCell.key("increment"));
     // The echo renders immediately (speculation.md §3); the
     // AUTHORITATIVE value arrives with the settle.
-    await settleAfter(space, watermarkBefore);
+    await settle(space);
     await waitForValue(
       (value) => (value ?? 0) >= 1,
       "the served consequence to render",
@@ -205,28 +218,17 @@ describe("sx2 events (Phase 3 gates)", () => {
 
     // ---- duplicate submission (events.md §5) ----
     const beforeDup = (latestValue ?? 0) as number;
-    const dupWatermark =
-      (watermarkCell(cc.runtime, space).get() as { seq?: number } | undefined)
-        ?.seq ?? 0;
     // The caller-supplied eventId travels WITH the session it was
     // chosen within (main's WS-D invocation-identity contract — an
     // unscoped id is refused); the same (id, session, stream) pair
     // scopes to the same durable delivery id, which is exactly what
     // the dedupe horizon needs to see a duplicate.
-    sendEvent(
-      resultCell.key("increment"),
-      undefined,
-      undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
-    );
-    sendEvent(
-      resultCell.key("increment"),
-      undefined,
-      undefined,
-      { eventId: "sx2-dup-1", session: "sx2-dup-session" },
-    );
-    await cc.runtime.idle();
-    await settleAfter(space, dupWatermark);
+    const dup = { eventId: "sx2-dup-1", session: "sx2-dup-session" };
+    await Promise.all([
+      fire(resultCell.key("increment"), dup),
+      fire(resultCell.key("increment"), dup),
+    ]);
+    await settle(space);
     await waitForValue(
       (value) => (value ?? 0) >= beforeDup + 1,
       "the deduped consequence",
@@ -238,15 +240,13 @@ describe("sx2 events (Phase 3 gates)", () => {
     const N = 10;
     const statsBefore = await fetchStats();
     assert(statsBefore !== undefined);
-    const rapidWatermark =
-      (watermarkCell(cc.runtime, space).get() as { seq?: number } | undefined)
-        ?.seq ?? 0;
     const beforeRapid = (latestValue ?? 0) as number;
+    const appends: Promise<void>[] = [];
     for (let i = 0; i < N; i++) {
-      resultCell.key("increment").send(undefined as never);
+      appends.push(fire(resultCell.key("increment")));
     }
-    await cc.runtime.idle();
-    await settleAfter(space, rapidWatermark);
+    await Promise.all(appends);
+    await settle(space);
     await waitForValue(
       (value) => (value ?? 0) >= beforeRapid + N,
       "all N consequences (final-only value)",

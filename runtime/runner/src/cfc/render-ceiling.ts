@@ -4,8 +4,8 @@ import {
   cfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { CfcConfClause } from "./clause.ts";
 import { clauseAlternatives } from "./clause.ts";

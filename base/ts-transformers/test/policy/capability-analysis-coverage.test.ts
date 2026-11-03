@@ -761,8 +761,28 @@ Deno.test(
 Deno.test(
   "optional-presence alias truthiness check keeps the property presence-only",
   () => {
-    // A non-primitive optional member used only in a truthiness check records
-    // presence, not the payload shape (the isBooleanConditionUsage skip).
+    // A truthiness check on a non-primitive optional member records presence,
+    // not the payload shape, so the member read beside it is all that the
+    // analysis records (the isBooleanConditionUsage skip).
+    const input = getPaths(
+      analyze(`${CELL}
+        const fn = (input: { maybe?: { n: number } }) => {
+          const opt = input?.maybe;
+          if (!opt) { return 0; }
+          return opt.n;
+        };`),
+      "input",
+    );
+    assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["maybe.n"]);
+  },
+);
+
+Deno.test(
+  "optional-presence alias truthiness check with no other use reads the property",
+  () => {
+    // With nothing else using the member, the check is what the value is
+    // read for, and a member nothing reads is dropped from the input.
     const input = getPaths(
       analyze(`${CELL}
         const fn = (input: { maybe?: { n: number } }) => {
@@ -773,6 +793,7 @@ Deno.test(
       "input",
     );
     assertEquals(input.wildcard, false);
+    assertEquals(input.readPaths, ["maybe"]);
   },
 );
 

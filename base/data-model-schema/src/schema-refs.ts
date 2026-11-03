@@ -14,8 +14,8 @@ import { isDeepFrozen } from "@commonfabric/data-model";
 import {
   decodeJsonPointer,
   encodeJsonPointer,
-} from "@commonfabric/utils/json-pointer";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+} from "@commonfabric/json/json-pointer";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { forEachSchema } from "./schema-walk.ts";
 
 /**

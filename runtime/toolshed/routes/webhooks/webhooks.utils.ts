@@ -1,4 +1,4 @@
-import { getLogger } from "@commonfabric/utils/logger";
+import { getLogger } from "@commonfabric/logger";
 import { sha256 } from "@/lib/sha2.ts";
 import { runtime } from "@/index.ts";
 import { identity } from "@/lib/identity.ts";

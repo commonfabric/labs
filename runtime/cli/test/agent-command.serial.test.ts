@@ -354,6 +354,64 @@ describe("cf agent runner", () => {
     expect(started).toEqual([]);
   });
 
+  it("offers the command tools and hands runs the endpoint and actor `--commands-url` and `--commands-actor` name", async () => {
+    const { deps, started } = stubDeps();
+
+    await run(deps, [
+      "runner",
+      "-i",
+      "/keys/me.key",
+      "-a",
+      "http://localhost:8100",
+      "--commands-url",
+      "http://127.0.0.1:8090",
+      "--commands-actor",
+      "agent:agent-runner",
+    ]);
+
+    expect(started[0].tools).toEqual(
+      expect.arrayContaining(["list_commands", "run_command"]),
+    );
+    expect(started[0].commands).toEqual({
+      url: "http://127.0.0.1:8090",
+      actor: "agent:agent-runner",
+    });
+  });
+
+  it("throws a validation error for a command endpoint without its actor, or a command tool without its endpoint", async () => {
+    const { deps, started } = stubDeps();
+    const base = ["runner", "-i", "/k", "-a", "http://localhost:8100"];
+
+    await expect(
+      run(deps, [...base, "--commands-url", "http://127.0.0.1:8090"]),
+    ).rejects.toThrow(/go together/);
+    await expect(run(deps, [...base, "--tools", "list_commands"]))
+      .rejects.toThrow(/--commands-url/);
+    await expect(
+      run(deps, [
+        ...base,
+        "--commands-url",
+        "http://127.0.0.1:8090",
+        "--commands-actor",
+        "",
+      ]),
+    ).rejects.toThrow(/Missing value for option "--commands-actor"/);
+    for (
+      const url of ["http://127.0.0.1:8090/?a=1", "http://127.0.0.1:8090/#"]
+    ) {
+      await expect(
+        run(deps, [
+          ...base,
+          "--commands-url",
+          url,
+          "--commands-actor",
+          "agent:agent-runner",
+        ]),
+      ).rejects.toThrow(/no query or fragment/);
+    }
+    expect(started).toEqual([]);
+  });
+
   it("throws a validation error, and starts nothing, for a missing identity or API URL", async () => {
     const { deps, started } = stubDeps();
 

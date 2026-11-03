@@ -21,6 +21,8 @@ import { createDiffSemantics, createSemantics } from "./semantics.ts";
 export const typeScriptLanguage: Language = {
   id: "typescript",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

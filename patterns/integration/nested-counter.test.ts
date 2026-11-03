@@ -21,7 +21,7 @@ import {
   PieceController,
   PiecesController,
 } from "./pieces-controller.ts";
-import { defer, type Deferred } from "@commonfabric/utils/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 
 const { API_URL, FRONTEND_URL } = env;
 

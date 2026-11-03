@@ -34,7 +34,7 @@ import {
 } from "@commonfabric/integration/shell-utils";
 import { appViewToUrlPath } from "@commonfabric/navigation";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import { join } from "@std/path";
 import {
   clickCfButton,

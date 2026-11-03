@@ -516,7 +516,7 @@ export { le as atomLe };
 
       it("reports value imports reaching outside the kernel, the api package included", () => {
         const file = kernelFile(
-          `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+          `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `import type { Tx } from "../../storage/interface.ts";\n` +
             `import { clauseLe } from "./label.ts";\n` +
             `import { atom } from "@commonfabric/api/cfc";\n` +
@@ -527,7 +527,7 @@ export { le as atomLe };
           .toEqual([
             [
               1,
-              "imports `@commonfabric/utils/deep-equal`, which is outside " +
+              "imports `@commonfabric/js-values/deep-equal`, which is outside " +
               "the kernel; a kernel function takes no transaction, reads " +
               "no dial and calls no hook, and a value it needs from outside " +
               "is declared inside the kernel",
@@ -546,7 +546,7 @@ export { le as atomLe };
         const manifest: SourceFile = {
           path: `${KERNEL_DIR}manifest.ts`,
           text:
-            `import { deepEqual } from "@commonfabric/utils/deep-equal";\n` +
+            `import { deepEqual } from "@commonfabric/js-values/deep-equal";\n` +
             `export const rows = () => [];\n`,
         };
         expect(
@@ -554,7 +554,7 @@ export { le as atomLe };
             collectFindings(input({ kernelFiles: [atomLeSource, manifest] })),
           ),
         ).toEqual([
-          "imports `@commonfabric/utils/deep-equal`, which is outside the " +
+          "imports `@commonfabric/js-values/deep-equal`, which is outside the " +
           "kernel; a kernel function takes no transaction, reads no dial " +
           "and calls no hook, and a value it needs from outside is " +
           "declared inside the kernel",

@@ -7,7 +7,7 @@
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isCell } from "@commonfabric/runner";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
  * Stands in for a value with no identity of its own to key by. A record cannot

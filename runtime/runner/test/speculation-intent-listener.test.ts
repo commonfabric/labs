@@ -75,7 +75,7 @@ import {
   SpeculationOverlayDestination,
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   flushMicrotasks,

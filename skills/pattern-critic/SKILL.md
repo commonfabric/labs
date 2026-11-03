@@ -14,8 +14,7 @@ there.
 Whatever else happens, honor the output contract: emit the guide's
 [PASS]/[FAIL]/[WARN] categorized checklist and end with the Summary counts and
 the Priority Fixes list. If nothing fails, say so explicitly in two lines. Write
-the review to the output path you were given (in the factory:
-`reviews/critic-NN.md`).
+the review to the output path you were given.
 
 Be explicit about SES and determinism issues. `Date.now()` (or no-argument
 `new Date()`) and `Math.random()` are the gated ambient intrinsics: allowed only

@@ -6,10 +6,11 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { defer } from "@commonfabric/utils/defer";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { defer } from "@commonfabric/async/defer";
 
 import { ACLManager } from "../src/acl-manager.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { readConfirmed } from "../src/confirmed-read.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
@@ -42,6 +43,7 @@ class LoopbackSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -99,6 +101,7 @@ describe("refused derived write", () => {
 
   beforeEach(() => {
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://refused-derived-write-${crypto.randomUUID()}`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: AUDIENCE },

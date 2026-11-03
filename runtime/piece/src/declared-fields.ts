@@ -20,7 +20,7 @@ import { localRefTarget } from "@commonfabric/runner/cfc/schema-sanitization";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
-} from "@commonfabric/utils/types";
+} from "@commonfabric/js-values/types";
 
 /** Whether `schema` is a schema object rather than a boolean or absent. */
 export function isSchemaObject(

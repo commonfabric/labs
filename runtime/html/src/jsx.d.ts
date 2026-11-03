@@ -2911,6 +2911,7 @@ interface CFAutocompleteElement extends CFHTMLElement {}
 interface CFSelectElement extends CFHTMLElement {}
 interface CFRadioGroupElement extends CFHTMLElement {}
 interface CFPickerElement extends CFHTMLElement {}
+interface CFSuggestionsElement extends CFHTMLElement {}
 interface CFToolsChipElement extends CFHTMLElement {}
 interface CFHeadingElement extends CFHTMLElement {}
 interface CFCollapsibleElement extends CFHTMLElement {}
@@ -3601,6 +3602,7 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "src": string;
+  "script"?: string;
   "bridge"?: {
     readonly resources: Readonly<Record<string, object>>;
   };
@@ -3989,6 +3991,23 @@ interface CFPickerAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-confirm"?: EventHandler<{ index: number; value: any }>;
   "oncf-focus"?: EventHandler<any>;
   "oncf-blur"?: EventHandler<any>;
+}
+
+interface CFSuggestionsAttributes<T> extends CFHTMLAttributes<T> {
+  /** The ranked suggestion cards, best first. */
+  "$items": CellLike<any[]>;
+  /** The thing whose anchored cards are drawn. */
+  "$about": CellLike<unknown>;
+  /** Draws only cards carrying at least one of these tags. */
+  tags?: string[];
+  /** Fires when the person takes a card; `card` links to its row. */
+  "oncf-suggestion-take"?: EventHandler<
+    { id: string; card_revision?: string; card: unknown }
+  >;
+  /** Fires once per card, when the card is first shown. */
+  "oncf-suggestion-seen"?: EventHandler<
+    { id: string; card_revision?: string; card: unknown }
+  >;
 }
 
 interface CFToolsChipAttributes<T> extends CFHTMLAttributes<T> {
@@ -5127,6 +5146,10 @@ declare global {
       "cf-picker": CFDOM.DetailedHTMLProps<
         CFPickerAttributes<CFPickerElement>,
         CFPickerElement
+      >;
+      "cf-suggestions": CFDOM.DetailedHTMLProps<
+        CFSuggestionsAttributes<CFSuggestionsElement>,
+        CFSuggestionsElement
       >;
       "cf-tools-chip": CFDOM.DetailedHTMLProps<
         CFToolsChipAttributes<CFToolsChipElement>,

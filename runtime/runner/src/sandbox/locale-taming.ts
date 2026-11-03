@@ -35,7 +35,7 @@
  * remain host-local.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 const DEFAULT_LOCALE = "en-US";
 const DEFAULT_TIME_ZONE = "UTC";

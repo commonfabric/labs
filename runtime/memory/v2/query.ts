@@ -1,7 +1,7 @@
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
-import { LRUCache } from "@commonfabric/utils/cache";
-import { getLogger } from "@commonfabric/utils/logger";
-import { StagedMap } from "@commonfabric/utils/staged-map";
+import { LRUCache } from "@commonfabric/collections/cache";
+import { getLogger } from "@commonfabric/logger";
+import { StagedMap } from "@commonfabric/collections/staged-map";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
   hashSchema,
@@ -35,7 +35,7 @@ import {
   schemaTrackerCoversSelector,
   schemaTrackerKey,
 } from "@commonfabric/runner/graph-query";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   lookupSchemaDocument,

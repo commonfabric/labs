@@ -4,9 +4,9 @@ Under server execution, the three verbs that give a space a pattern — upload a
 program, instantiate a piece from it, and replace a piece's source — run on the
 space's serving runtime. The client's part is to resolve the program from disk
 and request; the serving side compiles, materializes or replaces, and commits.
-This document is the contract for that: the route a client calls, the authority
-it needs, where the verb runs, what comes back, and what still happens on the
-client.
+This document is the contract for that: how a client sends a verb, the
+authority it needs, where the verb runs, what comes back, and what still happens
+on the client.
 
 A source update carries module-update authority, which
 [`module-loading.md`](../specs/module-loading.md) requires to be published from
@@ -24,24 +24,59 @@ serving runtime, and a check does not freeze the space
 
 The verbs run only when `EXPERIMENTAL_SERVER_EXECUTION` selects the ON arm
 ([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md#serverexecution)).
-Off the flag a deployment has no serving loop, the route answers 503, and `cf`
-performs each verb in its own process as it always has. `cf test` runs a whole
-stack in memory and is untouched either way.
+Off the flag a deployment has no serving loop, its memory server does not
+advertise `patternLifecycle`, and `cf` performs each verb in its own process.
+`cf test` runs a whole stack in memory and is untouched either way.
 
-## The route
+## Sending a verb
 
-Three POST endpoints under `/api/pattern-lifecycle`, mounted by
-`runtime/toolshed/routes/pattern-lifecycle/`. Every body carries `space`, the
-DID of the space acted in. A verb that takes a pattern takes it one of two ways,
-and exactly one: `program` — the program as the client resolved it, every file
-by name, with `main`, an optional `mainExport`, optional `sourceRoots`, and
-optional `dataFiles` — or `pattern`, a `{ identity, symbol }` pointer to a
-closure the space already holds. A body naming both or neither fails validation.
+A client sends a verb as a `pattern.lifecycle` request on its memory session on
+the space
+([`04-protocol.md` §4.3.10](../specs/memory-v2/04-protocol.md#4310-patternlifecycle--run-a-pattern-lifecycle-verb)),
+which a memory server takes while it advertises the `patternLifecycle` hello
+flag. The session reaches the process that serves the space: a deployment that
+runs several toolshed processes routes each space's memory WebSocket, by its
+`space=<did>` query parameter, to one process, and the serving loop serves the
+space on that process. A request takes at most 8 MiB in UTF-8
+(`PATTERN_LIFECYCLE_MAX_BYTES`). On a connection through the memory router a
+request takes at most 4 MiB, the router's request bound, and the client refuses
+a larger one before sending it.
 
-| verb          | body                                                                                                                     | receipt                                                                                                                                          |
+The request is `{ type: "pattern.lifecycle", requestId, space, sessionId, verb,
+body }`, where `verb` is `upload`, `instantiate`, or `setsrc`, and `body` holds
+the verb's arguments, [below](#arguments-and-receipts); the session supplies the
+space. The response's `ok` is the verb's receipt.
+
+The toolshed installs its handler on the memory server with
+`Server.setPatternLifecycleHandler()` once the serving loop starts, and removes
+it at shutdown; the server advertises `patternLifecycle` exactly while a handler
+is installed. The handler (`lifecycleRequestHandler` in
+`runtime/toolshed/lib/pattern-lifecycle-handler.ts`) runs each request in a
+trace span of its own, validates `body` against the verb's schema, and runs the
+verb through `processLifecycleCall()` in
+`runtime/toolshed/lib/pattern-lifecycle.ts`.
+
+The memory server finishes handling the request's frame once the verb has
+started, and sends the response when the verb settles. Frames sent after it for
+the same space on that connection are handled without waiting for the verb, and
+on a routed connection the request's credit returns to the router at once.
+`SpaceSession.runPatternLifecycle(verb, body)` in
+`runtime/memory/v2/client.ts` sends the request, and
+`IStorageManager.runPatternLifecycle(space, verb, body)` sends it on a storage
+manager's session for `space`.
+
+### Arguments and receipts
+
+A verb that takes a pattern takes it one of two ways, and exactly one: `program`
+— the program as the client resolved it, every file by name, with `main`, an
+optional `mainExport`, optional `sourceRoots`, and optional `dataFiles` — or
+`pattern`, a `{ identity, symbol }` pointer to a closure the space already
+holds. A body naming both or neither fails validation.
+
+| verb          | arguments                                                                                                                | receipt                                                                                                                                          |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `upload`      | `program`                                                                                                                | `{ pattern }` — the pointer the space now holds the program under                                                                                |
-| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                                 |
+| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error?, attempt?, terminal? }, timings? }`                                       |
 | `setsrc`      | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log |
 
 Once creation commits, a preparation or completion refusal returns the created
@@ -63,39 +98,48 @@ key as `cf.request_key` — the receipt's, which the server generates when the
 caller sends none, or for a refusal the caller's own — so a creation a caller
 reports by its key can be found among the traces. If a verb fails, its completed
 phases still reach the request span; phases never reached are absent. The
-failure keeps its refusal code and response status across the worker port.
+failure keeps its refusal code across the worker port.
 
-A refusal is a JSON body `{ error, code }`. `code` is stable and is what a
-client branches on; `error` is prose for a person.
+### Refusals
 
-| status | code                                             | meaning                                                                                                                                                       |
-| ------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 401    | `unauthorized`                                   | no valid first-party request proof                                                                                                                            |
-| 403    | `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                            |
-| 404    | `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                    |
-| 409    | `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against                                               |
-| 413    | `payload-too-large`                              | the body exceeds the limit, checked before authentication                                                                                                     |
-| 422    | `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set |
-| 429    | `rate-limited`                                   | the caller's request budget is spent, checked before authentication                                                                                           |
-| 500    | `internal`                                       | the serving side failed for a reason it does not name                                                                                                         |
-| 503    | `server-execution-off`, `space-not-served`       | no serving loop on this deployment; the space's lease is held elsewhere                                                                                       |
+A refusal is an error response named `PatternLifecycleRefusal`. Its `code` is
+stable and is what a client branches on; its `message` is prose for a person.
 
-Body validation runs after authentication and answers 422 with the validator's
-own body — a body naming both `program` and `pattern`, or neither, fails there —
-so a client that sends what the schema describes never sees it.
+| code                                             | meaning                                                                                                                                                       |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycle-unsupported`                          | raised by the client before sending: the memory server does not advertise `patternLifecycle`                                                                  |
+| `payload-too-large`                              | the message takes more than 8 MiB in UTF-8; the client refuses before sending past that, or past 4 MiB on a routed connection                                 |
+| `invalid-request`                                | `body` does not match the verb's schema, including a body naming both `program` and `pattern`, or neither                                                     |
+| `forbidden`                                      | the caller is not a writer of the space, or there is no such space                                                                                            |
+| `pattern-not-found`, `piece-not-found`           | the named pattern, or the named piece, is not in the space                                                                                                    |
+| `slug-taken`, `source-moved`                     | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against                                               |
+| `compile-failed`, `setup-failed`, `incompatible` | the program did not compile; setup refused the pattern or the argument; the candidate cannot run over the piece's retained state and the override was not set |
+| `server-execution-off`                           | the memory server has no handler installed: no serving loop runs on this deployment                                                                           |
+| `space-not-served`                               | the serving loop on this process cannot serve the space                                                                                                       |
+| `internal`                                       | the handler threw, or the serving side failed for a reason it does not name                                                                                   |
+
+`cf` takes every refusal but `internal` and `space-not-served` as a decision
+that the verb did not run. It takes those two, and a connection lost before the
+response, as an unknown outcome, for which `cf piece new` prints the request key
+to retry with.
 
 ## Authority
 
-Every call carries the CF1 first-party request proof
-([`toolshed-access-control.md`](../specs/toolshed-access-control.md)), signed
-with the caller's own identity key; `cf` signs with the identity it connects as.
-The route then requires that DID to hold WRITE or OWNER on the space's ACL,
-resolved the way the memory server resolves an authored commit — the wildcard
-grant and the service principals count — so a caller the memory server would
-admit writing directly is admitted here, and no other. A deployment with ACL
-enforcement off admits every authenticated caller, as its memory server does.
-One denial covers a malformed DID, a space the deployment does not host, an
-absent ACL, and a caller without a grant, so the route is not an existence
+A `pattern.lifecycle` request runs as the DID its memory session was opened as
+(the session's principal). Before the verb starts, the memory server requires
+that DID itself to hold WRITE on the space, resolved as it resolves an authored
+commit. A grant the session holds only through a proof chain's root issuer does
+not count, since the verb commits with the requester's own trust. An anonymous
+session, or a principal without WRITE, is refused `forbidden`. `cf` opens its
+sessions as the identity it connects as.
+
+The handler then checks that DID against the space's ACL itself: it must hold
+WRITE or OWNER there, resolved the way the memory server resolves an authored
+commit — the wildcard grant and the service principals count — so a caller the
+memory server would admit writing directly is admitted, and no other. A
+deployment with ACL enforcement off admits every authenticated caller, as its
+memory server does. One denial covers a malformed DID, a space the deployment does not host,
+an absent ACL, and a caller without a grant, so the check is not an existence
 oracle over the deployment's spaces.
 
 The hosted authority check reads the ACL through the memory server's internal
@@ -112,13 +156,13 @@ setup mints attributes to the requester rather than to the serving identity.
 
 `ExecutorHost.runLifecycleVerb` hands a verb to the space's `SpaceServer`,
 activating the space if it is parked. A verb request is an activation trigger of
-its own: the requester holds no session on the space, so the criteria the
-session-open and admission hooks consult do not apply. The `SpaceServer` queues
-the verb and runs it as a step of its next wave cycle, after the root ensure and
-ahead of the event drain, awaited in full, so every transaction the verb seals
-joins that cycle's wave. The request settles once the wave has committed and the
-verb's `confirm` step — a read of the durable state the verb was to leave — has
-passed. A seal's acceptance is not durability, since the wave commit can
+its own, apart from the criteria the session-open and admission hooks consult.
+The
+`SpaceServer` queues the verb and runs it as a step of its next wave cycle,
+after the root ensure and ahead of the event drain, awaited in full, so every
+transaction the verb seals joins that cycle's wave. The request settles once the
+wave has committed and the verb's `confirm` step — a read of the durable state
+the verb was to leave — has passed. A seal's acceptance is not durability, since the wave commit can
 withdraw a contribution, and this is what keeps a receipt from naming a piece
 that is not there. A space that parks before a queued verb runs rejects it, and
 the host queues the verb once more on the successor tenure.
@@ -150,20 +194,27 @@ deterministic piece identity, original pattern, and slug. A legitimate later
 source update can change the piece's current pattern while registration remains
 retryable.
 
-With `register: true`, the route prepares the default pattern's `addPiece`
+With `register: true`, the handler prepares the default pattern's `addPiece`
 delivery and retains its attempt in a serving wave. It then invokes the stream
 through trusted ingress, retaining the authenticated caller's identity. The
 caller must also have WRITE access to the stream's target space before any
 trusted observation or delivery, including when a root exports a foreign
 handler. An observer outside the serving wave watches the prepared stream's
 durable event sidecar, including a read after subscription to recover already
-completed replays. A separate serving wave reads the computed registry and
-records `registration.status: "handled"`; its receipt is checked after the wave
-commits. The process needs delegation authority, without a READ or WRITE grant
-in the space: private reads and receipt writes use the serving runtime, and the
-out-of-wave observer reads only the prepared event's sidecar through the trusted
-memory service. Waiting outside the wave lets the event's consequences commit.
-This permits a default pattern to derive its registry from panels; the route
+completed replays. The event goes to the process's own memory server, except
+that a stream in a space other than the verb's, on a toolshed routing its
+crossings (`SERVER_EXECUTION_OWNER_ROUTING`), is appended to through that
+space's owner on a routed session, and the observer watches the stream's
+document on that session for its changes; the readback of the outcome, on the
+subscription and on each wake, stays on the process's own trusted memory
+service, as does the recovery read. A separate serving wave reads the computed
+registry and records `registration.status: "handled"`; its receipt is checked
+after the wave commits. The process needs delegation authority, without a READ
+or WRITE grant in the space: private reads and receipt writes use the serving
+runtime, and the out-of-wave observer reads only the prepared event's sidecar
+through the trusted memory service. Waiting outside the wave lets the event's
+consequences commit.
+This permits a default pattern to derive its registry from panels; the handler
 never writes that export. The event and receipt make a lost response retryable
 without another panel. `register: false` returns `skipped`. If registration
 fails after setup, including a missing root or `addPiece` handler, the
@@ -213,8 +264,16 @@ is a conflict, and every document the transaction writes is held to the store
 seq the transaction was stamped at. A transaction that read state sealed into
 the open wave is refused, since the wave could still withdraw that state and a
 commit made durable over it could not be withdrawn with it; a caller stages such
-state in an earlier cycle. The replica takes the writes only once the store has
-accepted them, so no run reads them as pending state a refusal could roll back.
+state in an earlier cycle. A caller that runs beside the loop's cycles rather
+than inside one waits for that cycle instead: the source reconciler's follow of
+a piece's origin, which the loop runs before the tenure's first start of the
+piece, compiles the candidate's closure into the open wave where the origin
+offers source the piece does not run, and where that transition is a source
+update — a `system:` origin, and a running program the piece retains — awaits
+`Runtime.sealsCommitted`, resolved once every wave open at the call has
+committed, before the adopting write, a direct commit in that case, reads the
+closure. The replica takes the writes only once the store has accepted them, so
+no run reads them as pending state a refusal could roll back.
 
 A wave open when the direct commit lands learns of it once the replica has
 applied it. Its commit step treats a document the direct commit wrote, sitting
@@ -251,7 +310,8 @@ failed (`failures`).
 
 The seed this implements records the direction as "client speculative-local,
 server-state wins", and for `cf` there is nothing to speculate: the CLI resolves
-the program locally — reading the files, pinning fabric imports — and sends it.
+the program locally — reading the files, pinning fabric imports — and sends it
+on the space's memory session.
 What `cf piece new` still does in its own process after the receipt is what any
 client does when it opens a piece: it starts the piece, which under the flag
 runs the graph as speculation while the serving loop serves the derived values.
@@ -282,8 +342,8 @@ serving loop goes on serving; that refusal is a failed refresh too. A piece addr
 client-side path, since the verb takes the piece's id alone.
 
 Another client of the piece controller, the browser shell, keeps the client-side
-shape. Moving it is its own change; the served operations and the route are what
-it moves onto.
+shape. Moving it is its own change; the served operations and the
+`pattern.lifecycle` request are what it moves onto.
 
 ## Tests
 
@@ -306,11 +366,16 @@ it moves onto.
   and a plain `startPiece()` resolves over the same refusal;
   `runtime/cli/test/piece.test.ts` checks that a served `setsrc` refreshes
   the piece through that option.
-- `runtime/toolshed/routes/pattern-lifecycle/` — the writer check against a
-  real ACL document, the status each refusal maps to, and the middleware order
-  in front of the handler.
-- `runtime/cli/test/pattern-lifecycle.test.ts` — the client's signing and
-  refusal handling against a stubbed fetch;
+- `runtime/memory/test/v2-pattern-lifecycle.test.ts` — the
+  `pattern.lifecycle` request: the `patternLifecycle` flag, the session and
+  WRITE checks, each refusal code, the size bound on both sides, and a frame
+  handled while the verb still runs.
+- `runtime/toolshed/lib/pattern-lifecycle.test.ts` — the writer check against
+  a real ACL document, the code each refusal carries, and a session request's
+  validation and outcome; `runtime/toolshed/lib/pattern-lifecycle-handler.test.ts`
+  — the handler reading a hosted space's ACL through the memory server.
+- `runtime/cli/test/pattern-lifecycle.test.ts` — the client's arguments on the
+  session and its refusal handling against a stubbed session;
   `runtime/cli/test/piece-integration.test.ts` and
   `runtime/cli/integration/integration.sh` drive the real verbs against a
   toolshed in both CI arms.

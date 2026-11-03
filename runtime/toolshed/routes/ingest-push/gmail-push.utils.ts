@@ -18,8 +18,8 @@
 import { errors, jwtVerify, type JWTVerifyGetKey } from "@panva/jose";
 import { sha256 } from "@commonfabric/content-hash";
 import type { JSONSchema, MemorySpace, Runtime } from "@commonfabric/runner";
-import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
   channelRefusal,

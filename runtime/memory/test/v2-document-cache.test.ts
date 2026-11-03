@@ -16,7 +16,7 @@ import { ensureDir } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 import { join, toFileUrl } from "@std/path";
 
-import { spliceAll } from "@commonfabric/utils/arrays";
+import { spliceAll } from "@commonfabric/collections/splice";
 import {
   applyCommit,
   close,

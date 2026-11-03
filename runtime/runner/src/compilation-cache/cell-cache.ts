@@ -7,8 +7,8 @@ import type {
   PatternCoverageSpan,
 } from "@commonfabric/ts-transformers";
 import { isBuilderSourceSitesV1 } from "@commonfabric/ts-transformers/runtime-contract";
-import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { getLogger } from "@commonfabric/logger";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";

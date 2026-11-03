@@ -17,7 +17,7 @@
  */
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import {
   HARNESS_CLIENT_ACTION_RESULT_MAX_LENGTH,
   type HarnessClientAction,

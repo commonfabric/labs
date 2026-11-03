@@ -10,6 +10,7 @@
  * what it shows, and source is read through the CLI.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type {
   PatternIndexEvent,
   PatternIndexListedPattern,
@@ -43,9 +44,6 @@ interface OpenPattern {
   /** Why `events` is absent when its read failed rather than pending. */
   eventsError?: string;
 }
-
-const reason = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 const prettyJson = (value: unknown): string => JSON.stringify(value, null, 2);
 
@@ -140,7 +138,7 @@ export class ConsoleIndexView extends LitElement {
       this.patternsError = undefined;
     } catch (error) {
       if (generation !== this.#refreshes) return;
-      this.patternsError = reason(error);
+      this.patternsError = describeFailure(error);
     }
   }
 
@@ -152,7 +150,7 @@ export class ConsoleIndexView extends LitElement {
       this.eventsError = undefined;
     } catch (error) {
       if (generation !== this.#refreshes) return;
-      this.eventsError = reason(error);
+      this.eventsError = describeFailure(error);
     }
   }
 
@@ -172,8 +170,8 @@ export class ConsoleIndexView extends LitElement {
     const read = ++this.#detailReads;
     this.open = { patternId };
     const [pattern, events] = await Promise.all([
-      readIndexPattern(patternId).catch((error: unknown) => reason(error)),
-      listIndexEvents({ patternId }).catch((error: unknown) => reason(error)),
+      readIndexPattern(patternId).catch(describeFailure),
+      listIndexEvents({ patternId }).catch(describeFailure),
     ]);
     if (read !== this.#detailReads) {
       return;
@@ -209,7 +207,7 @@ export class ConsoleIndexView extends LitElement {
       if (run !== this.#searches) {
         return;
       }
-      this.searchError = reason(error);
+      this.searchError = describeFailure(error);
       this.searchResults = undefined;
     } finally {
       if (run === this.#searches) {

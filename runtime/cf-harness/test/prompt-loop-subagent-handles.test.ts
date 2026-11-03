@@ -1540,7 +1540,7 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).toContain(
       "A research handle (a cfh:v: token) named in your task holds findings the parent already established",
     );
-    expect(childSystemPrompt).toContain(
+    expect(childSystemPrompt).not.toContain(
       "Ask what remains unclear rather than commissioning another whole app",
     );
     expect(childUserPrompt).toContain(minted.token);

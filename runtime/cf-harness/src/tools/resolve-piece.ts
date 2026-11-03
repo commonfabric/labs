@@ -127,13 +127,13 @@ export const resolvePieceTool: HarnessToolDefinition<
           case "missing-piece-id":
             return error(
               "not-found",
-              "That slug does not resolve to a usable piece in this session's space. Ask for its exact slug or an attachment.",
+              "That slug does not resolve to a usable piece in this session's space.",
             );
         }
       }
       return error(
         "unavailable",
-        "The piece address could not be checked. Ask the user to attach the piece; do not infer that it is absent.",
+        "The piece address could not be checked; do not infer that it is absent.",
       );
     }
   },

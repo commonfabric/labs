@@ -15,7 +15,7 @@ import {
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
-import { maxOf } from "@commonfabric/utils/math";
+import { maxOf } from "@commonfabric/collections/math";
 import {
   DISCRETIONARY_SECONDS,
   FILL_DENSITY_SHARE,
@@ -1697,7 +1697,7 @@ export function placedOnlyMandatory(laid: Pick<Plan, "lanes">): boolean {
  * membership, so a reason added later is held back like any other and
  * does not become non-gating without anybody deciding that it should.
  */
-function excused(manifest: Manifest): Manifest["withheld"] {
+export function excused(manifest: Manifest): Manifest["withheld"] {
   return manifest.withheld.filter((held) => held.reason === "flaky");
 }
 

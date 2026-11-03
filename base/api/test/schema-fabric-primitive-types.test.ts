@@ -18,7 +18,7 @@ import type {
   FabricPrimitiveSchemaType,
 } from "@commonfabric/api";
 import type { Schema } from "@commonfabric/api/schema";
-import type { Equal, MustBeTrue } from "@commonfabric/utils/types";
+import type { Equal, MustBeTrue } from "@commonfabric/js-values/types";
 
 /** The inference for each name in the vocabulary, keyed by the name. */
 type InferredByName = {

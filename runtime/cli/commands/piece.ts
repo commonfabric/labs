@@ -24,14 +24,18 @@ import { listFlags } from "@commonfabric/piece/refusal";
 import ports from "@commonfabric/ports" with { type: "json" };
 import { isSlugAddress, parseCellPath, UI } from "@commonfabric/runner";
 import {
+  pagePathSegments,
+  readSpaceSegment,
+} from "@commonfabric/runner/fabric-url";
+import {
   encodeJsonPointer,
   linkPathSegmentToCellPathSegment,
   parseCellReference,
   parseScopedIdSegment,
   renderCellReference,
 } from "@commonfabric/runner/shared";
-import { decode } from "@commonfabric/utils/encoding";
-import { maxOf } from "@commonfabric/utils/math";
+import { decode } from "@commonfabric/text/utf8";
+import { maxOf } from "@commonfabric/collections/math";
 
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
@@ -66,6 +70,7 @@ import {
 import { cliCommand, cliText } from "../lib/cli-name.ts";
 import { toCompactDebugString } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { reservesStdoutForCommandOutput } from "../lib/json-output.ts";
 import {
@@ -73,7 +78,6 @@ import {
   normalizeLLMFriendlyRef,
   splitArgumentSuffix,
 } from "../lib/llm-friendly-ref.ts";
-import { renderPiece } from "../lib/piece-render.ts";
 import type {
   PieceDescription,
   PieceFieldDescription,
@@ -891,7 +895,7 @@ export function exitPieceCallFailure(
   }
   const printError = deps?.printError ?? console.error;
   const exit = deps?.exit ?? Deno.exit;
-  printError(error instanceof Error ? error.message : String(error));
+  printError(describeFailure(error));
   // Where the invocation stopped decides retry semantics: anything at or
   // past "dispatched" retries SAFELY ONLY with this same id. At-most-once
   // is per COMMIT, not per execution: a same-id retry runs the handler
@@ -1557,6 +1561,20 @@ export function targetOptions(
   env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.");
   option("-i,--identity <path:string>", "Path to an identity keyfile.");
   if (space) {
+    // A chain file is what `cf delegation issue` writes for the identity:
+    // the delegations its sessions present to open a space another key
+    // owns. A command that acts on no existing space holds none.
+    env(
+      "CF_DELEGATIONS=<path:string>",
+      "Path to a delegation chain file the identity holds.",
+    );
+    const delegations = [
+      "--delegations <path:string>",
+      "Path to a delegation chain file the identity holds. Repeatable.",
+      { collect: true },
+    ] as const;
+    if (opts.global) cmd.globalOption(...delegations);
+    else cmd.option(...delegations);
     env("CF_SPACE=<space:string>", "The space name or DID.");
     option("-s,--space <space:string>", "The space name or DID");
   }
@@ -1680,7 +1698,15 @@ before qualifiers or path, to select the arguments cell the way --input does.`,
     )
     .option(
       "--step",
-      "Start and recompute the piece in this session before reading",
+      "Start and recompute the piece in this session before reading. Under " +
+        "server execution every read already recomputes, on the server",
+    )
+    .option(
+      "--no-run",
+      "Read what the store holds now, without asking the server to recompute " +
+        "a derived value or waiting for it. A value nothing has derived yet " +
+        "reads as null",
+      { conflicts: ["step"] },
     )
     .option(
       "--json",
@@ -2163,7 +2189,12 @@ stored clause the input's confidentiality list does not name is removed from
 the declared label, from the labels derived from what was written there (the
 shape and value entries get-label shows), and from a link's own label. The
 input holds confidentiality alone, naming only clauses the path already
-stores. Labels at other paths, an ancestor's included, are not changed.`,
+stores. Labels at other paths, an ancestor's included, are not changed. A write
+redirect at the path is followed, as a write follows it, and the labels where
+it leads are lowered; with --link-slot, the labels of the link stored at the
+path are lowered instead. Use --link-slot when a lowering refuses on the label
+of a write redirect the path follows: the clause is on the link itself, not on
+where it leads.`,
       ),
     )
     .usage(`${pieceUsage} [path]`)
@@ -2185,6 +2216,12 @@ stores. Labels at other paths, an ancestor's included, are not changed.`,
       ),
       "Remove every confidentiality clause stored at a value you own.",
     )
+    .example(
+      cliText(
+        `echo '{"confidentiality":[]}' | cf ${spelling} ${EX_ID} ${EX_COMP_PIECE} profile --dangerously-allow-lowering-confidentiality --link-slot`,
+      ),
+      "Remove the confidentiality clauses a link stores on itself.",
+    )
     .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_PATH_HELP)
     .option(
       "--input",
@@ -2200,8 +2237,18 @@ stores. Labels at other paths, an ancestor's included, are not changed.`,
         "alone: its DID, User, Context or Resource naming it, or its own " +
         "space as Space or PersonalSpace. Refused when the path also shows " +
         "a clause the input does not name from an ancestor's or wildcard " +
-        "label or the piece's own schema. Records a receipt of the removal, " +
-        "readable by the identity alone, in that space.",
+        "label, a write redirect's own label, or the piece's own schema. " +
+        "Records a receipt of the removal, readable by the identity alone, " +
+        "in that space.",
+    )
+    .option(
+      "--link-slot",
+      "With --dangerously-allow-lowering-confidentiality, lower the labels " +
+        "of a link stored at the path itself, write redirect included, " +
+        "rather than following a write redirect there to the labels where " +
+        "it leads. The labels of the link's target are left as they are. " +
+        "Needed when a lowering refuses on the label of a write redirect the " +
+        "path follows.",
     )
     .option(
       "--json",
@@ -2851,6 +2898,10 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
     const pieceConfig = parsePieceOptions(options);
 
     try {
+      // Rendering is the one thing here that needs the HTML renderer and its
+      // worker protocol, and every other `piece` command should not pay for them.
+      // deno-lint-ignore cf-imports/no-inline-module-import
+      const { renderPiece } = await import("../lib/piece-render.ts");
       if (options.watch) {
         writePieceRenderStatus(
           "Watching for changes... Press Ctrl+C to exit.\n",
@@ -3153,6 +3204,13 @@ export interface PieceCLIOptions {
 
   apiUrl?: string;
   identity?: string;
+
+  /**
+   * Delegation chain files the identity holds: one path from
+   * `CF_DELEGATIONS`, or each `--delegations` written.
+   */
+  delegations?: string | string[];
+
   space?: string;
 
   /**
@@ -3187,6 +3245,12 @@ export interface PieceLabelCLIOptions extends PieceCLIOptions {
 export interface PieceSetLabelCLIOptions extends PieceLabelCLIOptions {
   /** Lower confidentiality at the path rather than adding to it. */
   dangerouslyAllowLoweringConfidentiality?: boolean;
+
+  /**
+   * In a lowering, lower the labels of a link stored at the path itself
+   * rather than following a write redirect there.
+   */
+  linkSlot?: boolean;
 }
 
 export interface PieceLabelCommandDependencies {
@@ -3198,6 +3262,7 @@ export interface PieceLabelCommandDependencies {
 
 export interface PieceGetCLIOptions extends PieceLabelCLIOptions {
   step?: boolean;
+  run?: boolean;
   filter?: string;
   select?: string;
   schema?: string;
@@ -3276,6 +3341,7 @@ export async function getCellValueFromCommand(
       {
         input,
         step: options.step,
+        ...(options.run === false ? { run: false } : {}),
         ...(selection === undefined ? {} : { selection }),
       },
     );
@@ -3354,6 +3420,8 @@ export async function setCellValueFromCommand(
   const wroteTo = written.path.length === pathSegments.length
     ? pieceConfig.piece
     : written.piece;
+  // Under server execution a later read pulls the recomputed value.
+  if (written.served === true) return;
   (deps.hint ?? hint)(
     cliText(
       `TIP: Computed values may be stale. Run 'cf piece step --cell ${wroteTo} ...' to trigger recomputation.`,
@@ -3655,6 +3723,7 @@ export async function setCellCfcLabelFromCommand(
       ...(options.dangerouslyAllowLoweringConfidentiality === true
         ? { lowerConfidentiality: true }
         : {}),
+      ...(options.linkSlot === true ? { linkSlot: true } : {}),
     },
   );
   (deps.render ?? render)(label, { json: true });
@@ -5175,7 +5244,7 @@ function parseScopedId(id: string): { id: string; scope?: CellScope } {
     return parseScopedIdSegment(id);
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }
@@ -5384,6 +5453,13 @@ export function parseSpaceOptions(
     identity: absPath(input.identity),
   };
   if (input.json) output.jsonOutput = true;
+  if (input.delegations !== undefined) {
+    output.delegations = (typeof input.delegations === "string"
+      ? [input.delegations]
+      : input.delegations).map((path) =>
+        absPath(path)
+      );
+  }
 
   // The space the reference below is checked against: `--space`, or the space
   // a `--url` carries.
@@ -5499,7 +5575,7 @@ function resolvePiecePath(
     });
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }
@@ -5639,10 +5715,12 @@ function decomposeUrl(
     );
   }
   const apiUrl = `${url.protocol}//${url.host}`;
-  const segments = url.pathname.split("/").filter(Boolean);
+  const segments = pagePathSegments(url.pathname);
+  // The space is read as the shell reads it, and a segment that cannot be
+  // read is refused by `decodeUrlSegment`, which says why.
   const space = segments[0] === undefined
     ? undefined
-    : decodeUrlSegment(segments[0]);
+    : readSpaceSegment(segments[0]) ?? decodeUrlSegment(segments[0]);
   if (!space) {
     throw new ValidationError(
       `"--url" does not contain a space.`,
@@ -5673,7 +5751,7 @@ function decomposeUrl(
     });
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }

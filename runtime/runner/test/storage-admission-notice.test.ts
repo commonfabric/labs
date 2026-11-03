@@ -20,6 +20,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createStorageAddressResolver,
   RemoteSessionFactory,
@@ -89,6 +90,7 @@ describe("storage admission notice", () => {
       guestClients = [];
       notify = () => {};
       server = new Server({
+        namesInstances: namesInstancesByDefault,
         store: new URL(`memory://storage-admission-notice-${++serverCount}`),
         sessionOpenAuth: { audience: "did:key:z6Mk-admission-audience" },
         authorizeSessionOpen: (message) =>
@@ -101,7 +103,10 @@ describe("storage admission notice", () => {
       // remote factory's connection-per-space path does.
       const factory: SessionFactory = {
         async create(target, signer, options) {
-          const client = await connect({ transport: loopback(server) });
+          const client = await connect({
+            instanceNames: namesInstancesByDefault(),
+            transport: loopback(server),
+          });
           client.subscribeAdmissible((admitted, principal) =>
             notify(admitted as MemorySpace, principal)
           );
@@ -186,6 +191,7 @@ describe("storage admission notice", () => {
 
     beforeEach(async () => {
       const server = StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
         acl: { mode: "enforce" },
         connectionAuth: true,
       });

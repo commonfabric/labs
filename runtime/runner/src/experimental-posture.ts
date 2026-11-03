@@ -70,6 +70,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // The local fold of a refused derived write is default-off; env-reachable
   // so a process can opt in with an explicit "true".
   localFold: "EXPERIMENTAL_LOCAL_FOLD",
+  // The creator record is default-off; env-reachable so a process can opt in
+  // with an explicit "true".
+  pieceCreatorRecord: "EXPERIMENTAL_PIECE_CREATOR_RECORD",
   // Instance naming is default-off, and reachable programmatically only: one
   // process naming instances binds a parent's children to other documents
   // than the rest of its space does, so no environment may turn it on before
@@ -185,6 +188,9 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // deployment that turns the fold off is deciding, for every client it
   // serves, between the value a fold keeps and the re-runs its absence costs.
   localFold: "server",
+  // The serving side binds an update-added owner field to the record, so
+  // whether pieces carry one is the deployment's decision, not a client's.
+  pieceCreatorRecord: "server",
   // Decides the identity a compiled pattern gives a `const`-bound child, so
   // two runtimes on different values bind one parent's children to
   // different documents.

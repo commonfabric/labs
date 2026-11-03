@@ -11,7 +11,7 @@ import { setCfcImplementationIdentity } from "../src/cfc/trust-authority.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { Cell } from "../src/cell.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 // A `writeAuthorizedBy` claim is a property of the field's schema, not of
 // its value (normative CFC §8.15.3): the write-authority set exists from the

@@ -36,7 +36,7 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
-import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import {
   asStoredValue,

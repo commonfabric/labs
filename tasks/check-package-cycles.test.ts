@@ -112,8 +112,8 @@ describe("check-package-cycles", () => {
     });
 
     it("returns the specifier of a side-effect import", () => {
-      expect(extractSpecifiers(`import "@commonfabric/utils/polyfill";`))
-        .toEqual(["@commonfabric/utils/polyfill"]);
+      expect(extractSpecifiers(`import "@commonfabric/platform/polyfill";`))
+        .toEqual(["@commonfabric/platform/polyfill"]);
     });
 
     it("returns the specifier of a dynamic import", () => {

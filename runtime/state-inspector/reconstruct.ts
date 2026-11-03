@@ -29,7 +29,7 @@ import {
   type EntityDocument as StoredDocument,
   type PatchOp,
 } from "@commonfabric/memory/v2";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 
 import type { SpaceDb } from "./db.ts";
 import { decodeStored } from "./decode.ts";

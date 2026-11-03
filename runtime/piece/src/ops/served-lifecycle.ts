@@ -15,6 +15,7 @@
 // so its setup transaction commits directly, outside the wave, and its
 // receipt is the store's verdict.
 
+import type { JSONSchema } from "@commonfabric/api";
 import {
   streamEntriesDocId,
   type StreamEventsDocValue,
@@ -38,7 +39,7 @@ import {
   sendEvent,
 } from "@commonfabric/runner";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { pieceId as pieceIdOf } from "../piece-id.ts";
 import { claimSlugInTx, prepareSlugClaim } from "../slugs.ts";
@@ -134,7 +135,7 @@ export interface ServedInstantiateRequest {
 }
 
 /** What `instantiate` hands back. */
-export interface ServedInstantiateReceipt {
+export type ServedInstantiateReceipt = {
   /** Retain this key when retrying creation or pending registration. */
   requestKey: string;
 
@@ -153,7 +154,7 @@ export interface ServedInstantiateReceipt {
 
   /** The name the piece was created under, when one was asked for. */
   slug?: string;
-}
+};
 
 /** What `setsrc` asks for. */
 export interface ServedSetSourceRequest {
@@ -188,7 +189,7 @@ export interface ServedSetSourceRequest {
 }
 
 /** What `setsrc` hands back: the accepted setup transaction's receipt. */
-export interface ServedSetSourceReceipt {
+export type ServedSetSourceReceipt = {
   pieceId: string;
 
   /** The pointer the piece now holds. */
@@ -206,18 +207,7 @@ export interface ServedSetSourceReceipt {
 
   /** The origin the update detached, `null` when the piece had none. */
   detachedOrigin: string | null;
-}
-
-function messageOf(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (
-    isObjectOrArray(error) && "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-  return String(error);
-}
+};
 
 /**
  * Compile `program` into the space and persist its closure, so a later
@@ -238,7 +228,7 @@ export async function servedUploadPattern(
         : { previousEntryIdentity: options.previousEntryIdentity }),
     });
   } catch (error) {
-    throw new ServedLifecycleRefusal("compile-failed", messageOf(error), {
+    throw new ServedLifecycleRefusal("compile-failed", describeFailure(error), {
       cause: error,
     });
   }
@@ -271,9 +261,13 @@ async function resolveServedPattern(
   } catch (error) {
     // A closure the space holds but cannot load is, to the caller, one it
     // does not hold: the same refusal, with the loader's reason attached.
-    throw new ServedLifecycleRefusal("pattern-not-found", messageOf(error), {
-      cause: error,
-    });
+    throw new ServedLifecycleRefusal(
+      "pattern-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
   }
   if (!pattern) {
     throw new ServedLifecycleRefusal(
@@ -303,13 +297,11 @@ export async function servedInstantiatePiece(
   const runtime = pieces.runtime;
   const space = pieces.getSpace();
   const requestKey = request.requestKey ?? crypto.randomUUID();
-  const requestRecord = runtime.getCell<ServedInstantiateReceipt | undefined>(
+  const requestRecord = receiptRecord(
+    runtime,
     space,
-    {
-      purpose: "piece-instantiation-receipt",
-      principal: request.actingUser,
-      requestKey,
-    },
+    requestKey,
+    request.actingUser,
   );
   await requestRecord.sync();
   const completed = requestRecord.get();
@@ -389,7 +381,7 @@ export async function servedInstantiatePiece(
         ? outcome.error.reason
         : outcome.error;
     if (cause instanceof ServedLifecycleRefusal) throw cause;
-    throw new ServedLifecycleRefusal("setup-failed", messageOf(cause), {
+    throw new ServedLifecycleRefusal("setup-failed", describeFailure(cause), {
       cause,
     });
   }
@@ -415,17 +407,60 @@ export interface ServedRegistrationOutcome {
   terminal?: true;
 }
 
-function registrationRecord(
+/**
+ * The shape a creation receipt is retained in. Read through it, the record
+ * hands back plain data: read with no schema, a nested object such as
+ * `pattern` comes back as a proxy over the store, which a receipt cannot be,
+ * since it leaves the runtime as an HTTP body and, from a serving worker, as
+ * a structured clone on the serving port.
+ */
+const receiptSchema = {
+  type: "object",
+  properties: {
+    requestKey: { type: "string" },
+    registration: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["skipped", "pending", "handled", "failed"],
+        },
+        error: { type: "string" },
+        attempt: { type: "number" },
+        terminal: { type: "boolean" },
+      },
+      required: ["status"],
+    },
+    pieceId: { type: "string" },
+    pattern: {
+      type: "object",
+      properties: {
+        identity: { type: "string" },
+        symbol: { type: "string" },
+      },
+      required: ["identity", "symbol"],
+    },
+    slug: { type: "string" },
+  },
+  required: ["requestKey", "registration", "pieceId", "pattern"],
+} as const satisfies JSONSchema;
+
+/** The record retaining the receipt of `actingUser`'s request `requestKey`. */
+function receiptRecord(
   runtime: Runtime,
   space: MemorySpace,
-  receipt: ServedInstantiateReceipt,
+  requestKey: string,
   actingUser: string,
 ): Cell<ServedInstantiateReceipt | undefined> {
-  return runtime.getCell<ServedInstantiateReceipt | undefined>(space, {
-    purpose: "piece-instantiation-receipt",
-    principal: actingUser,
-    requestKey: receipt.requestKey,
-  });
+  return runtime.getCell<ServedInstantiateReceipt | undefined>(
+    space,
+    {
+      purpose: "piece-instantiation-receipt",
+      principal: actingUser,
+      requestKey,
+    },
+    receiptSchema,
+  );
 }
 
 /** Select one durable attempt and resolve its native event target inside a serving wave. */
@@ -439,10 +474,10 @@ export async function prepareServedRegistration(
     receipt.registration.status === "handled"
   ) return { receipt };
   const runtime = pieces.runtime;
-  const requestRecord = registrationRecord(
+  const requestRecord = receiptRecord(
     runtime,
     pieces.getSpace(),
-    receipt,
+    receipt.requestKey,
     actingUser,
   );
   await requestRecord.sync();
@@ -526,7 +561,7 @@ export async function prepareServedRegistration(
       },
     };
   } catch (error) {
-    return { receipt, error: messageOf(error) };
+    return { receipt, error: describeFailure(error) };
   }
 }
 
@@ -543,10 +578,10 @@ export async function finishServedRegistration(
     receipt.registration.status === "handled"
   ) return receipt;
   const runtime = pieces.runtime;
-  const requestRecord = registrationRecord(
+  const requestRecord = receiptRecord(
     runtime,
     pieces.getSpace(),
-    receipt,
+    receipt.requestKey,
     actingUser,
   );
   const attempt = receipt.registration.attempt ?? 0;
@@ -578,7 +613,7 @@ export async function finishServedRegistration(
       ...receipt,
       registration: {
         status: "failed",
-        error: messageOf(error),
+        error: describeFailure(error),
         attempt,
         ...(terminal ? { terminal: true as const } : {}),
       },
@@ -622,8 +657,12 @@ export async function confirmServedRegistration(
   receipt: ServedInstantiateReceipt,
   actingUser: string,
 ): Promise<void> {
-  const retained = await registrationRecord(runtime, space, receipt, actingUser)
-    .pull();
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
   if (retained === undefined || retained.pieceId !== receipt.pieceId) {
     throw new Error("Registration receipt was not retained");
   }
@@ -764,7 +803,7 @@ export async function completeServedRegistration(
       }
     }
     result = {
-      error: messageOf(error),
+      error: describeFailure(error),
       ...(terminal ? { terminal: true as const } : {}),
     };
   }
@@ -798,9 +837,13 @@ export async function servedSetPieceSource(
   try {
     piece = await pieces.get(request.pieceId, false);
   } catch (error) {
-    throw new ServedLifecycleRefusal("piece-not-found", messageOf(error), {
-      cause: error,
-    });
+    throw new ServedLifecycleRefusal(
+      "piece-not-found",
+      describeFailure(error),
+      {
+        cause: error,
+      },
+    );
   }
   if (getPatternIdentityRef(piece.getCell()) === undefined) {
     throw new ServedLifecycleRefusal(
@@ -842,7 +885,7 @@ export async function servedSetPieceSource(
  * reason of its own.
  */
 function setSourceRefusal(error: unknown): ServedLifecycleRefusal {
-  const message = messageOf(error);
+  const message = describeFailure(error);
   if (
     error instanceof PieceSourceChangedError ||
     message.includes(PIECE_SOURCE_MOVED)
@@ -902,8 +945,12 @@ export async function confirmServedInstantiate(
   receipt: ServedInstantiateReceipt,
   actingUser: string,
 ): Promise<void> {
-  const retained = await registrationRecord(runtime, space, receipt, actingUser)
-    .pull();
+  const retained = await receiptRecord(
+    runtime,
+    space,
+    receipt.requestKey,
+    actingUser,
+  ).pull();
   const expectedPiece = runtime.getCell(space, {
     purpose: "piece-instantiation",
     principal: actingUser,

@@ -19,7 +19,7 @@ import {
 import type { DID } from "@commonfabric/identity";
 import { navigate } from "@commonfabric/navigation";
 import { openPieceMenu } from "@commonfabric/ui";
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 type SubPages = {
   sidebarUI?: VNode;

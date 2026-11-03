@@ -6,8 +6,8 @@
 import { Gunzip, gzipSync } from "fflate";
 
 import { isCanonicalEd25519DID } from "@commonfabric/identity";
-import { isPlainObject } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import {
   ROUTED_DEFAULT_SLOT_LIMIT,

@@ -18,7 +18,7 @@ import {
   type IFCLabel,
   isCfcEnforcementMode,
 } from "@commonfabric/runner/cfc";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessRunState } from "../src/run-state.ts";
 import type {
   HarnessHandleReferent,

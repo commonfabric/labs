@@ -4,9 +4,12 @@ import {
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { utf8Compare } from "@commonfabric/utils/utf8";
+import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  isObjectNotArray,
+  isObjectOrArray,
+} from "@commonfabric/js-values/types";
+import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { matchesOnlyValueBoundClaims } from "./atom-classes.ts";
 

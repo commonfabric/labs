@@ -39,6 +39,9 @@ const ASK: LocalJobProfile = {
   retry: "never",
 };
 
+/** The command endpoint a profile names. */
+const COMMANDS = { url: "http://127.0.0.1:8080", actor: "agent:agent-runner" };
+
 /** The space a fabric profile names. */
 const SPACE = "did:key:z6MkgUiiZvP3qYQqr1NWyS2uCpny8dejAvyuBZh2PAVACs97";
 
@@ -411,7 +414,6 @@ describe("local-jobs/lane", () => {
     it("runs the task under the profile's role, tools and turn cap, with the framing as the system prompt", async () => {
       expect(await localJobSpecOf(job, ASK, {})).toEqual({
         task: REQUEST.task,
-        commandJobId: "job-test",
         taskRole: "direct-command",
         resultSchema: REQUEST.resultSchema,
         tools: ASK.tools,
@@ -479,12 +481,10 @@ describe("local-jobs/lane", () => {
         await localJobSpecOf({ request: REQUEST } as LocalJob, {
           ...ASK,
           loomRetrievalConfig: "/profile/retrieval.json",
-          loomCommandsConfig: "/profile/commands.json",
           model: "profile-model",
         }, runner),
       ).toMatchObject({
         loomRetrievalConfigPath: "/profile/retrieval.json",
-        loomCommandsConfigPath: "/profile/commands.json",
         model: "profile-model",
       });
     });
@@ -570,23 +570,6 @@ describe("local-jobs/lane", () => {
       expect(
         localJobEventsOf(event({ role: "assistant", content: "Done." })),
       ).toEqual([{ kind: "text", body: { turn: 1, text: "Done." } }]);
-    });
-
-    it("reports a read-only command's admitted output", () => {
-      expect(localJobEventsOf(event(
-        answer({
-          status: "executed",
-          outcome: { ok: true, id: "loom.inspect" },
-          entry: {
-            status: "admitted",
-            value: { ok: true, outputs: { title: "Trip" } },
-          },
-        }, "run_read_command"),
-        [calling("run_read_command")],
-      ))).toEqual([{
-        kind: "command",
-        body: { command: "loom.inspect", ok: true, outputs: { title: "Trip" } },
-      }]);
     });
 
     it("reports a command for each executed call of a batch, in order, and nothing for one the host never ran", () => {
@@ -1588,14 +1571,16 @@ describe("local-jobs/lane", () => {
     });
 
     it("binds each concurrent run to its own job identity", async () => {
-      const { store, lane, nextRun, enqueue } = laneWith();
+      const { store, lane, nextRun, enqueue } = laneWith({
+        profiles: new Map([["ask", { ...ASK, commands: COMMANDS }]]),
+      });
       await lane.start();
       const a = enqueue("a");
       const b = enqueue("b", { ...REQUEST, interactive: true });
       const first = await nextRun(0);
       const second = await nextRun(1);
-      expect(first.spec.commandJobId).toBe(a);
-      expect(second.spec.commandJobId).toBe(b);
+      expect(first.spec.commands).toEqual({ ...COMMANDS, runId: a });
+      expect(second.spec.commands).toEqual({ ...COMMANDS, runId: b });
       first.settle({ outcome: "cancelled" });
       second.settle({ outcome: "cancelled" });
       await reached(store, a, "cancelled");

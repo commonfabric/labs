@@ -1,4 +1,4 @@
-import { defer } from "@commonfabric/utils/defer";
+import { defer } from "@commonfabric/async/defer";
 
 import { sendEvent } from "../src/cell.ts";
 import { resolveLink } from "../src/link-resolution.ts";

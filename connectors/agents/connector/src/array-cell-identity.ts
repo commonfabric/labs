@@ -1,5 +1,5 @@
 import { isLinkRef, linkRefFrom } from "@commonfabric/data-model/cell-rep";
-import { isObjectNotArray } from "@commonfabric/utils/types";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { canonicalJson, hashFabricValue } from "./canonical-json.ts";
 import { stableFabricValue } from "./stable-fabric-value.ts";
 

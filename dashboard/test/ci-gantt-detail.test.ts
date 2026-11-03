@@ -43,6 +43,43 @@ async function gzipped(text: string): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/**
+ * Holds every `Deno.rename()` until the test releases it, so that a test can
+ * act while a write has written its temporary file but not yet renamed it.
+ * `next()` resolves, once the next held rename is reached, with the function
+ * that releases it. `restore()` releases every rename still held.
+ */
+function holdRenames(): {
+  next(): Promise<() => void>;
+  restore(): void;
+} {
+  const original = Deno.rename;
+  const held: (() => void)[] = [];
+  const reached: (() => void)[] = [];
+  const waiting: ((release: () => void) => void)[] = [];
+  Deno.rename = async (from, to) => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    held.push(resolve);
+    const taker = waiting.shift();
+    if (taker) taker(resolve);
+    else reached.push(resolve);
+    await promise;
+    await original(from, to);
+  };
+  return {
+    next: () => {
+      const release = reached.shift();
+      return release
+        ? Promise.resolve(release)
+        : new Promise((resolve) => waiting.push(resolve));
+    },
+    restore: () => {
+      Deno.rename = original;
+      for (const release of held) release();
+    },
+  };
+}
+
 describe("ci-gantt-detail", () => {
   let directory: string;
   let store: CiGanttDetailStore;
@@ -285,6 +322,47 @@ describe("ci-gantt-detail", () => {
 
           expect(await store.read(SOURCE, 20, 1)).not.toBeNull();
           await expect(Deno.stat(orphan)).rejects.toThrow(Deno.errors.NotFound);
+        });
+
+        it("leaves the temporary file of a write in progress, and removes others", async () => {
+          const orphan =
+            `${directory}/detail/owner%2Frepo.ci%2Eyml.81.1.json.old.tmp`;
+          const renames = holdRenames();
+          try {
+            const writing = store.write(SOURCE, 80, 1, [ganttJob("Check")]);
+            const release = await renames.next();
+            await Deno.writeTextFile(orphan, "{}");
+
+            await store.prune(SOURCE, [attempt(80)]);
+
+            release();
+            await writing;
+          } finally {
+            renames.restore();
+          }
+          expect((await store.read(SOURCE, 80, 1))?.[0].name).toBe("Check");
+          expect(await names()).toEqual(["owner%2Frepo.ci%2Eyml.80.1.json"]);
+        });
+
+        it("leaves the temporary file of a write in progress when an earlier write of the same attempt has finished", async () => {
+          const renames = holdRenames();
+          try {
+            const first = store.write(SOURCE, 82, 1, [ganttJob("Check")]);
+            const releaseFirst = await renames.next();
+            const second = store.write(SOURCE, 82, 1, [ganttJob("Recheck")]);
+            const releaseSecond = await renames.next();
+            releaseFirst();
+            await first;
+
+            await store.prune(SOURCE, [attempt(82)]);
+
+            releaseSecond();
+            await second;
+          } finally {
+            renames.restore();
+          }
+          expect((await store.read(SOURCE, 82, 1))?.[0].name).toBe("Recheck");
+          expect(await names()).toEqual(["owner%2Frepo.ci%2Eyml.82.1.json"]);
         });
 
         it("returns without error when the directory does not exist", async () => {
