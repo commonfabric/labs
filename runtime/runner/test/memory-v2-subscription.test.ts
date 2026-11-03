@@ -14,6 +14,7 @@ import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
 import { getLogger } from "@commonfabric/logger";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { registerCommitRejectionListener } from "../src/storage/reactivity-log.ts";
@@ -154,6 +155,7 @@ describe("Memory v2 storage notifications", () => {
       throw new Error("Expected a memory/v2 emulated storage manager");
     }
     remoteClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(candidate.server()),
     });
     remoteSession = await remoteClient.mount(

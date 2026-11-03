@@ -41,6 +41,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
+import { namesInstances } from "./builder/instance-name.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
@@ -2161,6 +2162,11 @@ export class Runtime {
       // session as it is created.
       this.storageManager.setSharedMemoryConnection?.(
         this.experimental.sharedMemoryConnection === true,
+      );
+      // Declared before any session opens as well, since each open declares
+      // the mode and the server admits it by that (INV-16).
+      this.storageManager.setInstanceNames?.(
+        namesInstances(this.experimental),
       );
       this.moduleByteCache = options.moduleByteCache;
       this.patternCoverage = options.patternCoverage;

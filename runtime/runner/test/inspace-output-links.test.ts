@@ -39,6 +39,7 @@ class PrincipalSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     try {

@@ -301,6 +301,16 @@ export type ConnectOptions = {
   address?: string;
 
   /**
+   * Whether the runtime this client serves names instances (INV-16,
+   * 04-protocol.md §4.1.2). When `true`, every `session.open` the client
+   * sends, a reopen included, declares `instanceNames: true`, and a handshake
+   * with a server that does not advertise `instanceNameMark` fails the
+   * connection permanently, before any open is signed. Absent or `false`, the
+   * client declares nothing and its sessions are positional.
+   */
+  instanceNames?: boolean;
+
+  /**
    * How many handshakes the connect may make, one when absent. Each after the
    * first follows a failed one after the reconnect backoff. A permanent
    * failure fails the connect at once, and so does any failure on a transport
@@ -758,6 +768,10 @@ export class Client {
   #sessionOpenAuthContext: SessionOpenAuthContext | null = null;
   #serverFlags: MemoryProtocolFlags | null = null;
   readonly #clientInfo: Readonly<ClientInfo>;
+
+  /** Whether every open declares `instanceNames: true` (`ConnectOptions`). */
+  readonly #instanceNames: boolean;
+
   #syncLabelTable = false;
   #commitLabelTable = false;
   /** Whether both peers advertised `syncPartsV1`. */
@@ -876,8 +890,10 @@ export class Client {
   private constructor(
     transport: Transport,
     clientInfo: Readonly<ClientInfo>,
+    instanceNames: boolean,
   ) {
     this.#clientInfo = clientInfo;
+    this.#instanceNames = instanceNames;
     this.#transport = transport;
     this.#transport.setReceiver((payload) => this.#onMessage(payload));
     this.#transport.setCloseReceiver?.((error) => this.#onClose(error));
@@ -894,7 +910,11 @@ export class Client {
       ? createClientInfo({ application: "memory", gitSha: null })
       : parseClientInfo(options.client);
     if (info === null) throw new TypeError("Invalid memory client metadata");
-    const client = new Client(options.transport, Object.freeze(info));
+    const client = new Client(
+      options.transport,
+      Object.freeze(info),
+      options.instanceNames === true,
+    );
     const abortError = (): Error =>
       options.signal?.reason instanceof Error
         ? options.signal.reason
@@ -1410,6 +1430,7 @@ export class Client {
     const session: SessionDescriptor = {
       ...mount,
       client: this.#clientInfo,
+      ...(this.#instanceNames ? { instanceNames: true as const } : {}),
     };
     const whileConnected = options.restoring === true;
     // A mount made while the connection is down waits for the reconnect to
@@ -2367,6 +2388,17 @@ export class Client {
           this.#helloPending.reject(permanentProtocolError(
             "The memory server does not enforce stable expression result " +
               "identities. Update the server before connecting this runtime.",
+          ));
+          return;
+        }
+        // A server that does not advertise it would admit this runtime's
+        // commits and record no mark, leaving the data it names open to
+        // positional runtimes (INV-16).
+        if (this.#instanceNames && !helloOk.flags.instanceNameMark) {
+          this.#helloPending.reject(permanentProtocolError(
+            "The memory server does not record which spaces hold data " +
+              "written with instance names, and this runtime names " +
+              "instances. Update the server before connecting this runtime.",
           ));
           return;
         }

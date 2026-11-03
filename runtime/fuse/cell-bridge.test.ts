@@ -5823,6 +5823,7 @@ describe("cell-bridge", () => {
           authorization: {},
         });
         const writerClient = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(server),
         });
         let runtime: Runtime | undefined;
@@ -5870,7 +5871,10 @@ describe("cell-bridge", () => {
                   inner.setCloseReceiver?.(receiver);
                 },
               };
-              const client = await MemoryV2Client.connect({ transport });
+              const client = await MemoryV2Client.connect({
+                instanceNames: namesInstancesByDefault(),
+                transport,
+              });
               const mounted = await client.mount(spaceId, {}, sessionOpenAuth);
               return { client, session: mounted };
             }

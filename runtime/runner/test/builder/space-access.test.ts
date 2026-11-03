@@ -95,7 +95,10 @@ describe("spaceAccess()", () => {
     on: Server = server,
   ): Promise<(id: string, value: FabricValue) => Promise<void>> {
     const target = owner.did() as MemorySpace;
-    const client = await connect({ transport: loopback(on) });
+    const client = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(on),
+    });
     cleanups.push(() => client.close());
     const session = await client.mount(
       target,

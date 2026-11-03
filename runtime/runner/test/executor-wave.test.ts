@@ -55,6 +55,7 @@ import {
   type SessionEffectsDocValue,
   streamEntriesDocId,
 } from "@commonfabric/memory/v2";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import {
@@ -4109,6 +4110,7 @@ describe("stage D seal-into-wave", () => {
       ) {
         this.principals.push(sessionSigner?.did() ?? "<anonymous>");
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(this.#server),
         });
         const session = await client.mount(

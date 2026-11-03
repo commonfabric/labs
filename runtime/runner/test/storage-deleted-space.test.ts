@@ -70,6 +70,7 @@ async function refusingManager(name: string, options: {
       control.opens++;
       if (options.failOpen !== undefined) throw options.failOpen;
       const client = await connect({
+        instanceNames: namesInstancesByDefault(),
         transport: loopback({
           connect: (send, syncParts) =>
             server.connect((message, payload) => {
