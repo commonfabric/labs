@@ -1951,10 +1951,22 @@ describe("Home shared-space catalog", () => {
             );
             expect(outcome.status).toBe("done");
           }
-          const titles = Object.values(
-            (await home.key("sharedSpaceCatalog").pull()).entries,
-          ).map((entry) => entry.title);
-          expect(titles).toEqual(
+          // A created room is listed by an event of its own that the creating
+          // one queues, so the catalog can still lack a group whose request
+          // is done.
+          const titlesOf = (catalog: SharedSpaceCatalog | undefined) =>
+            Object.values(catalog?.entries ?? {}).map((entry) => entry.title);
+          const catalog = await waitForCellValue<SharedSpaceCatalog>(
+            runtime,
+            home.key("sharedSpaceCatalog"),
+            (value) => {
+              const titles = titlesOf(value);
+              return titles.includes("Team later") &&
+                titles.includes("Team earlier");
+            },
+            { stuckLabel: "the catalog listing both groups" },
+          );
+          expect(titlesOf(catalog)).toEqual(
             expect.arrayContaining(["Team later", "Team earlier"]),
           );
         });
