@@ -10,6 +10,8 @@ import {
   isCellHandle,
 } from "@commonfabric/runtime-client";
 
+import { internSchema } from "@commonfabric/data-model-schema";
+
 import { sameCellDoc } from "../../core/cell-controller.ts";
 
 /**
@@ -35,6 +37,38 @@ export type SuggestionCard = {
   tags?: string;
 };
 
+/** A reference a row holds, read as a cell, or null. */
+const rowReferenceSchema = {
+  anyOf: [{ type: "null" }, { type: "unknown", asCell: ["cell"] }],
+} as const;
+
+/** Reads each row's fields, with its references as cells. */
+export const suggestionRowsSchema = internSchema({
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      card_revision: { type: "string" },
+      title: { type: "string" },
+      body: { type: "string" },
+      source: { type: "string" },
+      anchor: rowReferenceSchema,
+      act_target: rowReferenceSchema,
+      about: { type: "string" },
+      tags: { type: "string" },
+    },
+  },
+  default: [],
+});
+
+/** Reads each entry of the list as the link to its row. */
+export const suggestionRowLinksSchema = internSchema({
+  type: "array",
+  items: { type: "unknown", asCell: ["cell"] },
+  default: [],
+});
+
 /** A drawn card, with its position in the bound list. */
 export type DrawnCard = { card: SuggestionCard; index: number };
 
@@ -45,7 +79,9 @@ export const VISIBLE_RATIO = 0.5;
  * The cards of `cards` to draw at `about`, in rank order, each with its
  * position in the list. A card is drawn when it has a string id not already
  * drawn, is anchored at `about`, and, when `tags` is given, carries one of
- * them. `listSpace` is the space of the list the cards came from.
+ * them. `about` is the cell the element's `about` resolves to, and draws
+ * nothing while undefined. `listSpace` is the space of the list the cards came
+ * from.
  */
 export function drawnCards(
   cards: readonly SuggestionCard[],

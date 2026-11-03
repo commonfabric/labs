@@ -19,6 +19,39 @@ function piece(id: string): CellHandle {
 const here = piece("here");
 const elsewhere = piece("elsewhere");
 
+/**
+ * A handle on the element of a `.map()`, a cell holding a link to `target`.
+ * `publish()` moves the link to another thing, as inserting an entry above
+ * the element does. Each resolution waits for `resolution`.
+ */
+function mapElementLinkingTo(
+  target: CellHandle,
+  { resolution = Promise.resolve() }: { resolution?: Promise<void> } = {},
+) {
+  const element = createMockCellHandle<unknown>({}, {
+    id: "of:mapped-list" as CellRef["id"],
+    path: ["element"],
+  });
+  let current = target;
+  const callbacks = new Set<(value: CellHandle) => void>();
+  Object.assign(element, {
+    resolveAsCell: () => resolution.then(() => current),
+    asSchema: () => ({
+      sync: () => Promise.resolve(current),
+      subscribe(callback: (value: CellHandle) => void) {
+        callback(current);
+        callbacks.add(callback);
+        return () => callbacks.delete(callback);
+      },
+    }),
+  });
+  const publish = (next: CellHandle) => {
+    current = next;
+    for (const callback of [...callbacks]) callback(next);
+  };
+  return { element, publish };
+}
+
 /** A row's `about`: the JSON of links to `handles`, as intake stores it. */
 function aboutOf(...handles: CellHandle[]): string {
   return JSON.stringify(handles.map((handle) => handle.toSigilLink()));
@@ -33,13 +66,18 @@ function drawnIds(element: CFSuggestions): (string | undefined)[] {
 }
 
 /**
- * Mounts the element over `items`, anchored at `here`, and records the events
- * it fires. `hidden` mounts it off screen, and `faded` inside a translucent
- * ancestor.
+ * Mounts the element over `items`, anchored at `about` (by default `here`),
+ * and records the events it fires once `about` has resolved. `hidden` mounts
+ * it off screen, and `faded` inside a translucent ancestor.
  */
 async function mount(
   items: CellHandle<SuggestionCard[]> | SuggestionCard[],
-  options: { hidden?: boolean; faded?: boolean; tags?: string[] } = {},
+  options: {
+    hidden?: boolean;
+    faded?: boolean;
+    tags?: string[];
+    about?: CellHandle;
+  } = {},
 ) {
   const element = document.createElement("cf-suggestions") as CFSuggestions;
   const taken: SuggestionEventDetail[] = [];
@@ -63,9 +101,11 @@ async function mount(
   if (options.faded) container.style.opacity = "0.5";
   container.append(element);
   element.items = items;
-  element.about = here;
+  element.about = options.about ?? here;
   element.tags = options.tags;
   document.body.append(container);
+  await element.updateComplete;
+  await element.accessForTestingOnly.aboutResolved;
   await element.updateComplete;
   return {
     element,
@@ -123,6 +163,48 @@ Deno.test("cf-suggestions draws by a card's own anchor ahead of what it is about
 Deno.test("cf-suggestions draws a handle on the same cell as about", async () => {
   using page = await mount([{ id: "same-cell", anchor: piece("here") }]);
   expect(drawnIds(page.element)).toEqual(["same-cell"]);
+});
+
+Deno.test("cf-suggestions draws the cards anchored at the thing a map element links to", async () => {
+  const { element } = mapElementLinkingTo(here);
+  using page = await mount([
+    { id: "anchored", anchor: here },
+    { id: "anchored-elsewhere", anchor: elsewhere },
+  ], { about: element });
+  expect(drawnIds(page.element)).toEqual(["anchored"]);
+});
+
+Deno.test("cf-suggestions draws nothing until about has resolved", async () => {
+  const resolution = Promise.withResolvers<void>();
+  const { element } = mapElementLinkingTo(here, {
+    resolution: resolution.promise,
+  });
+  const slot = document.createElement("cf-suggestions") as CFSuggestions;
+  slot.items = [{ id: "anchored", anchor: here }];
+  slot.about = element;
+  document.body.append(slot);
+  try {
+    await slot.updateComplete;
+    expect(drawnIds(slot)).toEqual([]);
+    resolution.resolve();
+    await slot.accessForTestingOnly.aboutResolved;
+    await slot.updateComplete;
+    expect(drawnIds(slot)).toEqual(["anchored"]);
+  } finally {
+    slot.remove();
+  }
+});
+
+Deno.test("cf-suggestions draws the cards of the thing about's link moves to", async () => {
+  const { element, publish } = mapElementLinkingTo(here);
+  using page = await mount([
+    { id: "here", anchor: here },
+    { id: "elsewhere", anchor: elsewhere },
+  ], { about: element });
+  publish(elsewhere);
+  await page.element.accessForTestingOnly.aboutResolved;
+  await page.element.updateComplete;
+  expect(drawnIds(page.element)).toEqual(["elsewhere"]);
 });
 
 Deno.test("cf-suggestions draws only cards carrying one of its tags, when it has tags", async () => {

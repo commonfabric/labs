@@ -951,10 +951,12 @@ label):
 ### cf-suggestions
 
 **Purpose**: Draws the ranked suggestion cards anchored at one thing, at a fixed
-size. A card is drawn where its `anchor` link names `$about`; a card with no
-`anchor` field falls back to the first link in its `about`, then its
-`act_target`, and a null `anchor` is drawn on no thing. The component performs
-no act; the host binds its events. **Tag**: `<cf-suggestions>`
+size. A card is drawn where its `anchor` link names the thing `$about` names or
+links to, so `$about={item}` inside `items.map(...)` draws the item's cards; a
+card with no `anchor` field falls back to the first link in its `about`, then
+its `act_target`, and a null `anchor` is drawn on no thing. Nothing is drawn
+until `$about` has resolved. The component performs no act; the host binds its
+events. **Tag**: `<cf-suggestions>`
 
 **Bindings**:
 
