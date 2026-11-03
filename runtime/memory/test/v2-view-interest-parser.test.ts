@@ -39,6 +39,12 @@ describe("view interest parsing", () => {
     });
   }
 
+  it("returns a `read` view", () => {
+    const read = { ...view, mode: "read" };
+
+    expect(parseViewInterests([read])).toEqual([read]);
+  });
+
   it("refuses duplicate ownership ids", () => {
     expect(parseViewInterests([view, { ...view, revision: 1 }])).toBeNull();
   });

@@ -8105,6 +8105,7 @@ export class Server {
   /** Installs delivery roots for a still-current view under its READ authority. */
   async setViewSelection(space: string, handle: SessionViewHandle, selection: {
     generation: number;
+    settled?: true;
     delivery: readonly ViewQuery[];
     eligibleActions?: readonly string[];
     pieces?: ViewPlan["pieces"];
@@ -8240,6 +8241,7 @@ export class Server {
         id: view.id,
         revision: view.revision,
         generation: selection?.generation ?? 0,
+        ...(selection?.settled === true ? { settled: true as const } : {}),
         eligibleActions: [...(selection?.eligibleActions ?? [])],
         pieces: [...(selection?.pieces ?? [])],
         inputs: [...(selection?.inputs ?? [])],

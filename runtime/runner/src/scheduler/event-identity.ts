@@ -20,6 +20,19 @@ function originStateFor(tx: object): { key: string; counter: number } {
 }
 
 /**
+ * The cause of the receipt a served handling of the event `eventId` writes: the
+ * cell that holds its outcome (events.md §4, "Result carriage"). It derives from
+ * the durable event id alone, so a client that sends the event and runs nothing
+ * of the piece can name the receipt as well as a client whose echo of the
+ * handler mints it.
+ */
+export function servedReceiptCause(eventId: string): {
+  resultFor: { $event: string };
+} {
+  return { resultFor: { $event: eventId } };
+}
+
+/**
  * Mints the durable id for an event at send time (spec §7.5). Ingress
  * callers that already own a durable delivery id pass it through
  * {@link scopeCallerEventId} instead.
@@ -50,12 +63,14 @@ export function mintEventId(
  * caller minting an unguessable one keeps its outcomes out of reach of anyone
  * who can guess a piece, a verb, and a word like that id.
  *
- * Every minted id above ends in `eventLink.id`, and that is load-bearing: the
- * handling's receipt derives from the handler's input bindings plus the event
- * id (`runner.ts`, `cause.$event`), and the bindings alone do not identify the
- * verb — two handlers on one piece that close over the same state have
- * byte-identical bindings. The stream component is what keeps their receipts
- * apart. A raw caller id carries no such component, so without this an agent
+ * Every minted id above ends in `eventLink.id`, and that is load-bearing. Under
+ * server execution the handling's receipt derives from the event id alone
+ * ({@link servedReceiptCause}). Otherwise it derives from the handler's input
+ * bindings plus the event id (`runner.ts`, `cause.$event`), and the bindings
+ * alone do not identify the verb — two handlers on one piece that close over the
+ * same state have byte-identical bindings. Either way the stream component is
+ * what keeps their receipts apart. A raw caller id carries no such component, so
+ * without this an agent
  * reusing one invocation id across two verbs would have its second call
  * collide on the first's receipt and be reported as an already-settled
  * success it never made.

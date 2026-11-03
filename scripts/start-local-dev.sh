@@ -378,7 +378,8 @@ SHELL_URL="http://localhost:$SHELL_PORT" \
     EXPOSE_GC=true \
     API_URL="$TOOLSHED_API_URL" \
     MEMORY_URL="$TOOLSHED_MEMORY_URL" \
-    deno run --unstable-otel -A $INSPECT_FLAG $WATCH_FLAG \
+    deno run --unstable-otel -A --v8-flags=--max-old-space-size=8192 \
+        $INSPECT_FLAG $WATCH_FLAG \
         --env-file=.env index.ts --port="$TOOLSHED_PORT" \
         < /dev/null > "$TOOLSHED_LOG" 2>&1 &
 TOOLSHED_PID=$!

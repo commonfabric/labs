@@ -73,6 +73,7 @@ import {
   isModule,
   isPattern,
   type JSONSchema,
+  type JSONSchemaObj,
   JSONValue,
   type Module,
   NAME,
@@ -202,7 +203,10 @@ import {
   type EventHandler,
   ignoreReadForScheduling,
 } from "./scheduler.ts";
-import { deriveEventKey } from "./scheduler/event-identity.ts";
+import {
+  deriveEventKey,
+  servedReceiptCause,
+} from "./scheduler/event-identity.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
 import {
@@ -3370,7 +3374,7 @@ export class Runner {
           argumentSchema,
           value,
           resultCell,
-        ),
+        ).links,
       resolvePendingSpaceNamesAndRetry: (frame, tx) =>
         this.#resolvePendingSpaceNamesAndRetry(frame, tx),
       invokeJavaScriptImplementation: (module, fn, argument) =>
@@ -12874,8 +12878,9 @@ export class Runner {
     argumentSchema: JSONSchema | undefined,
     value: unknown,
     resultCell: Cell<any>,
-  ): NormalizedFullLink[] {
+  ): { links: NormalizedFullLink[]; forwarded: NormalizedFullLink[] } {
     const links: NormalizedFullLink[] = [];
+    const forwarded: NormalizedFullLink[] = [];
     const seen = new WeakMap<object, Set<unknown>>();
     // The argument schema at rest can be a `cid:` reference, whose
     // definitions live on the document it names.
@@ -12884,6 +12889,44 @@ export class Runner {
       : undefined;
     const rootDefinitions = argumentRoot?.$defs;
 
+    // Whether `schema` declares its position opaque, itself, through a
+    // reference, or in every arm of a union a present value can take. A shape
+    // this does not recognize reads as not opaque, which only reads more, and
+    // that includes a reference leading back to one it is following.
+    const declaredOpaque = (
+      schema: unknown,
+      following: ReadonlySet<string> = new Set(),
+    ): boolean => {
+      if (!isObjectNotArray(schema)) return false;
+      const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
+      if (ref !== undefined && following.has(ref)) return false;
+      const followed = ref === undefined
+        ? following
+        : new Set([...following, ref]);
+      const inherited = cfcSchemaWithInheritedDefs(
+        schema as JSONSchema,
+        rootDefinitions,
+      );
+      const resolved = isObjectNotArray(inherited)
+        ? ContextualFlowControl.resolveSchemaRefs(inherited as JSONSchemaObj) ??
+          inherited
+        : inherited;
+      if (!isObjectNotArray(resolved)) return false;
+      const isOpaque = (candidate: JSONSchema) =>
+        ContextualFlowControl.getAsCellValues(candidate).some((entry) =>
+          ContextualFlowControl.getAsCellKind(entry) === "opaque"
+        );
+      if (isOpaque(schema as JSONSchema) || isOpaque(resolved)) return true;
+      const arms = resolved.anyOf ?? resolved.oneOf;
+      if (!Array.isArray(arms)) return false;
+      const present = arms.filter((arm) =>
+        !isObjectNotArray(arm) ||
+        (arm.type !== "undefined" && arm.type !== "null")
+      );
+      return present.length > 0 &&
+        present.every((arm) => declaredOpaque(arm, followed));
+    };
+
     const visit = (schema: unknown, currentValue: unknown): void => {
       // Sigil-only: the value is post-unwrap, where the only `$alias`
       // records left belong to embedded Pattern values (their `defer`
@@ -12891,6 +12934,12 @@ export class Runner {
       // parsing one here would read it at the wrong nesting level.
       if (isWriteRedirectLink(currentValue)) {
         const link = parseLink(currentValue, resultCell);
+        // An opaque input is forwarded and never read, so its writers owe the
+        // reader nothing.
+        if (declaredOpaque(schema)) {
+          forwarded.push(link);
+          return;
+        }
         links.push({
           ...link,
           schema: combineOptionalSchema(
@@ -12974,8 +13023,8 @@ export class Runner {
       }
     };
 
-    visit(argumentSchema, value);
-    return dedupeNormalizedLinks(links);
+    visit(argumentRoot ?? argumentSchema, value);
+    return { links: dedupeNormalizedLinks(links), forwarded };
   }
 
   #resolveJavaScriptFunction(
@@ -13281,10 +13330,22 @@ export class Runner {
   ): Cell<unknown> {
     return this.#runtime.getCell(
       patternResultCell.space,
-      { resultFor: cause },
+      this.#handlingReceiptCause(cause),
       undefined,
       tx,
     );
+  }
+
+  /**
+   * Helper for the handler paths, which returns the cause a handling's result
+   * cell derives from, given the cause of the handling itself. Under server
+   * execution that is the event alone, so that the sender of an event can name
+   * the receipt without running the handler (`servedReceiptCause()`).
+   */
+  #handlingReceiptCause(cause: Record<string, any>): Record<string, any> {
+    return this.#runtime.experimental.serverExecution === true
+      ? servedReceiptCause(cause.$event)
+      : { resultFor: cause };
   }
 
   async #handleJavaScriptHandlerResult(
@@ -13745,7 +13806,7 @@ export class Runner {
   ): DeferredStartResult<any> {
     const resultCell = this.#runtime.getCell(
       resultSpace,
-      { resultFor: cause },
+      this.#handlingReceiptCause(cause),
       undefined,
       tx,
     );
@@ -14320,14 +14381,17 @@ export class Runner {
       ...(presyncInputs !== undefined && { presyncInputs }),
     });
 
-    const schedulerReads = this.#collectArgumentSchedulerReadLinks(
-      module.argumentSchema,
-      inputs,
-      resultCell,
-    );
+    const { links: schedulerReads, forwarded } = this
+      .#collectArgumentSchedulerReadLinks(
+        module.argumentSchema,
+        inputs,
+        resultCell,
+      );
     const declaredSchedulerReads = schedulerReads.length > 0
       ? schedulerReads
-      : reads;
+      : reads.filter((read) =>
+        !forwarded.some((link) => areNormalizedLinksSame(link, read))
+      );
     const populateDependencies = reads.length > 0
       ? (depTx: IExtendedStorageTransaction, event: any) => {
         this.#populateDeclaredSchedulerReads(declaredSchedulerReads, depTx);
