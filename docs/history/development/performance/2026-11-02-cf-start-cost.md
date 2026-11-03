@@ -66,6 +66,16 @@ What is left under `piece` is the runner's core: 113 modules at the top of
 means separating the `Runtime` from the builtins, the scheduler or the CFC
 machinery.
 
+Merging the terminal browser (#9517) and the runtime's naming mode (#9525) into
+this work took `topics.ts` from 276 modules to 742. `labels.ts`, `watch.ts` and
+`topics.ts` imported the display fit through `@commonfabric/html/worker`,
+`wholeValueLabel()` sat in `prepare.ts`, and `v2-remote-session.ts` imported
+`builder/instance-name.ts`, which reads `cell.ts`. Moving what those needed into
+narrow modules, and loading the browser only for `browse`, put it at 308. Seven
+alternating pairs of `topics --help` at load 96-108 took a median 0.75 s at 742
+modules and 0.36 s at 308, with 0.77 s and 0.35 s of CPU. The tables below were
+taken before those merges.
+
 ## Results
 
 Each row is seven pairs taken alternating, order swapping every round, after a

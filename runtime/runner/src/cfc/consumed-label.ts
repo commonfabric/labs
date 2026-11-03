@@ -1,9 +1,10 @@
 /**
  * How the entries of a stored label map resolve into the label of a read: what
  * a read at a path consumes, and the one label that stands for it. These are
- * pure functions of the entries, apart from `prepare.ts` and the transaction
- * machinery it reads, so that a reader outside the runtime that shows a stored
- * value resolves its label by the runtime's code without loading the rest.
+ * pure functions of the entries. They have their own module so that a reader
+ * outside the runtime that shows a stored value resolves its label by the
+ * runtime's code without loading `prepare.ts` and the transaction machinery it
+ * reads.
  */
 
 import { uniqueCfcAtoms } from "./atoms.ts";
