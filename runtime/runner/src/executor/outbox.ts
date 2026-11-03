@@ -32,7 +32,7 @@
 // of a withdrawn contribution's appends (the wave folds survivors only).
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type { Engine } from "@commonfabric/memory/v2/engine";
+import { type Engine, findSpaceDeletion } from "@commonfabric/memory/v2/engine";
 import {
   deleteExecutionOutboxRow,
   selectPendingExecutionOutboxRows,
@@ -582,12 +582,25 @@ export class SpaceOutbox {
    * order exists to carry. The cost is one drain cycle of latency for
    * rows behind the failure aimed at OTHER streams; correctness over
    * throughput here.
+   *
+   * Before it starts each row, the drain reads its own space's access list,
+   * and it stops at the first row it finds the space deleted before. That
+   * row and every later one stay for a reap to remove with the rest of the
+   * store (serving-loop.md, "A deleted space"). A row whose TARGET is
+   * deleted is refused there deterministically, like any other LT4 refusal.
    */
   async deliverPendingAppends(): Promise<{ remaining: number }> {
     const rows = selectPendingExecutionOutboxRows(this.#engine, {
       branch: "",
     });
     for (const [index, row] of rows.entries()) {
+      if (findSpaceDeletion(this.#engine, this.#space) !== undefined) {
+        logger.warn("append-drain-space-deleted", () => [
+          `the space is deleted; drain stopped before append ${row.eventId}, ` +
+          "its row and successors left for the reap",
+        ]);
+        return { remaining: rows.length - index };
+      }
       try {
         const entry = {
           targetStream: row.targetStream,

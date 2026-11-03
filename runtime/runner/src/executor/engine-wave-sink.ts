@@ -61,6 +61,7 @@ import {
   selectSessionOverwritePathsSince,
   selectWritePathsSince,
   serverSeq,
+  SpaceDeletedError,
   WaveCommitConflictError,
   WavePreconditionError,
   WaveStaleReadError,
@@ -115,6 +116,11 @@ export function waveCommitFailureResult(
         message: error.message,
         staleReads: error.staleReads,
       },
+    };
+  }
+  if (error instanceof SpaceDeletedError) {
+    return {
+      error: { name: "SpaceDeleted", message: error.message },
     };
   }
   if (error instanceof DerivedAclDocumentWriteError) {

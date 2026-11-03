@@ -27,6 +27,7 @@ import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
+  findSpaceDeletion,
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
@@ -45,6 +46,7 @@ import {
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
+  SPACE_DELETED_PARK,
   SpaceServer,
   type SpaceServerOptions,
   type SpaceServerPolicy,
@@ -645,6 +647,13 @@ export class ExecutorHost {
     let parked = false;
     try {
       const engine = await this.#options.server.engineForSpace(space);
+      // The access list is read before the lease is acquired, on every
+      // activation, so a deleted space gets no tenure whatever demand set
+      // this one off (serving-loop.md, "A deleted space").
+      if (findSpaceDeletion(engine, space) !== undefined) {
+        this.#refuseDeletedSpace(space);
+        return;
+      }
       // The sink's session key IS the DR1 holder, whose process-instance
       // component makes a new process a NEW engine session — so the
       // process-global counter starting at 0 never collides with a prior
@@ -707,6 +716,15 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
+          if (reason === SPACE_DELETED_PARK) {
+            // The tenure ended for good: the space is not served again, so
+            // nothing is re-evaluated, and the park is no failure to back
+            // off from.
+            this.#failureParkStreaks.delete(space);
+            this.#pendingNotices.delete(space);
+            this.#endTenure(space, server, true);
+            return;
+          }
           const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
@@ -792,6 +810,16 @@ export class ExecutorHost {
       logger.error("activate-failed", `activation of ${space} failed`, error);
       this.#reportActivationSettled(space, "failed");
     }
+  }
+
+  /**
+   * Helper for `#activateInner()`, which declines to activate `space`,
+   * found deleted: whatever was buffered for its next tenure is dropped,
+   * since none comes, and the attempt is reported refused.
+   */
+  #refuseDeletedSpace(space: MemorySpace): void {
+    this.#pendingNotices.delete(space);
+    this.#reportActivationSettled(space, "refused");
   }
 
   /**

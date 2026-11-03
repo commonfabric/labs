@@ -4201,19 +4201,21 @@ export class SpaceDeletedError extends ProtocolError {
 }
 
 /**
- * Throws {@link SpaceDeletedError} when the ACL document `engine` stores holds
- * a deletion tombstone: that of `space` where the caller names it, else the
- * one ACL document the store holds, an engine serving one space. Read inside
- * a commit's write transaction, it sees a deletion another connection
- * committed after the memory server's own check (INV-15).
+ * The deletion `engine`'s store records, when its ACL document holds a
+ * deletion tombstone, or `undefined` when it does not: the ACL document of
+ * `space` where the caller names it, else the one ACL document the store
+ * holds, an engine serving one space. `aclRevision` is the `seq` at which the
+ * deletion tombstone is stored (INV-15).
  */
-export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
+export const findSpaceDeletion = (
+  engine: Engine,
+  space?: string,
+): { space: string; aclRevision: number } | undefined => {
   if (space !== undefined) {
     const state = readState(engine, { id: aclDocId(space) });
-    if (state !== null && isDeletionTombstone(state.document?.value)) {
-      throw new SpaceDeletedError(space, state.seq);
-    }
-    return;
+    return state !== null && isDeletionTombstone(state.document?.value)
+      ? { space, aclRevision: state.seq }
+      : undefined;
   }
   const heads = engine.database.prepare(
     `SELECT h.id, h.seq, r.data FROM head h
@@ -4229,8 +4231,22 @@ export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
       | EntityDocument
       | null;
     if (isDeletionTombstone(document?.value)) {
-      throw new SpaceDeletedError(head.id.slice("of:".length), head.seq);
+      return { space: head.id.slice("of:".length), aclRevision: head.seq };
     }
+  }
+  return undefined;
+};
+
+/**
+ * Throws {@link SpaceDeletedError} when {@link findSpaceDeletion} finds a
+ * deletion in `engine`'s store, for `space` where the caller names it. Read
+ * inside a commit's write transaction, it sees a deletion another connection
+ * committed after the memory server's own check (INV-15).
+ */
+export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
+  const deletion = findSpaceDeletion(engine, space);
+  if (deletion !== undefined) {
+    throw new SpaceDeletedError(deletion.space, deletion.aclRevision);
   }
 };
 

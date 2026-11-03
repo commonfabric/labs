@@ -47,7 +47,10 @@ import {
   watermarkCell,
   watermarkDocLink,
 } from "../src/executor/watermark.ts";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  writeDeletionTombstone,
+} from "./memory-v2-test-utils.ts";
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -2021,6 +2024,128 @@ describe("stage F serving loop", () => {
       await serviceRuntime.dispose();
       await serviceManager.close();
     }
+  });
+
+  //
+  // A deleted space (serving-loop.md, "A deleted space")
+  //
+
+  /** Resolves once an activation of the space has been refused. */
+  const refused = (): Promise<unknown> =>
+    activations.matching((entry) =>
+      entry.space === space && entry.outcome === "refused"
+    );
+
+  /** A warm request for the space, which activates it with no session. */
+  const warmNotice = (engine: Engine.Engine, label: string) =>
+    server.noteExecutorCommit({
+      space,
+      seq: Engine.serverSeq(engine),
+      class: "authored",
+      sessionId: `${label}-issuer`,
+      writes: [{ id: `of:${label}`, scopeKey: "space" }],
+      warm: true,
+    });
+
+  /** Activates the space on a client's write to `label`, and returns its
+   * engine and its tenure's lease holder. */
+  const activateOnClientWrite = async (label: string) => {
+    openClient();
+    const input = clientRuntime.getCell<{ value: number }>(
+      space,
+      label,
+      undefined,
+    );
+    const tx = clientRuntime.edit();
+    input.withTx(tx).set({ value: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await activated();
+    return {
+      engine: await server.engineForSpace(space),
+      holder: host!.spaceServer(space)!.holder,
+    };
+  };
+
+  it("starts no tenure for a deleted space: activation reads the access list before the lease, and refuses again on every later trigger", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    let built = 0;
+    onServingRuntime = () => {
+      built += 1;
+      return Promise.resolve();
+    };
+    host = newHost();
+
+    warmNotice(engine, "deleted-warm-1");
+    await refused();
+    warmNotice(engine, "deleted-warm-2");
+    await refused();
+
+    expect(built).toBe(0);
+    expect(host.stats().lease.held).toBe(0);
+    expect(engine.executionLeases.holderOf(space)).toBeUndefined();
+    expect(host.spaceServer(space)).toBeUndefined();
+  });
+
+  it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {
+    onServingRuntime = () => Promise.resolve();
+    host = newHost({ idleParkMs: 600_000 });
+    const { engine, holder } = await activateOnClientWrite(
+      "deleted-notice-input",
+    );
+
+    // The host's notice of an admitted commit that wrote the space's ACL
+    // document. It is marked as the tenure's own derived commit, which the
+    // feed skips as an echo, so no wave runs on it and only the notice's
+    // reading of the access list can end the tenure.
+    const seq = writeDeletionTombstone(engine, space, spaceSigner.did());
+    server.noteExecutorCommit({
+      space,
+      seq,
+      class: "derived",
+      holder,
+      sessionId: holder,
+      writes: [{ id: `of:${space}`, scopeKey: "space" }],
+    });
+    await parks.matching((entry) =>
+      entry.space === space && entry.reason === "space-deleted"
+    );
+    await host.spaceServer(space)?.whenParked;
+    expect(engine.executionLeases.holderOf(space)).toBeUndefined();
+
+    // The client's session is still live demand, and the space is still not
+    // served: a later trigger is refused, and the park was no failure to
+    // back off from.
+    warmNotice(engine, "deleted-notice-warm");
+    await refused();
+    expect(host.spaceServer(space)).toBeUndefined();
+    expect(host.stats().reactivationBackoffs).toBe(0);
+  });
+
+  it("ends a tenure for good when its wave commit is refused for the space's deletion, which the host never announced", async () => {
+    onServingRuntime = () => Promise.resolve();
+    host = newHost({ idleParkMs: 600_000 });
+    const { engine } = await activateOnClientWrite("deleted-commit-input");
+
+    // A deletion committed through another process: no notice of it
+    // reaches the host. A notice of an ordinary write at the same seq wakes
+    // the loop, whose commit the engine refuses.
+    const seq = writeDeletionTombstone(engine, space, spaceSigner.did());
+    server.noteExecutorCommit({
+      space,
+      seq,
+      class: "authored",
+      sessionId: "other-process",
+      writes: [{ id: "of:deleted-commit-wake", scopeKey: "space" }],
+    });
+    await parks.matching((entry) =>
+      entry.space === space && entry.reason === "space-deleted"
+    );
+    await host.spaceServer(space)?.whenParked;
+    expect(engine.executionLeases.holderOf(space)).toBeUndefined();
+    warmNotice(engine, "deleted-commit-warm");
+    await refused();
+    expect(host.spaceServer(space)).toBeUndefined();
   });
 
   it("parks an idle space with no live sessions (IDLE_PARK_MS), releasing the lease", async () => {

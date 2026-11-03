@@ -156,8 +156,8 @@ in this order, each step a change of its own:
    is not protected by it, and the recipe's genesis for a space with no list
    must never land on a Home. The Memory server's part is done: it refuses a
    space whose access-control document holds a deletion tombstone, in every
-   mode. The serving loop's part, ending a tenure on a deleted space and
-   starting no further outbox row, is not done yet.
+   mode. So is the serving loop's: it starts no tenure for a deleted space,
+   ends one on the deletion, and starts no further outbox row.
 6. **The server admits the deletion commit.** Compaction's refusal of a
    deletion tombstone names reaping in the same change. Once a deletion has
    been committed, rolling a server back to a release from before step 5 is not

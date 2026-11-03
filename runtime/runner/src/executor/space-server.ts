@@ -772,6 +772,13 @@ export type LifecycleVerb<T> = {
 export const LIFECYCLE_VERB_SPACE_PARKED =
   "the space parked before the lifecycle verb ran";
 
+/**
+ * The park reason of a tenure ended because its space is deleted
+ * (serving-loop.md, "A deleted space"). The host starts no tenure for the
+ * space again.
+ */
+export const SPACE_DELETED_PARK = "space-deleted";
+
 /** The reason carried by a seal a tenure refuses once it has parked. */
 export const SEAL_AFTER_PARK_REFUSED = "seal-after-park-refused";
 
@@ -2114,6 +2121,16 @@ export class SpaceServer implements TransactionSealDestination {
    */
   noteSpaceAclChanged(space: MemorySpace): void {
     this.#runtime?.storageManager.noteSpaceAclChanged?.(space);
+    // For this tenure's own space, the notice is also how it hears of a
+    // deletion: it holds no session there for a revocation to reach
+    // (serving-loop.md, "A deleted space"). A deleted space ends the
+    // tenure for good.
+    if (
+      space === this.#options.space && this.#active &&
+      Engine.findSpaceDeletion(this.#options.engine, space) !== undefined
+    ) {
+      void this.park(SPACE_DELETED_PARK);
+    }
   }
 
   /** The host's in-process feed (plane (d)): every admitted commit for
@@ -8011,6 +8028,17 @@ export class SpaceServer implements TransactionSealDestination {
         "(serving-loop.md §2)",
       ]);
       await this.park("lease-lost-abort");
+      return;
+    }
+    if (outcome.aborted === "space-deleted") {
+      // The engine refused the home commit for the space's deletion, the
+      // backstop for a deletion committed through another process, whose
+      // commit the host never announces (serving-loop.md, "A deleted
+      // space"). The tenure ends for good, as on the host's notice.
+      logger.warn("wave-aborted", () => [
+        "wave aborted: the space is deleted; ending the tenure",
+      ]);
+      await this.park(SPACE_DELETED_PARK);
       return;
     }
     if (outcome.seq !== undefined) {
