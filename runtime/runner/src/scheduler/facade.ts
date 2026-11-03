@@ -1580,6 +1580,13 @@ export class Scheduler {
     return writers;
   }
 
+  /** Whether a client session tracks the instance key `(space, id, scope)`. */
+  isDemandedEntity(
+    address: { space: MemorySpace; id: string; scope: CellScope },
+  ): boolean {
+    return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
   /** LEAVE: the last session tracking the instance key left (R-D's
    * coarse boundary — never early). The 1→0 transition releases the
    * writers' root status (bracketed; `withdrawDemandFrom` re-derives from

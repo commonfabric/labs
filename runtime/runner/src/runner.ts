@@ -2892,6 +2892,9 @@ export class Runner {
    */
   #handlerResultPatterns = new WeakSet<Pattern>();
 
+  /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
+  #keepsDemandedChildren = false;
+
   /**
    * Registrations a run installed in a transaction refused for a stale basis,
    * by result document. The run keeps such a registration, but its graph read
@@ -5452,6 +5455,30 @@ export class Runner {
     this.#releaseUnownedChild(resultCell, installedCancel);
   }
 
+  /**
+   * Helper for a handler's result on a serving runtime, which stops the pieces
+   * the result started once its transaction has committed, leaving what the store
+   * holds. A demand or an event starts one again, as either does after a restart.
+   * A piece a client demands at this moment keeps running: its demand has already
+   * made its one attempt to load the piece, and nothing would make another.
+   */
+  #releaseServedHandlerResult<T>(
+    resultCell: Cell<T>,
+    installedCancel: Cancel | undefined,
+  ): void {
+    const pointer = this.#sessionPatternPointer(resultCell);
+    this.#keepsDemandedChildren = true;
+    try {
+      this.releaseChild(resultCell, installedCancel);
+    } finally {
+      this.#keepsDemandedChildren = false;
+    }
+    const key = this.#getDocKey(resultCell);
+    if (pointer !== undefined && !this.#cancels.has(key)) {
+      this.#runtime.patternManager.forgetKeylessPattern(pointer.identity);
+    }
+  }
+
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
     if (!this.#usesScopedPrograms(resultCell)) {
@@ -5487,6 +5514,13 @@ export class Runner {
       return;
     }
     if (this.#independentlyStartedResults.has(key)) return;
+    if (this.#keepsDemandedChildren) {
+      const { space, id, scope } = resultCell.getAsNormalizedFullLink();
+      if (this.#runtime.scheduler.isDemandedEntity({ space, id, scope })) {
+        this.#independentlyStartedResults.add(key);
+        return;
+      }
+    }
     // A start still resolving may be about to give this result a lifetime of
     // its own, and it cannot say so until it finishes. Declining here keeps a
     // page that is still opening from being closed by its parent. An attempt
@@ -13655,7 +13689,17 @@ export class Runner {
         if (this.#cancels.get(key) !== installedCancel) return;
         this.stop(resultCell);
       });
-      addCancel(cancelOwnedStart);
+      // A serving runtime keeps no graph nothing demands (serving-loop.md §1),
+      // so the parent holds nothing past this transaction's commit.
+      if (waveRunContextOf(tx) === undefined || cancelDeferredStart) {
+        addCancel(cancelOwnedStart);
+      } else {
+        tx.addCommitCallback((_committedTx, commitResult) => {
+          if (!commitResult.error) {
+            this.#releaseServedHandlerResult(resultCell, installedCancel);
+          }
+        });
+      }
       // Spec scheduler-v2 §7.6 rule 2: the launch is speculative; if this
       // handler's transaction ultimately fails, stop the piece (data writes
       // roll back with the transaction; registrations do not).

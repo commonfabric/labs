@@ -691,7 +691,8 @@ export class PatternManager {
    * whose module evaluated this session. Entries are live builder artifacts of
    * evaluated modules — the same order of retention the engine's strong
    * implementation index already committed to for their implementation
-   * functions.
+   * functions. A keyless pattern has no module, and a serving runtime drops its
+   * entry through {@link forgetKeylessPattern} when it releases the piece.
    *
    * The forward value → `{identity, symbol}` map lives at module level in
    * `builder/pattern-metadata.ts`
@@ -1391,6 +1392,17 @@ export class PatternManager {
     const ref = { identity, symbol: "default" };
     this.associatePatternIdentity(root, ref);
     return ref;
+  }
+
+  /**
+   * Drops a keyless pattern's index entry once nothing will ask for it. A start
+   * that later names the identity finds what a fresh session finds. An identity
+   * that is not keyless stays, since a module's artifacts last the session.
+   */
+  forgetKeylessPattern(identity: string): void {
+    if (PatternManager.isKeylessPatternIdentity(identity)) {
+      this.#addressableByIdentity.delete(identity);
+    }
   }
 
   /**
