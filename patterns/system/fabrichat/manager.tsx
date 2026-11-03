@@ -1797,11 +1797,11 @@ export interface FabriChatManagerOutput {
 
   /**
    * The rooms `rooms` leaves out because their space is deleted, newest
-   * first, among those the manager holds a link to: a membership's, saved or
-   * archived, a `direct` entry's, or one it found through the catalog while
-   * the room could still be read. A deleted room can't be read, written or
-   * forgotten, so a client shows each as deleted and offers no control for
-   * it.
+   * first, among those this user holds a membership for, saved or archived.
+   * A room from before the manager recorded memberships has none, and only
+   * the catalog's `deleted` list shows it. A deleted room can't be read,
+   * written or forgotten, so a client shows each as deleted and offers no
+   * control for it.
    */
   deletedRooms: PerUser<ChatIndexEntry[]>;
 
