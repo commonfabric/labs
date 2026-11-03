@@ -46,6 +46,64 @@ describe("memory-v2-cross-space-settled", () => {
     await storage.close();
   });
 
+  describe("follow-up work", () => {
+    // Work that a reaction to settling work tracks holds every waiter until it
+    // settles too, however the reaction reaches it within a few turns.
+
+    const waiters: Record<
+      string,
+      (storage: EmulatedStorageManager) => Promise<void>
+    > = {
+      "crossSpaceSettled()": (storage) => storage.crossSpaceSettled(),
+      "synced()": (storage) => storage.synced(),
+    };
+    const spellings: Record<
+      string,
+      (settling: Promise<void>, track: () => void) => Promise<void>
+    > = {
+      "in a `.then()` on the settling work": (settling, track) =>
+        settling.then(track),
+      "on a microtask after the work settles": (settling, track) =>
+        settling.then(() =>
+          new Promise<void>((resolve) =>
+            queueMicrotask(() => {
+              track();
+              resolve();
+            })
+          )
+        ),
+      "three turns after the work settles": (settling, track) =>
+        settling.then(() => undefined).then(() => undefined).then(track),
+    };
+
+    for (const [waiterName, wait] of Object.entries(waiters)) {
+      for (const [spelling, trackFollowUp] of Object.entries(spellings)) {
+        it(`holds \`${waiterName}\` while work tracked ${spelling} is pending`, async () => {
+          const first = Promise.withResolvers<void>();
+          const followUp = Promise.withResolvers<void>();
+          storage.trackUntilSettled(first.promise);
+          const followUpTracked = trackFollowUp(
+            first.promise,
+            () => storage.trackUntilSettled(followUp.promise),
+          );
+          let settled = false;
+          const waiting = wait(storage).then(() => {
+            settled = true;
+          });
+
+          first.resolve();
+          await followUpTracked;
+          expect(storage.pendingCrossSpacePromiseCount()).toBe(1);
+          expect(settled).toBe(false);
+
+          followUp.resolve();
+          await waiting;
+          expect(settled).toBe(true);
+        });
+      }
+    }
+  });
+
   describe("crossSpaceSettled()", () => {
     it("resolves once tracked work settles, including work tracked while it waits", async () => {
       const rejectionsBefore = loggedRejections();
@@ -70,32 +128,6 @@ describe("memory-v2-cross-space-settled", () => {
       expect(settled).toBe(true);
       expect(storage.pendingCrossSpacePromiseCount()).toBe(0);
       expect(loggedRejections()).toBe(rejectionsBefore + 1);
-    });
-
-    it("waits for work that a reaction to settling work tracks a few microtask turns later", async () => {
-      const first = Promise.withResolvers<void>();
-      const followUp = Promise.withResolvers<void>();
-      storage.trackUntilSettled(first.promise);
-
-      // The reaction tracks its follow-up three turns after the first work
-      // settles, as a reaction that awaits along the way does.
-      const followUpTracked = first.promise
-        .then(() => undefined)
-        .then(() => undefined)
-        .then(() => storage.trackUntilSettled(followUp.promise));
-      let settled = false;
-      const waiting = storage.crossSpaceSettled().then(() => {
-        settled = true;
-      });
-
-      first.resolve();
-      await followUpTracked;
-      expect(settled).toBe(false);
-      expect(storage.pendingCrossSpacePromiseCount()).toBe(1);
-
-      followUp.resolve();
-      await waiting;
-      expect(settled).toBe(true);
     });
 
     it("resolves when nothing is tracked", async () => {
