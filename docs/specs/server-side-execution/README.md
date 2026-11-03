@@ -400,9 +400,10 @@ session-scoped client act. The wiring:
   INSTANCES, which is scope and not access: scoped reads and writes
   resolve against the run's acting principal — the event's actor, or the
   demander (scopes.md §5) — so a run reaches no other user's or session's
-  instance, and a serving runtime refuses every user- or session-scoped
-  read of a space other than the one it serves (protocol.md §2's
-  fail-closed interim).
+  instance. In a space other than the one it serves, a serving runtime
+  reads the acting principal's own instance only when that space's access
+  list grants the principal READ, and refuses every other user- or
+  session-scoped read (protocol.md §2's grant-scoped read).
 - **Multi-tenancy**: one executor host serves many spaces. Per-space
   budgets (CPU time per wave, outstanding LLM calls, egress rate) are part
   of the executor contract from day one — a runaway pattern (an LLM

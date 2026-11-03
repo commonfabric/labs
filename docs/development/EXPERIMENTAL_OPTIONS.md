@@ -445,17 +445,22 @@ flags it adopts from the deployment it runs against.
     delegating list, and a `session.open` carrying it from any other is
     refused. Under OFF that list is empty and no serving runtime exists to
     send it.
-  - **Scoped instances.** What a served run cannot reach is a scoped instance,
-    which is a fact about scope and not about access. A served handler reads
-    and writes `PerUser` and `PerSession` state as the event's stamped actor,
-    user and session, and a served derivation that reads scoped state runs
-    once per user or session demanding it, as that principal (scopes.md §2,
-    §5). No run reads the instance of another user or session, and a run with
-    no acting session has no session instance. A serving runtime also serves
-    one space. In every other space it reads space-scoped documents only, and
-    its read of a user- or session-scoped document there is refused with a
-    `ForeignScopedReadRefusedError`, so a served handler whose run reads one
-    fails and commits nothing (protocol.md §2).
+  - **Scoped instances.** What a served run cannot reach is a scoped instance
+    that is not its acting principal's. A served handler reads and writes
+    `PerUser` and `PerSession` state as the event's stamped actor, user and
+    session, and a served derivation that reads scoped state runs once per user
+    or session demanding it, as that principal (scopes.md §2, §5). No run reads
+    the instance of another user or session, and a run with no acting session
+    has no session instance. A serving runtime also serves one space. In every
+    other space it reads space-scoped documents freely, and a user- or
+    session-scoped document only as the acting principal's own instance, when
+    that space's own access list grants the principal `READ`; a space with no
+    list grants nothing (protocol.md §2's grant-scoped read). Any other scoped
+    read there is refused with a `ForeignScopedReadRefusedError`: a served
+    handler whose run reads one fails and commits nothing, and a derivation's
+    run is withdrawn. An admitted read registers no demand in that space, so
+    the instance is as that space's own serving loop last derived it for the
+    principal.
 - **Current default and planned end state.** The summary table's cell
   states the current value of the ONE first-party default,
   `SERVER_EXECUTION_DEFAULT_ENABLED` in

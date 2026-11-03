@@ -437,10 +437,11 @@ export const reactionTalliesOf = (
  * A room as a manager links it: only the part of `ChatRoomOutput` the manager
  * reads through the link. The manager runs in its user's home, not in the
  * room's space, and the runtime serving a home reads another space's
- * space-scoped documents only: a read of a per-user or per-session instance
- * there is refused, whatever access the reader holds. A served handler whose
- * run reads one fails, and the link's schema is part of every manager
- * handler's declared reads.
+ * space-scoped documents freely, but a per-user or per-session one only as its
+ * actor's own instance, on that space's `READ` grant to the actor, and as that
+ * space's runtime last derived it. A served handler whose run reads a refused
+ * instance fails, and the link's schema is part of every manager handler's
+ * declared reads.
  *
  * So the link carries what the room's space holds at space scope and costs
  * little to read: what the room says about itself, how many messages it

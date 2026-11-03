@@ -546,7 +546,7 @@ less. So access does not explain a served run missing what the person it runs
 for can read, and a pattern has no narrower "server view" to design around.
 
 What a served run can't reach is a scoped instance that belongs to someone
-else, which is the scope rule above and not an access rule:
+else, which is the scope rule above:
 
 - A served handler runs as the person and session that sent its event. The
   `PerUser` and `PerSession` state it reads and writes is that person's and
@@ -555,11 +555,13 @@ else, which is the scope rule above and not an access rule:
   `PerSession` instance, served or not. A value every member reads belongs in
   `PerSpace` state.
 - A serving runtime serves one space. A served run reads another space's
-  `PerSpace` state, and its read of another space's `PerUser` or `PerSession`
-  state is refused. A handler whose run reads one fails, and none of its writes
-  commit. A handler reads what its state's schema declares, so a link from a
-  piece in one space to a piece in another declares only the `PerSpace` part
-  the handler needs.
+  `PerSpace` state. Of that space's `PerUser` and `PerSession` state it reads
+  only the instance of the person it runs for, and only when that space's access
+  list grants them `READ`; any other such read is refused. A handler whose run
+  reads a refused instance fails, and none of its writes commit. An instance
+  read this way is what that space's own serving runtime last derived for the
+  person, so a link to a piece in another space that needs a current value
+  declares its `PerSpace` part.
 
 ## Authorization And Admin Roles
 

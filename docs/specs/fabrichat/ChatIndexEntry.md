@@ -37,10 +37,10 @@ interface ChatIndexEntry {
   `messages.latest`, which holds up to `maxWindowCount` messages, and its
   `participants`, which reads every message for its authors,
   is read from the room itself: the link's schema is part of every manager
-  handler's declared reads, and a served handler whose run reads a per-user or
-  per-session instance in a space other than its own fails. That is a limit of
-  scope and not of access: the runtime serving the manager reads the room's
-  space with its owner's access
+  handler's declared reads, and in a space other than its own a served
+  handler's run reads a per-user or per-session instance only as its actor's,
+  on that space's `READ` grant to the actor, as that space's runtime last
+  derived it, and fails on any other
   ([`serverExecution`](../../development/EXPERIMENTAL_OPTIONS.md#serverexecution)).
 - **`kind`** repeats the room's own `about.kind`
   ([`ChatRoomAbout`](ChatRoomAbout.md)), so a client can list and filter rooms

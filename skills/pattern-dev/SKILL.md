@@ -50,7 +50,8 @@ relevant input and output types.
 
 A handler the server runs reads each space with its owner's access, so access is
 not why it misses what its user can read. What it can't reach is someone else's
-scoped instance, or a `PerUser` or `PerSession` instance in another space;
+scoped instance; in another space it reads its user's own `PerUser` or
+`PerSession` instance only when that space's access list grants them `READ`.
 `docs/common/patterns/multi-user-patterns.md`, "Scoped State In A Served Run",
 has the rule.
 

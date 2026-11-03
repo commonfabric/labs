@@ -167,10 +167,12 @@ records no principal on any frame; the `serverExecution` entry in
 `docs/development/EXPERIMENTAL_OPTIONS.md` states the rule on both arms and the
 configurations that bind nothing. Under the binding, narrower access is not why
 a served run came back without a document. What a served run does lack is scoped
-instances: another user's or session's, and any user- or session-scoped document
-of a space its runtime does not serve, which it refuses with a
-`ForeignScopedReadRefusedError`. That error in a serving log identifies the
-case.
+instances: another user's or session's, and in a space its runtime does not
+serve, any instance that is not its actor's own or that the space's access list
+does not grant the actor, which the runtime refuses with a
+`ForeignScopedReadRefusedError`. That error in a serving log names the document
+and the reason, not the run that made the read, so tie it to a run before
+calling it the cause.
 
 **Read the server's instruments before adding any.** The health route already
 reports the serving process's own logger statistics, under the same key names
