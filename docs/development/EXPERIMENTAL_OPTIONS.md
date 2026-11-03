@@ -454,8 +454,9 @@ flags it adopts from the deployment it runs against.
     has no session instance. A serving runtime also serves one space. In every
     other space it reads space-scoped documents freely, and a user- or
     session-scoped document only as the acting principal's own instance, when
-    that space's own access list grants the principal `READ`; a space with no
-    list grants nothing (protocol.md §2's grant-scoped read). Any other scoped
+    that space's own access list grants `READ` or more through the principal's
+    entry or, where it has none, an `ANYONE` entry; a space with no list grants
+    nothing (protocol.md §2's grant-scoped read). Any other scoped
     read there is refused with a `ForeignScopedReadRefusedError`: a served
     handler whose run reads one fails and commits nothing, and a derivation's
     run is withdrawn. An admitted read registers no demand in that space, so
