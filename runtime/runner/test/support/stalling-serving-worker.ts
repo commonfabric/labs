@@ -45,7 +45,7 @@ serveFromPort(self as unknown as PortLike, {
   runLifecycleVerb: async (host, space, verb) => {
     const receipt = await host.runLifecycleVerb(space, {
       name: verb.name,
-      run: (runtime) => {
+      run: (runtime): Promise<string | number> => {
         if (verb.name === "stall") {
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         }
