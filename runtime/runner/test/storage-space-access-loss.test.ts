@@ -35,7 +35,10 @@ describe("storage space access loss", () => {
       authorizeSessionOpen: () => space,
       acl: { mode: "enforce" },
     });
-    const client = await connect({ transport: loopback(server) });
+    const client = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(server),
+    });
     const session = await client.mount(
       space,
       {},
@@ -116,7 +119,10 @@ describe("storage space access loss", () => {
     let guestSession: SpaceSession | undefined;
     const factory: SessionFactory = {
       async create(target, signer, options) {
-        const client = await connect({ transport: loopback(server) });
+        const client = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: loopback(server),
+        });
         try {
           const session = await client.mount(
             target,

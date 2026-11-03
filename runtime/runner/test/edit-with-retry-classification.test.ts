@@ -310,6 +310,7 @@ class CountingLoopbackSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -476,6 +477,7 @@ class WireRefusalSessionFactory implements SessionFactory {
   ) {
     this.sessions++;
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(

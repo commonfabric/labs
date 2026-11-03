@@ -329,6 +329,7 @@ export class SingleSessionFactory implements SessionFactory {
       throw new Error(`Session already created for ${space}`);
     }
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: this.#transport,
     });
     const session = await client.mount(space, {}, testSessionOpenAuthFactory);

@@ -361,8 +361,8 @@ export class CodecRegistry<Encoded> {
 
   /**
    * Guards against registering a codec under a tag that is not one. A decoder
-   * refuses a tag that is not syntactically a tag, per Section 9 of
-   * `3-json-encoding.md`, so a codec indexed under such a string could emit a
+   * refuses a tag that is not syntactically a tag, per Section 2.5 of
+   * `1-fabric-values.md`, so a codec indexed under such a string could emit a
    * value this same system would then refuse to read back. Checking here is
    * what keeps the two sides of a round trip from disagreeing, and does it once
    * per codec rather than once per value.

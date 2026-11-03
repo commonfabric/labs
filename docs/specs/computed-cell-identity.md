@@ -377,16 +377,17 @@ What this leaves open:
   numbering it was deployed with.
 - A runtime with naming off, or one that predates instance names, binds a
   parent's children positionally, even where a naming runtime carried them
-  over to their names: reopening the parent, it runs whatever instance now
-  takes a carried child's positional number on that child's document, and
-  updating the parent, it shows the carried child's state under that instance,
-  with no refusal in either case (`runtime/runner/test/instance-naming-modes.test.ts`).
-  The `instanceNames` flag stays off until such a runtime is kept away from a
-  space whose data a naming runtime wrote. The memory server is to do that by
-  marking a space at the first commit from a naming runtime and admitting no
-  runtime with naming off to it afterward (INV-16 in
-  [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission),
-  which the server enforces and no client declares a mode for yet);
+  over to their names: reopening the parent, it would run whatever instance
+  now takes a carried child's positional number on that child's document. The
+  memory server keeps such a runtime away: a space is marked at the first
+  commit from a naming runtime, which declares its mode in every open, and the
+  server admits no runtime with naming off to a marked space (INV-16 in
+  [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+  so its reopen or update of such a parent is refused
+  (`runtime/runner/test/instance-naming-modes.test.ts`). A naming runtime of a
+  build older than the declaration declares nothing, and is admitted as
+  positional. The `instanceNames` flag stays off until deployments' posture
+  names instances;
   [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
   that and the flip.
 

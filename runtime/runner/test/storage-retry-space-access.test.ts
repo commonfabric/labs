@@ -64,7 +64,10 @@ describe("storage space access retry", () => {
           failNextGuestMount = undefined;
           if (failure !== undefined) throw failure;
         }
-        const client = await connect({ transport: loopback(server) });
+        const client = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: loopback(server),
+        });
         try {
           const session = await client.mount(
             target,
@@ -136,6 +139,7 @@ describe("storage space access retry", () => {
       async create(target, _signer, options) {
         const transport = loopback(server);
         const client = await connect({
+          instanceNames: namesInstancesByDefault(),
           transport: {
             ...transport,
             send(payload) {

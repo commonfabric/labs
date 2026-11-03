@@ -15,6 +15,7 @@ import {
   type CapabilityId,
   COMPILE_CACHE_FILE,
   type ExecOptions,
+  METRIC_EXPORT_INTERVAL_MS,
   openCapabilities,
   resolveCapabilities,
   type Spawn,
@@ -1148,6 +1149,28 @@ describe("opening a capability on a machine that answers", () => {
     expect(env?.CACHE_DIR).toMatch(/capability-[^/]*\/toolshed-\d+\/cache$/);
     expect(served.MEMORY_DIR).toBe(env?.MEMORY_DIR);
     expect(served.DB_PATH).toBe("");
+  });
+
+  it("starts every server with a metric export interval no lane outlives", async () => {
+    // A compiled server that exports metrics while its main thread is busy
+    // with its shutdown never exits, so no export may fall due in a lane.
+    expect(METRIC_EXPORT_INTERVAL_MS).toBeGreaterThanOrEqual(
+      24 * 60 * 60 * 1000,
+    );
+    const interval = `${METRIC_EXPORT_INTERVAL_MS}`;
+    const source = machine({ "index.ts": LISTENING });
+    await open("toolshed", source);
+    expect(envOf(source, "index.ts")?.OTEL_METRIC_EXPORT_INTERVAL)
+      .toBe(interval);
+    for (const role of ["default", "opposite"] as const) {
+      const id = role === "default"
+        ? "toolshed-baked"
+        : "toolshed-baked-opposite";
+      const binary = `toolshed-baked-${role}`;
+      const baked = await openBaked(id, binary, role);
+      expect(envOf(baked, binary)?.OTEL_METRIC_EXPORT_INTERVAL)
+        .toBe(interval);
+    }
   });
 
   it("gives the suites of a baked server a store beside the server's rather than its own", async () => {

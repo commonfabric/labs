@@ -103,7 +103,10 @@ describe("storage admission notice", () => {
       // remote factory's connection-per-space path does.
       const factory: SessionFactory = {
         async create(target, signer, options) {
-          const client = await connect({ transport: loopback(server) });
+          const client = await connect({
+            instanceNames: namesInstancesByDefault(),
+            transport: loopback(server),
+          });
           client.subscribeAdmissible((admitted, principal) =>
             notify(admitted as MemorySpace, principal)
           );

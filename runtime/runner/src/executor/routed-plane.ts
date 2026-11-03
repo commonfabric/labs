@@ -23,6 +23,7 @@ import {
   type ClientInfo,
   createClientInfo,
 } from "@commonfabric/memory/v2/client-info";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import {
   createSignedSessionOpenAuth,
   createStorageAddressResolver,
@@ -457,6 +458,12 @@ export class RoutedPlane {
     const client = await MemoryClient.connect({
       transport,
       client: this.#clientInfo,
+      // The session commits the serving runtimes' writes to the space, so it
+      // declares their naming mode (INV-16), which is this build's default
+      // since no environment sets the flag.
+      // TODO(danfuzz): Take the serving runtimes' mode from the host once an
+      // environment can set the `instanceNames` flag.
+      instanceNames: namesInstancesByDefault(),
       firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
     });
     try {
