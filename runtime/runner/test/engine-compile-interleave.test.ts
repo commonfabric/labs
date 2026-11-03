@@ -150,6 +150,10 @@ describe("Engine", () => {
         const compile = (engine: Engine) =>
           engine.compileResolvedToRecordGraph(storedSource, entryFilename);
         const timerFiredDuring = async (engine: Engine) => {
+          // `yieldToEventLoop()` gives timers a turn only once some
+          // `performance.now()` has passed since it last did, and this fake
+          // clock stands still during a compile unless the test moves it.
+          await clock.tick(1_000);
           let fired = false;
           const timer = setTimeout(() => {
             fired = true;
