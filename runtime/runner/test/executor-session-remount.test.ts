@@ -161,6 +161,7 @@ class GatedLoopbackManager extends StorageManager {
         }
         const loopback = MemoryV2Client.loopback(server);
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: {
             ...loopback,
             send: async (payload) => {

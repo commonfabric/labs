@@ -25,6 +25,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   SingleSessionFactory,
@@ -214,6 +215,7 @@ describe("memory-v2 reconnect holdings", () => {
       memoryHost: new URL("memory://runner-v2-holdings"),
     }, new SingleSessionFactory(transport));
     const writerClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     const writer = await writerClient.mount(

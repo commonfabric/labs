@@ -28,6 +28,7 @@ import {
   type MemoryMessageFrame,
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createStorageAddressResolver,
   MEMORY_STORAGE_PATH,
@@ -733,7 +734,10 @@ describe("WebSocketTransport failure signaling", () => {
     it("keeps sending a refused control's remaining body records after the refusal arrives mid-body", async () => {
       const audience = (await Identity.fromPassphrase("credit-refusal")).did();
       await withTransport(async (transport, socket) => {
-        const connecting = MemoryClient.connect({ transport });
+        const connecting = MemoryClient.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport,
+        });
         const active = socket();
         active.openConnection();
         await active.whenSent(1);
@@ -1159,7 +1163,10 @@ describe("WebSocketTransport failure signaling", () => {
     it("disposes a Memory client while its session commit is blocked on credit", async () => {
       const audience = (await Identity.fromPassphrase("credit-disposal")).did();
       await withTransport(async (transport, socket) => {
-        const connecting = MemoryClient.connect({ transport });
+        const connecting = MemoryClient.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport,
+        });
         const active = socket();
         active.openConnection();
         await active.whenSent(1);
@@ -1394,7 +1401,10 @@ describe("WebSocketTransport failure signaling", () => {
         ]
       ) {
         await withTransport(async (transport, socket) => {
-          const connecting = MemoryClient.connect({ transport });
+          const connecting = MemoryClient.connect({
+            instanceNames: namesInstancesByDefault(),
+            transport,
+          });
           const active = socket();
           active.openConnection();
           await active.whenSent(1);
@@ -3096,7 +3106,10 @@ describe("WebSocketTransport failure signaling", () => {
         return write.promise;
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-queued-commit-replay",
@@ -3145,7 +3158,10 @@ describe("WebSocketTransport failure signaling", () => {
         return write.promise;
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-closing-commit-replay",
@@ -3193,7 +3209,10 @@ describe("WebSocketTransport failure signaling", () => {
         return Promise.reject(new Error("write failed"));
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-silent-write-failure",
@@ -3269,7 +3288,10 @@ describe("WebSocketTransport failure signaling", () => {
         };
       },
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-duplicate-commit",
@@ -3317,7 +3339,10 @@ describe("WebSocketTransport failure signaling", () => {
         return Promise.reject(writeFailure);
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-refused-write",
@@ -3367,7 +3392,10 @@ describe("WebSocketTransport failure signaling", () => {
         );
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-closing-refusals",

@@ -105,6 +105,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
       },
     });
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     const session = await client.mount(
