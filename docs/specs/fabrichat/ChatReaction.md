@@ -70,3 +70,15 @@ The `deleteReaction` stream checks the authenticated actor against the reaction'
 `authored-by` attestation. Selecting the same profile as another actor does not
 grant the right to remove their reaction; its author can use this stream to
 remove it after changing profiles.
+
+## A reaction the room can't read
+
+No `sendReaction` stores a reaction that lacks a field above, or holds an
+`emoji` or a `sentAt` of another type than the one above, such as a `sentAt`
+that is a bare `bigint` rather than a `FabricEpochNsec`. A message's reactions
+can still hold one, as data stored under another shape can, just as a room's
+messages can hold [a message it can't
+read](ChatMessage.md#a-message-the-room-cant-read). The room leaves such a
+reaction out of the tallies it shows for the message, as though the message
+didn't hold it, and tallies the message's other reactions as it would without
+it.
