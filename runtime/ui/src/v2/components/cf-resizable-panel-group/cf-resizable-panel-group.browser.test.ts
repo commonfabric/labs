@@ -247,6 +247,33 @@ Deno.test("a size a person dragged to stays when the group reads its panels agai
   page.first.defaultSize = 40;
   await laidOut(page.group);
   expect(page.first.style.width).toBe("40%");
+  expect(page.second.style.width).toBe("64%");
+});
+
+Deno.test("a dragged size outside a panel's new bounds returns every panel to its default", async () => {
+  using page = await mounted("horizontal");
+  page.handle.focus();
+  await pressKey("Home");
+  expect(page.first.style.width).toBe("31%");
+
+  page.first.minSize = 33;
+  await laidOut(page.group);
+  expect(page.first.style.width).toBe("36%");
+  expect(page.second.style.width).toBe("64%");
+});
+
+Deno.test("a re-read of the panels during a drag ends the drag", async () => {
+  using page = await mounted("horizontal");
+  page.handle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 100, clientY: 160 }),
+  );
+  page.second.minSize = 25;
+  await laidOut(page.group);
+  expect(page.group.classList.contains("resizing")).toBe(false);
+  document.dispatchEvent(
+    new MouseEvent("mousemove", { clientX: 140, clientY: 160 }),
+  );
+  expect(page.first.style.width).toBe("36%");
 });
 
 Deno.test("the group and its handle name their orientation, the handle's for assistive technology as the line it draws", async () => {

@@ -249,6 +249,8 @@ export class CFResizablePanelGroup extends BaseElement {
   #onPanelSizes = (): void => this.updatePanels();
 
   private updatePanels(): void {
+    // A drag measures from the sizes it started with, so a re-read ends it.
+    if (this._activeHandle) this.#cancelResize();
     const previous = new Map(this._panels);
     this._panels.clear();
     this._handles = [];
@@ -258,18 +260,27 @@ export class CFResizablePanelGroup extends BaseElement {
     const handles = Array.from(this.querySelectorAll("cf-resizable-handle"));
 
     // A panel's sizes are its properties, which its attributes set too: a
-    // renderer assigns properties and sets no attribute. A size a person
-    // dragged to stays until that panel's default changes.
+    // renderer assigns properties and sets no attribute. The sizes a person
+    // dragged to stay while the same panels have the same defaults and each
+    // size is still within its panel's bounds; otherwise every panel returns
+    // to its default, so the sizes still add up.
+    const kept = panels.length === previous.size &&
+      panels.every((panel) => {
+        const known = previous.get(panel);
+        return known !== undefined &&
+          known.defaultSize === panel.defaultSize &&
+          known.currentSize >= panel.minSize &&
+          known.currentSize <= panel.maxSize;
+      });
     panels.forEach((panel) => {
       const { minSize, maxSize, defaultSize } = panel;
-      const known = previous.get(panel);
       this._panels.set(panel, {
         element: panel,
         minSize,
         maxSize,
         defaultSize,
-        currentSize: known?.defaultSize === defaultSize
-          ? known.currentSize
+        currentSize: kept
+          ? previous.get(panel)?.currentSize ?? defaultSize
           : defaultSize,
       });
     });
