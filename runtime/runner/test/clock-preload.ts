@@ -150,6 +150,14 @@ installFakeClock({
     // flush deadline and the failure-park backoff; auto-advance turns the
     // reactivation backoff into a runaway.
     "executor-cross-space",
+    // The owner-routing suite drives two live ExecutorHosts over one file
+    // store. Closing a host parks each space under the park's dispose
+    // deadline, and the dispose waits on loopback work the pump reads as an
+    // idle loop, so auto-advance fires that deadline at once: `close()`
+    // returns with the dispose abandoned and still writing into the store the
+    // teardown then removes. It waits on activation and store edges, never on
+    // a delay.
+    "executor-owner-routing",
     // The Phase-6 outbox-budget suite: the egress-rate token bucket's
     // pacing sleeps are wall-clock policy, and the auto-advance clock's
     // virtual timers diverge from the bucket's time source (Date.now) —
