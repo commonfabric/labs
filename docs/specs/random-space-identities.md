@@ -251,10 +251,8 @@ says which spaces this covers):
 The admission rule and the refusal are
 [INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
 [the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
-Deleting a space is implemented in part. The Memory server refuses a space
-whose access-control document holds a deletion tombstone, but does not yet
-admit the commit that would write one: it refuses that commit as it refuses any
-access-control document that is not an access list.
+The Memory server and the serving loop implement deleting a space; nothing in
+this repository sends the deletion commit yet, which `cf space delete` will.
 
 ### Reaping a deleted space
 

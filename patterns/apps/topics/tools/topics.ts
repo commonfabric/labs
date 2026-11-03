@@ -137,6 +137,9 @@ export interface TopicsDeps {
   /** Runs `program` as {@link runProgram} does. */
   run: typeof runProgram;
 
+  /** Whether the deployment `board` is on runs its pieces itself. */
+  serverExecutes: (board: Board) => Promise<boolean>;
+
   /** Where a write's text is read from when it is not an argument. */
   stdin: Pick<typeof Deno.stdin, "isTerminal" | "readable">;
 
@@ -168,6 +171,7 @@ const defaultDeps: TopicsDeps = {
   timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   launcher: LAUNCHER,
   run: runProgram,
+  serverExecutes,
   stdin: Deno.stdin,
   write: console.log,
   warn: console.error,
@@ -176,6 +180,22 @@ const defaultDeps: TopicsDeps = {
   copyText: (text) => runQuietly(PROGRAMS.copy, text),
   identityDid,
 };
+
+/**
+ * Whether the deployment `board` is on publishes server execution. One that
+ * cannot be asked counts as not running its pieces, and the `cf` command that
+ * then runs the Topic reports what is wrong with it.
+ */
+export async function serverExecutes(board: Board): Promise<boolean> {
+  try {
+    const response = await fetch(new URL("/api/meta", board.apiUrl));
+    const meta: unknown = await response.json();
+    return isObjectNotArray(meta) && isObjectNotArray(meta.experimental) &&
+      meta.experimental.serverExecution === true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Runs the Deno program at `program` with `args`, the variables in `env` added
@@ -788,7 +808,8 @@ export class UnsettledWrite extends Error {
  * Runs the Topic at `cell` to completion once, after the write `written` to
  * it. The board lists each Topic with a comment count and a last activity
  * that the Topic derives and stores only when a run of it completes, and
- * `cf piece call` returns before that.
+ * `cf piece call` returns before that. A deployment that runs its pieces itself
+ * has that run in hand already, and this asks for nothing.
  */
 async function step(
   deps: TopicsDeps,
@@ -796,6 +817,7 @@ async function step(
   cell: string,
   written: Written,
 ) {
+  if (await deps.serverExecutes(board)) return;
   try {
     await cf(deps, board, ["piece", "step", "--cell", cell]);
   } catch (error) {

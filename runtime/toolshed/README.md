@@ -288,10 +288,8 @@ on a deleted space and refuses each reopen the same way. `SpaceInviteClient`'s
 redemption then falls back to the HTTP route, as it does whenever its open is
 refused with an `AuthorizationError`, and the route answers `space-deleted`. Its
 administration through a session surfaces the deleted `AuthorizationError`
-itself. Since nothing yet admits the commit that deletes a space, none of these
-refusals is reached in practice. Outside the convenience `create` operation,
-transport failures remain transport failures. Malformed error responses use
-`service-error`.
+itself. Outside the convenience `create` operation, transport failures remain
+transport failures. Malformed error responses use `service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
 same serialized transaction as its ACL-only public commit. A unique receipt pair
