@@ -377,7 +377,7 @@ export interface FabricClassWithNonterminalCodec<PlusType = never> {
  * more. This package names what it requires rather than the classes that
  * happen to supply it, so a client brings its own. `BaseLiveEnvironment` is
  * the base to build one on, and `NullLiveEnvironment` covers a caller that
- * expects to need no cell. See Section 2.5 of the formal spec.
+ * expects to need no cell. See Section 2.6 of the formal spec.
  */
 export interface LiveEnvironment {
   /**
