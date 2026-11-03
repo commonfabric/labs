@@ -442,7 +442,7 @@ Deno.bench({
 
 Deno.bench({
   name: "frozen large tree under a fresh container (keys in order)",
-  group: "frozen-ordered-large-tree-rewalk",
+  group: "frozen-large-tree-rewalk",
   fn(b) {
     const data = deepFreeze({
       count: wrapperCount++,
