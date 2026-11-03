@@ -149,80 +149,94 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
     expect(isCell(col)).toBe(true);
     expect((col as { get(): unknown }).get()).toEqual({ name: "Ada" });
   });
-  it("decodes a nullable link column, which a row schema types as anyOf null or a cell", async () => {
-    const author = runtime.getCell<{ name: string }>(
-      space,
-      "nullable-author",
-      undefined,
-      tx,
-    );
-    author.set({ name: "Ada" });
-    const db: SqliteDbRef = {
-      id: `of:rowdec-${crypto.randomUUID()}`,
-      tables: {
-        people: table({ id: "integer primary key", author_cf_link: "text" }),
-      },
-    };
-    await seedSqlite(
-      db,
-      "INSERT INTO people (author_cf_link) VALUES (?), (NULL)",
-      [encodeCfLinkValue(author)],
-    );
-    await tx.commit().settled;
-
-    // The rowSchema the transformer injects for
-    // db.query<{ author: Cell<{ name: string }> | null }>(...).
-    const rowSchema = {
+  // The rowSchema the transformer injects for
+  // db.query<{ author: Cell<{ name: string }> | null }>(...), with the union
+  // written at the column and behind a named type.
+  const nullableRowSchemas: Record<string, JSONSchema> = {
+    "written at the column": {
       type: "object",
       properties: {
         author: {
           anyOf: [{ type: "null" }, { type: "object", asCell: ["cell"] }],
         },
       },
-    } as unknown as JSONSchema;
-
-    const tx2 = runtime.edit();
-    const p = cf.pattern(() =>
-      cf.sqliteQuery(
-        {
-          db,
-          sql: "SELECT author_cf_link AS author FROM people ORDER BY id",
-          reactOn: db,
-          rowSchema,
-          // deno-lint-ignore no-explicit-any
-        } as any,
-      )
-    );
-    const resultCell = runtime.getCell(
-      space,
-      "rowdec-nullable-result",
-      p.resultSchema,
-      tx2,
-    );
-    const result = runtime.run(tx2, p, {}, resultCell);
-    await tx2.commit().settled;
-
-    const v = await waitForCellValue<QueryState>(
-      runtime,
-      result,
-      (s) =>
-        s?.pending === false && Array.isArray(s.result) &&
-        s.result.length === 2,
-    );
-    expect(v.error).toBeUndefined();
-
-    const tree = result.asSchema({
+    } as unknown as JSONSchema,
+    "behind a named type": {
       type: "object",
-      additionalProperties: true,
-      properties: { result: { type: "array", items: rowSchema } },
-    } as unknown as JSONSchema).get() as {
-      result?: Array<{ author?: unknown }>;
-    };
-    const [linked, unlinked] = tree.result ?? [];
-    expect(isCell(linked?.author)).toBe(true);
-    expect((linked?.author as { get(): unknown }).get()).toEqual({
-      name: "Ada",
+      properties: { author: { $ref: "#/$defs/Author" } },
+      $defs: {
+        Author: {
+          anyOf: [{ type: "null" }, { type: "object", asCell: ["cell"] }],
+        },
+      },
+    } as unknown as JSONSchema,
+  };
+
+  for (const [shape, rowSchema] of Object.entries(nullableRowSchemas)) {
+    it(`decodes a nullable link column, its union ${shape}`, async () => {
+      const author = runtime.getCell<{ name: string }>(
+        space,
+        "nullable-author",
+        undefined,
+        tx,
+      );
+      author.set({ name: "Ada" });
+      const db: SqliteDbRef = {
+        id: `of:rowdec-${crypto.randomUUID()}`,
+        tables: {
+          people: table({ id: "integer primary key", author_cf_link: "text" }),
+        },
+      };
+      await seedSqlite(
+        db,
+        "INSERT INTO people (author_cf_link) VALUES (?), (NULL)",
+        [encodeCfLinkValue(author)],
+      );
+      await tx.commit().settled;
+
+      const tx2 = runtime.edit();
+      const p = cf.pattern(() =>
+        cf.sqliteQuery(
+          {
+            db,
+            sql: "SELECT author_cf_link AS author FROM people ORDER BY id",
+            reactOn: db,
+            rowSchema,
+            // deno-lint-ignore no-explicit-any
+          } as any,
+        )
+      );
+      const resultCell = runtime.getCell(
+        space,
+        "rowdec-nullable-result",
+        p.resultSchema,
+        tx2,
+      );
+      const result = runtime.run(tx2, p, {}, resultCell);
+      await tx2.commit().settled;
+
+      const v = await waitForCellValue<QueryState>(
+        runtime,
+        result,
+        (s) =>
+          s?.pending === false && Array.isArray(s.result) &&
+          s.result.length === 2,
+      );
+      expect(v.error).toBeUndefined();
+
+      const tree = result.asSchema({
+        type: "object",
+        additionalProperties: true,
+        properties: { result: { type: "array", items: rowSchema } },
+      } as unknown as JSONSchema).get() as {
+        result?: Array<{ author?: unknown }>;
+      };
+      const [linked, unlinked] = tree.result ?? [];
+      expect(isCell(linked?.author)).toBe(true);
+      expect((linked?.author as { get(): unknown }).get()).toEqual({
+        name: "Ada",
+      });
+      expect(unlinked?.author).toBeNull();
     });
-    expect(unlinked?.author).toBeNull();
-  });
+  }
 });

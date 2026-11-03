@@ -118,7 +118,8 @@ and is **driven by the typed `db.query<Row>` schema**:
 
 1. From the transformer-injected `rowSchema`, identify which result columns are
    marked `asCell` (a `Cell<T>` field in `Row`), either directly or in a branch
-   of an `anyOf` or `oneOf`: a nullable `Cell<T> | null` field lowers to
+   of an `anyOf`, `oneOf`, or `allOf`, following a `$ref` into the row schema's
+   `$defs`: a nullable `Cell<T> | null` field lowers to
    `anyOf: [{ type: "null" }, { …, asCell }]`, and is a link column too. An
    **untyped** query injects no `rowSchema` → no columns are decoded.
 2. For each `asCell` column, replace the stored sigil-link **string** with the
