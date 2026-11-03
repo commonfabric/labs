@@ -2,10 +2,18 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 const signer = await Identity.fromPassphrase("cross-space settled");
+
+/** How many rejections of tracked work the storage manager has logged. */
+const loggedRejections = (): number =>
+  (getLoggerCountsBreakdown() as Record<
+    string,
+    Record<string, { error?: number }>
+  >)["storage.v2"]?.["tracked-work-rejected"]?.error ?? 0;
 
 /**
  * How many times `then()` has been called on a `CountedPromise`, counted from
@@ -40,6 +48,7 @@ describe("memory-v2-cross-space-settled", () => {
 
   describe("crossSpaceSettled()", () => {
     it("resolves once tracked work settles, including work tracked while it waits", async () => {
+      const rejectionsBefore = loggedRejections();
       const first = Promise.withResolvers<void>();
       const second = Promise.withResolvers<void>();
       storage.trackUntilSettled(first.promise);
@@ -60,6 +69,7 @@ describe("memory-v2-cross-space-settled", () => {
       await waiting;
       expect(settled).toBe(true);
       expect(storage.pendingCrossSpacePromiseCount()).toBe(0);
+      expect(loggedRejections()).toBe(rejectionsBefore + 1);
     });
 
     it("resolves when nothing is tracked", async () => {

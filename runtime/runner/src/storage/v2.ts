@@ -3724,13 +3724,19 @@ export class StorageManager implements IStorageManager {
 
   trackUntilSettled(work: Promise<unknown>): void {
     // Settles either way and never rejects: no waiter attaches to it, so a
-    // rejection carried here would go unhandled. `work` is still its
-    // owner's to observe.
+    // rejection carried here would go unhandled. A rejection is logged, so
+    // work whose owner attaches no handler of its own still reports it.
     const settle = () => {
       this.#crossSpacePromises.delete(tracked);
       this.#releaseCrossSpaceWaiters();
     };
-    const tracked: Promise<void> = work.then(settle, settle);
+    const tracked: Promise<void> = work.then(settle, (error: unknown) => {
+      logger.error("tracked-work-rejected", () => [
+        "work tracked until settled rejected:",
+        error,
+      ]);
+      settle();
+    });
     this.#crossSpacePromises.add(tracked);
   }
 
