@@ -27,6 +27,7 @@ import {
   repairProfileRootsOf,
   repairProfileSpaceRoot,
 } from "../../src/ops/profile-space-root.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 const owner = await Identity.fromPassphrase("profile root housekeeping owner");
 const stranger = await Identity.fromPassphrase(
@@ -154,6 +155,7 @@ describe("profile-space-root", () => {
   beforeEach(() => {
     runtimes = [];
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-profile-root-housekeeping" },
       acl: { mode: "enforce" },

@@ -7,6 +7,7 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { Server } from "@commonfabric/memory/v2/server";
 import { table } from "@commonfabric/memory/sqlite/schema";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -29,6 +30,8 @@ describe("executor-home-sqlite", () => {
         (message.authorization as { principal: string }).principal,
       sessionOpenAuth: { audience: "did:key:home-sqlite-test" },
       acl: { mode: "off", delegatingDids: [service.did()] },
+      // A toolshed's posture: the runtime's naming default.
+      namesInstances: namesInstancesByDefault,
     });
     await server.writeDocument(consumer, `of:${consumer}`, {
       [alice.did()]: "OWNER",

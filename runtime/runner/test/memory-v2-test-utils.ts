@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type {
   IStorageNotification,
@@ -43,6 +44,7 @@ export const TEST_HELLO_SESSION_OPEN: SessionOpenAuthMetadata = {
   challenge: TEST_SESSION_OPEN_CHALLENGE,
 };
 export const TEST_MEMORY_SERVER_AUTH = {
+  namesInstances: namesInstancesByDefault,
   authorizeSessionOpen: () => TEST_SESSION_OPEN_PRINCIPAL,
   sessionOpenAuth: {
     audience: TEST_SESSION_OPEN_AUDIENCE,

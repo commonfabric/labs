@@ -21,6 +21,7 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { StorageManager } from "../src/storage/v2.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const owner = await Identity.fromPassphrase("self-owned-space owner");
 const other = await Identity.fromPassphrase("self-owned-space other");
@@ -31,7 +32,10 @@ describe("storage-self-owned-space", () => {
 
   beforeEach(() => {
     cleanups = [];
-    server = StandaloneMemoryServer.start({ acl: { mode: "enforce" } });
+    server = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+      acl: { mode: "enforce" },
+    });
     cleanups.push(() => server.close());
   });
 
@@ -91,6 +95,7 @@ describe("storage-self-owned-space", () => {
 
   it("throws on a host that admits no proof chain, and creates nothing there", async () => {
     const refusing = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
       acl: { mode: "enforce", delegations: false },
     });
     cleanups.push(() => refusing.close());

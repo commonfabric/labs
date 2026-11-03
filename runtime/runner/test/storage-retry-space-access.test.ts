@@ -12,6 +12,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { hasOperationStorageCapability } from "../src/storage/interface.ts";
 import {
   type Options,
@@ -47,6 +48,7 @@ describe("storage space access retry", () => {
     failNextGuestMount = undefined;
     failNextGuestWatch = undefined;
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://storage-retry-space-access-${++serverCount}`),
       sessionOpenAuth: { audience: "did:key:z6Mk-retry-access-audience" },
       authorizeSessionOpen: (message) =>

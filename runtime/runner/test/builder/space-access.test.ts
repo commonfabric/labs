@@ -17,6 +17,7 @@ import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-op
 import { defer } from "@commonfabric/async/defer";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import {
   spaceAccess,
@@ -61,6 +62,7 @@ describe("spaceAccess()", () => {
     cleanups = [];
     sessionOpens = [];
     server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://space-access-${++serverCount}`),
       authorizeSessionOpen: async (message, context) => {
         const principal = await authorizeLoopbackSessionOpen(message, context);

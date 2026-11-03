@@ -99,6 +99,7 @@ import {
   type initializePiecesController,
   moduleByteCache,
 } from "./pieces-controller.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 /** Host CFC settings carried into each independent test runtime. */
 export type MultiRuntimeCfcOptions = Pick<
@@ -959,6 +960,7 @@ export class MultiRuntimeHarness {
         ...(runsInWorker() ? {} : { moduleByteCache }),
       })
       : StandaloneMemoryServer.start({
+        namesInstances: namesInstancesByDefault,
         serve,
         ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
       });
