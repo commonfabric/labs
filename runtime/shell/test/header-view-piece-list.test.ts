@@ -17,6 +17,7 @@ import { expect } from "@std/expect";
 import { TaskStatus } from "@lit/task";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import type { AppView } from "@commonfabric/navigation";
 import { CellReadRefusedError } from "@commonfabric/runtime-client";
 
 import type { XHeaderView as HeaderViewClass } from "../src/views/HeaderView.ts";
@@ -30,7 +31,7 @@ import { templateMarkup } from "./lit-template-markup.ts";
 interface HeaderViewLike {
   rt: unknown;
   space: string | undefined;
-  spaceName: string | undefined;
+  view: AppView | undefined;
   pieceId: string | undefined;
   pieceTitle: string | undefined;
   menuOpen: boolean;
@@ -189,7 +190,7 @@ async function mountHeader(rt: unknown): Promise<HeaderViewLike> {
   const view = new XHeaderView() as unknown as HeaderViewLike;
   view.rt = rt;
   view.space = "did:key:first";
-  view.spaceName = "Menu test";
+  view.view = { spaceName: "Menu test" };
   view.pieceTitle = "Current piece";
   view.pieceId = "named";
   return view;
