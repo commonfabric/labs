@@ -151,10 +151,11 @@ defined; consult the package's `exports` map to know where to import it from.
 
 The declarations in `api.ts` must agree with the implementations they mirror,
 and the agreement is asserted at compile time: `api-agreement.ts`, a module
-nothing imports, asserts that each of the three base classes and its declaration
-are mutually assignable, and each concrete class asserts beside its own
-definition that it satisfies its declaration. `runtime/runner/` wires concrete
-implementations into builder exports.
+nothing imports, asserts that `FabricInstance` and `FabricPrimitive`, and their
+constructors, are each the same type as their declarations, and each concrete
+class that `api.ts` declares asserts beside its own definition that it satisfies
+its declaration. `runtime/runner/` wires concrete implementations into builder
+exports.
 
 The files and directories, in more detail:
 
@@ -166,17 +167,22 @@ The files and directories, in more detail:
   `types/`), and the comparisons `valueEqual()`, `valueEqualByWalk()`, and
   `fabricAwareEqual()` (from `comparison/`).
 - `api.ts`: The pattern-visible declarations: the `FabricValue` union and the
-  types beside it, the three base classes and every concrete class as an
-  `interface` plus a `declare const`, and the debug-rendering option types. It
-  has no imports, so that the type module the sandbox is served can inline it;
-  it is also the `./api` export subpath, which `@commonfabric/api` re-exports.
-- `interface.ts`: The three abstract base classes as classes, the layer types,
-  and the conversion-layer types (`FabricConvertibleJsObject`,
-  `FabricConvertibleJsValue`); re-exports every type `api.ts` declares. Free of
-  runtime imports, so that any module can import it.
-- `api-agreement.ts`: Asserts that each of the three base classes and its
-  `api.ts` declaration are mutually assignable. Nothing imports it; it exists to
-  be type-checked, and everything in it erases at compile time.
+  types beside it, `FabricInstance`, `FabricPrimitive`, and the concrete classes
+  patterns can reach, each as an `interface` plus a `declare const`, and the
+  debug-rendering option types. `FabricMap` and `FabricSet` are not declared
+  here. It has no imports, so that the type module the sandbox is served can
+  inline it; it is also the `./api` export subpath, which `@commonfabric/api`
+  re-exports.
+- `interface.ts`: The abstract classes `FabricInstance` and `FabricPrimitive` as
+  classes, the layer types, and the conversion-layer types
+  (`FabricConvertibleJsObject`, `FabricConvertibleJsValue`); re-exports every
+  type `api.ts` declares. Its only runtime imports are two leaves that import
+  nothing back, `api.ts` for the brand symbols and the module holding the
+  classes' common root, so that any module can import it without a cycle.
+- `api-agreement.ts`: Asserts that `FabricInstance` and `FabricPrimitive`, and
+  their constructors, are each the same type as their `api.ts` declarations.
+  Nothing imports it; it exists to be type-checked, and everything in it erases
+  at compile time.
 - `convertible-js.ts`: Conversion: `fabricFromConvertibleJsValue`,
   `shallowFabricFromConvertibleJsValue`, `convertibleJsFromFabricValue`,
   `isValidFabricConvertibleJsValue`.

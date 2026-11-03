@@ -21,7 +21,8 @@ A document's payload is a `FabricValue`, which crosses this package's boundary
 as `fvj1:` text
 ([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)):
 `encodeMemoryBoundary()` in `v2.ts` writes one through `jsonFromFabricValue()`,
-and `decodeMemoryBoundary()` reads one back with a memory `LiveEnvironment`.
+and `decodeMemoryBoundary()` reads one back with a `NullLiveEnvironment`, so no
+cell is decoded at this boundary.
 
 A write is expressed as an **operation**: `set` replaces a document, `patch`
 applies a list of edits to one, `delete` writes a tombstone, and `sqlite` folds

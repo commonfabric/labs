@@ -126,7 +126,7 @@ export type FabricErrorState = {
  * frozen and immutable thereafter. Every mutator -- the slot setters along with
  * `setExtra` / `deleteExtra` -- throws once the instance is `Object.freeze`'d.
  * The codec layer handles `FabricError` via its static `[CODEC]`, which is the
- * source of truth for the encoded form. See Section 1.4.1 of
+ * source of truth for the encoded form. See Section 1.4.2 of
  * `1-fabric-values.md`.
  */
 export class FabricError extends FabricNativeWrapper<Error>

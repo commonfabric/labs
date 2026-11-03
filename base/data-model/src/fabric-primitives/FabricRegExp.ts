@@ -59,7 +59,7 @@ type FabricRegExpState = {
  * validates the pattern syntax eagerly and makes `value` cheap. Other flavors
  * are stored faithfully (`source` / `flags` / `flavor`) but cannot yet produce
  * a JS `RegExp`, so `value` throws for them -- leaving room to represent
- * other regex syntaxes in the future. See Section 1.4.1 of
+ * other regex syntaxes in the future. See Section 1.4.5 of
  * `1-fabric-values.md`.
  */
 export class FabricRegExp extends BaseFabricPrimitive
