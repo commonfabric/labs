@@ -261,6 +261,40 @@ describe("node-binding-memo", () => {
     });
   });
 
+  describe("forgetResult()", () => {
+    it("binds again for a result it forgot", () => {
+      const memo = new NodeBindingMemo<string>({
+        capacity: 16,
+        maxWeight: 1024 * 1024,
+      });
+      const bound = subject({ resultLink: linkTo("forgotten") });
+      memo.bindingFor(bound, () => "first");
+
+      memo.forgetResult(linkTo("forgotten"));
+
+      expect(memo.size).toBe(0);
+      expect(memo.bindingFor(bound, () => "second")).toBe("second");
+    });
+
+    it("keeps what it holds for another result", () => {
+      const memo = new NodeBindingMemo<string>({
+        capacity: 16,
+        maxWeight: 1024 * 1024,
+      });
+      const kept = subject({ resultLink: linkTo("kept") });
+      memo.bindingFor(kept, () => "first");
+      memo.bindingFor(
+        subject({ resultLink: linkTo("forgotten") }),
+        () => "other",
+      );
+
+      memo.forgetResult(linkTo("forgotten"));
+
+      expect(memo.size).toBe(1);
+      expect(memo.bindingFor(kept, () => "second")).toBe("first");
+    });
+  });
+
   describe("clear()", () => {
     it("drops every binding held", () => {
       const bindings = memo();

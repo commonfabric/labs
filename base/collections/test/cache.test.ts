@@ -41,6 +41,17 @@ describe("LRUCache", () => {
       expect(cache.size).toBe(1);
     });
 
+    it("returns the keys held from `keys()`, leaving what gets dropped next alone", () => {
+      const cache = new LRUCache<string, number>({ capacity: 2 });
+      cache.put("a", 1);
+      cache.put("b", 2);
+
+      expect([...cache.keys()]).toEqual(["a", "b"]);
+
+      cache.put("c", 3);
+      expect(cache.has("a")).toBe(false);
+    });
+
     it("deletes keys", () => {
       const cache = new LRUCache<string, number>();
       cache.put("a", 1);

@@ -250,6 +250,11 @@ export class LRUCache<K, V> {
     this.#evictToFit();
   }
 
+  /** The keys held. This does not count as a use of any of them. */
+  keys(): MapIterator<K> {
+    return this.#map.keys();
+  }
+
   /** Removes the entry for `key`, returning whether there was one. */
   delete(key: K): boolean {
     const node = this.#map.get(key);

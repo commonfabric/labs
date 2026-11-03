@@ -106,6 +106,18 @@ export class NodeBindingMemo<Binding> {
     return binding;
   }
 
+  /**
+   * Drops every binding held whose subject names `resultLink`'s address, for a
+   * result nothing will bind on soon: a binding can hold the cells of the run
+   * that computed it, and each cell holds that run's transaction.
+   */
+  forgetResult(resultLink: NormalizedFullLink): void {
+    const address = JSON.stringify(addressKey(resultLink));
+    for (const key of [...this.#entries.keys()]) {
+      if (key.includes(address)) this.#entries.delete(key);
+    }
+  }
+
   /** Drops every binding held. */
   clear(): void {
     this.#entries.clear();

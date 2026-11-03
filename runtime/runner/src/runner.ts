@@ -2893,7 +2893,7 @@ export class Runner {
   #handlerResultPatterns = new WeakSet<Pattern>();
 
   /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
-  #keepsDemandedChildren = false;
+  #releasingServedResult = false;
 
   /**
    * Registrations a run installed in a transaction refused for a stale basis,
@@ -5460,18 +5460,20 @@ export class Runner {
    * the result started once its transaction has committed, leaving what the store
    * holds. A demand or an event starts one again, as either does after a restart.
    * A piece a client demands at this moment keeps running: its demand has already
-   * made its one attempt to load the piece, and nothing would make another.
+   * made its one attempt to load the piece, and nothing would make another. A
+   * stopped piece's node bindings and index entry go with it, since they hold the
+   * cells of the run that started it, and those hold its transaction.
    */
   #releaseServedHandlerResult<T>(
     resultCell: Cell<T>,
     installedCancel: Cancel | undefined,
   ): void {
     const pointer = this.#sessionPatternPointer(resultCell);
-    this.#keepsDemandedChildren = true;
+    this.#releasingServedResult = true;
     try {
       this.releaseChild(resultCell, installedCancel);
     } finally {
-      this.#keepsDemandedChildren = false;
+      this.#releasingServedResult = false;
     }
     const key = this.#getDocKey(resultCell);
     if (pointer !== undefined && !this.#cancels.has(key)) {
@@ -5514,12 +5516,19 @@ export class Runner {
       return;
     }
     if (this.#independentlyStartedResults.has(key)) return;
-    if (this.#keepsDemandedChildren) {
-      const { space, id, scope } = resultCell.getAsNormalizedFullLink();
-      if (this.#runtime.scheduler.isDemandedEntity({ space, id, scope })) {
-        this.#independentlyStartedResults.add(key);
-        return;
-      }
+    const link = this.#releasingServedResult
+      ? resultCell.getAsNormalizedFullLink()
+      : undefined;
+    if (
+      link !== undefined &&
+      this.#runtime.scheduler.isDemandedEntity({
+        space: link.space,
+        id: link.id,
+        scope: link.scope,
+      })
+    ) {
+      this.#independentlyStartedResults.add(key);
+      return;
     }
     // A start still resolving may be about to give this result a lifetime of
     // its own, and it cannot say so until it finishes. Declining here keeps a
@@ -5543,6 +5552,10 @@ export class Runner {
     // authoritative over such a start and tombstones it; a release is not, and
     // leaves it to resolve into a result of its own.
     this.#stopResult(resultCell);
+    if (link !== undefined) {
+      this.#nodeIOBindings.forgetResult(link);
+      this.#patternNodeBindings.forgetResult(link);
+    }
   }
 
   /**

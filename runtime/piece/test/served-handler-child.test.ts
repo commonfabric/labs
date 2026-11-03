@@ -224,6 +224,24 @@ describe("served-handler-child", () => {
     expect(await indexedModules()).toBe(before);
   });
 
+  it("holds no more node bindings as children are added", async () => {
+    const pieces = await clientPieces();
+    await addChildOnServer(pieces, "first");
+    const heldNodeBindings = () =>
+      host.runLifecycleVerb(space, {
+        name: "count bindings",
+        run: (runtime) =>
+          Promise.resolve(
+            runtime.runner.accessForTestingOnly.heldNodeBindings,
+          ),
+      });
+    const before = await heldNodeBindings();
+
+    await addSecondChild();
+
+    expect(await heldNodeBindings()).toBe(before);
+  });
+
   it("keeps what the handler stored", async () => {
     const pieces = await clientPieces();
     const child = await addChildOnServer(pieces, "first");

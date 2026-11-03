@@ -226,8 +226,7 @@ any of its actions that ran. A demand for one of its values, or an event to one
 of its streams, starts the piece as either starts a piece on a fresh runtime. A
 piece whose document a client session tracks at that commit keeps running,
 because that session's demand has already made its attempt to load it. The result
-pattern's own index entry goes with the release, so a create leaves the serving
-runtime holding only bounded caches and the replica's copy of what it wrote.
+pattern's index entry and each stopped piece's node bindings go with the release.
 
 **Parking.** A park releases the lease and stops the loop. A park for a
 failed loop, a failed initialization or a closing host disposes the runtime. An IDLE park (§3's "on idle") that abandoned no
