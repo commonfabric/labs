@@ -69,10 +69,10 @@ machinery.
 ## Results
 
 Each row is seven pairs taken alternating, order swapping every round, after a
-warm-up round that was discarded. The board grew from 40 Topics to about 115 over
-the two runs. `cf cell get` read one Topic's `title`, and `cf piece call` passed
-the same `--schema` on both sides. Times are medians in seconds, and CPU is user
-plus system.
+warm-up round that was discarded. The board grew from 40 Topics to 147 over the
+three runs. `cf cell get` read one Topic's `title`, and `cf piece call` passed the
+same `--schema` on both sides. Times are medians in seconds, and CPU is user plus
+system.
 
 First run, load median 257:
 
@@ -92,10 +92,32 @@ Second run, load median 161:
 | `cf piece call` | 9.09        | 7.04       | 2.77       | 1.61      |
 | `topics new`    | 15.60       | 8.44       | 4.61       | 2.89      |
 
-Single runs of the new client at load 90-130 took 2.3-3.9 s for `topics new`, 1.6 s
-for `cf piece call`, and 0.2-0.5 s for `bin/cf --help`.
+Third run, load median 41, board 115 to 147 Topics:
 
-One `topics new` at load 90, in milliseconds since its process started: modules
+| Command         | Wall before | Wall after | CPU before | CPU after |
+| --------------- | ----------- | ---------- | ---------- | --------- |
+| `bin/cf --help` | 3.98        | 0.25       | 4.12       | 0.23      |
+| `cf cell get`   | 4.01        | 2.60       | 3.62       | 1.62      |
+| `cf piece call` | 6.73        | 4.51       | 3.92       | 2.24      |
+| `topics new`    | 8.60        | 4.94       | 5.82       | 2.59      |
+
+## The rest of the time is on the server, and it grows with the board
+
+After the third run, at load 28-44, the same server held the 147-Topic board and a
+new one:
+
+| Board      | `topics new`, wall | `executeCallable.handled` |
+| ---------- | ------------------ | ------------------------- |
+| New        | 2.45-3.10 s        | 228-234 ms                |
+| 147 Topics | 5.74-8.88 s        | 2,052-3,351 ms            |
+
+`handled` is the client waiting for the server to run `addTopic`. So `topics new`
+takes the few seconds it was meant to on a new board, and on a grown board most of
+its time is that wait. This is two boards rather than a sweep, and the server had
+been running for hours, so it says that the handling got slower as the board grew
+and not how it scales or why.
+
+One `topics new` at load 90 on a small board, in milliseconds since its process started: modules
 loaded at 220-370, `cf` spawned straight after and finished at 2,080-2,230, the
 copy refreshed by 2,240-2,380. Inside a 1.6 s `cf piece call`, about 800 ms is the
 launcher and loading `piece`, 150 ms is `loadPieces`, 400-480 ms is
@@ -129,12 +151,13 @@ with `--jitless`, which is the likely reason `before` arms sometimes read severa
 times higher than their minimums, though that was not isolated. CPU separates work
 from contention better than wall time here, but not cleanly.
 
-Wall time at these loads is mostly waiting for a core, including the server's
-wait, so the wall ratios above understate what the change does on a quiet machine,
-and neither run measures one.
+Wall time at these loads is mostly waiting for a core, including the server's wait,
+and no run here was on a quiet machine.
 
 ## Left over
 
+- What `addTopic`'s handling on the server spends its time on, and why that grows
+  with the board.
 - `cf cell get` on a board's root takes 1.8-3 s in `getCellValue.result.get`, since
   `resolveCellPath` materializes the whole root to preserve ancestor branch choices.
   That scales with the board, and `topics new` does not take this path.
