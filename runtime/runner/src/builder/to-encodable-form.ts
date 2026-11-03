@@ -82,7 +82,19 @@ type BindingWalk = {
   readonly ignoreSelfAliases: boolean;
   readonly path: PropertyKey[];
   readonly ancestors: IndexTrackingStack<object>;
+  /** Whether a pattern graph may stand as {@link closedGraphBindings} holds it. */
+  readonly reusesClosedGraphs: boolean;
+  /** Set once the walk reaches a cell, or a record among its ancestors. */
+  reachedOutside: boolean;
 };
+
+/**
+ * Each pattern graph's bound form, for a graph whose binding depended on nothing
+ * but the graph: it reached no cell, and closed no cycle through a record above
+ * it. Binding such a graph again would rebuild the same structure, which for a
+ * pattern a handler starts on every event is a copy of its whole graph per event.
+ */
+const closedGraphBindings = new WeakMap<object, FabricExecValue>();
 
 export function withAliasBindings(
   value: unknown,
@@ -96,6 +108,8 @@ export function withAliasBindings(
     ignoreSelfAliases,
     path: [...path],
     ancestors,
+    reusesClosedGraphs: false,
+    reachedOutside: false,
   });
 }
 
@@ -110,6 +124,7 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   if (isCellResultForDereferencing(value)) value = getCellOrThrow(value);
 
   if (isCell(value)) {
+    walk.reachedOutside = true;
     const { external, frame } = exportCell(value);
 
     // If this is an external reference, just copy the reference as is.
@@ -234,6 +249,9 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   // pattern's `nodes` are bound node by node, each node's module as a module;
   // see `bindGraphMember()`.
   if (isObjectOrArray(value) || isPattern(value)) {
+    if (walk.reusesClosedGraphs && isPattern(value)) {
+      return bindGraphOnce(value, walk);
+    }
     // If this is a pattern, serialize it through the INTERNAL graph
     // serializer (its toJSON under the internal-serialization context): this
     // function builds the in-memory node representation, so embedded
@@ -286,6 +304,22 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
 }
 
 /**
+ * Helper for `bindValue()`, which returns the bound form of a graph that reaches
+ * nothing outside itself, binding it the first time. A graph nested in this one
+ * is bound in place, so one graph's bound form holds no object twice; `createRef()`
+ * hashes a repeated object differently.
+ */
+function bindGraphOnce(graph: object, walk: BindingWalk): FabricExecValue {
+  const known = closedGraphBindings.get(graph);
+  if (known !== undefined) return known;
+  const within = { ...walk, reusesClosedGraphs: false, reachedOutside: false };
+  const bound = bindValue(graph, within);
+  if (within.reachedOutside) walk.reachedOutside = true;
+  else closedGraphBindings.set(graph, bound);
+  return bound;
+}
+
+/**
  * Helper for `bindValue()`, which binds a member of a pattern graph: its
  * `nodes` node by node, every other member as a value.
  */
@@ -320,6 +354,28 @@ export function moduleWithAliasBindings(
     ignoreSelfAliases,
     path: [...path],
     ancestors,
+    reusesClosedGraphs: false,
+    reachedOutside: false,
+  });
+}
+
+/**
+ * Binds a module as {@link moduleWithAliasBindings} does, except that a pattern
+ * graph reaching nothing outside itself is bound once and then shared, so two
+ * modules can hold one graph. For a pattern built while a program runs, whose
+ * graph no stored id derives from.
+ */
+export function moduleWithReusedGraphBindings(
+  module: Module,
+  resolveCellAlias?: CellAliasResolver,
+): Module {
+  return bindModule(module, {
+    resolveCellAlias,
+    ignoreSelfAliases: false,
+    path: [],
+    ancestors: new IndexTrackingStack(),
+    reusesClosedGraphs: true,
+    reachedOutside: false,
   });
 }
 
@@ -414,7 +470,10 @@ function bindRecord<Member>(
   bindMember: (member: unknown, walk: BindingWalk, key: string) => Member,
 ): Record<string, Member> {
   const ancestors = walk.ancestors;
-  if (ancestors.has(original)) return {};
+  if (ancestors.has(original)) {
+    walk.reachedOutside = true;
+    return {};
+  }
   ancestors.push(original);
 
   const result: Record<string, Member> = {};
