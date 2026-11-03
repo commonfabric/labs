@@ -38,7 +38,10 @@ import {
   type ExecutorHostOptions,
 } from "@commonfabric/runner/executor/host";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  namesInstancesByDefault,
+} from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
 
 import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
@@ -270,6 +273,7 @@ async function withHome(
   connect: (server: Server) => Server = (server) => server,
 ) {
   const server = new Server({
+    namesInstances: namesInstancesByDefault,
     acl: { mode: "enforce", delegatingDids: [service.did()] },
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: "did:key:home-catalog-memory" },
@@ -1951,10 +1955,22 @@ describe("Home shared-space catalog", () => {
             );
             expect(outcome.status).toBe("done");
           }
-          const titles = Object.values(
-            (await home.key("sharedSpaceCatalog").pull()).entries,
-          ).map((entry) => entry.title);
-          expect(titles).toEqual(
+          // A created room is listed by an event of its own that the creating
+          // one queues, so the catalog can still lack a group whose request
+          // is done.
+          const titlesOf = (catalog: SharedSpaceCatalog | undefined) =>
+            Object.values(catalog?.entries ?? {}).map((entry) => entry.title);
+          const listed = await waitForCellValue<SharedSpaceCatalog>(
+            runtime,
+            home.key("sharedSpaceCatalog"),
+            (value) => {
+              const titles = titlesOf(value);
+              return titles.includes("Team later") &&
+                titles.includes("Team earlier");
+            },
+            { stuckLabel: "the catalog listing both groups" },
+          );
+          expect(titlesOf(listed)).toEqual(
             expect.arrayContaining(["Team later", "Team earlier"]),
           );
         });

@@ -11,6 +11,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -28,12 +29,16 @@ describe("storage space access loss", () => {
     const identity = await Identity.fromPassphrase("throwing access observer");
     const space = identity.did();
     const server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL("memory://throwing-access-observer"),
       sessionOpenAuth: { audience: space },
       authorizeSessionOpen: () => space,
       acl: { mode: "enforce" },
     });
-    const client = await connect({ transport: loopback(server) });
+    const client = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(server),
+    });
     const session = await client.mount(
       space,
       {},
@@ -103,6 +108,7 @@ describe("storage space access loss", () => {
     const guest = await Identity.fromPassphrase("access-loss guest");
     const space = owner.did();
     const server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL("memory://storage-space-access-loss"),
       sessionOpenAuth: { audience: "did:key:z6Mk-access-loss-audience" },
       authorizeSessionOpen: (message) =>
@@ -113,7 +119,10 @@ describe("storage space access loss", () => {
     let guestSession: SpaceSession | undefined;
     const factory: SessionFactory = {
       async create(target, signer, options) {
-        const client = await connect({ transport: loopback(server) });
+        const client = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: loopback(server),
+        });
         try {
           const session = await client.mount(
             target,

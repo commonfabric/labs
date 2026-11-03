@@ -166,6 +166,7 @@ for (
         cursor: null,
         baselineHash: "baseline",
         materialized: "toggle",
+        anchors: [],
         operations: [],
       });
       await Promise.race([ready, failed.promise]);

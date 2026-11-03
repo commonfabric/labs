@@ -62,7 +62,7 @@ import {
 } from "./types.ts";
 import { livePages } from "./live-page.ts";
 import { type Board, repoPagesRoute } from "./repo-page.ts";
-import { SERVING_VERSION } from "./version.ts";
+import { SERVING_VERSION, withVersionHeader } from "./version.ts";
 import {
   DASHBOARD_MESSAGE_MAX_LENGTH,
   type DashboardMessage,
@@ -816,7 +816,9 @@ export async function handle(req: Request): Promise<Response> {
   }
   if (url.pathname === "/healthz") return Response.json({ ok: views.size > 0, at: lastChange });
   for (const r of routes) {
-    if (url.pathname === r.path) return await r.handler(req, url);
+    if (url.pathname === r.path) {
+      return withVersionHeader(await r.handler(req, url));
+    }
   }
   await refreshDashboardMessage();
   return new Response(page(), { headers: { "content-type": "text/html; charset=utf-8" } });

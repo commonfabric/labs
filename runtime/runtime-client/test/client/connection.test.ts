@@ -255,6 +255,7 @@ describe("connection", () => {
         cursor: null,
         baselineHash: "baseline",
         materialized: "value",
+        anchors: [],
         operations: [],
       },
     };

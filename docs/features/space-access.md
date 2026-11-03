@@ -324,10 +324,12 @@ A consumer that keeps a list of spaces, Home's shared-space catalog among
 them, uses `spaceDeleted(target)` to put away an entry whose space is gone
 ([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
 
-Deleting a space is not implemented yet; until it is, the memory server
-refuses the commit that would delete one and sends no refusal marked `deleted`,
-so `spaceDeleted(target)` never returns `true` and `spaceaccesslost` never
-carries the marker, though the runtime, the renderer and the shell handle both.
+Deleting a space is not implemented yet. The memory server refuses a space
+whose access list a deletion tombstone has replaced, marked `deleted`, but
+refuses the commit that would write one, so no space is deleted, and
+`spaceDeleted(target)` never returns `true` and `spaceaccesslost` never
+carries the marker, though the runtime, the renderer and the shell handle
+both.
 
 ## Changing the level
 

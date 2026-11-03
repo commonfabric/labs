@@ -251,6 +251,28 @@ describe("ExperimentalOptions", () => {
       }
     });
 
+    it("constructing Runtime declares its naming mode to the storage manager", async () => {
+      // Each open declares the mode, so a manager hears it before any session
+      // opens: at construction, on and off alike.
+      for (const enabled of [true, false]) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setInstanceNames: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { instanceNames: enabled },
+        });
+        expect(declared).toEqual([enabled]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
     it("disposing Runtime resets global config to the default", async () => {
       const initial = getModernCellRepConfig();
       const sm = StorageManager.emulate({ as: signer });

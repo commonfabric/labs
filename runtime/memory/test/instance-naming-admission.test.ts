@@ -5,7 +5,10 @@
  * the first commit from a declaring session records in the space's store,
  * the opens and commits a marked space refuses, the posture that decides
  * whether an unmarked space admits a declaring session, and the revocation
- * of a space's positional sessions when a commit marks it.
+ * of a space's positional sessions when a commit marks it. The memory
+ * client's half is here too: a client whose runtime names instances declares
+ * it in every open, and refuses a server that does not advertise
+ * `instanceNameMark`.
  */
 
 import { expect } from "@std/expect";
@@ -16,6 +19,7 @@ import type { FabricValue } from "@commonfabric/api";
 import {
   connect as connectClient,
   loopback,
+  type SessionOpenAuthFactory,
   type Transport,
 } from "../v2/client.ts";
 import * as Engine from "../v2/engine.ts";
@@ -197,6 +201,82 @@ const markInStore = async (server: Server, space: string): Promise<void> => {
 };
 
 /**
+ * A transport to `server` that `drop()` disconnects, and that reconnects at
+ * the client's next send. `sent` lists each frame the client sent, and
+ * `withoutMark` takes `instanceNameMark` out of each `hello.ok`, as a server
+ * of a build older than the capability sends it.
+ */
+const droppableTransport = (
+  server: Server,
+  { withoutMark = false }: { withoutMark?: boolean } = {},
+) => {
+  let connection: ReturnType<Server["connect"]> | undefined;
+  let receiver = (_payload: string) => {};
+  let closeReceiver = (_error?: Error) => {};
+  const sent: { type?: unknown; session?: SessionDescriptor }[] = [];
+  const disconnect = () => {
+    connection?.close();
+    connection = undefined;
+  };
+  const transport: Transport = {
+    async send(payload: string) {
+      connection ??= server.connect((message) => {
+        if (
+          withoutMark && message.type === "hello.ok" &&
+          message.flags !== undefined
+        ) {
+          const { instanceNameMark: _mark, ...flags } = message.flags;
+          receiver(encodeMemoryBoundary({ ...message, flags }));
+          return;
+        }
+        receiver(encodeMemoryBoundary(message));
+      });
+      sent.push(decodeMemoryBoundary(payload) as typeof sent[number]);
+      await connection.receive(payload);
+    },
+    setReceiver: (next) => {
+      receiver = next;
+    },
+    setCloseReceiver: (next) => {
+      closeReceiver = next;
+    },
+    reset: disconnect,
+    close: () => {
+      disconnect();
+      return Promise.resolve();
+    },
+  };
+  return {
+    transport,
+    sent,
+    drop: () => {
+      disconnect();
+      closeReceiver(new Error("connection dropped"));
+    },
+  };
+};
+
+/**
+ * A session-open authorizer that signs as `principal`, and records each
+ * descriptor it is handed to sign in `signed`.
+ */
+const recordingAuth = (
+  principal: string,
+  signed: SessionDescriptor[],
+): SessionOpenAuthFactory =>
+(_space, session, context) => {
+  signed.push(session);
+  return {
+    invocation: {
+      iss: principal,
+      aud: context.audience,
+      challenge: context.challenge.value,
+    },
+    authorization: {},
+  };
+};
+
+/**
  * Creates `space` under `enforce` as its own key, declaring `session`, with a
  * genesis granting ALICE OWNER and BOB WRITE.
  */
@@ -297,6 +377,106 @@ describe("instance-naming-admission", () => {
         },
       );
     }
+  });
+
+  describe("the memory client", () => {
+    it("declares `instanceNames: true` in each open it signs, a reopen after a dropped connection included, when its runtime names instances", async () => {
+      const server = createServer("client-declares", "off", () => true);
+      const space = "did:key:z6Mk-naming-client-declares";
+      const wire = droppableTransport(server);
+      const client = await connectClient({
+        transport: wire.transport,
+        instanceNames: true,
+      });
+      try {
+        const signed: SessionDescriptor[] = [];
+        await client.mount(space, {}, recordingAuth(ALICE, signed));
+        const reconnected = Promise.withResolvers<void>();
+        client.subscribeReconnected(() => reconnected.resolve());
+        wire.drop();
+        await reconnected.promise;
+
+        const opens = wire.sent.filter((frame) =>
+          frame.type === "session.open"
+        );
+        expect({
+          signed: signed.map((session) => session.instanceNames),
+          sent: opens.map((frame) => frame.session?.instanceNames),
+          reopened: opens[1]?.session?.sessionId !== undefined,
+        }).toEqual({
+          signed: [true, true],
+          sent: [true, true],
+          reopened: true,
+        });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("declares nothing in an open, when its runtime names none", async () => {
+      const server = createServer("client-positional", "off");
+      const space = "did:key:z6Mk-naming-client-positional";
+      const wire = droppableTransport(server);
+      const client = await connectClient({ transport: wire.transport });
+      try {
+        const signed: SessionDescriptor[] = [];
+        await client.mount(space, {}, recordingAuth(ALICE, signed));
+
+        expect(signed.map((session) => "instanceNames" in session)).toEqual([
+          false,
+        ]);
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
+    it("fails the connection permanently, sending no open, to a server that does not advertise `instanceNameMark`, when its runtime names instances", async () => {
+      const server = createServer("client-unmarked-server", "off", () => true);
+      const wire = droppableTransport(server, { withoutMark: true });
+      try {
+        const failure = await connectClient({
+          transport: wire.transport,
+          instanceNames: true,
+        }).then(() => undefined, (error: Error) => error);
+
+        expect({
+          name: failure?.name,
+          permanent: (failure as { permanent?: unknown } | undefined)
+            ?.permanent,
+          message: failure?.message,
+          sent: wire.sent.map((frame) => frame.type),
+        }).toEqual({
+          name: "ProtocolError",
+          permanent: true,
+          message: "The memory server does not record which spaces hold " +
+            "data written with instance names, and this runtime names " +
+            "instances. Update the server before connecting this runtime.",
+          sent: ["hello"],
+        });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("connects to a server that does not advertise `instanceNameMark`, and opens there, when its runtime names none", async () => {
+      const server = createServer("client-positional-unmarked", "off");
+      const space = "did:key:z6Mk-naming-client-positional-unmarked";
+      const wire = droppableTransport(server, { withoutMark: true });
+      const client = await connectClient({ transport: wire.transport });
+      try {
+        const session = await client.mount(space, {}, recordingAuth(ALICE, []));
+
+        expect({
+          mark: client.serverFlags?.instanceNameMark,
+          opened: session.sessionId !== undefined,
+        }).toEqual({ mark: false, opened: true });
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
   });
 
   describe("recording the mark", () => {

@@ -29,7 +29,7 @@ import {
 /**
  * Temporal type representing a span of time, as a count of nanoseconds. Wraps
  * a `bigint` value. The companion to `FabricEpochNsec`: the difference between
- * two instants is one of these. See Section 1.4.13 of the formal spec.
+ * two instants is one of these. See Section 1.4.13 of `1-fabric-values.md`.
  */
 export class FabricDurationNsec extends BaseFabricPrimitive
   implements ApiFabricDurationNsec {

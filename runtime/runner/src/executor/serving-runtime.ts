@@ -9,6 +9,7 @@
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
+import { CompileTurns } from "../harness/compile-interleave.ts";
 import {
   type ExperimentalOptions,
   type ModuleByteCache,
@@ -92,6 +93,12 @@ export type ServingRuntimeFactoryOptions = {
 export function servingRuntimeFactory(
   options: ServingRuntimeFactoryOptions,
 ): ExecutorHostOptions["createRuntime"] {
+  // A serving runtime yields while it compiles, so the runtimes that share a
+  // byte cache take turns, which keeps it compiling a program once.
+  const sharedByteCache = options.moduleByteCache === undefined ? {} : {
+    moduleByteCache: options.moduleByteCache,
+    compileTurns: new CompileTurns(),
+  };
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
       as: options.identity,
@@ -125,9 +132,7 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
-      ...(options.moduleByteCache === undefined
-        ? {}
-        : { moduleByteCache: options.moduleByteCache }),
+      ...sharedByteCache,
     });
     return Promise.resolve({
       runtime,

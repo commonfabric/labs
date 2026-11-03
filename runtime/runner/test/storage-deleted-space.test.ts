@@ -7,6 +7,7 @@ import type { V2Error } from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -53,6 +54,7 @@ async function refusingManager(name: string, options: {
   const identity = await Identity.fromPassphrase(`deleted-space ${name}`);
   const space = identity.did() as MemorySpace;
   const server = new Server({
+    namesInstances: namesInstancesByDefault,
     store: new URL(`memory://deleted-space-${name}`),
     sessionOpenAuth: { audience: space },
     authorizeSessionOpen: () => space,
@@ -68,6 +70,7 @@ async function refusingManager(name: string, options: {
       control.opens++;
       if (options.failOpen !== undefined) throw options.failOpen;
       const client = await connect({
+        instanceNames: namesInstancesByDefault(),
         transport: loopback({
           connect: (send, syncParts) =>
             server.connect((message, payload) => {

@@ -35,6 +35,32 @@ describe("isCodecTypeTag", () => {
     expect(isCodecTypeTag("Abc123@1234")).toBe(true);
   });
 
+  it("returns `true` for a tag with namespace prefixes", () => {
+    expect(isCodecTypeTag("core.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("sys.beep.Boop@1")).toBe(true);
+    expect(isCodecTypeTag("aB3.x9.Abc123@1234")).toBe(true);
+  });
+
+  it("returns `false` for a malformed namespace prefix", () => {
+    expect(isCodecTypeTag("Sys.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys..Boop@1")).toBe(false);
+    expect(isCodecTypeTag(".Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop.@1")).toBe(false);
+    expect(isCodecTypeTag("sys_x.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys-x.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("1sys.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys.Beep.Boop@1")).toBe(false);
+    expect(isCodecTypeTag("s\u00fcs.Boop@1")).toBe(false);
+  });
+
+  it("returns `false` for a prefixed tag whose name or version is malformed", () => {
+    expect(isCodecTypeTag("sys.boop@1")).toBe(false);
+    expect(isCodecTypeTag("sys.beep@1")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop@01")).toBe(false);
+    expect(isCodecTypeTag("sys.Boop@0")).toBe(false);
+  });
+
   it("returns `false` for a string with no version", () => {
     expect(isCodecTypeTag("")).toBe(false);
     expect(isCodecTypeTag("Bytes")).toBe(false);
@@ -58,7 +84,7 @@ describe("isCodecTypeTag", () => {
   });
 
   it("returns `false` for a name that does not start uppercase", () => {
-    // `UpperCamelCase` is the convention Section 2 of `3-json-encoding.md`
+    // `UpperCamelCase` is the convention Section 2.5 of `1-fabric-values.md`
     // states, and this is what holds every format to it. The case decides
     // whether an unclaimed tag round-trips as an `UnknownValue` or is refused
     // as a malformation, so a reader cannot be left to infer it.
@@ -69,7 +95,7 @@ describe("isCodecTypeTag", () => {
   });
 
   it("returns `false` for a name holding a non-ASCII letter", () => {
-    // The alphabet is ASCII, which Section 2 of `3-json-encoding.md` states
+    // The alphabet is ASCII, which Section 2.5 of `1-fabric-values.md` states
     // and a Unicode-property spelling of the same syntax would not honor. A
     // tag crosses between systems, so the set of names it can carry cannot
     // depend on which alphabet a decoder reads it with.

@@ -83,7 +83,10 @@ describe("Home interface upgrade", () => {
         mode === "automatic-cold" ? "cold" : "running"
       } system-origin update`;
     it(description + suffix, async () => {
-      const server = newLoopbackServer();
+      // Its runtimes name instances, and a cold case's first one does not,
+      // so the server's posture names instances, as a deployment's does once
+      // it runs runtimes of either mode (INV-16).
+      const server = newLoopbackServer({ namesInstances: () => true });
       const patterns = fromFileUrl(new URL("..", import.meta.url));
       const temporary = await Deno.makeTempDir({
         prefix: "home-origin-rehearsal-",

@@ -29,6 +29,30 @@ export function isCapability(value: unknown): value is Capability {
   return value === "READ" || value === "WRITE" || value === "OWNER";
 }
 
+/**
+ * The value that replaces a deleted space's access list, naming the principal
+ * that deleted it, and holding nothing else (INV-15 in
+ * `docs/specs/memory-v2/09-invariants.md`).
+ */
+export type DeletionTombstone = { deleted: { by: DID } };
+
+/**
+ * Whether `value` is a deletion tombstone: `{ deleted: { by } }`, with `by` a
+ * DID, and no other field at either level. Anything else, a tombstone with an
+ * extra field included, is not one.
+ */
+export function isDeletionTombstone(
+  value: unknown,
+): value is DeletionTombstone {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== "deleted") return false;
+  const deleted = value.deleted;
+  if (!isPlainObject(deleted)) return false;
+  const inner = Object.keys(deleted);
+  return inner.length === 1 && inner[0] === "by" && isDID(deleted.by);
+}
+
 export function isACL(value: unknown): value is ACL {
   if (!isPlainObject(value)) return false;
   for (const [did, cap] of Object.entries(value)) {

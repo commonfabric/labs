@@ -7,6 +7,7 @@ import {
   hasConcreteOwner,
   isACL,
   isCapable,
+  isDeletionTombstone,
 } from "../acl.ts";
 import {
   type CreateInvite,
@@ -167,6 +168,12 @@ export function executeInvite(
       !isDIDKey(space)
     ) {
       throw new SpaceInviteError("invalid-request");
+    }
+    // No invitation operation acts on a deleted space, inside the transaction
+    // it would run in, so a deletion another connection committed is seen
+    // here too (INV-15).
+    if (isDeletionTombstone(read(engine, { id: aclDocId(space) })?.value)) {
+      throw new SpaceInviteError("space-deleted");
     }
     const remove = (inviteId: string) => {
       db.prepare("DELETE FROM space_invites WHERE inviteId = ?").run(inviteId);

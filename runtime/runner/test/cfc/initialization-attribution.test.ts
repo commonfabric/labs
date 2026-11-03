@@ -8,6 +8,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
 import { cfcLabelViewForCell } from "../../src/cfc/label-view.ts";
@@ -344,6 +345,7 @@ describe("initialization attribution", () => {
         requested: MemoryV2Client.MountOptions = {},
       ) {
         const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
           transport: MemoryV2Client.loopback(this.#server),
         });
         const session = await client.mount(
@@ -391,6 +393,7 @@ describe("initialization attribution", () => {
       );
       space = spaceIdentity.did();
       server = new MemoryV2Server.Server({
+        namesInstances: namesInstancesByDefault,
         store: new URL(
           `memory://initialization-attribution-${crypto.randomUUID()}`,
         ),

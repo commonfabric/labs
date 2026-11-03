@@ -56,6 +56,7 @@ dashboard/
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
+  history-page-client.ts  the browser half of the two performance history pages: the window slider, chart loading, progress, and update checks
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   repo-page.ts  the page for each repository, and the index of them all
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
@@ -182,6 +183,15 @@ one start and the next: a watched restart therefore pulls every open page onto
 the code that restart is serving, and the version in the page source says which
 start served it. An unattended display reloads when it reconnects to a server
 reporting a different version.
+
+Every response to a drill-down route also names the version that served it, in
+a `dashboard-version` header. A live page compares the version in each event it
+receives. The performance history pages, which fetch their charts again after
+they load, compare that header instead. When it names a different version, the
+page loads itself again in full, so charts from one version never run under
+another version's script and styles. A response that names no version, such as
+the error page a proxy returns while the server restarts, never reloads the
+page.
 
 An unattended display also survives the server going away. Every serving tick
 sends a heartbeat down each open event connection, so a browser can tell a
@@ -1716,10 +1726,26 @@ Notes:
     On both history pages, a failed collection remains in the Idle panel until
     a later collection for that history view succeeds.
     Open runtime benchmark and CI history pages check for newer server data once
-    a minute. An open Gantt regenerates every 30 minutes and whenever its tab
-    becomes visible. CI refreshes share a 30-minute GitHub freshness window, so
-    multiple pages do not repeat the same API reads. Runtime and CI history
-    checks wait through the same window after GitHub rejects a collection.
+    a minute. When the check reports newer data, or comes from a different
+    version of the dashboard, the page fetches the charts and the progress
+    panel below the controls again, once no window is waiting to be applied and
+    keyboard focus is outside the charts. Charts from the same version replace
+    the ones on the page; charts from a different version load the whole page
+    again instead, at the newly chosen window if there is one. A page the
+    browser brings back from its back/forward cache takes its window from its
+    address, loads that window if its charts show another one, and otherwise
+    checks at once. Its repository picker or key-only switch shows what the
+    page was served for. Both pages run the same script,
+    `followHistoryPage` in `history-page-client.ts`. Each page supplies only
+    the key that remembers its hide-green choice, the address its collection
+    progress streams from, what its loading message says it checks for, and
+    the wording of its progress panel. An open Gantt regenerates every 30
+    minutes and whenever its tab becomes visible. The server draws its chart
+    as a self-contained image, so a new version's drawing reaches an open
+    Gantt page when it next regenerates. CI refreshes share a 30-minute
+    GitHub freshness window, so multiple pages do not repeat the same API
+    reads. Runtime and CI history checks wait through the same window after
+    GitHub rejects a collection.
     Moving the window slider starts or joins the matching collection without
     cancelling wider-window work already in progress.
     CI history reads the workflow's runs through the run-list reader, back to

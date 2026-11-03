@@ -911,8 +911,18 @@ the list names other than the deleting principal or its chain's root issuer
 still holds, or lets a deleted space take writes again. Over-rejection leaves
 the space's owner no way to delete it.
 
-Checked by: nothing yet. The server does not implement deleting a space, and
-refuses a deletion tombstone under INV-12's validity clause.
+Checked by: the "a deleted space" cases of
+`runtime/memory/test/v2-server-acl.test.ts`, for the refusal of a space whose
+ACL document holds a deletion tombstone: at `session.open` in every mode; on
+each command of an open session, ahead of the command's other checks, in `off`
+and `enforce`; on an operator's direct write; on an invitation operation; on
+the foreign grant; and on a fresh commit inside the engine's write transaction,
+with an exact replay still answered. The same file's served-change cases cover
+a served change to a deleted space's access list, and
+`runtime/toolshed/test/space-invites.test.ts` the invitation route's
+`space-deleted`. Admitting the commit that writes a deletion tombstone is not
+implemented yet: the server refuses one under INV-12's validity clause, so no
+deletion is committed through it.
 
 ### INV-16 — Instance-naming admission
 
@@ -999,9 +1009,13 @@ Layer: server admission and commit admission (`runtime/memory/v2/server.ts`, in
 since the mark is read from the space's store, and where a commit is
 authorized); the server's posture
 (`runtime/toolshed/lib/experimental-posture.ts`); client declaration and
-refusal handling (`runtime/memory/v2/client.ts` and
-`runtime/runner/src/storage/v2-remote-session.ts`, from the runtime's
-`instanceNames` experimental flag).
+refusal handling (`runtime/memory/v2/client.ts`, given the mode by the
+runner's session factories in `runtime/runner/src/storage/v2-remote-session.ts`,
+`runtime/runner/src/storage/v2-emulate.ts` and
+`runtime/runner/src/executor/loopback-storage.ts`, which the storage manager
+tells the mode a `Runtime` declares from its `instanceNames` experimental
+flag, and by a serving host's routed plane in
+`runtime/runner/src/executor/routed-plane.ts`).
 
 Soundness direction: over-rejection is safe. Refusing a positional session to
 an unmarked space, or a naming session to an unmarked space of a server whose
@@ -1023,8 +1037,23 @@ revocation is tested on its own: it ends the session with a
 `SessionRevokedError` that carries `clientUpdateRequired: true` and the message
 above, and the client keeps it
 (`runtime/memory/test/v2-session-termination.test.ts`), as does the storage
-manager (`runtime/runner/test/storage-retry-space-access.test.ts`). No client
-declares a mode yet, and the `instanceNames` flag stays off until one does
+manager (`runtime/runner/test/storage-retry-space-access.test.ts`). The same
+memory test file checks the client's declaration: a client whose runtime names
+instances declares it in each open it signs, a reopen included, and fails its
+connection permanently, sending no open, to a server that does not advertise
+`instanceNameMark`, while a positional client declares nothing and connects
+there. `runtime/runner/test/instance-naming-modes.test.ts` checks the boundary
+between runtimes of the two modes over one memory server: a positional runtime
+is refused a space a naming runtime wrote, whether it reopens, updates, starts
+or loads compiled code from a parent there, and the parent's children stay
+where the naming runtime bound them. The same file checks that a runtime
+declares its mode to its storage manager, which refuses a runtime of the other
+mode, and the posture of an emulated memory server
+(`runtime/runner/src/storage/v2-emulate.ts`), which follows the mode of the
+runtime it serves, and of a loopback server given none, which follows the
+runtime's default; `runtime/runner/test/experimental-options.test.ts` checks
+that a `Runtime` declares its mode at construction. The `instanceNames` flag
+stays off until deployments turn their posture on
 ([`../../plans/instance-names-on.md`](../../plans/instance-names-on.md)).
 
 ## Change discipline

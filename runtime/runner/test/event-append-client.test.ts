@@ -27,6 +27,7 @@ import type {
   ClientCommit,
   StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { sendEvent } from "../src/cell.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -82,6 +83,7 @@ const appendOf = (
 describe("event-append queue (events.md §5, LT9)", () => {
   it("settles a READ principal's authoritative append refusal without retrying it", async () => {
     const server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
       authorizeSessionOpen: (message) =>
         (message.authorization as { principal: string }).principal,
@@ -103,6 +105,7 @@ describe("event-append queue (events.md §5, LT9)", () => {
       },
     });
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(server),
     });
     const session = await client.mount(

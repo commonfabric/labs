@@ -6,6 +6,7 @@ import {
   RESET,
   sgr,
   stripAnsi,
+  term,
   visibleWidth,
 } from "../lib/view/ansi.ts";
 
@@ -57,4 +58,17 @@ Deno.test("cpLen counts a lone surrogate as one column, as for...of does", () =>
   }
   assertEquals(cpLen("\udc7baB"), 3);
   assertEquals(cpLen("\ud835\udc7b"), 1, "a pair is still one column");
+});
+
+Deno.test("hyperlink percent-encodes what in its address could drive the terminal, as UTF-8", () => {
+  const link = term.hyperlink("https://x/a b\x07\x1b]0;é\x9c", "go");
+
+  assertEquals(
+    link,
+    "\x1b]8;;https://x/a%20b%07%1B]0;%C3%A9%C2%9C\x07go\x1b]8;;\x07",
+  );
+  assertEquals(
+    term.hyperlink("https://example.com/p?q=1#f", "x"),
+    "\x1b]8;;https://example.com/p?q=1#f\x07x\x1b]8;;\x07",
+  );
 });
