@@ -206,6 +206,8 @@ export function createSpaceInviteRouter(
             { code: error.code },
             error.code === "not-owner"
               ? 403
+              : error.code === "space-deleted"
+              ? 410
               : error.code === "invalid-request" ||
                   error.code === "invalid-host"
               ? 400

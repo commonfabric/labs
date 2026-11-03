@@ -58,7 +58,7 @@ import {
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
-import { aclDocId } from "../acl.ts";
+import { aclDocId, isDeletionTombstone } from "../acl.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -4167,6 +4167,74 @@ export class WaveStaleReadError extends Error {
 }
 
 /**
+ * A fresh commit refused because its space is deleted: the space's ACL
+ * document holds a deletion tombstone, and no commit to a deleted space is
+ * admitted on any write path (INV-15 in
+ * `docs/specs/memory-v2/09-invariants.md`). It is the `ProtocolError` naming
+ * the deletion that a `derived` or a delegated commit is refused with; the
+ * memory server gives a session's transact the deleted `AuthorizationError`
+ * in its place.
+ */
+export class SpaceDeletedError extends ProtocolError {
+  readonly #space: string;
+  readonly #aclRevision: number;
+
+  /**
+   * Constructs an instance for `space`, whose deletion tombstone is stored at
+   * `aclRevision`.
+   */
+  constructor(space: string, aclRevision: number) {
+    super(`Space ${space} is deleted`);
+    this.#space = space;
+    this.#aclRevision = aclRevision;
+  }
+
+  /** The deleted space. */
+  get space(): string {
+    return this.#space;
+  }
+
+  /** The `seq` at which the space's deletion tombstone is stored. */
+  get aclRevision(): number {
+    return this.#aclRevision;
+  }
+}
+
+/**
+ * Throws {@link SpaceDeletedError} when the ACL document `engine` stores holds
+ * a deletion tombstone: that of `space` where the caller names it, else the
+ * one ACL document the store holds, an engine serving one space. Read inside
+ * a commit's write transaction, it sees a deletion another connection
+ * committed after the memory server's own check (INV-15).
+ */
+export const refuseDeletedSpace = (engine: Engine, space?: string): void => {
+  if (space !== undefined) {
+    const state = readState(engine, { id: aclDocId(space) });
+    if (state !== null && isDeletionTombstone(state.document?.value)) {
+      throw new SpaceDeletedError(space, state.seq);
+    }
+    return;
+  }
+  const heads = engine.database.prepare(
+    `SELECT h.id, h.seq, r.data FROM head h
+     JOIN revision r ON r.branch = h.branch AND r.id = h.id
+       AND r.scope_key = h.scope_key AND r.seq = h.seq
+       AND r.op_index = h.op_index
+     WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE 'of:did:%'
+       AND h.op = 'set'`,
+  ).all<{ id: string; seq: number; data: string | null }>();
+  for (const head of heads) {
+    if (head.data === null) continue;
+    const document = decodeTrustedMemoryBoundary(head.data) as
+      | EntityDocument
+      | null;
+    if (isDeletionTombstone(document?.value)) {
+      throw new SpaceDeletedError(head.id.slice("of:".length), head.seq);
+    }
+  }
+};
+
+/**
  * A derived commit carries an operation on its space's ACL document.
  * No derived producer may write that document, in any memory ACL mode: the
  * derived admission checks the lease and nothing of INV-12's shape or of any
@@ -5806,6 +5874,13 @@ const applyCommitTransaction = (
       replayed: true,
     };
   }
+
+  // No fresh commit is admitted to a deleted space, whatever its class or
+  // path (INV-15). The memory server checks before the write transaction
+  // starts; this repeats the check inside it, where a deletion committed
+  // through another connection in between is visible. An exact replay
+  // already answered from the store above.
+  refuseDeletedSpace(engine, space);
 
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
   // `derived` row): the producer holds the space's lease — ONE equality check
