@@ -52,14 +52,3 @@ export function withVersionHeader(response: Response): Response {
   return served;
 }
 
-/**
- * Script for a page that fetches parts of itself after it loads. It defines
- * `servedByAnotherVersion(response)`, which says whether a response names a
- * version other than the one that served the page. A response that names no
- * version, such as the error page a proxy returns while the server restarts,
- * names no other one. The page decides what to do about another version.
- */
-export const VERSION_CLIENT = `const servedByAnotherVersion = (response) => {
-    const version = response.headers.get(${JSON.stringify(VERSION_HEADER)});
-    return version !== null && version !== ${JSON.stringify(SERVING_VERSION)};
-  };`;

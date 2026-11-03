@@ -56,6 +56,7 @@ dashboard/
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
+  history-page-client.ts  the browser half of the two performance history pages: the window slider, chart loading, progress, and update checks
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
   repo-page.ts  the page for each repository, and the index of them all
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
@@ -1733,14 +1734,18 @@ Notes:
     again instead, at the newly chosen window if there is one. A page the
     browser brings back from its back/forward cache takes its window from its
     address, loads that window if its charts show another one, and otherwise
-    checks at once. The CI history page also shows the repository it was
-    served for. An open Gantt regenerates every 30 minutes and
-    whenever its tab becomes visible. The server draws its chart as a
-    self-contained image, so a new version's drawing reaches an open Gantt page
-    when it next regenerates. CI refreshes share a 30-minute GitHub freshness
-    window, so multiple pages do not repeat the same API reads. Runtime and CI
-    history checks wait through the same window after GitHub rejects a
-    collection.
+    checks at once. Its repository picker or key-only switch shows what the
+    page was served for. Both pages run the same script,
+    `followHistoryPage` in `history-page-client.ts`. Each page supplies only
+    the key that remembers its hide-green choice, the address its collection
+    progress streams from, what its loading message says it checks for, and
+    the wording of its progress panel. An open Gantt regenerates every 30
+    minutes and whenever its tab becomes visible. The server draws its chart
+    as a self-contained image, so a new version's drawing reaches an open
+    Gantt page when it next regenerates. CI refreshes share a 30-minute
+    GitHub freshness window, so multiple pages do not repeat the same API
+    reads. Runtime and CI history checks wait through the same window after
+    GitHub rejects a collection.
     Moving the window slider starts or joins the matching collection without
     cancelling wider-window work already in progress.
     CI history reads the workflow's runs through the run-list reader, back to
