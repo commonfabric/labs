@@ -159,7 +159,7 @@ async function main() {
         program,
         { noCheck: true },
       );
-      const { main: exports } = engine.evaluateRecordGraph(
+      const { main: exports } = await engine.evaluateRecordGraph(
         id,
         graph,
         mainSpecifier,
