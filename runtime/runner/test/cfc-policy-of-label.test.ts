@@ -300,7 +300,7 @@ describe("PolicyOf label-time binding", () => {
         module.policyManifests ?? [],
       );
     }
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -379,7 +379,7 @@ describe("PolicyOf label-time binding", () => {
           module.policyManifests ?? [],
         );
       }
-      const evaluated = engine.evaluateRecordGraph(
+      const evaluated = await engine.evaluateRecordGraph(
         compiled.id,
         compiled.graph,
         compiled.mainSpecifier,
@@ -453,7 +453,7 @@ describe("PolicyOf label-time binding", () => {
     };
     const engine = runtime.harness as Engine;
     const compiled = await engine.compileToRecordGraph(program);
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,

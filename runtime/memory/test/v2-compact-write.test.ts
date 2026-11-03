@@ -1048,6 +1048,21 @@ describe("compactStore", () => {
       );
     });
 
+    it("refuses a deleted space's store, and sends its operator to reaping", async () => {
+      await build((e) => {
+        standard(e);
+        applyCommit(e, {
+          sessionId: "s:a",
+          commit: ops(50, [
+            setOp(ACL, { deleted: { by: "did:key:z6Mk-compact-deleter" } }),
+          ]),
+        });
+      });
+      await expect(
+        compactStore({ store, out, selection: { prefixes: ["computed:"] } }),
+      ).rejects.toThrow("reclaimed by reaping it (`cf space reap`)");
+    });
+
     it("refuses an ACL document whose value is not an ACL", async () => {
       await build((e) => {
         standard(e);

@@ -28,7 +28,7 @@ import {
   read,
   readRevision,
 } from "./engine.ts";
-import { isACL } from "../acl.ts";
+import { isACL, isDeletionTombstone } from "../acl.ts";
 
 /**
  * Which instances a compaction selects. Prefixes match `id` (the namespaces
@@ -1090,6 +1090,16 @@ export const compactStore = async (
         ? undefined
         : (decodeTrustedMemoryBoundary(aclHeads[0].data) as EntityDocument)
           .value;
+      // A deleted space's store is reaped, not compacted: the audit
+      // revision would restate a deletion tombstone as though it were a list
+      // (random-space-identities.md, "Reaping a deleted space").
+      if (isDeletionTombstone(value)) {
+        throw new CompactionRefused(
+          `${
+            aclHeads[0].id
+          } holds a deletion tombstone: the space is deleted, and a deleted space's storage is reclaimed by reaping it (\`cf space reap\`), not by compacting it`,
+        );
+      }
       if (!isACL(value)) {
         throw new CompactionRefused(
           `${

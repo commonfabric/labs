@@ -74,6 +74,7 @@ import {
   NAME,
   type NormalizedFullLink,
   parseExternalSchemaRef,
+  pullFromServer,
   recomposeSchema,
   resolveLink,
   resolveLinkTracingDereferences,
@@ -252,6 +253,13 @@ export interface SetPiecePatternOptions {
 export interface GetCellValueOptions {
   input?: boolean;
   step?: boolean;
+
+  /**
+   * `false` reads what the store holds now, with no wait for the serving
+   * runtime and no demand for a derived value that is stale.
+   */
+  run?: boolean;
+
   selection?: CellSelection;
 }
 
@@ -392,9 +400,20 @@ export class PieceVerbReadError extends Error {
 }
 
 export class PieceResultProjectionError extends Error {
-  constructor(path: readonly (string | number)[], stepped: boolean) {
+  /**
+   * `stepped` says the read ran the piece here, and `served` that the serving
+   * runtime runs it, so that `--step` has nothing to add.
+   */
+  constructor(
+    path: readonly (string | number)[],
+    stepped: boolean,
+    served = false,
+  ) {
     const location = path.length === 0 ? "<root>" : path.join("/");
-    const stepHint = stepped
+    const stepHint = served
+      ? " The server was asked for it, but the required value still did not " +
+        "materialize."
+      : stepped
       ? " The piece was stepped, but the required value still did not " +
         "materialize."
       : " Use --step to start the piece and materialize session-scoped " +
@@ -530,6 +549,9 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
     error: unknown,
   ) => void;
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** Asks the server for a cell's value, in place of {@link pullServed}. */
+  pullServed?: typeof pullServed;
 }
 
 interface DisposableRuntime {
@@ -1773,7 +1795,7 @@ async function createWithReceipt(
   } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
-): Promise<{ id: string; getCell: () => Cell<unknown> }> {
+): Promise<string> {
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
@@ -1848,19 +1870,20 @@ async function createWithReceipt(
         (receipt.registration?.error ?? ""),
     );
   }
-  const cell = await timeCliPhase(
-    "newPiece.create.getPieceCell",
-    () => pieces.getPieceCell(receipt.pieceId, false),
-    trace,
-  );
-  if (options?.start !== false) {
+  // Under server execution the serving loop runs what the verb created.
+  if (options?.start !== false && !servesLifecycleVerbs(pieces)) {
+    const cell = await timeCliPhase(
+      "newPiece.create.getPieceCell",
+      () => pieces.getPieceCell(receipt.pieceId, false),
+      trace,
+    );
     await timeCliPhase(
       "newPiece.create.start",
       () => boundStart(pieces.startPiece(cell)),
       trace,
     );
   }
-  return { id: receipt.pieceId, getCell: () => cell };
+  return receipt.pieceId;
 }
 
 /**
@@ -1975,12 +1998,12 @@ export async function newPiece(
     });
     return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
   };
-  const receipted = served || options?.requestKey !== undefined;
-  const piece = await timeCliPhase(
-    "newPiece.create",
-    () =>
-      receipted
-        ? createWithReceipt(
+  // Receipt-backed creation returns after both setup and registration commit.
+  if (served || options?.requestKey !== undefined) {
+    const id = await timeCliPhase(
+      "newPiece.create",
+      () =>
+        createWithReceipt(
           config,
           pieces,
           program,
@@ -1988,19 +2011,24 @@ export async function newPiece(
           options,
           deps,
           boundStart,
-        )
-        : boundStart(pieces.create(program, {
-          repository: entry.repository,
-          start: options?.start,
-          ...(options?.input === undefined ? {} : { input: options.input }),
-        })),
+        ),
+    );
+    noteWroteTo(config.space);
+    return id;
+  }
+  const piece = await timeCliPhase(
+    "newPiece.create",
+    () =>
+      boundStart(pieces.create(program, {
+        repository: entry.repository,
+        start: options?.start,
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // Receipt-backed creation returns after both setup and registration commit.
-  if (receipted) return piece.id;
 
   if (options?.slug) {
     try {
@@ -2153,13 +2181,10 @@ async function resolveSlugSourceCell(
 
 /**
  * The served half of `setPiecePattern`: the serving runtime replaces the
- * source and commits the update, and this connection then refreshes the
- * piece it holds the way a client-side update does after its own commit —
- * starting it, which under the flag runs the graph as speculation while
- * the serving loop serves the derived values — and reports that outcome in
- * the receipt's `refresh`, since the commit is durable whatever the refresh
- * did. A start whose own setup commit fails leaves the piece stopped, so
- * that is a failed refresh too.
+ * source and commits the update, and this connection then asks the server for
+ * the piece's result, which is what makes the new source run, and reports that
+ * outcome in the receipt's `refresh`, since the commit is durable whatever the
+ * refresh did.
  */
 async function updateOnServer(
   config: PieceConfig,
@@ -2186,7 +2211,7 @@ async function updateOnServer(
   let refresh: PatternUpdateReceipt["refresh"];
   try {
     const cell = await pieces.getPieceCell(receipt.pieceId, false);
-    await pieces.startPiece(cell, undefined, { awaitSetupCommit: true });
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
     refresh = {
@@ -2613,10 +2638,12 @@ async function tryResolveLivePieceToolCallable(
  * Helper for callable resolution and discovery, which loads the target piece
  * and its pieces controller.
  *
- * Dispatch starts only the addressed piece before resolving the requested
- * callable. A verb sending into an existing root's `addPiece` stream has the
- * scheduler start that root at delivery through `ensurePieceRunningVerdict()`
- * in `runtime/runner/src/ensure-piece-running.ts`.
+ * Under server execution dispatch starts nothing: the event goes to the server,
+ * which runs the handler, and this process reads what is stored to resolve the
+ * callable. Otherwise dispatch starts only the addressed piece before resolving
+ * the requested callable, and a verb sending into an existing root's `addPiece`
+ * stream has the scheduler start that root at delivery through
+ * `ensurePieceRunningVerdict()` in `runtime/runner/src/ensure-piece-running.ts`.
  *
  * Dispatch performs no separate space-root initialization. Root-dependent
  * verbs require an initialized root: lazy start neither creates an absent root
@@ -2707,7 +2734,7 @@ async function loadPieceForCallables(
       resolvedConfig.piece,
       resolvedConfig.pieceScope,
     )
-    : prepareDispatch
+    : prepareDispatch && pieces.runtime?.experimental?.serverExecution !== true
     ? pieces.get(
       resolvedConfig.piece,
       true,
@@ -4291,6 +4318,8 @@ export async function linkPieces(
           resolvedTargetPath,
           {
             ...options,
+            // The serving loop runs the pieces a link joins.
+            ...(servedPieces(pieces) ? { start: false } : {}),
             ...(resolvedSourceScope === undefined
               ? {}
               : { sourceScope: resolvedSourceScope }),
@@ -4414,7 +4443,8 @@ export async function linkSqliteDiskSource(
     deps,
   );
   await pieces.link(id, [], resolvedTarget.piece, resolvedTarget.pathAfter, {
-    start: options?.start,
+    // The serving loop runs the piece a link reaches.
+    start: servedPieces(pieces) ? false : options?.start,
     targetScope: resolvedTarget.scope ?? options?.targetScope,
   });
   await pieces.synced();
@@ -4740,6 +4770,7 @@ export async function inspectPiece(
     undefined,
     resolvedConfig.pieceScope,
   );
+  if (servedPieces(pieces)) await pullServed(pieces, piece.getCell());
 
   const id = piece.id;
   const name = piece.name();
@@ -5253,6 +5284,36 @@ async function waitForServedHead(pieces: PiecesController): Promise<void> {
   }
 }
 
+/** Whether the serving runtime runs the pieces `pieces` reaches. */
+function servedPieces(pieces: PiecesController): boolean {
+  return pieces.runtime?.experimental?.serverExecution === true;
+}
+
+/**
+ * Under server execution, asks the server for `cell` and waits until it holds
+ * what the server derives for it, having covered every send at or below the
+ * server's head as of now. Does nothing in the OFF arm, where this runtime runs
+ * what it reads. Against a server that cannot be asked, it says so on stderr,
+ * and a read that follows gets what the server has stored.
+ */
+export async function pullServed(
+  pieces: PiecesController,
+  cell: Cell<unknown>,
+): Promise<void> {
+  if (!servedPieces(pieces)) return;
+  await timeCliPhase("served.head", () => waitForServedHead(pieces));
+  const pulled = await timeCliPhase(
+    "served.pull",
+    () => pullFromServer(pieces.runtime, cell),
+  );
+  if (!pulled) {
+    console.warn(
+      "This server accepts no read views, so it was not asked to recompute " +
+        "this value; reading what it has stored, which may be stale.",
+    );
+  }
+}
+
 export async function getCellValue(
   config: PieceConfig,
   addressedPath: (string | number)[],
@@ -5266,7 +5327,9 @@ export async function getCellValue(
     pieces,
     deps,
   );
-  const shouldStep = options.step === true;
+  // Under server execution there is nothing to run here: the pull below is
+  // what recomputes the value.
+  const shouldStep = options.step === true && !servedPieces(pieces);
   const piece = await timeCliPhase(
     "getCellValue.piece",
     () =>
@@ -5279,10 +5342,14 @@ export async function getCellValue(
   );
 
   try {
-    await timeCliPhase(
-      "getCellValue.served.settled",
-      () => waitForServedHead(pieces),
-    );
+    if (options.run !== false && servedPieces(pieces)) {
+      await pullServed(
+        pieces,
+        options.input
+          ? await piece.input.getCell(path)
+          : (await piece.result.getCell()).key(...path),
+      );
+    }
     if (shouldStep) {
       // A nested target pull is itself the demand and storage boundary for
       // the requested cell. Pulling the canonical piece first widens that
@@ -5318,6 +5385,24 @@ export async function getCellValue(
     }
 
     const prop = options.input ? "input" : "result";
+    // A path whose result the schema could not project. A verb there is refused
+    // either way. A derived value nothing has demanded has no stored value yet,
+    // which a read that asks for nothing reports as absent.
+    const projectionFailed = async (): Promise<undefined> => {
+      const verbRefusal = await verbReadRefusalOrNull(
+        piece,
+        prop,
+        path,
+        resolvedConfig.piece,
+      );
+      if (verbRefusal) throw verbRefusal;
+      if (options.run === false) return undefined;
+      throw new PieceResultProjectionError(
+        path,
+        shouldStep,
+        servedPieces(pieces),
+      );
+    };
     if (options.selection !== undefined) {
       const selection = options.selection;
       const targetCell = options.input
@@ -5353,7 +5438,7 @@ export async function getCellValue(
           error.message.startsWith("Cannot access path") &&
           await resultProjectionFailedAtPath(piece, path)
         ) {
-          throw new PieceResultProjectionError(path, shouldStep);
+          return await projectionFailed();
         }
         throw error;
       }
@@ -5374,19 +5459,17 @@ export async function getCellValue(
         !options.input && selected === undefined &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       if (selected === undefined && !sourceWasAbsent) {
         throw new CellSelectionError(
           "Cannot read selected value: the filter/schema expression did " +
             "not materialize a JSON-renderable value. This is not JSON " +
-            "null. Retry with --step for a computed result, or inspect the " +
-            "selected source data and schema.",
+            `null. ${
+              servedPieces(pieces)
+                ? "Inspect"
+                : "Retry with --step for a computed result, or inspect"
+            } the selected source data and schema.`,
         );
       }
       return selected;
@@ -5404,12 +5487,7 @@ export async function getCellValue(
         error.message.startsWith("Cannot access path") &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       throw error;
     }
@@ -5418,12 +5496,7 @@ export async function getCellValue(
       !options.input && value === undefined &&
       await resultProjectionFailedAtPath(piece, path)
     ) {
-      throw await verbReadRefusalOrNull(
-        piece,
-        prop,
-        path,
-        resolvedConfig.piece,
-      ) ?? new PieceResultProjectionError(path, shouldStep);
+      return await projectionFailed();
     }
 
     // Read-path guard (verb contract WS-F): a path that lands ON a verb would
@@ -5457,6 +5530,9 @@ export interface CellWriteTarget {
 
   /** The path inside that piece, empty for a write at its root. */
   path: (string | number)[];
+
+  /** Whether the serving runtime recomputes what the write changes. */
+  served?: boolean;
 }
 
 /**
@@ -5498,7 +5574,7 @@ export async function setCellValue(
     await piece.result.set(value, path);
   }
   noteWroteTo(config.space);
-  return { piece: resolvedConfig.piece, path };
+  return { piece: resolvedConfig.piece, path, served: servedPieces(pieces) };
 }
 
 /**
@@ -5558,8 +5634,9 @@ export async function callPieceHandler<T = any>(
  * for {@link stepPiece}. The two differ in what they are for and so in what
  * they do around the start: a step exists to commit what recomputation
  * produced, so it pulls, settles, receipts the space and stops the piece
- * again; this one leaves the pattern running, writes nothing, and receipts
- * nothing, because starting a piece is not a write.
+ * again, except under server execution, where it starts nothing and only pulls
+ * from the server; this one leaves the pattern running, writes nothing, and
+ * receipts nothing, because starting a piece is not a write.
  *
  * `addressedPath` is the path the caller was aiming at, and what it decides is
  * which piece runs: a walk that reaches a collection's member spends the
@@ -5600,7 +5677,10 @@ export async function warmPiece(
   // the resolution's answer: a walk into a collection holder reaches a member,
   // and the caller's memo is over pieces rather than over the paths that
   // reach them.
-  if (deps.alreadyRunning?.(resolvedConfig.piece) !== true) {
+  if (
+    !servedPieces(pieces) &&
+    deps.alreadyRunning?.(resolvedConfig.piece) !== true
+  ) {
     await timeCliPhase(
       "warmPiece.getPiece",
       () =>
@@ -5709,6 +5789,7 @@ export async function sinkCellValue(
   // and a read of one path would otherwise be about two different cells.
   const io = options.input ? piece.input : piece.result;
   const cell = await io.getCell(path) as Cell<unknown>;
+  await pullServed(pieces, cell);
   // Before the subscription, so the baseline is the value a read of this path
   // would serve. The first settle writes no line and is what every later
   // change is measured against, and `runtime.idle()` says the runtime is quiet
@@ -5803,16 +5884,23 @@ export async function stepPiece(
     pieces,
     deps,
   );
+  const served = servedPieces(pieces);
   const piece = await timeCliPhase(
     "stepPiece.getPiece",
     () =>
       pieces.get(
         resolvedConfig.piece,
-        true,
+        !served,
         undefined,
         resolvedConfig.pieceScope,
       ),
   );
+  if (served) {
+    // The server runs the piece and commits what it derives, so the step is
+    // the pull, and it writes nothing.
+    await pullServed(pieces, piece.getCell());
+    return;
+  }
   await timeCliPhase("stepPiece.pull", () => piece.getCell().pull());
   await timeCliPhase("stepPiece.synced", () => pieces.synced());
   // A step exists to run the pattern and commit what recomputation

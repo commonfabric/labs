@@ -399,7 +399,8 @@ describe("unloadable patternIdentity pointer vs a running pattern", () => {
       await otherTx.commit().settled;
       await other.idle();
     } finally {
-      await other.dispose();
+      // `rt` goes on using this storage manager and the artifact it now holds.
+      await other.dispose({ closeStorage: false });
     }
 
     const { cell } = await runV1("unloadable-pointer-cfc-disabled");

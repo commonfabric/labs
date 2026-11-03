@@ -3,8 +3,8 @@ import { yieldToEventLoop } from "@commonfabric/async/sleep";
 
 /**
  * Whether cold pattern compilation yields real macrotask turns between its
- * steps (per-module transform/emit, per-body SES verify, pre-evaluate) when
- * nothing says otherwise.
+ * steps (per-module transform/emit, per-body SES verify, per-module evaluate)
+ * when nothing says otherwise.
  *
  * Yielding lets work sharing the SAME event loop interleave with the CPU-bound
  * compile. In the browser runtime worker that work is IPC, and a synchronous
@@ -28,7 +28,7 @@ export const COMPILE_INTERLEAVES_EVENT_LOOP = isBrowser();
  * One compile-pipeline yield point: a real macrotask turn where compilation
  * interleaves the event loop, and a plain microtask completion — zero added
  * event-loop turns — everywhere else. An engine's seams between CPU-bound compile
- * steps (per-body SES verify, pre-evaluate) reach it through
+ * steps (per-body SES verify, per-module evaluate) reach it through
  * `Engine.yieldBetweenCompileSteps()`, which says which of the two applies.
  *
  * The default arm is {@link COMPILE_INTERLEAVES_EVENT_LOOP}, so tests can pin

@@ -5,6 +5,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type {
   EntityDocument,
   ScopeKeyIdentity,
+  SessionViewHandle,
   ViewPlan,
   ViewQuery,
 } from "@commonfabric/memory/v2";
@@ -44,6 +45,23 @@ import { hasInlineCellScheme } from "../immutable-cell.ts";
 const logger = getLogger("view-replication");
 type Selection = Omit<ViewPlan, "id" | "revision" | "generation"> & {
   delivery: ViewQuery[];
+};
+
+/**
+ * Names one view's lifetime: a session's view at one revision. A new session or
+ * a new revision is a new key.
+ */
+export const viewLifetimeKey = (handle: SessionViewHandle): string =>
+  `${handle.sessionEpoch}\0${handle.viewEpoch}`;
+
+/** A `read` view's one selection: nothing beyond its roots, and its answer. */
+const SETTLED_READ: Selection = {
+  settled: true,
+  delivery: [],
+  eligibleActions: [],
+  pieces: [],
+  inputs: [],
+  producers: [],
 };
 
 /** Independent invalidation of rendered reads and execution-dependent output. */
@@ -127,24 +145,37 @@ export class ViewPlanPublisher {
    * quiescence: after one the flush deadline cut, a view that already holds
    * a published selection keeps it, and only a view with none is planned, so
    * that a burst of cut waves plans each view once, at the settlement that
-   * ends it, over the snapshot that settlement left.
+   * ends it, over the snapshot that settlement left. `settled` says whether a
+   * `read` view has the answer it waits for, and is asked with the list of
+   * views already in hand, since that list can hold a view that registered after
+   * the settlement ended. Returns whether a `read` view has not settled yet,
+   * which leaves out one the server refused the answer for: a refusal, such as
+   * of a session that lost READ, is no reason to run another cycle.
    */
   async publish(
     runtime: Runtime,
     server: HostMemoryServer,
     space: MemorySpace,
-    { quiescent = true }: { quiescent?: boolean } = {},
-  ): Promise<void> {
+    { quiescent = true, settled = () => false }: {
+      quiescent?: boolean;
+      settled?: (handle: SessionViewHandle) => boolean;
+    } = {},
+  ): Promise<boolean> {
     if (this.#runtime !== runtime) {
       this.dispose();
       this.#runtime = runtime;
       runtime.storageManager.subscribe(this.#subscription);
     }
     const live = new Set<string>();
+    let readUnanswered = false;
     const interests = await server.viewInterestsForSpace(space);
+    // A read view holds demand and runs nothing, so it consumes no handler
+    // observations.
     runtime.scheduler.setViewConsumers(
       space,
-      interests.map((interest) => ({
+      interests.filter((interest) => interest.view.mode !== "read").map((
+        interest,
+      ) => ({
         principal: interest.principal,
         sessionId: interest.handle.sessionId as ScopeKeyIdentity["sessionId"],
       })),
@@ -175,10 +206,26 @@ export class ViewPlanPublisher {
     };
     for (const interest of interests) {
       const { handle, view, principal } = interest;
-      const key = `${handle.sessionEpoch}\0${handle.viewEpoch}`;
+      const key = viewLifetimeKey(handle);
       live.add(key);
       if (!interest.attached) {
         logger.debug("detached-view", "Deferring planning for a detached view");
+        continue;
+      }
+      if (view.mode === "read") {
+        if (this.#published.has(key)) continue;
+        if (!settled(handle)) {
+          readUnanswered = true;
+          continue;
+        }
+        if (
+          await server.setViewSelection(space, handle, {
+            ...SETTLED_READ,
+            generation: (interest.selectionGeneration ?? 0) + 1,
+          })
+        ) {
+          this.#published.set(key, SETTLED_READ);
+        }
         continue;
       }
       if (
@@ -502,5 +549,6 @@ export class ViewPlanPublisher {
     for (const key of this.#views.keys()) {
       if (!live.has(key)) this.#views.delete(key);
     }
+    return readUnanswered;
   }
 }
