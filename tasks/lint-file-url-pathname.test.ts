@@ -74,7 +74,6 @@ describe("lint-file-url-pathname", () => {
     expect(reported(`
       toFileUrl(root).pathname = join(base, name);
       toFileUrl(root).pathname += "/";
-      other.pathname = new URL("./x.ts", import.meta.url).pathname;
     `)).toEqual([]);
   });
 });

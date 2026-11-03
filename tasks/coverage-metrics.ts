@@ -522,9 +522,19 @@ export function trackedSourceLineNumbers(content: string): number[] {
 }
 
 /**
- * Read one `deno coverage --lcov` report, keyed by absolute source path. A
- * relative path, as a lane's report gives a file of the repository, is
- * resolved against `rootDir`.
+ * The key a coverage record of `sourcePath` is filed under: the path itself
+ * when it is absolute, and the path joined to `rootDir` when it is relative,
+ * as a lane's report names a file of the repository. The source files a
+ * reader looks up are keyed by joining to `rootDir` as well.
+ */
+export function lcovKey(rootDir: string, sourcePath: string): string {
+  return path.isAbsolute(sourcePath)
+    ? path.normalize(sourcePath)
+    : path.join(rootDir, sourcePath);
+}
+
+/**
+ * Read one `deno coverage --lcov` report, keyed by {@linkcode lcovKey}.
  *
  * Per-instance suffixes (`?testRun=<uuid>` cache-busting imports) are
  * normalized away at LCOV GENERATION (write-coverage-lcov.ts,
@@ -537,7 +547,7 @@ export function parseLcov(
   rootDir: string,
 ): Map<string, LcovFileCoverage> {
   return parseLcovReports([lcov], {
-    mapPath: (sourcePath) => path.resolve(rootDir, sourcePath),
+    mapPath: (sourcePath) => lcovKey(rootDir, sourcePath),
   });
 }
 

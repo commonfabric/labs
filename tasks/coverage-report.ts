@@ -35,6 +35,7 @@ import {
   collectCoverageDebtMetricsFromCoverage,
   collectMeasuredSetDebt,
   type CoverageDebtMetric,
+  lcovKey,
 } from "./coverage-metrics.ts";
 import { addLcovReport, type LcovFileCoverage } from "./lcov.ts";
 import { collectSetReports, markedSets } from "./coverage-gate.ts";
@@ -102,9 +103,9 @@ export interface LaneReports {
 }
 
 /**
- * Every LCOV report under a directory, keyed by absolute source path with a
- * relative path resolved against `root`, and the record each lane that opened
- * the compile byte cache left of whether it found the cache restored.
+ * Every LCOV report under a directory, keyed by {@linkcode lcovKey} against
+ * `root`, and the record each lane that opened the compile byte cache left of
+ * whether it found the cache restored.
  */
 export async function collectReports(
   at: string,
@@ -116,7 +117,7 @@ export async function collectReports(
     for await (const entry of walk(at, { includeDirs: false })) {
       if (path.extname(entry.path) === ".lcov") {
         addLcovReport(coverage, await Deno.readTextFile(entry.path), {
-          mapPath: (sourcePath) => path.resolve(root, sourcePath),
+          mapPath: (sourcePath) => lcovKey(root, sourcePath),
         });
       } else if (path.basename(entry.path) === COMPILE_CACHE_STATE_FILE) {
         cacheStates.add((await Deno.readTextFile(entry.path)).trim());

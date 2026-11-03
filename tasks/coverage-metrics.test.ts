@@ -45,6 +45,17 @@ Deno.test("parseLcov resolves a relative source path against the root it is give
   assertEquals([...coverage.keys()], ["/repo/runtime/example/src/mod.ts"]);
 });
 
+Deno.test("parseLcov keys a relative path the way a relative root's source files are keyed", () => {
+  const coverage = parseLcov(
+    "SF:runtime/example/src/mod.ts\nDA:1,1\nend_of_record",
+    "repo",
+  );
+
+  assertEquals([...coverage.keys()], [
+    path.join("repo", "runtime/example/src/mod.ts"),
+  ]);
+});
+
 Deno.test("instance-suffix normalization merges records of the same physical file", () => {
   // Deno's coverage emits one record per module INSTANCE — the same file
   // appears plain and as `?testRun=<uuid>` once per cache-busting import.
