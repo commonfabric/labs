@@ -17,6 +17,10 @@
  * A move the repository decides to ship is declared in
  * `cause-assignments-accepted-moves.ts`.
  *
+ * A comparison only protects the patterns it reaches, so the gate also fails
+ * on a pattern the base builds and the change compiles from the same source to
+ * no assignment, and on a run that compares no patterns at all.
+ *
  * Usage: check-cause-assignments.ts [base-ref]   (default: origin/main)
  */
 
@@ -107,6 +111,16 @@ export interface Comparison {
   compared: number;
 
   /**
+   * The patterns the base built and the head compiled from the same source to
+   * no assignment. Such a pattern is not among `compared`, so it would
+   * otherwise pass unseen.
+   */
+  dropped: string[];
+
+  /** How many patterns each side's build gave an assignment. */
+  built: { base: number; head: number };
+
+  /**
    * The patterns either side failed to compile, less those that side's own
    * `UNEVALUABLE_PATTERNS` lists. Such a pattern is in neither side's
    * builds, so it would otherwise pass unseen.
@@ -136,11 +150,18 @@ export function compareDumps(
   const before = new Map(
     base.assignments.map((assignment) => [assignment.pattern, assignment]),
   );
+  const unassigned = new Map(
+    head.unassigned.map(({ pattern, source }) => [pattern, source]),
+  );
   const comparison: Comparison = {
     failing: [],
     forgiven: [],
     unused: [],
     compared: 0,
+    dropped: base.assignments
+      .filter(({ pattern, source }) => unassigned.get(pattern) === source)
+      .map(({ pattern }) => pattern),
+    built: { base: base.assignments.length, head: head.assignments.length },
     compileErrors: [
       ...base.errors
         .filter((error) => !unevaluable.base.has(error.pattern))
@@ -278,6 +299,49 @@ export function describeFailures(comparison: Comparison): string {
       "builds above.",
   );
   return lines.join("\n");
+}
+
+/** The report of `comparison`'s dropped patterns. */
+export function describeDropped(comparison: Comparison): string {
+  return [
+    "The base build gives these patterns a cause assignment and this build " +
+    "compiles the same source to none, so their numbering could not be " +
+    "compared. `buildAssignment()` in tasks/cause-assignments-dump.ts found " +
+    "no pattern among what each module evaluated to:",
+    "",
+    ...comparison.dropped,
+  ].join("\n");
+}
+
+/** The report of a run that compared no patterns. */
+export function describeNothingCompared({ built }: Comparison): string {
+  return "This run compared no patterns, so it checked nothing. The base " +
+    `build gave ${built.base} patterns an assignment and this build ` +
+    `${built.head}, with no pattern on both sides from the same source. ` +
+    "Either a build yields nothing tasks/cause-assignments-dump.ts can read, " +
+    "or the change moves or edits every pattern, which has to land apart " +
+    "from a change to what numbers them.";
+}
+
+/**
+ * A report of each kind of failure in `comparison`. An empty list says the gate
+ * passes.
+ */
+export function failureReports(comparison: Comparison): string[] {
+  const reports: string[] = [];
+  if (comparison.compileErrors.length > 0) {
+    reports.push(describeCompileErrors(comparison));
+  }
+  if (comparison.failing.length > 0) {
+    reports.push(describeFailures(comparison));
+  }
+  if (comparison.dropped.length > 0) {
+    reports.push(describeDropped(comparison));
+  }
+  if (comparison.compared === 0) {
+    reports.push(describeNothingCompared(comparison));
+  }
+  return reports;
 }
 
 /**
@@ -493,6 +557,7 @@ async function dumpTree(
   }));
   return {
     assignments: outputs.flatMap((output) => output.assignments),
+    unassigned: outputs.flatMap((output) => output.unassigned),
     errors: outputs.flatMap((output) => output.errors),
   };
 }
@@ -584,14 +649,9 @@ async function main() {
           `${entry.head}) forgives nothing in this run and can be removed`,
       );
     }
-    if (comparison.compileErrors.length > 0) {
-      console.error(describeCompileErrors(comparison));
-      Deno.exitCode = 1;
-    }
-    if (comparison.failing.length > 0) {
-      console.error(describeFailures(comparison));
-      Deno.exitCode = 1;
-    }
+    const reports = failureReports(comparison);
+    for (const report of reports) console.error(report);
+    if (reports.length > 0) Deno.exitCode = 1;
   } finally {
     await git("worktree", "remove", "--force", baseTree);
     await Deno.remove(scratch, { recursive: true });
