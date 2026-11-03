@@ -1125,9 +1125,16 @@ const CONSOLE_PROMPT_SLOT = createCliPromptSlotBinding({
 
 /**
  * Why a console turn cannot start for want of a model credential, or
- * `undefined` when it can.
+ * `undefined` when it can. The codes are the chat service's own provider
+ * failures, so a refusal reads like one.
  */
-export type ConsoleModelReadiness = () => Promise<string | undefined>;
+export type ConsoleModelReadiness = () => Promise<
+  | {
+    code: "provider-auth-required" | "provider-unavailable";
+    message: string;
+  }
+  | undefined
+>;
 
 /**
  * The Codex credential's readiness, read from the store each time it is asked.
@@ -1141,15 +1148,27 @@ export const consoleCodexReadiness = (
   harnessHome: string,
 ): ConsoleModelReadiness =>
 async () => {
-  const status = await new OpenAICodexAuthService(
-    new FileHarnessCredentialStore({
-      path: defaultHarnessCredentialStorePath(harnessHome),
-    }),
-    CONSOLE_CREDENTIAL_OWNER.ownerKey,
-  ).status();
-  return status.status === "connected"
-    ? undefined
-    : `cf-harness Codex is ${status.status}; connect it with \`cf-harness auth login openai-codex\``;
+  let status;
+  try {
+    status = await new OpenAICodexAuthService(
+      new FileHarnessCredentialStore({
+        path: defaultHarnessCredentialStorePath(harnessHome),
+      }),
+      CONSOLE_CREDENTIAL_OWNER.ownerKey,
+    ).status();
+  } catch (error) {
+    return {
+      code: "provider-unavailable",
+      message: `cf-harness could not read its Codex credential: ${
+        describeFailure(error)
+      }`,
+    };
+  }
+  return status.status === "connected" ? undefined : {
+    code: "provider-auth-required",
+    message:
+      `cf-harness Codex is ${status.status}; connect it with \`cf-harness auth login openai-codex\``,
+  };
 };
 
 /**
@@ -1484,14 +1503,6 @@ const consoleSandboxSelected = (config: ConsoleConfig): string | undefined =>
     ? undefined
     : describeSandboxRuntimeChoice(config.sandboxRuntimeChoice);
 
-/**
- * Combines retained decisions with independently cached host probes. The
- * sandbox probe is the direct runsc driver's, judged at the enforcement mode
- * its turns resolve from the options each is built with, in `env`. On macOS
- * it also asks the VM that driver runs in, from the store `env` names. `env`
- * is the process's environment unless given, since that is the one runsc
- * runs with. `host.platform` replaces `Deno.build.os`.
- */
 /** The Codex credential's row, read from the store at each refresh. */
 export const consoleCodexHealthProbe = (
   harnessHome: string,
@@ -1521,8 +1532,10 @@ export const consoleCodexHealthProbe = (
           }
           : {
             ...fact,
-            value: "not connected",
-            reason: refusal,
+            value: refusal.code === "provider-unavailable"
+              ? "not readable"
+              : "not connected",
+            reason: refusal.message,
             remedy:
               "Connect Codex with `cf-harness auth login openai-codex`; the console needs no restart.",
             state: "failed",
@@ -1540,6 +1553,14 @@ export const consoleCodexHealthProbe = (
   };
 };
 
+/**
+ * Combines retained decisions with independently cached host probes. The
+ * sandbox probe is the direct runsc driver's, judged at the enforcement mode
+ * its turns resolve from the options each is built with, in `env`. On macOS
+ * it also asks the VM that driver runs in, from the store `env` names. `env`
+ * is the process's environment unless given, since that is the one runsc
+ * runs with. `host.platform` replaces `Deno.build.os`.
+ */
 export const createConsoleHealth = (
   config: ConsoleConfig,
   launch?: ConsoleObservedLaunchHealth,
@@ -2272,12 +2293,6 @@ export class ConsoleServer {
     if (typeof text !== "string" || text.trim() === "") {
       return Response.json({ error: "text is required" }, { status: 400 });
     }
-    // Refused here, before anything starts, so the page never shows a turn
-    // that then fails for want of a model credential.
-    const unready = await this.#modelReadiness();
-    if (unready !== undefined) {
-      return Response.json({ error: unready }, { status: 503 });
-    }
     if (body.sessionId !== undefined && typeof body.sessionId !== "string") {
       return Response.json({ error: "sessionId must be a string" }, {
         status: 400,
@@ -2312,6 +2327,15 @@ export class ConsoleServer {
       }
       browserHostToken = crypto.randomUUID();
       browserHost = new ConsoleBrowserHost(browserHostToken);
+    }
+    // Refused here, after the request is known to be well formed and before
+    // anything starts, so the page never shows a turn that then fails for
+    // want of a model credential.
+    const unready = await this.#modelReadiness();
+    if (unready !== undefined) {
+      return Response.json({ error: unready.message, code: unready.code }, {
+        status: CHAT_ERROR_STATUS[unready.code],
+      });
     }
     let sessionId = body.sessionId;
     if (sessionId === undefined) {
