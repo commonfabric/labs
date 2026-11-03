@@ -122,6 +122,9 @@ class LoopbackSessionFactory implements SessionFactory {
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
+  /** What `setInstanceNames()` last chose. */
+  #instanceNames = false;
+
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
@@ -177,6 +180,11 @@ class LoopbackSessionFactory implements SessionFactory {
     );
   }
 
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
+  }
+
   async create(
     space: MemorySpace,
     signer?: Signer,
@@ -192,6 +200,7 @@ class LoopbackSessionFactory implements SessionFactory {
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
       client: this.#clientInfo,
+      instanceNames: this.#instanceNames,
       ...(this.#routeFor(space, signer) === undefined
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),

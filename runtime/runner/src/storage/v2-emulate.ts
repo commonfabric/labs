@@ -103,6 +103,9 @@ class EmulatedSessionFactory implements SessionFactory {
   /** The chains held here, one of which a session's open presents. */
   readonly #delegations = new DelegationStore();
 
+  /** What `setInstanceNames()` last chose. */
+  #instanceNames = false;
+
   constructor(
     getServer: () => MemoryV2Server.Server,
   ) {
@@ -117,13 +120,21 @@ class EmulatedSessionFactory implements SessionFactory {
     // A client session's frames are no serving loop's work, whichever
     // session's request caused them.
     const transport = servingContextLoopback(this.#getServer(), false);
-    const client = await MemoryV2Client.connect({ transport });
+    const client = await MemoryV2Client.connect({
+      transport,
+      instanceNames: this.#instanceNames,
+    });
     const session = await client.mount(
       space,
       mountOptions,
       loopbackSessionOpenAuth(this.#delegations, space, signer),
     );
     return { client, session };
+  }
+
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
   }
 
   /** @inheritDoc */
@@ -155,7 +166,7 @@ class EmulatedSessionFactory implements SessionFactory {
 }
 
 export class EmulatedStorageManager extends StorageManager {
-  #serverFactory: () => MemoryV2Server.Server;
+  #serverFactory: (manager: EmulatedStorageManager) => MemoryV2Server.Server;
   #server?: MemoryV2Server.Server;
   #ownsServer = true;
 
@@ -185,7 +196,14 @@ export class EmulatedStorageManager extends StorageManager {
       // Harnesses that share one server across managers use connectTo()
       // and pick their own cadence — "manual" for controlled-staleness
       // premises that depend on frames NOT spreading until the test says.
-      () => newLoopbackServer({ subscriptionRefreshDelayMs: 0 }),
+      //
+      // The server serves this manager alone, so its posture is the naming
+      // mode of the runtime the manager serves (INV-16).
+      (manager) =>
+        newLoopbackServer({
+          subscriptionRefreshDelayMs: 0,
+          namesInstances: () => manager.namesInstances,
+        }),
     );
   }
 
@@ -211,7 +229,7 @@ export class EmulatedStorageManager extends StorageManager {
 
   protected constructor(
     options: Options,
-    serverFactory: () => MemoryV2Server.Server,
+    serverFactory: (manager: EmulatedStorageManager) => MemoryV2Server.Server,
   ) {
     const serverHolder: { get: () => MemoryV2Server.Server } = {
       get: () => {
@@ -243,7 +261,7 @@ export class EmulatedStorageManager extends StorageManager {
   }
 
   protected server(): MemoryV2Server.Server {
-    this.#server ??= this.#serverFactory();
+    this.#server ??= this.#serverFactory(this);
     return this.#server;
   }
 }

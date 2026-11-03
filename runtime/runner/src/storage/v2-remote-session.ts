@@ -227,6 +227,14 @@ export interface SessionFactory {
    */
   setSharedConnections?(enabled: boolean): void;
 
+  /**
+   * Chooses whether the sessions created from here on declare that their
+   * runtime names instances (`ConnectOptions.instanceNames` of the memory
+   * client). A factory without the method declares nothing, so its sessions
+   * are positional whatever their runtime's mode.
+   */
+  setInstanceNames?(enabled: boolean): void;
+
   /** Closes every connection the factory keeps open between sessions. */
   close?(): Promise<void>;
 
@@ -1347,6 +1355,9 @@ export class RemoteSessionFactory implements SessionFactory {
   #transports = new Set<WebSocketTransport>();
   #sharedConnections = false;
 
+  /** What `setInstanceNames()` last chose. */
+  #instanceNames = false;
+
   /** Transports closed so far. */
   #closedTransports = 0;
 
@@ -1437,6 +1448,11 @@ export class RemoteSessionFactory implements SessionFactory {
   /** @inheritDoc */
   setSharedConnections(enabled: boolean): void {
     this.#sharedConnections = enabled;
+  }
+
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
   }
 
   /** @inheritDoc */
@@ -1626,6 +1642,7 @@ export class RemoteSessionFactory implements SessionFactory {
       client: MemoryClient.connect({
         transport,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       }).then((client) => {
@@ -1687,6 +1704,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
@@ -1760,6 +1778,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
         address: transport.address.href,
         firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
       });
