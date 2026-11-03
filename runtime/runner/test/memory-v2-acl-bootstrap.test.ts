@@ -82,6 +82,7 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
   ) {
     this.principals.push(signer?.did() ?? "<anonymous>");
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: this.#transport(this.#server),
     });
     const session = await client.mount(

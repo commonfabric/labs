@@ -103,6 +103,7 @@ import {
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import {
@@ -1790,6 +1791,13 @@ export class StorageManager implements IStorageManager {
 
   /** What `setSharedMemoryConnection()` last declared. */
   #sharedMemoryConnection = false;
+
+  /**
+   * The naming mode `setInstanceNames()` declared, or `undefined` while none
+   * is, when the manager's sessions run this build's default.
+   */
+  #instanceNames: boolean | undefined;
+
   #localSessionDocuments: boolean | undefined;
   #eventAppendQueueStore?: EventAppendQueueStore;
   #eventAppendPacing?: EventAppendPacing | false;
@@ -2376,6 +2384,24 @@ export class StorageManager implements IStorageManager {
     this.#sessionFactory.setSharedConnections?.(enabled);
   }
 
+  /** See `IStorageManager.setInstanceNames`. */
+  setInstanceNames(enabled: boolean): void {
+    if (this.#instanceNames !== undefined && this.#instanceNames !== enabled) {
+      throw new Error(
+        "setInstanceNames: this manager's runtimes already declared the " +
+          "other naming mode; one manager's sessions cannot serve both",
+      );
+    }
+    if (enabled !== this.namesInstances && this.#providers.size > 0) {
+      throw new Error(
+        "setInstanceNames: a session is already open; declaring the mode " +
+          "now would leave that session declaring the other",
+      );
+    }
+    this.#instanceNames = enabled;
+    this.#sessionFactory.setInstanceNames?.(enabled);
+  }
+
   /** See `IStorageManager.setSessionReadCeiling`. */
   setSessionReadCeiling(ceiling: SessionReadCeiling): void {
     if (this.#providers.size > 0) {
@@ -2385,6 +2411,15 @@ export class StorageManager implements IStorageManager {
       );
     }
     this.#sessionReadCeiling = ceiling;
+  }
+
+  /**
+   * Whether the sessions this manager opens declare that their runtime names
+   * instances: as `setInstanceNames()` declared, and while nothing has, as a
+   * runtime of this build does by default (`namesInstancesByDefault()`).
+   */
+  get namesInstances(): boolean {
+    return this.#instanceNames ?? namesInstancesByDefault();
   }
 
   /** The serving manager's HOME space (Options.servingHomeSpace) —

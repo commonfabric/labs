@@ -20,6 +20,7 @@ import {
   type ClientInfo,
   createClientInfo,
 } from "@commonfabric/memory/v2/client-info";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { LoopbackMemoryServer } from "./host-memory-server.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import {
@@ -122,6 +123,13 @@ class LoopbackSessionFactory implements SessionFactory {
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
+
   constructor(
     plane: LoopbackPlane,
     route: Pick<RouteOptions, "createTransport"> | undefined,
@@ -177,6 +185,11 @@ class LoopbackSessionFactory implements SessionFactory {
     );
   }
 
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
+  }
+
   async create(
     space: MemorySpace,
     signer?: Signer,
@@ -192,6 +205,7 @@ class LoopbackSessionFactory implements SessionFactory {
     const client = await MemoryClient.connect({
       transport: this.#transport(space, signer),
       client: this.#clientInfo,
+      instanceNames: this.#instanceNames,
       ...(this.#routeFor(space, signer) === undefined
         ? {}
         : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),

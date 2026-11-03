@@ -17,6 +17,7 @@ import {
   type WatchSpec,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,
@@ -230,7 +231,10 @@ describe("memory-v2-pre-watch-effect", () => {
       schemaId,
       schema,
     );
-    const client = await MemoryV2Client.Client.connect({ transport });
+    const client = await MemoryV2Client.Client.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     const session = await client.mount(
       space,
       {},

@@ -81,6 +81,7 @@ import {
   getPatternSource,
   resolveEntryIdentity,
 } from "../src/index.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
 
 const spaceSigner = await Identity.fromPassphrase("space root ensure space");
@@ -135,6 +136,7 @@ class CidDroppingSessionFactory implements SessionFactory {
   ) {
     const client = await MemoryV2Client.connect({
       transport: this.#transport(),
+      instanceNames: namesInstancesByDefault(),
     });
     const session = await client.mount(
       space,
@@ -369,6 +371,7 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
   const seedSelfOwnedKind = async (spaceKind: string): Promise<void> => {
     const client = await MemoryV2Client.connect({
       transport: MemoryV2Client.loopback(server),
+      instanceNames: namesInstancesByDefault(),
     });
     try {
       const session = await client.mount(
