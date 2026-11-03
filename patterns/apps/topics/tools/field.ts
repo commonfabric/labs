@@ -66,9 +66,11 @@ export class Field {
 
   /** Replaces the text, with the cursor at its end, as an undoable edit. */
   set text(text: string) {
-    this.#remember();
-    this.#buffer.setText(this.#multiline ? text : text.replace(/\n/g, " "));
-    this.#buffer.moveBufferEnd();
+    this.#typing = false;
+    this.#edit(() => {
+      this.#buffer.setText(this.#multiline ? text : text.replace(/\n/g, " "));
+      this.#buffer.moveBufferEnd();
+    });
   }
 
   /**
@@ -94,15 +96,14 @@ export class Field {
       return true;
     }
     if (char !== undefined && !key.ctrl && !key.alt) {
-      if (!this.#typing) this.#remember();
+      if (this.#typing) b.insert(char);
+      else this.#edit(() => b.insert(char));
       this.#typing = true;
-      b.insert(char);
       return true;
     }
     this.#typing = false;
     const edit = (act: () => void) => {
-      this.#remember();
-      act();
+      this.#edit(act);
       return true;
     };
     const move = (act: () => void) => {
@@ -388,7 +389,11 @@ export class Field {
 
   /** Inserts `text` at the cursor as one undoable edit. */
   #insert(text: string): void {
-    this.#remember();
+    this.#edit(() => this.#splice(text));
+  }
+
+  /** Helper for {@link #insert}, which puts `text` at the cursor. */
+  #splice(text: string): void {
     const b = this.#buffer;
     const lines = b.lines;
     const before = [
@@ -405,10 +410,16 @@ export class Field {
     b.place(insertedLines.length - 1, [...insertedLines.at(-1) ?? ""].length);
   }
 
-  /** Records the text as it stands, for an undo to restore. */
-  #remember(): void {
+  /**
+   * Runs `act`, recording the text as it stood for an undo to restore, if
+   * `act` changed it.
+   */
+  #edit(act: () => void): void {
     const b = this.#buffer;
-    this.#undo.push({ text: b.text(), row: b.row, col: b.col });
+    const before = { text: b.text(), row: b.row, col: b.col };
+    act();
+    if (b.text() === before.text) return;
+    this.#undo.push(before);
     if (this.#undo.length > UNDO_DEPTH) this.#undo.shift();
     this.#redo.length = 0;
   }

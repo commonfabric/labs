@@ -132,20 +132,21 @@ function byReference(topics: readonly Topic[]): Map<string, Topic> {
 
 /**
  * The newest `count` events a single reading of the board still records,
- * Topics filed, comments, and links, by their own timestamps, oldest first.
+ * Topics filed, comments, and links, by their own timestamps, oldest first,
+ * leaving out what is withheld from this display.
  */
 export function history(topics: readonly Topic[], count: number): TopicEvent[] {
   const events: TopicEvent[] = topics.flatMap((topic): TopicEvent[] => [
-    ...(topic.createdAt > 0
+    ...(!topic.withheld && topic.createdAt > 0
       ? [{ kind: "filed" as const, topic, at: topic.createdAt }]
       : []),
     ...topic.comments.flatMap((comment) =>
-      comment.removed || comment.sentAt === 0
+      comment.withheld || comment.removed || comment.sentAt === 0
         ? []
         : [{ kind: "comment" as const, topic, comment, at: comment.sentAt }]
     ),
     ...topic.links.flatMap((link) =>
-      link.removed || link.addedAt === undefined
+      link.withheld || link.removed || link.addedAt === undefined
         ? []
         : [{ kind: "link" as const, topic, link, at: link.addedAt }]
     ),

@@ -414,16 +414,21 @@ export function consoleTerminal(
       // Each thing said, to say it again once the hold is undone.
       const held: (() => void)[] = [];
       const undo: (() => void)[] = [];
+      const { info, warn } = out;
+      const counting = counter();
       for (const method of CONSOLE_METHODS) {
         const original = out[method];
         out[method] = (...args: unknown[]) => {
-          held.push(() => Reflect.apply(original, out, args));
-          // An assertion that holds, and a timer or count that starts or
-          // ends a group, say nothing.
-          if (method === "assert" ? args[0] : SILENT.has(method)) return;
+          const told = counting(method, args);
+          if (told === undefined) return;
+          const [as, what] = told;
+          const speak = as === method ? original : as === "info" ? info : warn;
+          held.push(() => Reflect.apply(speak, out, what));
+          // An assertion that holds, and the end of a group, say nothing.
+          if (as === "assert" ? what[0] : as === "groupEnd") return;
           said(
-            consoleLine(method === "assert" ? args.slice(1) : args),
-            ERRING.has(method),
+            consoleLine(as === "assert" ? what.slice(1) : what),
+            ERRING.has(as),
           );
         };
         // Each method takes its own arguments, which only reflection can
@@ -484,13 +489,51 @@ const CONSOLE_METHODS = [
 ] as const;
 type ConsoleMethod = typeof CONSOLE_METHODS[number];
 
-/** The ways of saying something on the console that say nothing at once. */
-const SILENT: ReadonlySet<ConsoleMethod> = new Set([
-  "clear",
-  "countReset",
-  "groupEnd",
-  "time",
-]);
+/**
+ * What each thing said on the console says, as a method and its arguments
+ * that say it again as it was, or nothing: a count or a timer is said as
+ * what it says when asked, since asking again later would count or time it
+ * again, and clearing the screen is dropped, there being no screen of its
+ * own to clear once the view is gone.
+ */
+function counter(): (
+  method: ConsoleMethod,
+  args: unknown[],
+) => [ConsoleMethod, unknown[]] | undefined {
+  const counts = new Map<string, number>();
+  const started = new Map<string, number>();
+  return (method, args) => {
+    const [label = "default", ...data] = args;
+    const name = String(label);
+    switch (method) {
+      case "clear":
+        return undefined;
+      case "count": {
+        const count = (counts.get(name) ?? 0) + 1;
+        counts.set(name, count);
+        return ["info", [`${name}: ${count}`]];
+      }
+      case "countReset":
+        counts.delete(name);
+        return undefined;
+      case "time":
+        started.set(name, performance.now());
+        return undefined;
+      case "timeLog":
+      case "timeEnd": {
+        const at = started.get(name);
+        if (method === "timeEnd") started.delete(name);
+        return at === undefined
+          ? ["warn", [`Timer '${name}' does not exist`]]
+          : ["info", [
+            `${name}: ${(performance.now() - at).toFixed(3)}ms`,
+            ...(method === "timeLog" ? data : []),
+          ]];
+      }
+    }
+    return [method, args];
+  };
+}
 
 /** The ways of saying something on the console that warn or err. */
 const ERRING: ReadonlySet<ConsoleMethod> = new Set([

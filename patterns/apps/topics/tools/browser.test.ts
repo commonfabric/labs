@@ -669,9 +669,11 @@ describe("browser", () => {
       type("\x1b");
       // Each keystroke changed the draft, and each change is stamped later
       // than the one before, though the clock stands still.
-      expect(saved.drafts["comment:1"]).toEqual({
+      const draft = saved.drafts["comment:1"];
+      expect(draft).toEqual({
         fields: ["Looks **cold**."],
         base: "",
+        invocation: expect.stringMatching(/^topics-/),
         at: NOW + "Looks **cold**.".length - 1,
       });
       expect(screen().join("\n")).toContain("✎");
@@ -687,7 +689,8 @@ describe("browser", () => {
           { verb: "comment", topic: "1", text: "Looks **cold**." },
           "Tester (person)",
         ]]);
-      expect(host.writes[0].invocation).toMatch(/^topics-/);
+      // Under the invocation of the version of the draft it saves.
+      expect(host.writes[0].invocation).toBe(draft?.invocation);
       expect(saved.drafts).toEqual({});
       expect(saved.pending).toEqual({});
     });
@@ -1383,6 +1386,18 @@ describe("browser", () => {
       browser.said("[WARN] connection closed, reconnecting", true);
 
       expect(screen().at(-1)).toContain("connection closed, reconnecting");
+    });
+
+    it("says in the status line that saving, or taking in another browser's saves, failed", () => {
+      browser.saveFailed(new Error("Disk full."));
+      expect(screen().at(-1)).toContain(
+        "Could not save drafts and what you have read: Disk full.",
+      );
+
+      browser.followFailed(new Error("Watch lost."));
+      expect(screen().at(-1)).toContain(
+        "Stopped taking in what other browsers save: Watch lost.",
+      );
     });
 
     it("presses a dialog's button by its letter, alone where no field has the keys and with Alt anywhere", async () => {

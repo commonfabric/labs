@@ -364,6 +364,27 @@ describe("screen", () => {
       );
     });
 
+    it("says a Topic withheld from this display is withheld, in the list and in a mention", () => {
+      const hidden = topic({ number: "3", title: "", withheld: true });
+      const fryer = topic({ title: "Fryer fixed" });
+      const shown = rows(
+        render(
+          state({
+            topics: [hidden],
+            feed: [
+              live({ kind: "mention", topic: fryer, other: hidden, at: NOW }),
+            ],
+          }),
+          100,
+          24,
+          NOW + 9000,
+        ),
+      ).join("\n");
+
+      expect(shown).toMatch(/ 3 withheld/);
+      expect(shown).toMatch(/top\/3 {2}withheld/);
+    });
+
     it("links each Topic's number to where a browser opens it, in the list, a card, and a mention", () => {
       const fryer = topic({});
       const other = topic({ number: "3", title: "Donuts" });

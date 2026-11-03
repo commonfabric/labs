@@ -69,6 +69,30 @@ describe("field", () => {
       expect(field.text).toBe("abcd");
     });
 
+    it("records no undo step for an edit that changes nothing, keeping what a redo restores", () => {
+      const field = new Field("ab");
+      type(field, "c\x1a"); // and Control-Z
+      type(field, "\x01\x7f"); // Control-A, then Backspace at the start
+      type(field, "\x12"); // Control-R
+
+      expect(field.text).toBe("abc");
+      type(field, "\x1a");
+      expect(field.text).toBe("ab");
+    });
+
+    it("starts a new undo step with the typing that follows replacing the text", () => {
+      const field = new Field("a");
+      type(field, "b");
+      field.text = "xyz";
+      type(field, "c");
+
+      expect(field.text).toBe("xyzc");
+      type(field, "\x1a");
+      expect(field.text).toBe("xyz");
+      type(field, "\x1a");
+      expect(field.text).toBe("ab");
+    });
+
     it("takes a paste whole: lines in a field of many, spaces in a field of one", () => {
       const many = new Field("", true);
       type(many, "\x1b[200~one\r\ntwo\x1b[201~");

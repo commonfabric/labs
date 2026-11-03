@@ -83,12 +83,28 @@ export class Writes {
     return this.#saved.drafts[key];
   }
 
-  /** Keeps `fields` as the draft `key` names, begun from `base`. */
-  keepDraft(key: string, fields: string[], base: string): void {
+  /**
+   * Keeps `fields` as the draft `key` names, begun from `base`, a version
+   * to be written under `invocation`, or under one of its own; keeping the
+   * version already kept changes nothing.
+   */
+  keepDraft(
+    key: string,
+    fields: string[],
+    base: string,
+    invocation = `topics-${crypto.randomUUID()}`,
+  ): void {
+    const kept = this.#saved.drafts[key];
+    if (
+      kept !== undefined && kept.base === base &&
+      kept.fields.length === fields.length &&
+      kept.fields.every((field, index) => field === fields[index])
+    ) return;
     this.#saved.drafts[key] = {
       fields,
       base,
-      at: this.#stamp(key, this.#saved.drafts[key]?.at),
+      invocation,
+      at: this.#stamp(key, kept?.at),
     };
     this.#save(this.#saved);
   }
@@ -118,13 +134,14 @@ export class Writes {
   }
 
   /**
-   * Makes `request`, signed as `agentName`, under an invocation of its own,
-   * after any write already under way; the draft `key` names, which it
-   * saves, becomes part of the pending write.
+   * Makes `request`, signed as `agentName`, after any write already under
+   * way, under the invocation of the version of the draft `key` names that
+   * it saves, which becomes part of the pending write, or under one of its
+   * own.
    */
   write(request: WriteRequest, agentName: string, key?: string): void {
-    const invocation = `topics-${crypto.randomUUID()}`;
     const draft = key === undefined ? undefined : this.#saved.drafts[key];
+    const invocation = draft?.invocation ?? `topics-${crypto.randomUUID()}`;
     this.#saved.pending[invocation] = {
       request,
       agentName,
@@ -240,17 +257,24 @@ export class Writes {
         // Counted as the write stands now, since another browser may have
         // made an attempt of its own meanwhile.
         if (pending.attempts === 1) {
-          // It was never made, so its text is a draft again, unless a newer
-          // draft has taken its place.
+          // It was never made, so its text is a draft again, to be written
+          // under the same invocation, unless a newer draft has taken its
+          // place.
           this.forget(invocation);
           const draft = pending.draft;
-          if (draft !== undefined && this.draft(draft.key) === undefined) {
-            this.keepDraft(draft.key, draft.fields, draft.base);
+          const newer = draft !== undefined &&
+            this.draft(draft.key) !== undefined;
+          if (draft !== undefined && !newer) {
+            this.keepDraft(draft.key, draft.fields, draft.base, invocation);
           }
           this.#tell({
             kind: "note",
             text: `Could not finish ${what}: ${firstLine(outcome.message)}` +
-              (draft === undefined ? "" : " Your draft is kept."),
+              (draft === undefined
+                ? ""
+                : newer
+                ? " A newer draft of it is kept."
+                : " Your draft is kept."),
             error: true,
           });
           return;
@@ -299,9 +323,11 @@ export class Writes {
  * file since: the earliest start, the latest reading of each Topic, and of
  * each draft and pending write the newer of the two, ours where they
  * tie, unless either threw away that version of it or a newer one. Our
- * settings win.
+ * settings win, but for a name to sign with that only theirs has.
  */
 export function mergeSaved(theirs: Saved, ours: Saved): Saved {
+  // A name is never taken back once given, so either one's is kept.
+  const agentName = ours.agentName ?? theirs.agentName;
   const dropped = { ...theirs.dropped };
   for (const [key, entry] of Object.entries(ours.dropped)) {
     const other = dropped[key];
@@ -335,7 +361,7 @@ export function mergeSaved(theirs: Saved, ours: Saved): Saved {
     drafts: newest(theirs.drafts, ours.drafts),
     pending: newest(theirs.pending, ours.pending),
     dropped,
-    ...(ours.agentName === undefined ? {} : { agentName: ours.agentName }),
+    ...(agentName === undefined ? {} : { agentName }),
     hideSettled: ours.hideSettled,
   };
 }

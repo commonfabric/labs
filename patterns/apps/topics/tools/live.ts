@@ -94,9 +94,10 @@ async function follow(
   // Watches afresh what the copy holds or knows to be missing, where entries
   // stop leading anywhere, and `also`.
   // The first watch declares the revisions the copy holds, with those of
-  // the documents that ride along, a content-addressed one or a piece, as
-  // many as one request may, so that the server sends only what moved; the
-  // rest go in watches of their own.
+  // the documents it holds for their revision alone and so does not watch,
+  // content-addressed ones no Topic read and pieces, as many as one request
+  // may, so that the server sends only what moved; the rest go in watches
+  // of their own.
   const rewatch = async (also: readonly string[] = []) => {
     watched = new Set([...heldContent(data), ...absent, ...waiting, ...also]);
     const all = [...watched];

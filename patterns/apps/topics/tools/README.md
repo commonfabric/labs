@@ -189,7 +189,9 @@ person has not read, which **View ▸ Mark all read** clears, is remembered
 between runs, along with drafts, writes not yet known to have landed, and the
 name writes are signed with, in a file under `$XDG_STATE_HOME` (or
 `~/.local/state`) beside the invocation session (`browse.ts`), readable only by
-its owner. Each change to a draft or a pending write stamps it later than any
+its owner. A Topic's activity is the `lastActivityAt` stored on it, which, as
+the Topics README says, is reliable once every writer runs the current Topic
+module. Each change to a draft or a pending write stamps it later than any
 version before it, and one thrown away is remembered by the stamp of the version
 thrown away. Each save takes a lock beside the file and merges what another
 browser saved there meanwhile, keeping the newer of each draft and pending

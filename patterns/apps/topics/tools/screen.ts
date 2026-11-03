@@ -255,9 +255,10 @@ function listRows(
       span(" ", { bg }),
       ...fit(
         [
-          span(clip(topic.title, titleWidth), {
+          span(clip(topic.withheld ? "withheld" : topic.title, titleWidth), {
             fg: glow > 0 ? C.fgBright : C.fg,
             bold: glow > 0,
+            italic: topic.withheld,
             bg,
           }),
         ],
@@ -498,7 +499,9 @@ function layOut(
           links + event.other.number,
         ),
         span("  "),
-        span(event.other.title, { fg: C.fgBright }),
+        event.other.withheld
+          ? span("withheld", { fg: C.fgDim, italic: true })
+          : span(event.other.title, { fg: C.fgBright }),
       ];
       return [event.kind === "mention" ? row : struck(row)];
     }

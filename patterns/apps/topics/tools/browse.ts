@@ -68,6 +68,7 @@ export async function browseBoard(
   using _following = await followSaved(
     board.state,
     (theirs) => browser?.reconcile(theirs),
+    (error) => browser?.followFailed(error),
   );
   let failure: { error: unknown } | undefined;
   try {
@@ -111,12 +112,14 @@ export async function browseBoard(
 
 /**
  * Calls `changed` with what is saved at `path` whenever the file changes,
- * until disposed. A version this build cannot read is passed over, as the
- * next save says.
+ * until disposed, or until watching or `changed` fails, which calls
+ * `failed` with what failed. A version this build cannot read is passed
+ * over, as the next save says.
  */
 export async function followSaved(
   path: string,
   changed: (saved: Saved) => void,
+  failed: (error: unknown) => void,
 ): Promise<Disposable> {
   await Deno.mkdir(dirname(path), { recursive: true });
   const watcher = Deno.watchFs(dirname(path), { recursive: false });
@@ -127,7 +130,7 @@ export async function followSaved(
       const theirs = await readSaved(path).catch(() => undefined);
       if (theirs !== undefined) changed(theirs.saved);
     }
-  })();
+  })().catch(failed);
   return { [Symbol.dispose]: () => watcher.close() };
 }
 

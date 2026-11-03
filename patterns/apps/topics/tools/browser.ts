@@ -113,6 +113,14 @@ export interface Draft {
   /** What the board held when the draft began, for a body or a title. */
   base: string;
 
+  /**
+   * The invocation a write saving this version of the draft is made under,
+   * the same in every browser that holds it, so that saving it from two at
+   * once writes it once; a draft saved without one is written under one of
+   * its own.
+   */
+  invocation?: string;
+
   /** When the draft last changed. */
   at: number;
 }
@@ -895,6 +903,18 @@ export class Browser implements BoardView {
 
   said(text: string, error: boolean): void {
     this.#say(text, error);
+  }
+
+  /**
+   * Says that taking in what other browsers save failed with `error`, after
+   * which this one no longer does.
+   */
+  followFailed(error: unknown): void {
+    this.#say(
+      `Stopped taking in what other browsers save: ${describeFailure(error)}`,
+      true,
+    );
+    this.#redraw();
   }
 
   /** Says that saving what the browser remembers failed with `error`. */

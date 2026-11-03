@@ -118,6 +118,18 @@ describe("writes", () => {
           "Your draft is kept.",
         error: true,
       });
+
+      // Saved again as it was, it is the same write, made at last.
+      writes.write(COMMENT, "Sol (agent)", "comment:1");
+      const again = sent[0].invocation;
+      expect(Object.keys(saved.pending)).toEqual([again]);
+      // Newer than the attempt forgotten, which a merge would drop.
+      expect(Object.keys(mergeSaved(saved, saved).pending)).toEqual([again]);
+      await settled();
+      expect(sent.map((s) => s.invocation)).toEqual([
+        sent[0].invocation,
+        sent[0].invocation,
+      ]);
     });
 
     it("keeps a newer draft over the one a failed write gives back", async () => {
@@ -129,6 +141,34 @@ describe("writes", () => {
       await settled();
 
       expect(saved.drafts["comment:1"]?.fields).toEqual(["Newer."]);
+      expect(told.at(-1)?.text).toBe(
+        "Could not finish commenting on top/1: No. A newer draft of it is kept.",
+      );
+    });
+
+    it("saves a version of a draft under one invocation, wherever it is saved from", () => {
+      writes.keepDraft("comment:1", ["Hi."], "");
+      const kept = saved.drafts["comment:1"];
+      writes.keepDraft("comment:1", ["Hi."], ""); // the same version
+      expect(saved.drafts["comment:1"]).toBe(kept);
+      const theirs: Saved = structuredClone(saved);
+      const other = new Writes({
+        saved: theirs,
+        write: () => new Promise(() => {}),
+        save: () => {},
+        persisted: () => Promise.resolve(),
+        now: () => NOW,
+        tell: () => {},
+      });
+
+      writes.write(COMMENT, "Sol (agent)", "comment:1");
+      other.write(COMMENT, "Sol (agent)", "comment:1");
+
+      expect(Object.keys(mergeSaved(theirs, saved).pending)).toEqual([
+        kept?.invocation,
+      ]);
+      writes.keepDraft("comment:1", ["Hi!"], "");
+      expect(saved.drafts["comment:1"]?.invocation).not.toBe(kept?.invocation);
     });
 
     it("keeps a write that may have landed, and settles it under the same invocation", async () => {
@@ -359,6 +399,12 @@ describe("writes", () => {
       }, ours);
 
       expect(newer.drafts["comment:1"]?.fields).toEqual(["New."]);
+    });
+
+    it("keeps the name to sign with that only theirs has", () => {
+      expect(
+        mergeSaved({ ...state(1), agentName: "Them" }, state(1)).agentName,
+      ).toBe("Them");
     });
 
     it("keeps ours of two versions stamped alike", () => {

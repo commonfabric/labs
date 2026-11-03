@@ -753,6 +753,43 @@ describe("watch", () => {
       expect(errors).toEqual([14]);
     });
 
+    it("says a count or a timer as it stood when asked, and clears nothing once undone", () => {
+      const printed: [string, unknown[]][] = [];
+      const record = (as: string) => (...args: unknown[]) =>
+        void printed.push([as, args]);
+      const out = {
+        ...console,
+        info: record("info"),
+        warn: record("warn"),
+        clear: record("clear"),
+        count: record("count"),
+        timeEnd: record("timeEnd"),
+      };
+      const terminal = consoleTerminal(Deno, out);
+      const said: string[] = [];
+      const undo = terminal.hold((text) => said.push(text));
+      out.count("x");
+      out.count("x");
+      out.countReset("x");
+      out.count("x");
+      out.clear();
+      out.time("t");
+      out.timeEnd("t");
+      out.timeEnd("t");
+      undo();
+
+      expect(said.slice(0, 3)).toEqual(["x: 1", "x: 2", "x: 1"]);
+      expect(said[3]).toMatch(/^t: \d+\.\d{3}ms$/);
+      expect(said[4]).toBe("Timer 't' does not exist");
+      expect(printed.map(([as, [line]]) => [as, line])).toEqual([
+        ["info", "x: 1"],
+        ["info", "x: 2"],
+        ["info", "x: 1"],
+        ["info", said[3]],
+        ["warn", "Timer 't' does not exist"],
+      ]);
+    });
+
     it("writes all of a text however little each write takes, and hands on size, raw mode, input, and resizes", () => {
       const written: number[] = [];
       const raw: boolean[] = [];

@@ -570,7 +570,10 @@ export type LabelDisplayFit = (label: IFCLabel) => boolean;
  * The fit of a display that no authored policy covers, whose audience is
  * `owner` (§8.10.6): a label fits the default display ceiling built for
  * that audience, atom by atom, without the exchange rules that would admit
- * a space the owner reads, so it is never wider than a render's. With no
+ * a space the owner reads, so it is never wider than a render's. A clause
+ * of alternatives fits only as a whole, as an atom of the ceiling, not as
+ * one of its alternatives would, so such a clause naming the owner among
+ * others is withheld where a render with a resolver could show it. With no
  * owner, only a label naming no one fits, which any display may show. A
  * label too malformed to fit at all does not fit.
  */

@@ -101,7 +101,7 @@ describe("browse", () => {
       {
         using _following = await followSaved(path, (saved) => {
           if (saved.drafts["new"] !== undefined) heard.resolve(saved);
-        });
+        }, (error) => heard.reject(error));
         const keeper = new Keeper(path, () => 10);
         keeper.save({
           ...state(1),
@@ -114,6 +114,19 @@ describe("browse", () => {
           "B",
         ]);
       }
+    });
+
+    it("calls back with what failed once taking in a save fails", async () => {
+      const path = join(dir, "state", "saved.json");
+      const failed = Promise.withResolvers<unknown>();
+      using _following = await followSaved(path, () => {
+        throw new Error("Reconciling failed.");
+      }, failed.resolve);
+      const keeper = new Keeper(path, () => 10);
+      keeper.save(state(1));
+      await keeper.settled();
+
+      expect(await failed.promise).toEqual(new Error("Reconciling failed."));
     });
   });
 
