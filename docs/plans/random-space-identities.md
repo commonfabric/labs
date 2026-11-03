@@ -158,13 +158,15 @@ in this order, each step a change of its own:
    space whose access-control document holds a deletion tombstone, in every
    mode. So is the serving loop's: it starts no tenure for a deleted space,
    ends one on the deletion, and starts no further outbox row.
-6. **The server admits the deletion commit.** Compaction's refusal of a
-   deletion tombstone names reaping in the same change. Once a deletion has
-   been committed, rolling a server back to a release from before step 5 is not
-   available: such a release reads the deletion tombstone as a malformed list,
-   which a service identity may repair, and a repair would write an access list
-   over it and so undo the deletion. Nor does an operator repair an
-   access-control document whose value is a deletion tombstone.
+6. **The server admits the deletion commit.** Done: the Memory server admits a
+   sole member's deletion and revokes the space's sessions with the reason
+   `deleted`. Compaction's refusal of a deletion tombstone names reaping in the
+   same change. Once a deletion has been committed, rolling a server back to a
+   release from before step 5 is not available: such a release reads the
+   deletion tombstone as a malformed list, which a service identity may repair,
+   and a repair would write an access list over it and so undo the deletion. Nor
+   does an operator repair an access-control document whose value is a deletion
+   tombstone.
 7. **`cf space delete` and `cf space reap`.**
 
 ### In other repositories

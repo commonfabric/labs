@@ -154,8 +154,7 @@ most-recently-used (MRU) ordering:
   gives for `markDeleted`. The picker lists a deleted profile apart, by its
   link and marked deleted, with no Restore. It shows no name, since a
   profile's name is kept in its own space, which is gone. `restoreProfile`
-  refuses a deleted profile. Deleting a space is not implemented yet, and
-  neither is this.
+  refuses a deleted profile. None of this is implemented yet.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with

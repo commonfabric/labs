@@ -520,11 +520,8 @@ successor tenure could have it admitted.
   such as a failure notice or a row's retirement, are refused like any other
   commit to the space, and the drain stops there too.
 
-The serving loop does all of this except hear of a deletion through a
-cross-space replica's revocation: the memory server does not yet revoke a
-deleted space's sessions with the reason `deleted`. Nor does it yet admit the
-commit that deletes a space, so nothing produces a deletion tombstone, and none
-of this is reached in practice.
+The serving loop does all of this. A cross-space replica's session is revoked
+with the reason `deleted` as every session on the space is.
 
 ## 3. The loop, normatively
 
