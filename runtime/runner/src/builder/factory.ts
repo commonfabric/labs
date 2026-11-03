@@ -96,6 +96,7 @@ import { resultOwnerOf } from "./result-owner-of.ts";
 import {
   spaceAccess,
   spaceAccessOf,
+  spaceDeleted,
   spaceMembers,
   spaceOf,
 } from "./space-access.ts";
@@ -332,6 +333,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccessOf,
     spaceMembers,
     spaceOf,
+    spaceDeleted,
     grantSpaceAccess,
     revokeSpaceAccess,
 

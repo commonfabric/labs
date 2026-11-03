@@ -10,6 +10,7 @@
 
 import { hashStringOf } from "@commonfabric/data-model";
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   inspectProfileSpaceRoot,
   listedProfiles,
@@ -354,7 +355,7 @@ export async function profileSpaceRoot(
           ...home,
           status: "failed",
           action: "none",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
       } finally {
         await pieces?.dispose();

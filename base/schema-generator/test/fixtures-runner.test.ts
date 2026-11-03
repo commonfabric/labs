@@ -19,6 +19,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
@@ -128,9 +129,7 @@ defineFixtureSuite<SchemaResult, string>({
       expectedValue = decodeGolden(expectedText);
     } catch (error) {
       throw new Error(
-        `Golden decoding failed for ${fixture.id}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Golden decoding failed for ${fixture.id}: ${describeFailure(error)}`,
       );
     }
 

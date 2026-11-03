@@ -4,6 +4,7 @@ import * as path from "@std/path";
 import { LaunchOptions } from "@astral/astral";
 import { astralBinaryPath } from "@commonfabric/integration/astral-adapter";
 import { build } from "@commonfabric/felt";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 // These configurations can be applied
 // by placing a `deno-web-test.config.ts` in package root.
@@ -144,7 +145,7 @@ export const getConfig = async (projectDir: string): Promise<Config> => {
   try {
     config = (await import(configPath)).default;
   } catch (cause) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
+    const detail = describeFailure(cause);
     throw new Error(
       `Unable to import ${configPath}: ${detail}`,
       { cause },

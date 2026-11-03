@@ -16,6 +16,7 @@
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { handleTokensIn } from "../../console/steps.ts";
@@ -1188,7 +1189,7 @@ const handleDiscipline: AuditCheck = {
         evidence.push({
           artifact: "run-state.json",
           pointer: "handleTable",
-          detail: error instanceof Error ? error.message : String(error),
+          detail: describeFailure(error),
         });
       }
     }
@@ -2189,7 +2190,7 @@ export const auditRunFamily = (
         outcome = {
           verdict: "inconclusive",
           message: `the check itself failed on this run: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
         };
       }

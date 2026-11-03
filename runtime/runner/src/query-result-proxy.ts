@@ -16,6 +16,7 @@ import {
   type IExtendedStorageTransaction,
   type IReadOptions,
 } from "./storage/interface.ts";
+import { isSingleReadTx } from "./storage/extended-storage-transaction.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
@@ -291,6 +292,18 @@ export function createQueryResultProxy<T>(
 }
 
 /**
+ * The transaction a cell minted from a view binds to: the one the view was made
+ * against, unless a read opened that one for itself, as `Cell.get()` does for a
+ * caller with no open transaction. Such a cell outlives the read and binds to
+ * none (see `markSingleReadTx()`).
+ */
+function txForMintedCell(
+  tx: IExtendedStorageTransaction | undefined,
+): IExtendedStorageTransaction | undefined {
+  return tx !== undefined && isSingleReadTx(tx) ? undefined : tx;
+}
+
+/**
  * Whether `member`, found under `prop` on a `FabricInstance`, is the generic
  * one the instance inherits unchanged from `Object.prototype`. A class that
  * overrides one of those names supplies a different function, and is not.
@@ -305,10 +318,10 @@ function isGenericObjectMember(prop: string, member: unknown): boolean {
  *
  * Reads go through `readTx()`: the transaction fixed at creation when
  * `pinned`, and one resolved per access otherwise. Cell minting goes through
- * `tx` — the transaction the caller actually supplied, which is `undefined`
- * when they supplied none. Every write trap refuses. The proxy cache is keyed
- * on `viewTx`, the transaction the proxies in it actually read through, so a
- * cached proxy is never handed to a caller reading through a different one.
+ * `txForMintedCell(tx)`: the transaction the caller actually supplied, which is
+ * `undefined` when they supplied none. Every write trap refuses. The proxy cache
+ * is keyed on `viewTx`, the transaction the proxies in it actually read through,
+ * so a cached proxy is never handed to a caller reading through a different one.
  *
  * Every trap that answers for the document first reads the current value
  * through `currentValue()`, which also checks that the document still holds
@@ -430,7 +443,14 @@ function createViewProxy<T>(
   // behind a stream holds no value to read.
   if (ContextualFlowControl.declaresStream(link.schema)) {
     return remember(
-      createCell(runtime, link, tx, false, "stream", cfcLabelView) as T,
+      createCell(
+        runtime,
+        link,
+        txForMintedCell(tx),
+        false,
+        "stream",
+        cfcLabelView,
+      ) as T,
     );
   }
 
@@ -450,7 +470,14 @@ function createViewProxy<T>(
   // schema to lose the asCell stream information.
   if (isStreamValue(value)) {
     return remember(
-      createCell(runtime, link, tx, false, "stream", cfcLabelView) as T,
+      createCell(
+        runtime,
+        link,
+        txForMintedCell(tx),
+        false,
+        "stream",
+        cfcLabelView,
+      ) as T,
     );
   }
 
@@ -637,7 +664,14 @@ function createViewProxy<T>(
         // transaction has finished still names its cell.
         if (prop === toCell) {
           return () =>
-            createCell(runtime, link, tx, false, undefined, cfcLabelView);
+            createCell(
+              runtime,
+              link,
+              txForMintedCell(tx),
+              false,
+              undefined,
+              cfcLabelView,
+            );
         }
 
         verifyKind();

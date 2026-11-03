@@ -619,25 +619,26 @@ describe("AppView collection members", () => {
     }
   });
 
-  it("cites a space by name only where a page address keeps the name as written", async () => {
-    // A page URL percent-encodes a space character and a non-ASCII one, and
-    // resolves a dot segment away; the page reader takes an escaped `@` at
-    // the head of a space for its mark, and a name that is `..` reaches the
-    // page the segments after it name. Each such name would open another
-    // space, so each is cited by the DID it resolved to. A URL keeps the
-    // escape in the last name as written, and both readers read it back as
-    // that name, so it is cited by it.
+  it("cites a space by name only where both readers read the name back as written", async () => {
+    // The page reader decodes the percent-encoding a page URL gives a space
+    // character and a non-ASCII one, so both readers read the first three
+    // names back as written, and each is cited by it. A page URL resolves a
+    // dot segment away, so a name that is `..` reaches the page the segments
+    // after it name; the page reader takes an escaped `@` at the head of a
+    // space for its mark, and decodes the escape in the last name, which the
+    // grammar keeps. Each of those names would open another space, so each is
+    // cited by the DID it resolved to.
 
     const restore = installBrowserGlobals();
     try {
       const { XAppView } = await import("../src/views/AppView.ts");
       const cases = [
-        { spaceName: "demo space", cited: SPACE },
-        { spaceName: "my space", cited: SPACE },
-        { spaceName: "caf\u00e9", cited: SPACE },
+        { spaceName: "demo space", cited: "demo space" },
+        { spaceName: "my space", cited: "my space" },
+        { spaceName: "caf\u00e9", cited: "caf\u00e9" },
         { spaceName: "..", cited: SPACE },
         { spaceName: "%40demo", cited: SPACE },
-        { spaceName: "demo%20space", cited: "demo%20space" },
+        { spaceName: "demo%20space", cited: SPACE },
       ];
       const outcomes = [];
       for (const { spaceName } of cases) {

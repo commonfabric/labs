@@ -69,6 +69,7 @@ describe("prompt-loop-empty-reply", () => {
         });
         const loop = new CfHarnessPromptLoop({
           engine,
+          allowedToolIds: [],
           apiKey: "fictional-key",
           fetchFn: () => {
             requests++;
@@ -140,6 +141,7 @@ describe("prompt-loop-empty-reply", () => {
       });
       const loop = new CfHarnessPromptLoop({
         engine,
+        allowedToolIds: [],
         apiKey: "fictional-key",
         fetchFn: () =>
           Promise.resolve(
@@ -305,7 +307,11 @@ describe("prompt-loop-empty-reply", () => {
             credentialOwnerKey: "fictional-owner",
             artifactStore,
           });
-          const loop = new CfHarnessPromptLoop({ engine, modelClient });
+          const loop = new CfHarnessPromptLoop({
+            engine,
+            modelClient,
+            allowedToolIds: [],
+          });
           const run = loop.runPrompt({ prompt: "Reply briefly." });
           if (content.trim().length === 0) {
             await expect(run).rejects.toMatchObject({

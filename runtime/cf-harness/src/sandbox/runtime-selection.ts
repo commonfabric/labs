@@ -19,6 +19,7 @@
 
 import { isAbsolute, join, resolve } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   HarnessControlError,
   harnessRecordedRunRefusal,
@@ -823,9 +824,7 @@ const locateDarwinStore = (
     canonical = canonicalHostPath("the native store", written);
   } catch (error) {
     throw refusal(
-      `its store cannot be located: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `its store cannot be located: ${describeFailure(error)}`,
       `Set \`${CFC_VM_HOME_ENV}\` to the path the store is at`,
     );
   }

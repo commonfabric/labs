@@ -1490,7 +1490,10 @@ describe("agent runner", () => {
     };
 
     for (
-      const cleanupFailure of [new Error("cleanup error"), "cleanup string"]
+      const [cleanupFailure, described] of [
+        [new Error("cleanup error"), "cleanup error"],
+        ["cleanup string", "cleanup string"],
+      ] as const
     ) {
       const registrations: unknown[] = [];
       const reports: string[] = [];
@@ -1520,11 +1523,7 @@ describe("agent runner", () => {
       expect(registrations[0]).not.toBeUndefined();
       expect(registrations[1]).toBeUndefined();
       expect(reports).toContain(
-        `agent runner: could not clear a failed registration: ${
-          cleanupFailure instanceof Error
-            ? cleanupFailure.message
-            : cleanupFailure
-        }`,
+        `agent runner: could not clear a failed registration: ${described}`,
       );
     }
   });

@@ -108,6 +108,7 @@ import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -591,22 +592,14 @@ export async function withRuntimeCleanupOnFailure<T>(
     if (closeNow) {
       await closeNow().catch((disposeError) => {
         report(
-          `loadPieces storage cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces storage cleanup failed: ${describeFailure(disposeError)}`,
         );
       });
     }
     await runtime.dispose().catch(
       (disposeError) => {
         report(
-          `loadPieces cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces cleanup failed: ${describeFailure(disposeError)}`,
         );
       },
     );
@@ -753,9 +746,7 @@ export async function loadPieces(
               navigateLine(`navigateTo new piece id ${id}`);
             } catch (e) {
               navigateFailure(
-                `navigateTo callback error: ${
-                  e instanceof Error ? e.message : String(e)
-                }`,
+                `navigateTo callback error: ${describeFailure(e)}`,
               );
             }
           },
@@ -810,9 +801,7 @@ export async function loadPieces(
       );
     } catch (error) {
       (output.report ?? console.warn)(
-        `Could not load the profile delegations: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not load the profile delegations: ${describeFailure(error)}`,
       );
     }
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
@@ -913,7 +902,7 @@ export async function listPieces(
         return {
           id: piece.id,
           reference,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -961,7 +950,7 @@ export async function listSpaceSlugs(
       } catch (err) {
         return {
           slug,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -1480,7 +1469,7 @@ export async function searchPieces(
     ) => {
       console.warn(
         `Warning: Could not read ${source} for piece ${pieceId}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     });
@@ -1865,7 +1854,7 @@ async function createWithReceipt(
       throw new Error(
         `Piece creation outcome may be incomplete. Retry the same command ` +
           `with --request-key ${requestKey}. ` +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
         { cause: error },
       );
     }
@@ -1951,7 +1940,7 @@ export async function newPiece(
     }
     throw new Error(
       `Could not initialize the space's default pattern: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
@@ -2221,7 +2210,7 @@ async function updateOnServer(
   } catch (error) {
     refresh = {
       status: "failed",
-      warning: error instanceof Error ? error.message : String(error),
+      warning: describeFailure(error),
     };
   }
   return {
@@ -4511,7 +4500,7 @@ async function buildConnectionMap(
       // Skip pieces that can't be inspected, but include them with no connections
       console.error(
         `Warning: Could not inspect piece ${piece.id}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
       connections.set(piece.id, createPieceConnection(piece));

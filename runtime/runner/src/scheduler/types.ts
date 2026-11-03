@@ -506,6 +506,23 @@ export type QueuedEvent = {
    */
   retryReadinessPending?: boolean;
 
+  /**
+   * The FIFO slot is held while the handler's input presync
+   * (`EventHandler.presyncInputs`) runs. The head parks the queue for that
+   * wait as it does for a loading handler, so a later event cannot overtake
+   * it, and the pass that started the presync ends, so the derivations the
+   * scheduler owes still run while it waits. The presync's settlement clears
+   * the flag and queues an execution.
+   */
+  presyncPending?: boolean;
+
+  /**
+   * The implementation and payload the head's presync covered. A head whose
+   * selected implementation or payload differs is presynced again before it
+   * dispatches.
+   */
+  presynced?: { readonly implementation: EventHandler; readonly event: any };
+
   /** Internal exactly-once guard for terminal pre-dispatch drops. */
   finalOutcomeNotified?: boolean;
 

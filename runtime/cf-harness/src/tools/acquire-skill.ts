@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { stampExternalFetchIngest } from "@commonfabric/runner/cfc";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 
@@ -174,7 +175,7 @@ export const acquireSkillToolDescriptor: HarnessToolDescriptor = {
 
 const safeErrorMessage = (error: unknown): string =>
   sanitizeRegistryString(
-    error instanceof Error ? error.message : String(error),
+    describeFailure(error),
   );
 
 const operationalAcquisitionCodes: ReadonlySet<

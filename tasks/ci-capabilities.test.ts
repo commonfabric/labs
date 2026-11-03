@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   BACKGROUND_LOG_ENV,
   READY_MARKER,
@@ -14,7 +15,6 @@ import {
   type CapabilityId,
   COMPILE_CACHE_FILE,
   type ExecOptions,
-  messageOf,
   openCapabilities,
   resolveCapabilities,
   type Spawn,
@@ -500,7 +500,7 @@ describe("opening a capability on a machine that answers", () => {
     try {
       await work;
     } catch (error) {
-      return messageOf(error);
+      return describeFailure(error);
     }
     throw new Error("Expected the call to throw, and it returned instead.");
   }
@@ -579,7 +579,7 @@ describe("opening a capability on a machine that answers", () => {
       });
       await opened.close();
     } catch (error) {
-      said.push(`threw ${error instanceof Error ? error.message : error}`);
+      said.push(`threw ${describeFailure(error)}`);
     } finally {
       await Deno.remove(root, { recursive: true });
     }

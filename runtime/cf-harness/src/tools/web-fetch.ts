@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
@@ -365,7 +366,7 @@ export const createWebFetchTool = (
           outputId,
           url: resultUrl,
           code: isAbortError(error) ? "timeout" : "fetch_failed",
-          message: error instanceof Error ? error.message : String(error),
+          message: describeFailure(error),
           fetchedAt,
         });
       } finally {
@@ -552,7 +553,7 @@ const resolveValidatedPublicAddresses = async (
       ok: false,
       message:
         `web_fetch host ${hostname} could not be resolved to a public address: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
     };
   }
@@ -645,7 +646,7 @@ async (input, init = {}) => {
       if (isAbortError(error)) {
         throw error;
       }
-      errors.push(error instanceof Error ? error.message : String(error));
+      errors.push(describeFailure(error));
     }
   }
   throw new Error(

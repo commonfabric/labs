@@ -57,6 +57,10 @@ space remain distinct entries. For container rooms, explicit
 `roomMembership` choices take precedence over discovery: an archived
 conversation stays forgotten even while a saved container still declares it.
 A saved explicit entry remains listed if the container changes its declaration.
+A saved explicit entry is listed once its room's records say it is a room, as
+a catalog entry's room is: one whose room this replica can't serve lists
+nothing until it can be served, and holds back no other room, nor the `people`
+the listed rooms' rosters hold.
 Forgetting a declared conversation never archives its container.
 
 Joining a record-backed standalone room registers its own space even when a

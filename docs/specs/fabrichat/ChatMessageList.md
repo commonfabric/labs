@@ -29,7 +29,8 @@ interface ChatMessageList {
 ## Fields
 
 - **`count`** is how many messages the room holds, obliterated tombstones
-  included.
+  included, and any it [can't read](ChatMessage.md#a-message-the-room-cant-read)
+  left out.
 - **`oldestAt`** and **`newestAt`** are the first and last messages' `sentAt`,
   in the order the room recorded them, and are absent while the room has no
   messages.

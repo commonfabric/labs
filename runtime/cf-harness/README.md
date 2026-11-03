@@ -1372,17 +1372,17 @@ otherwise, with the status and selected headers.
 
 A final assistant reply must contain non-whitespace text. A reply with no text
 and no function tool calls fails the run with `provider-unavailable`, including
-when the provider returned HTTP 200. The one exception is a run that has
-`submit_result`: when a turn that still offers tools follows, its first such
-reply is answered with a host notice asking it to submit the answer, or why it
-cannot be given, and only a second fails it. Tool-only replies continue through
-normal tool dispatch. The normalized assistant message stays in the transcript,
-and the run report retains the model attempts and token usage. This failure does
-not trigger a retry. A Codex attempt that reached its terminal response records
-that response's `status` as `terminalStatus` and the type of each of its output
-items as `outputItemTypes`, which together say whether a blank reply was a
-`completed` response with an empty message, a reasoning item alone, or no item
-at all.
+when the provider returned HTTP 200. A run that has `submit_result` or
+`finish_task` gets one completion notice per prompt-loop invocation when a turn
+that still offers tools follows. The notice asks it to call `submit_result` if
+available, otherwise `finish_task`, with the answer or why it cannot be given. A
+second blank reply fails the run. Tool-only replies continue through normal tool
+dispatch. The normalized assistant message stays in the transcript, and the run
+report retains the model attempts and token usage. This failure does not trigger
+a retry. A Codex attempt that reached its terminal response records that
+response's `status` as `terminalStatus` and the type of each of its output items
+as `outputItemTypes`, which together say whether a blank reply was a `completed`
+response with an empty message, a reasoning item alone, or no item at all.
 
 A blank reply also writes `model-turn-<n>-<uuid>-empty-reply.json` beside the
 run report. The UUID preserves each reply when a resumed invocation repeats a
@@ -2119,11 +2119,11 @@ not grant access to another store.
 
 The action path is checked before collecting execution details: a read-only
 mailbox does not establish the ability to send, and an unavailable send path
-calls for an upfront limitation and an offered draft. The guidance favors the
-closest achievable outcome without silently substituting data or claiming the
-original task is complete. Unavailable or withheld evidence remains unknown; the
-agent follows the not-checked verification rule and never asks for a nonexistent
-permission to release it.
+calls for an upfront limitation and an offered draft. The guidance states
+capability limits and offers useful achievable work without silently
+substituting a source or claiming the original goal is complete. Unavailable or
+withheld evidence remains unknown; the agent follows the not-checked
+verification rule and never asks for a nonexistent permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
 for a specific remaining uncertainty, with `followUpTo` naming the research

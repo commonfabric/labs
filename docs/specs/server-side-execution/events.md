@@ -258,7 +258,10 @@ handler fires
   off the queue first, as the flush deadline's purge of an in-process
   leftover does, and each queues that pass; a head the event phases
   drop on their own leaves its park to end at its loads' release, which
-  queues it then. A head that
+  queues it then. A head held for its handler's input presync
+  (scheduler-v2 README §7.5) ends the pass the same way; the hold ends
+  when the presync settles or when a drop takes the head off the queue,
+  and each queues that pass. A head that
   parks before the pass ran any handler leaves the settle to run as
   before. The scheduler is not idle while a head is parked, so a serving
   cycle whose flush deadline comes before the park ends commits the

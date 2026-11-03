@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -5409,7 +5410,7 @@ const applyOperation = (
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec ${operation.codec} rejected the payload: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }
@@ -5436,7 +5437,7 @@ const applyOperation = (
     if (cause instanceof ProtocolError) throw cause;
     throw new OpCodecError(
       `operation codec produced an invalid Fabric value: ${
-        cause instanceof Error ? cause.message : String(cause)
+        describeFailure(cause)
       }`,
     );
   }

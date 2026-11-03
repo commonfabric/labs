@@ -31,6 +31,7 @@
 // effects" table (the effect half never touches the store), no delivery
 // of a withdrawn contribution's appends (the wave folds survivors only).
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Engine } from "@commonfabric/memory/v2/engine";
 import {
   deleteExecutionOutboxRow,
@@ -650,7 +651,7 @@ export class SpaceOutbox {
           this.#stats.outbox.failed += 1;
           const noticed = await this.#writeDeliveryFailureNotice(
             row,
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           );
           if (!noticed) {
             // The notice could not be written durably: KEEP the row so

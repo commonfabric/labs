@@ -21,6 +21,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   cfcLabelAtomTypes,
@@ -704,7 +705,7 @@ const readDatabaseFill = async (
       fill.push({
         table,
         ...rule,
-        unread: error instanceof Error ? error.message : String(error),
+        unread: describeFailure(error),
       });
       continue;
     }

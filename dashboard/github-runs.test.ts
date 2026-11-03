@@ -10,6 +10,7 @@ import {
   RUN_LIST_ACCESS,
 } from "./lib.ts";
 import { RELAY_VOUCH_MS } from "./github-webhooks.ts";
+import { RunListFile } from "./run-list-file.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 
 const REPO = "example/repo";
@@ -1098,6 +1099,22 @@ describe("github-runs", () => {
           );
         });
 
+        it("returns each run with only the first line of its head commit's message", async () => {
+          const github = new FakeGitHub([
+            run(3, { head_commit: { message: "Fix it\n\nAt length." } }),
+            run(2, { head_commit: { message: "One line" } }),
+            run(1),
+          ]);
+
+          const read1 = await read(new RunLists(), github);
+
+          expect(read1.map((held) => held.head_commit)).toEqual([
+            { message: "Fix it" },
+            { message: "One line" },
+            null,
+          ]);
+        });
+
         it("passes run list access with every run list it asks for", async () => {
           const seen: GitHubRequestOptions[] = [];
           const github = new FakeGitHub(runs(30, 1));
@@ -1581,6 +1598,36 @@ describe("github-runs", () => {
 
             expect(ids(read2)).toEqual(ids(runs(305, 1)));
             expect(github.pages).toEqual(["1@20"]);
+          });
+
+          it("keeps only the first line of the head commit message of each run the file holds", async () => {
+            const described = runs(250, 1).map((held) =>
+              run(held.id, {
+                name: "CI",
+                path: `.github/workflows/${WORKFLOW}`,
+                head_commit: { message: `Change ${held.id}\n\nAt length.` },
+              })
+            );
+            await new RunListFile(file).save(() => [{
+              repo: REPO,
+              workflow: WORKFLOW,
+              runs: described,
+              complete: true,
+              drift: 0,
+              readAt: Date.now(),
+              usedAt: Date.now(),
+              readers: [{ reader: "reader", id: 1, at: Date.now() }],
+            }], 0);
+            const github = new FakeGitHub(described);
+
+            const read1 = await read(new RunLists(file), github, {
+              until: (held) => held.id === 10,
+            });
+
+            expect(github.pages).toEqual(["1@20"]);
+            expect(read1.map((held) => held.head_commit)).toEqual(
+              ids(runs(250, 10)).map((id) => ({ message: `Change ${id}` })),
+            );
           });
 
           it("logs a write of the file that fails, and writes it again after the next reading", async () => {

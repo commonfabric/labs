@@ -491,16 +491,16 @@ commit and every commit carrying delegated carriage included, with a
 `ProtocolError` naming the deletion, and that refusal is deterministic: no
 successor tenure could have it admitted.
 
-- Activation reads the space's access list before it acquires a lease. When
-  it finds a tombstone there, it starts no tenure, and §1's re-evaluation
+- Activation reads the space's access list before it acquires a lease. When it
+  finds a deletion tombstone there, it starts no tenure, and §1's re-evaluation
   starts none for that space again, whatever demand it sees.
 - A tenure reads and commits its own space engine-direct, and holds no session
-  on it, so no session revocation tells it of the deletion. What tells it is
-  the host's notice that an admitted commit wrote the space's ACL document
-  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs.
-  On that notice for its own space the SpaceServer reads the ACL document, and
-  when it holds a tombstone it ends the tenure for good. It stops committing at
-  once, as on a lease loss, disposes of the runtime, releases the lease, and
+  on it, so no session revocation tells it of the deletion. What tells it is the
+  host's notice that an admitted commit wrote the space's ACL document
+  (`noteSpaceAclChanged()`), which the host fans out to every tenure it runs. On
+  that notice for its own space the SpaceServer reads the ACL document, and when
+  it holds a deletion tombstone it ends the tenure for good. It stops committing
+  at once, as on a lease loss, disposes of the runtime, releases the lease, and
   does not re-acquire it. A refused commit naming the deletion ends it the same
   way, which is the backstop for a deletion committed through another process,
   whose commit the host does not see.
@@ -580,11 +580,13 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // settle that follows (anchor: facade.ts #processExecuteEventPhases):
   // the demanded derivations several events invalidate run once over
   // all of them, which is where a wave of several events coalesces;
-  // a head the preflight parks on its loads behind events the pass
-  // ran ends the pass without its settle, which the pass the park's
-  // end queues runs behind it (the park ends on its loads' release, on
-  // a failed load, or on a drop of the parked head; events.md §2 says
-  // what a deadline that comes first commits), and an event the
+  // a head waiting on loads behind events the pass ran, parked on its
+  // closure's by the preflight or held for its handler's input presync,
+  // ends the pass without its settle, which the pass the wait's end
+  // queues runs behind it (the wait ends on its loads' release, on a
+  // failed load, on the presync's settlement, or on a drop of the
+  // waiting head; events.md §2 says what a deadline that comes first
+  // commits), and an event the
   // preflight holds for an invalid input ends the run of handlers, so
   // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()

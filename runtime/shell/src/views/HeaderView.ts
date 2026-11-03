@@ -1,6 +1,6 @@
 import type { FavoriteEntry } from "@commonfabric/home-schemas";
 import { type DID, KeyStore } from "@commonfabric/identity";
-import { navigate } from "@commonfabric/navigation";
+import { appViewToUrlPath, navigate } from "@commonfabric/navigation";
 import { hasEntityUriScheme } from "@commonfabric/runner/entity-kind";
 import { type NameSchema, nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
@@ -1103,7 +1103,7 @@ export class XHeaderView extends BaseView {
                 <a
                   class="header-space"
                   href="${this.spaceName
-                    ? `/${this.spaceName}`
+                    ? appViewToUrlPath({ spaceName: this.spaceName })
                     : `/${this.spaceDid ?? ""}`}"
                   @click="${this.#handleSpaceClick}"
                 >${this.#spaceDisplayName}</a>

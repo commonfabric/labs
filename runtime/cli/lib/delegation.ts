@@ -15,6 +15,7 @@ import {
   isCanonicalEd25519DID,
   issueDelegation,
 } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
 import { DelegationStore } from "@commonfabric/runner/storage/delegation-store";
 
@@ -178,7 +179,7 @@ export async function describeDelegationChains(
     try {
       await checkPresentableChain(links, nowSeconds);
     } catch (error) {
-      verified = error instanceof Error ? error.message : String(error);
+      verified = describeFailure(error);
     }
     for (const [link, bytes] of links.entries()) {
       let delegation: Delegation;
@@ -194,7 +195,7 @@ export async function describeDelegationChains(
           subject: null,
           command: "",
           expires: null,
-          verified: error instanceof Error ? error.message : String(error),
+          verified: describeFailure(error),
         });
         continue;
       }
@@ -229,7 +230,7 @@ export async function readDelegationChainFile(
   } catch (error) {
     throw new Error(
       `Could not read the delegation chain file ${path}: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -237,9 +238,7 @@ export async function readDelegationChainFile(
     return decodeDelegationChains(text);
   } catch (error) {
     throw new Error(
-      `${path} is not a delegation chain file: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `${path} is not a delegation chain file: ${describeFailure(error)}`,
     );
   }
 }
@@ -285,7 +284,7 @@ export async function holdDelegationChainFiles(
       try {
         decoded = await checkPresentableChain(chain, nowSeconds);
       } catch (error) {
-        throw refused(error instanceof Error ? error.message : String(error));
+        throw refused(describeFailure(error));
       }
       const { aud } = decoded[decoded.length - 1].payload;
       if (aud !== principal) {
@@ -294,7 +293,7 @@ export async function holdDelegationChainFiles(
       try {
         await add.call(holder, chain);
       } catch (error) {
-        throw refused(error instanceof Error ? error.message : String(error));
+        throw refused(describeFailure(error));
       }
       held += 1;
     }

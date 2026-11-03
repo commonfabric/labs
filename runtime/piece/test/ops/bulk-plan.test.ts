@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   canonicalPieceAddress,
   decodePlan,
@@ -620,7 +621,7 @@ describe("bulk-plan", () => {
       try {
         deriveRollbackPlan(plan, "later");
       } catch (error) {
-        message = error instanceof Error ? error.message : String(error);
+        message = describeFailure(error);
       }
       // Whole words as the message prints them, never a substring mined out
       // of one: what an operator pastes is a token of this text, so a

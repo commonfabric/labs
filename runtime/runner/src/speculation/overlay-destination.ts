@@ -83,6 +83,7 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
@@ -888,7 +889,7 @@ export class SpeculationOverlayDestination
       // catch, entries already collected kept unresolved verdicts and
       // live pending writes forever. Withdraw them and surface a
       // CommitError like any other seal failure.
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = describeFailure(cause);
       result = {
         error: {
           name: "StorageTransactionAborted",

@@ -3,9 +3,11 @@
  * dashboard that restarts reads each list only down to the runs it held
  * before, rather than from the top to wherever its readers need. Processes
  * that share the file lock it while each puts its heads in place of the ones
- * the file holds, and replace it whole. A head taken from the file reads its
- * list from the top until it reaches a run it holds, so any head that was whole
- * when it was saved can be taken, however old.
+ * the file holds, and replace it whole. Each process keeps the heads it last
+ * read or wrote, and parses the file again only once another process has
+ * replaced it. A head taken from the file reads its list from the top until it
+ * reaches a run it holds, so any head that was whole when it was saved can be
+ * taken, however old.
  *
  * Every version of the dashboard reads the file the same way, whichever
  * version wrote it. A run that lacks a field this version reads, or holds one
@@ -16,8 +18,10 @@
  * back. A file that cannot be read at all is replaced.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { GitHubRun } from "./github-runs.ts";
+import { CacheFile } from "./history-files.ts";
 
 /** The head of one workflow's run list, as the file holds it. */
 export interface SavedHead {
@@ -59,16 +63,16 @@ const headKey = (repo: string, workflow: string | number): string =>
 
 /** A file holding the heads of run lists. */
 export class RunListFile {
-  #path: string;
+  #file: CacheFile<ReadonlyMap<string, SavedHead>>;
 
   /** Constructs an instance which keeps heads in the file at `path`. */
   constructor(path: string) {
-    this.#path = path;
+    this.#file = new CacheFile(path);
   }
 
   /** The path of the file. */
   get path(): string {
-    return this.#path;
+    return this.#file.path;
   }
 
   /**
@@ -79,24 +83,21 @@ export class RunListFile {
     repo: string,
     workflow: string | number,
   ): Promise<SavedHead | undefined> {
-    return (await this.#read()).get(headKey(repo, workflow));
+    const head = (await this.#read()).get(headKey(repo, workflow));
+    return head && { ...head, runs: [...head.runs] };
   }
 
   /**
    * Puts the heads `heads` returns in place of the heads of the same lists the
    * file holds, except where the file's head was read from the top of its list
    * more recently, or at the same moment and holds more runs, and replaces the
-   * file with the result, less the heads last used before `since`. `heads` is called once the file is locked, and what it
-   * returns is serialized before anything else runs.
+   * file with the result, less the heads last used before `since`. `heads` is
+   * called once the file is locked, and what it returns is serialized before
+   * anything else runs.
    */
   async save(heads: () => SavedHead[], since: number): Promise<void> {
-    const lock = await Deno.open(`${this.#path}.lock`, {
-      create: true,
-      write: true,
-    });
-    try {
-      await lock.lock(true);
-      const kept = await this.#read();
+    await this.#file.locked(async () => {
+      const kept = new Map(await this.#read());
       for (const head of heads()) {
         if (head.runs.length === 0) continue;
         const key = headKey(head.repo, head.workflow);
@@ -105,62 +106,55 @@ export class RunListFile {
           held === undefined || head.readAt > held.readAt ||
           head.readAt === held.readAt && head.runs.length >= held.runs.length
         ) {
-          kept.set(key, head);
+          kept.set(key, { ...head, runs: [...head.runs] });
         }
       }
-      const saved = [...kept.values()].filter((head) => head.usedAt >= since);
-      const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`;
-      try {
-        // A run's name and path are absent when GitHub sends none, and are
-        // written as null so that every field a run has is in the file.
-        await Deno.writeTextFile(
-          temporary,
-          JSON.stringify(
-            { heads: saved },
-            (_, value) => value === undefined ? null : value,
-          ),
-        );
-        await Deno.rename(temporary, this.#path);
-      } catch (error) {
-        await Deno.remove(temporary).catch(() => {});
-        throw error;
+      for (const [key, head] of kept) {
+        if (head.usedAt < since) kept.delete(key);
       }
-    } finally {
-      lock.close();
-    }
+      // A run's name and path are absent when GitHub sends none, and are
+      // written as null so that every field a run has is in the file.
+      const text = JSON.stringify(
+        { heads: [...kept.values()] },
+        (_, value) => value === undefined ? null : value,
+      );
+      await this.#file.write(text, kept);
+    });
   }
 
   /**
-   * Helper for `load()` and `save()`, which reads the heads the file holds, by
-   * their keys. A file that cannot be read holds none, and the reason it
-   * cannot be read is logged unless it does not exist.
+   * Helper for `load()` and `save()`, which returns the heads the file holds,
+   * by their keys. The heads this instance last read or wrote are returned
+   * while the file is still at that version. A file that cannot be read holds
+   * none, and the reason it cannot be read is logged unless it does not exist.
    */
-  async #read(): Promise<Map<string, SavedHead>> {
-    const heads = new Map<string, SavedHead>();
-    let parsed: unknown;
+  async #read(): Promise<ReadonlyMap<string, SavedHead>> {
     try {
-      parsed = JSON.parse(await Deno.readTextFile(this.#path));
+      return await this.#file.read(headsIn) ?? new Map();
     } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) {
-        console.error(
-          `run lists in ${this.#path} could not be read:`,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
-      return heads;
+      console.error(
+        `run lists in ${this.path} could not be read:`,
+        describeFailure(error),
+      );
+      return new Map();
     }
-    if (!isObjectNotArray(parsed) || !Array.isArray(parsed.heads)) {
-      return heads;
-    }
-    const now = Date.now();
-    for (const value of parsed.heads) {
-      const head = savedHead(value, now);
-      if (head !== undefined) {
-        heads.set(headKey(head.repo, head.workflow), head);
-      }
-    }
-    return heads;
   }
+}
+
+/**
+ * Helper for `RunListFile.#read()`, which returns the heads the JSON `text`
+ * holds, by their keys.
+ */
+function headsIn(text: string): Map<string, SavedHead> {
+  const heads = new Map<string, SavedHead>();
+  const parsed: unknown = JSON.parse(text);
+  if (!isObjectNotArray(parsed) || !Array.isArray(parsed.heads)) return heads;
+  const now = Date.now();
+  for (const value of parsed.heads) {
+    const head = savedHead(value, now);
+    if (head !== undefined) heads.set(headKey(head.repo, head.workflow), head);
+  }
+  return heads;
 }
 
 /** Whether `value` is a whole number of at least `least`. */
@@ -176,7 +170,7 @@ const isNullableString = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
 
 /**
- * Helper for `RunListFile.#read()`, which returns the head `value` holds, cut
+ * Helper for `headsIn()`, which returns the head `value` holds, cut
  * back above its first run that cannot be used or is out of order, or
  * `undefined` when `value` is not a head, records a time later than `now`, or
  * holds no run that can be used.
@@ -223,9 +217,9 @@ function savedHead(value: unknown, now: number): SavedHead | undefined {
 }
 
 /**
- * Helper for `savedHead()`, which returns the run `value` holds, or
- * `undefined` when it lacks a field a run has or holds one that cannot be
- * used.
+ * Helper for `savedHead()`, which returns the run `value` holds, with only the
+ * first line of its head commit's message, or `undefined` when it lacks a
+ * field a run has or holds one that cannot be used.
  */
 function savedRun(value: unknown): GitHubRun | undefined {
   if (!isObjectNotArray(value)) return undefined;
@@ -249,7 +243,7 @@ function savedRun(value: unknown): GitHubRun | undefined {
   const commit = head_commit === null
     ? null
     : isObjectNotArray(head_commit) && typeof head_commit.message === "string"
-    ? { message: head_commit.message }
+    ? { message: firstLine(head_commit.message) }
     : undefined;
   if (
     !isWhole(id, 1) || !isNullableString(name) || !isNullableString(path) ||
@@ -277,4 +271,12 @@ function savedRun(value: unknown): GitHubRun | undefined {
     html_url,
     head_commit: commit,
   } satisfies Record<keyof GitHubRun, unknown>;
+}
+
+/**
+ * Returns the first line of `text` as a string of its own. A string cut from a
+ * longer one keeps the longer one in memory, so the line is copied.
+ */
+export function firstLine(text: string): string {
+  return JSON.parse(JSON.stringify(text.split("\n", 1)[0]));
 }

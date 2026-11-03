@@ -46,7 +46,12 @@ treat the container as admitting others.
 - `room`: the link, so a client can reach the room's own streams.
 - `[VIEWS]`: a `chat` group, the placement's whole data face:
   - `state`: `"member"` (the room space admits the viewer, at any level),
-    `"not-member"`, or `"unavailable"` (the room can't be read right now). A
+    `"not-member"`, `"deleted"` (the room's space is
+    [deleted](../random-space-identities.md#deleting-a-space), so no one can
+    read it again, and every fact read through it is empty), or
+    `"unavailable"` (the room can't be read right now). `spaceDeleted(room)` is
+    read first, and `true` makes the state `"deleted"` whatever the viewer's
+    level, which for a deleted space is `"none"`. A
     member with READ only sees the room but can't send to it (see
     [`ChatRoomOutput`](ChatRoomOutput.md#membership)).
   - `messages` and `canSend`, from the room (see

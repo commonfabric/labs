@@ -20,6 +20,7 @@ import {
   parseLaneArgs,
   profileRoot,
 } from "./ci-lane.ts";
+import { ORDER_JOB_NAME } from "./test-order-tomorrow.ts";
 import { measuredSetDirectory } from "./test-topology/coverage-gates.ts";
 import {
   FULL_LANE_BOUND_SECONDS,
@@ -674,7 +675,9 @@ Deno.test("the plan reaches the lanes as a count, a list of lanes, and arguments
     `echo '${JSON.stringify({ of, args })}'`;
 
   // Anything but a pull request runs everything, a called run included.
-  for (const event of ["push", "workflow_dispatch", "schedule"]) {
+  for (
+    const event of ["push", "workflow_dispatch", "schedule", "workflow_run"]
+  ) {
     const full = await counted(event, answer(3, ["--full"]));
     assertStepCode(full, 0, `a ${event} run's count fails`);
     assertEquals(
@@ -1615,32 +1618,144 @@ Deno.test("test-records-ship forwards its optional variant input", async () => {
   assertStringIncludes(action, 'args+=(--variant "$RESOLVED_VARIANT")');
 });
 
-Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
-  interface Job {
-    if?: string;
-    environment?: string;
-    uses?: string;
-    with?: Record<string, string>;
-    secrets?: unknown;
-    permissions?: Record<string, string>;
-    steps?: { run?: string }[];
-  }
-  interface Workflow {
-    name: string;
-    on: Record<string, unknown>;
-    env?: Record<string, string>;
-    jobs: Record<string, Job>;
-  }
-  const ciText = await workflow("deno.yml");
-  const ci = parseYaml(ciText) as Workflow;
+interface TomorrowJob {
+  name?: string;
+  if?: string;
+  environment?: string;
+  uses?: string;
+  with?: Record<string, string>;
+  secrets?: unknown;
+  permissions?: Record<string, string>;
+  outputs?: Record<string, string>;
+  steps?: { id?: string; run?: string }[];
+}
+
+interface TomorrowWorkflow {
+  name: string;
+  on: Record<string, unknown>;
+  env?: Record<string, string>;
+  concurrency?: { group: string; "cancel-in-progress": boolean };
+  jobs: Record<string, TomorrowJob>;
+}
+
+/**
+ * The value of the expression `expression` given `github`, read as
+ * JavaScript, which agrees with Actions on the comparisons, `&&`, and `||`
+ * these workflows use.
+ */
+function evaluate(expression: string, github: unknown): unknown {
+  return new Function("github", `return (${expression});`)(github);
+}
+
+Deno.test("the run in tomorrow's order runs once a seed, at a green head", async () => {
+  const ci = parseYaml(await workflow("deno.yml")) as TomorrowWorkflow;
   const tomorrow = parseYaml(
     await workflow("test-order-tomorrow.yml"),
-  ) as Workflow;
+  ) as TomorrowWorkflow;
+
+  // It starts each time CI finishes on main, and once a day early on a Pacific
+  // day.
+  assertEquals(tomorrow.on.workflow_run, {
+    workflows: [ci.name],
+    types: ["completed"],
+    branches: ["main"],
+  });
+  assertEquals(tomorrow.on.schedule, [{ cron: "17 11 * * *" }]);
+  assertEquals(Object.keys(tomorrow.on).sort(), [
+    "schedule",
+    "workflow_dispatch",
+    "workflow_run",
+  ]);
+
+  // A run that CI failing or a pull request's CI started skips every job. The
+  // runs that CI passing on main or the schedule started wait for one another,
+  // and the others wait for nothing. Actions reads a property of a missing object as
+  // null, where JavaScript throws, so an event other than `workflow_run`
+  // carries an empty `workflow_run`.
+  const context = (
+    event_name: string,
+    workflow_run: { event?: string; conclusion?: string } = {},
+  ) => ({
+    event_name,
+    workflow: tomorrow.name,
+    run_id: 7,
+    event: { workflow_run },
+  });
+  const passed = context("workflow_run", {
+    event: "push",
+    conclusion: "success",
+  });
+  const failed = context("workflow_run", {
+    event: "push",
+    conclusion: "failure",
+  });
+  const proposed = context("workflow_run", {
+    event: "pull_request",
+    conclusion: "success",
+  });
+  const scheduled = context("schedule");
+  const dispatched = context("workflow_dispatch");
+  const seed = tomorrow.jobs.seed;
+  for (const github of [passed, scheduled, dispatched]) {
+    assertEquals(evaluate(seed.if!, github), true, github.event_name);
+  }
+  for (const github of [failed, proposed]) {
+    assertEquals(evaluate(seed.if!, github), false, github.event_name);
+  }
+  const group = (github: unknown) =>
+    tomorrow.concurrency!.group.replaceAll(
+      /\$\{\{(.*?)\}\}/g,
+      (_, expression: string) => String(evaluate(expression, github)),
+    );
+  assertEquals(group(passed), `${tomorrow.name}-deciding`);
+  assertEquals(group(scheduled), `${tomorrow.name}-deciding`);
+  assertEquals(group(failed), `${tomorrow.name}-7`);
+  assertEquals(group(proposed), `${tomorrow.name}-7`);
+  assertEquals(group(dispatched), `${tomorrow.name}-7`);
+  assertEquals(tomorrow.concurrency!["cancel-in-progress"], false);
+
+  // tasks/test-order-tomorrow.ts decides whether the suites run, and finds
+  // the runs of a seed by the name of their jobs. A run dispatched by hand
+  // runs them without asking.
+  assertEquals(seed.permissions?.actions, "read");
+  assertEquals(seed.outputs?.run, "${{ steps.decide.outputs.run }}");
+  const decide = seed.steps?.find((step) => step.id === "decide")?.run;
+  assert(decide !== undefined, "no step decides whether the suites run");
+  const echo = (answer: string) => `printf '%s\\n' "$@" >&2\necho ${answer}`;
+  const script = "run\n--allow-env\n--allow-net=api.github.com\n" +
+    "tasks/test-order-tomorrow.ts\n";
+  for (const event of ["workflow_run", "schedule"]) {
+    const asked = await runStep(decide, { EVENT: event, SEED: "20261029" }, {
+      deno: echo("false"),
+    });
+    assertStepCode(asked, 0, `a ${event} run's decision fails`);
+    assertEquals(asked.output, "run=false\n");
+    assertEquals(asked.stderr, `${script}20261029\n`);
+  }
+  const forced = await runStep(decide, {
+    EVENT: "workflow_dispatch",
+    SEED: "20261029",
+  }, { deno: echo("false") });
+  assertStepCode(forced, 0, "a dispatched run's decision fails");
+  assertEquals(forced.output, "run=true\n");
+  assertEquals(forced.stderr, "");
+  assertEquals(tomorrow.jobs.ci.if, "needs.seed.outputs.run == 'true'");
+  assertEquals(
+    tomorrow.jobs.ci.name,
+    `${ORDER_JOB_NAME} (\${{ needs.seed.outputs.seed }})`,
+  );
+});
+
+Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
+  const ciText = await workflow("deno.yml");
+  const ci = parseYaml(ciText) as TomorrowWorkflow;
+  const tomorrow = parseYaml(
+    await workflow("test-order-tomorrow.yml"),
+  ) as TomorrowWorkflow;
   const relay = withoutComments(await workflow("test-records-relay.yml"));
 
-  // The scheduled workflow works out the next Pacific day's seed and hands it
-  // to the CI workflow, which puts it where every test runner reads it.
-  assertEquals(tomorrow.on.schedule, [{ cron: "0 11 * * *" }]);
+  // The workflow works out the next Pacific day's seed and hands it to the CI
+  // workflow, which puts it where every test runner reads it.
   assert(
     tomorrow.jobs.seed.steps?.some((step) =>
       step.run?.includes("deno task -q test-seed --tomorrow")
@@ -1664,10 +1779,10 @@ Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", as
   assertEquals(call.permissions, Object.fromEntries(asked));
   assertEquals(call.secrets, undefined);
 
-  // A called run takes its caller's event and ref, and the scheduled run's
-  // ref is main. So a job that holds a deployment environment or a secret
-  // runs only for a push to main, and a guard on the branch alone would let
-  // the scheduled run attest and deploy. The gates on coverage and topology
+  // A called run takes its caller's event and ref, and the ref of every run of
+  // this workflow is main. So a job that holds a deployment environment or a
+  // secret runs only for a push to main, and a guard on the branch alone would
+  // let this workflow's run attest and deploy. The gates on coverage and topology
   // judge the commit, which the commit's own run already does.
   const shipping = jobIds(ciText).filter((id) =>
     ci.jobs[id].environment !== undefined ||

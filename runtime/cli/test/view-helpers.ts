@@ -3,6 +3,9 @@
  * itself (the test task globs `*.test.ts`), just an import.
  */
 
+import { sha1 } from "@noble/hashes/legacy.js";
+import { bytesToHex } from "@noble/hashes/utils.js";
+
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import { renderFrame, type ViewState } from "../lib/view/render.ts";
 import { type Rgb, stripAnsi, term } from "../lib/view/ansi.ts";
@@ -15,6 +18,18 @@ export { parseDocument };
  * lets a test assert on a theme color without hard-coding its hex. */
 export function bgCode(rgb: Rgb): string {
   return `48;2;${rgb[0]};${rgb[1]};${rgb[2]}`;
+}
+
+/** The abbreviated name Git gives a blob holding `text` in a SHA-1
+ * repository, as a diff's `index` line shows it. */
+export function gitBlobName(text: string): string {
+  const encoder = new TextEncoder();
+  const content = encoder.encode(text);
+  const header = encoder.encode(`blob ${content.length}\0`);
+  const blob = new Uint8Array(header.length + content.length);
+  blob.set(header);
+  blob.set(content, header.length);
+  return bytesToHex(sha1(blob)).slice(0, 7);
 }
 
 /** The `38;2;r;g;b` foreground run for a color. */

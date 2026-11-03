@@ -47,6 +47,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { deepEqual, deepEqualKey } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
@@ -7565,7 +7566,8 @@ export type CfcPrefixProvenanceSummary = {
   /**
    * Non-internal read activities without an activity-clock position,
    * treated at -Infinity (joining every prefix). Deliberate -Infinity
-   * trigger reads are not counted. Same read set for every protected
+   * trigger reads and write-destination reads, which join no prefix, are
+   * not counted. Same read set for every protected
    * write, so this is per-prepare, not per-write.
    */
   clockLessReads: number;
@@ -7690,7 +7692,11 @@ type InputReadSnapshot = {
 
 /**
  * The labeled reads a protected entry's input checks quantify over, built
- * from the input reads whose documents resolved to a label with values.
+ * from the input reads whose documents resolved to a label with values. The
+ * write path's own reads of its destination (`writeDestinationRead`,
+ * §18.6.2) are not among them: no program asked for them, and what they
+ * return decides which writes are emitted, never a written value. A read the
+ * program made of the same place carries no marker and still gates.
  * Returns what the per-entry checks consume: each read's gate path, its
  * effective label, and the labeled locations it consumed, resolved on first
  * ask.
@@ -7747,6 +7753,7 @@ const buildGatedInputReads = (
         ),
     }];
   }).filter((read) =>
+    !isWriteDestinationRead(read.meta) &&
     read.label !== undefined &&
     // A present-but-empty label ({} — no atoms) is the same trust level as
     // an absent one (excluded above); whether metadata materialized an
@@ -7974,7 +7981,9 @@ export class InputReadView {
         internalByMeta.set(meta, internal);
       }
       if (internal) continue;
-      if (read.journalIndex === undefined) clockLessReads += 1;
+      if (
+        read.journalIndex === undefined && !isWriteDestinationRead(meta)
+      ) clockLessReads += 1;
       reads.push({ ...read, journalIndex: read.journalIndex ?? -Infinity });
     }
     for (const read of triggers) {
@@ -9467,7 +9476,7 @@ const linkedSourceEvidence = (
       // The schema the stored envelope names could not be read in this
       // transaction, so the evidence is undecided rather than short.
       return {
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeFailure(error),
         unavailable: true,
       };
     }
@@ -9478,7 +9487,7 @@ const linkedSourceEvidence = (
       );
     } catch (error) {
       return {
-        reason: error instanceof Error ? error.message : String(error),
+        reason: describeFailure(error),
       };
     }
     sourceMetadata = metadataResolver.linkSource(
@@ -12625,7 +12634,7 @@ export function* prepareBoundaryCommitSteps(
       mergedSchema = bindCreator(mergedSchema, key);
     } catch (error) {
       reasons.push(verdictReason(
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       ));
       continue;
     }
