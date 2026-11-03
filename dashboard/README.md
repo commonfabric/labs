@@ -1729,8 +1729,9 @@ Notes:
     the ones on the page; charts from a different version load the whole page
     again instead, at the newly chosen window if there is one. A page the
     browser brings back from its back/forward cache takes its window from its
-    address and checks at once, and the CI history page shows the repository
-    it was served for. An open Gantt regenerates every 30 minutes and
+    address, loads that window if its charts show another one, and otherwise
+    checks at once. The CI history page also shows the repository it was
+    served for. An open Gantt regenerates every 30 minutes and
     whenever its tab becomes visible. The server draws its chart as a
     self-contained image, so a new version's drawing reaches an open Gantt page
     when it next regenerates. CI refreshes share a 30-minute GitHub freshness

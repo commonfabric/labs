@@ -182,8 +182,20 @@ function elementsOf(html: string): Map<string, FakeElement> {
 interface Answer {
   status?: number;
   version?: string | null;
+  /** Whether the response never arrives, so the request ends only if aborted. */
+  pending?: boolean;
   body: string;
 }
+
+/**
+ * How the stand-in server answers a page's update checks. `snapshot` is the
+ * data version it reports, the page's own by default, and `firstPending` holds
+ * back the response to the first check.
+ */
+type CheckAnswer = Omit<Answer, "body" | "pending"> & {
+  snapshot?: string;
+  firstPending?: boolean;
+};
 
 /** A page whose script is running in the stand-in browser. */
 interface RunningPage {
@@ -197,8 +209,12 @@ interface RunningPage {
   readonly pushes: string[];
   readonly document: FakeDocument;
   readonly window: FakeTarget;
+  /** Starts the page's periodic update check. */
+  startCheck(): void;
   /** Runs the page's periodic update check and waits for it to finish. */
   check(): Promise<void>;
+  /** Changes the address, as going back or forward within the page does. */
+  address(href: string): void;
   /** Fires `type` at `target` and waits for what it starts. */
   dispatch(target: FakeTarget, type: string, event?: object): Promise<void>;
 }
@@ -227,7 +243,9 @@ async function run(
   };
   const fetch = (url: string, init?: { signal?: AbortSignal }) => {
     requests.push(url);
-    const { status = 200, version = SERVING_VERSION, body } = answer(url);
+    const { status = 200, version = SERVING_VERSION, pending, body } = answer(
+      url,
+    );
     const headers = new Headers();
     if (version !== null) headers.set(VERSION_HEADER, version);
     const response = {
@@ -239,13 +257,14 @@ async function run(
     };
     // The response arrives after whatever runs alongside the request, which
     // can abort it first.
-    return new Promise<typeof response>((resolve, reject) =>
-      queueMicrotask(() =>
-        init?.signal?.aborted
-          ? reject(new DOMException("aborted", "AbortError"))
-          : resolve(response)
-      )
-    );
+    return new Promise<typeof response>((resolve, reject) => {
+      const signal = init?.signal;
+      const abort = () => reject(new DOMException("aborted", "AbortError"));
+      signal?.addEventListener("abort", abort);
+      if (!pending) {
+        queueMicrotask(() => signal?.aborted ? abort() : resolve(response));
+      }
+    });
   };
   class DOMParser {
     parseFromString(markup: string) {
@@ -298,6 +317,9 @@ async function run(
   // the event loop lets whatever the script started run to the end.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
   await settle();
+  const startCheck = () => {
+    for (const callback of intervals) callback();
+  };
   return {
     elements,
     requests,
@@ -305,9 +327,16 @@ async function run(
     pushes,
     document,
     window,
+    startCheck,
     async check() {
-      for (const callback of intervals) callback();
+      startCheck();
       await settle();
+    },
+    address(next) {
+      const url = new URL(next, location.href);
+      location.href = url.href;
+      location.pathname = url.pathname;
+      location.search = url.search;
     },
     async dispatch(target, type, event) {
       target.dispatch(type, event);
@@ -339,16 +368,18 @@ const HISTORY_PAGES = [
  */
 function openHistory(
   history: (typeof HISTORY_PAGES)[number],
-  check: Omit<Answer, "body"> & { snapshot?: string },
+  check: CheckAnswer,
   fragment: Omit<Answer, "body"> = {},
 ): Promise<RunningPage> {
   const html = history.page();
   const loaded = elementsOf(html).get("fetch-progress")!.dataset
     .snapshotVersion!;
+  let checks = 0;
   return run(html, history.href, (url) =>
     url.startsWith("/bench/check?")
       ? {
         ...check,
+        pending: check.firstPending === true && checks++ === 0,
         body: JSON.stringify({
           version: check.snapshot ?? loaded,
           progress: null,
@@ -362,7 +393,7 @@ describe("history page scripts", () => {
   for (const history of HISTORY_PAGES) {
     describe(history.name, () => {
       const open = (
-        check: Omit<Answer, "body"> & { snapshot?: string },
+        check: CheckAnswer,
         fragment: Omit<Answer, "body"> = {},
       ) => openHistory(history, check, fragment);
       const replacementOf = (page: RunningPage) =>
@@ -535,6 +566,28 @@ describe("history page scripts", () => {
         expect(charts.attributes.has("aria-busy")).toBe(false);
         expect(charts.replacement).toBeUndefined();
         expect(page.navigations).toEqual([]);
+      });
+
+      it("loads the window its address names when restored from the back/forward cache after leaving mid-load", async () => {
+        const page = await open({});
+        page.address(windowHref("7"));
+        page.window.dispatch("popstate");
+        await page.dispatch(page.window, "pagehide");
+        await page.dispatch(page.window, "pageshow", { persisted: true });
+
+        expect(page.elements.get("days")!.value).toBe("7");
+        expect(replacementOf(page)).toBe("range-content");
+        expect(page.navigations).toEqual([]);
+      });
+
+      it("checks at once when restored from the back/forward cache with a check still waiting", async () => {
+        const page = await open({ firstPending: true });
+        page.startCheck();
+        await page.dispatch(page.window, "pagehide");
+        await page.dispatch(page.window, "pageshow", { persisted: true });
+
+        expect(page.requests.filter((url) => url.startsWith("/bench/check?")))
+          .toHaveLength(2);
       });
 
       it("puts a newly chosen window in place when the same version serves it", async () => {

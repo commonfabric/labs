@@ -3253,7 +3253,7 @@ ${DASHBOARD_THEME_CLIENT}
   ${VERSION_CLIENT}
   const hg = document.getElementById("hg"), days = document.getElementById("days"), daysv = document.getElementById("daysv"), repo = document.getElementById("repo"), controls = days.form, KEY = "ciJobsHideGreen", DEFAULT_DAYS = days.value;
   let rangeContent = document.getElementById("range-content"), fetchProgress = document.getElementById("fetch-progress"), title = document.getElementById("fetch-title"), total = document.getElementById("fetch-total"), detail = document.getElementById("fetch-detail"), bar = document.getElementById("fetch-bar"), pageVersion = fetchProgress.dataset.snapshotVersion, appliedDays = days.value;
-  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", snapshotChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
+  let navigating = false, pendingRefresh = false, checkRequest = null, eventStream = null, connectedProgressUrl = "", snapshotChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
   const apply = () => document.body.classList.toggle("hide-green", hg.checked);
   hg.checked = sessionStorage.getItem(KEY) === "1";
   apply();
@@ -3300,6 +3300,8 @@ ${DASHBOARD_THEME_CLIENT}
   window.addEventListener("pagehide", () => {
     navigating = true;
     rangeRequest?.abort();
+    checkRequest?.abort();
+    checkRequest = null;
     eventStream?.close();
   });
   repo.addEventListener("change", () => repo.form.requestSubmit());
@@ -3419,11 +3421,15 @@ ${DASHBOARD_THEME_CLIENT}
     };
   };
   const checkForUpdates = async () => {
-    if (checking || navigating || document.visibilityState === "hidden") return;
-    checking = true;
+    if (checkRequest || navigating || document.visibilityState === "hidden") return;
+    const controller = new AbortController();
+    checkRequest = controller;
     const revision = viewRevision;
     try {
-      const response = await fetch(fetchProgress.dataset.checkUrl, { headers: { accept: "application/json" } });
+      const response = await fetch(fetchProgress.dataset.checkUrl, {
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
       if (servedByAnotherVersion(response)) {
         refreshRangeWhenIdle();
         return;
@@ -3441,7 +3447,7 @@ ${DASHBOARD_THEME_CLIENT}
     } catch {
       if (!eventStream && !collectionFailed && !transportFailed) renderIdle();
     } finally {
-      checking = false;
+      if (checkRequest === controller) checkRequest = null;
     }
   };
   const bindRangeContent = () => {
@@ -3565,7 +3571,8 @@ ${DASHBOARD_THEME_CLIENT}
     if (event.persisted) {
       restoreDays();
       bindRangeContent();
-      void checkForUpdates();
+      if (days.value !== appliedDays) void loadRange("pop");
+      else void checkForUpdates();
     }
   });
   bindRangeContent();
