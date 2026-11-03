@@ -639,53 +639,64 @@ describe("connection authentication", () => {
       }
     });
 
-    it("refuses a deleted space's commands with the deletion, ahead of a run-out lease", async () => {
-      const clock = { now: 1_000_000 };
-      const server = createServer("lease-deleted", { clock });
-      try {
-        const peer = await connectPeer(server);
-        await authenticate(peer, alice, { exp: clock.now + 60 }, clock);
-        const opened = await open(peer, SPACE, alice.did());
-        const sessionId = opened.ok!.sessionId;
-        // The deletion tombstone, written as the commit admitting a deletion
-        // would write it.
-        const engine = await server.engineForSpace(SPACE);
-        const seq = Engine.applyCommit(engine, {
-          sessionId: "deletion-stand-in",
-          space: SPACE,
-          commitClass: "system",
-          commit: {
-            localSeq: Engine.serverSeq(engine) + 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "set",
-              id: `of:${SPACE}`,
-              value: { value: { deleted: { by: alice.did() } } },
-            }],
-          },
-        }).seq;
-
-        clock.now += 61;
-        const refusal = {
-          name: "AuthorizationError",
-          message: `Space ${SPACE} is deleted`,
-          deleted: true,
-          permanentEvidence: true,
-          aclRevision: seq,
-        };
-        expect((await query(peer, SPACE, sessionId)).error).toEqual(refusal);
-        expect(
-          (await request(peer, {
-            type: "presence.join",
+    for (
+      const command of [
+        {
+          label: "a command",
+          send: (peer: WirePeer, sessionId: string) =>
+            query(peer, SPACE, sessionId),
+        },
+        {
+          label: "a presence join",
+          send: (peer: WirePeer, sessionId: string) =>
+            request(peer, {
+              type: "presence.join",
+              space: SPACE,
+              sessionId,
+              room: "room-0123456789abcdefghijklmnop",
+            }),
+        },
+      ]
+    ) {
+      it(`refuses ${command.label} on a deleted space with the deletion, ahead of a run-out lease`, async () => {
+        const clock = { now: 1_000_000 };
+        const server = createServer("lease-deleted", { clock });
+        try {
+          const peer = await connectPeer(server);
+          await authenticate(peer, alice, { exp: clock.now + 60 }, clock);
+          const opened = await open(peer, SPACE, alice.did());
+          const sessionId = opened.ok!.sessionId;
+          // The deletion tombstone, written as the commit admitting a
+          // deletion would write it.
+          const engine = await server.engineForSpace(SPACE);
+          const seq = Engine.applyCommit(engine, {
+            sessionId: "deletion-stand-in",
             space: SPACE,
-            sessionId,
-            room: "room-0123456789abcdefghijklmnop",
-          })).error,
-        ).toEqual(refusal);
-      } finally {
-        await server.close();
-      }
-    });
+            commitClass: "system",
+            commit: {
+              localSeq: Engine.serverSeq(engine) + 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: `of:${SPACE}`,
+                value: { value: { deleted: { by: alice.did() } } },
+              }],
+            },
+          }).seq;
+
+          clock.now += 61;
+          expect((await command.send(peer, sessionId)).error).toEqual({
+            name: "AuthorizationError",
+            message: `Space ${SPACE} is deleted`,
+            deleted: true,
+            permanentEvidence: true,
+            aclRevision: seq,
+          });
+        } finally {
+          await server.close();
+        }
+      });
+    }
 
     it("reaches no connection whose session's lease has run out", async () => {
       const clock = { now: Math.floor(Date.now() / 1000) };
