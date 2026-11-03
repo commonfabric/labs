@@ -45,7 +45,7 @@ import {
 } from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/logger";
 import { utf8ByteLength } from "@commonfabric/text/utf8";
-import { namesInstancesByDefault } from "../builder/instance-name.ts";
+import { namesInstancesByDefault } from "../builder/instance-naming.ts";
 import { AsyncSemaphoreQueue } from "../queue.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";

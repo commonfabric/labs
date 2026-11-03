@@ -22,7 +22,7 @@ import { debugStr } from "@commonfabric/data-model";
 import {
   defaultDisplayFit,
   type LabelDisplayFit,
-} from "@commonfabric/html/worker";
+} from "@commonfabric/html/display-fit-atoms";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { urlToAppView } from "@commonfabric/navigation";
@@ -58,7 +58,6 @@ import {
   saveMirror,
   spaceDid,
 } from "./sync.ts";
-import { browseBoard, runQuietly, systemPrograms } from "./browse.ts";
 import { redact } from "./labels.ts";
 import type { Opening, WriteOutcome, WriteRequest } from "./browser.ts";
 import { similarTopics } from "./similar.ts";
@@ -163,8 +162,12 @@ export interface TopicsDeps {
   identityDid: (path: string) => Promise<string>;
 }
 
-/** The programs that open a web browser and fill the clipboard here. */
-const PROGRAMS = systemPrograms(Deno.build.os);
+/**
+ * The terminal browser and what it runs, which only the command that draws it
+ * reads, since every other command starts without its modules.
+ */
+// deno-lint-ignore cf-imports/no-inline-module-import -- every other command starts without the terminal browser's modules
+const loadBrowser = () => import("./browse.ts");
 
 const defaultDeps: TopicsDeps = {
   openDocSource,
@@ -179,8 +182,14 @@ const defaultDeps: TopicsDeps = {
   write: console.log,
   warn: console.error,
   env: Deno.env.get,
-  openUrl: (url) => runQuietly([...PROGRAMS.open, url]),
-  copyText: (text) => runQuietly(PROGRAMS.copy, text),
+  openUrl: async (url) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly([...systemPrograms(Deno.build.os).open, url]);
+  },
+  copyText: async (text) => {
+    const { runQuietly, systemPrograms } = await loadBrowser();
+    await runQuietly(systemPrograms(Deno.build.os).copy, text);
+  },
   identityDid,
 };
 
@@ -1541,6 +1550,7 @@ export async function main(
       const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))
         ?.trim();
       const viewer = await deps.identityDid(board.identity);
+      const { browseBoard } = await loadBrowser();
       return await browseBoard(
         {
           ...board,

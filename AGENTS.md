@@ -157,8 +157,9 @@ implementation, or semantic gap, how a gap is filed as a specs pull request, and
 what to do without access to the private specs repository. It governs
 `runtime/runner/src/cfc/` and `runtime/runner/src/cfc.ts`, the CFC tests under
 `runtime/runner/test/`, the render boundaries in
-`runtime/html/src/worker/reconciler.ts` and
-`runtime/html/src/worker/display-fit.ts`, the harness's CFC enforcement in
+`runtime/html/src/worker/reconciler.ts`,
+`runtime/html/src/worker/display-fit.ts` and
+`runtime/html/src/worker/display-fit-atoms.ts`, the harness's CFC enforcement in
 `runtime/cf-harness/src/` (`cfc-*.ts`, `contracts/cfc-*.ts`,
 `sandbox/runsc-cfc-result.ts`), the harness console's display ceiling in
 `runtime/cf-harness/console/display-ceiling.ts`, and every

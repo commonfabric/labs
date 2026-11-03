@@ -123,9 +123,12 @@ describe("what starting a command reads", () => {
   it("reads a fraction of the runner for the Topics client", async () => {
     const graph = await startGraph("patterns/apps/topics/tools/topics.ts");
     expect(reachedAmong(graph, [
-      ...COMPILER_AND_SERVER,
+      // What it reads of `runtime/html/` is the display fit, to redact output.
+      ...COMPILER_AND_SERVER.filter((needle) => needle !== "runtime/html/"),
+      "runtime/html/src/worker/mod.ts",
       "runtime/runner/src/runtime.ts",
       "runtime/runner/src/index.ts",
+      "patterns/apps/topics/tools/browser.ts",
     ])).toEqual([]);
     expect(graph.size).toBeLessThan(350);
   });
