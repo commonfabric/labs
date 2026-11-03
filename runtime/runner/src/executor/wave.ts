@@ -95,9 +95,10 @@ const logger = getLogger("wave-accumulator", {
  * class at the wave commit's per-doc CAS (serving-loop.md §3d):
  *
  * - `derivation` writes are PURE — re-derivable, so a write whose doc head
- *   advanced past the wave's basis is DROPPED; the drop re-arms nothing —
- *   recomputation arrives only through the ordinary dependency path
- *   (serving-loop.md §3d, RULED 2026-08-05);
+ *   advanced past the wave's basis is DROPPED; recomputation arrives through
+ *   the ordinary dependency path (serving-loop.md §3d, RULED 2026-08-05),
+ *   unless the commit that superseded the write left the document with no
+ *   value, which re-arms the run ({@link SupersededOutput});
  * - `event-handler` writes are NON-RE-DERIVABLE consequences — rebased and
  *   retried on conflict, and REQUEUED (rolled back to unconsequenced,
  *   never lost) when the rebase conflicts semantically;
@@ -412,10 +413,34 @@ type WaveSettlement = Result<
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
 
+    /** The documents this derivation's writes were dropped from as
+     * superseded. */
+    supersededOutputs?: readonly SupersededOutput[];
+
     /** Why the wave withdrew this transaction's contribution. */
     waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
+
+/**
+ * A document instance a derivation's write to it was dropped from as
+ * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
+ * superseding commit unless it read the document, and a computed never reads
+ * its own output. That commit can leave the document with no value, as a
+ * client's piece start does, and then the run is owed again:
+ * `scheduler/superseded-output.ts`.
+ */
+export interface SupersededOutput {
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+
+  /** The identity the instance's scope resolves against. */
+  scopeKeyIdentity?: ScopeKeyIdentity;
+
+  /** The store's head for the instance when the wave dropped the write. */
+  seq: number;
+}
 
 const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
@@ -824,6 +849,10 @@ interface WaveContribution {
    * closure, the first one found. Set only by that closure, and read only
    * to name the cause when the run's withdrawal is reported. */
   withdrawnRead?: WithdrawnRead;
+
+  /** Per doc-instance key, what this derivation's dropped writes lost to.
+   * Set only where the commit step drops such a write. */
+  supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
 
@@ -1696,8 +1725,22 @@ export class WaveAccumulator
         ).then((settled): Result<Unit, StorageTransactionRejected> =>
           settled.find((outcome) => outcome.error !== undefined) ?? { ok: {} }
         )).then((outcome): WaveSettlement =>
-          outcome.error !== undefined && contribution.readDependencyWithdrawn
-            ? { error: { ...outcome.error, readDependencyWithdrawn: true } }
+          outcome.error !== undefined &&
+            (contribution.readDependencyWithdrawn ||
+              contribution.supersededOutputs !== undefined)
+            ? {
+              error: {
+                ...outcome.error,
+                ...(contribution.readDependencyWithdrawn
+                  ? { readDependencyWithdrawn: true }
+                  : {}),
+                ...(contribution.supersededOutputs === undefined ? {} : {
+                  supersededOutputs: [
+                    ...contribution.supersededOutputs.values(),
+                  ],
+                }),
+              },
+            }
             : outcome
         ),
       );
@@ -2336,7 +2379,9 @@ export class WaveAccumulator
      * Dropping costs nothing: the value is re-derivable, and a derivation
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
-     * path. A non-re-derivable consequence takes no view check here: its
+     * path. One that did not read the doc runs again only if that commit
+     * left the doc with no value (SupersededOutput). A non-re-derivable
+     * consequence takes no view check here: its
      * reads are held to the store ahead of this loop, and one with a stale
      * read is requeued whole before any doc of its reaches this, so what
      * arrives here rests on current reads and conflicts on its written
@@ -2517,14 +2562,24 @@ export class WaveAccumulator
           }
           if (contribution.context.kind === "derivation") {
             // Pure derivation write superseded: DROP, sound because
-            // re-derivable. The drop re-arms nothing — recomputation
-            // arrives only through the ordinary dependency path
-            // (§3d, RULED 2026-08-05).
+            // re-derivable. Recomputation arrives through the ordinary
+            // dependency path (§3d, RULED 2026-08-05), or, where the
+            // superseding commit leaves the doc with no value, through the
+            // settlement this records for the scheduler.
             droppedDocs[contribution.index].add(key);
             outcome.supersededWrites += this.#homeOpCountFor(
               contribution,
               doc,
             );
+            const identity = contribution.context.scopeKeyIdentity ??
+              this.#scopeKeyIdentity;
+            (contribution.supersededOutputs ??= new Map()).set(key, {
+              space: this.#space,
+              id: doc.id,
+              ...(doc.scope === undefined ? {} : { scope: doc.scope }),
+              ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+              seq: heads.get(key) ?? 0,
+            });
           } else {
             // Non-re-derivable consequence (event-handler and the loop's
             // bookkeeping alike): rebase against the new head —

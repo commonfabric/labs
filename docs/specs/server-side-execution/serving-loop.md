@@ -1378,8 +1378,10 @@ first does so for free. The classes:
   (RULED 2026-08-05): the concurrent commit is the next wave's input,
   and it recomputes exactly the runs whose recorded reads it dirties —
   the ordinary dependency path, with no superseded-write mark (the
-  ruling note below). Count drops as `supersededWrites` (exposed in
-  §7's counters). This class CASes against a second basis as well: the
+  ruling note below, which also states the one exception, a commit that
+  leaves the doc with no value). Count drops as `supersededWrites`
+  (exposed in §7's counters). This class CASes against a second basis
+  as well: the
   seq the replica stood at for the doc when the contribution SEALED. The
   replica gap above is when the two differ, and a doc the replica had not
   taken the head of holds a value the derivation that wrote it never saw,
@@ -1580,6 +1582,29 @@ output waits for the next input change (accepted). The corollary is
 deliberate: a survivor whose writes were dropped per-doc still lands
 its BASIS ROWS — its reads are true, and no recompute-owed mark
 exists.
+
+**A drop that leaves the document with no value re-arms its run**
+(PROPOSED 2026-11-02, awaiting ruling). The reasoning above takes the
+superseding commit to be the fresh state readers reconverge from. A
+client's piece start is an authored commit to a genuinely derived
+document that holds no such state: it stores a computed document's
+structure, a `result` link and no `value`, and leaves the value to the
+serving runtime. When it lands above the view a served run of the
+computed sealed on, the run's write is dropped. The run never read its
+output, so the commit's arrival wakes nothing, and W moves past a
+demanded derivation whose document holds no value. A client previewing
+that value keeps its echo for good, since speculation.md §4's arrival
+gate has no derived cover to witness, and a writer waiting out the echo
+(`speculationSettledFor()`) does not return.
+
+So the settlement of a run whose write was dropped as superseded names
+the documents it lost, each with the store's head when it was dropped.
+The scheduler waits for the replica to take those commits, because a
+run started sooner could read past a value that had not arrived, and
+re-arms the run if one of those documents then exists with no value
+(`scheduler/superseded-output.ts`). A commit that wrote a value keeps
+the disposition above: the derived output waits for the next input
+change.
 
 A contribution whose **read dependency is withdrawn** has a separate
 invalidation obligation. The accumulator records when its withdrawn-read

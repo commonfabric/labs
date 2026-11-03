@@ -77,6 +77,7 @@ import type { NodeRegistry } from "./node-record.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
 import { RetryImmediately } from "./retry-immediately.ts";
+import { supersededOutputsOwed } from "./superseded-output.ts";
 import { type ActionTimingState, recordActionTime } from "./timing.ts";
 import type {
   Action,
@@ -1490,13 +1491,23 @@ function finalizeReactiveActionCommit(
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
     delete owner.pendingWaveRun;
+    const readWithdrawn = outcome.error?.readDependencyWithdrawn === true &&
+      outcome.error?.waveWithdrawalCause === "contribution-dropped";
+    const superseded = outcome.error?.supersededOutputs;
     if (
       node.registrationToken !== registrationToken ||
-      outcome.error?.readDependencyWithdrawn !== true ||
-      outcome.error?.waveWithdrawalCause !== "contribution-dropped" ||
+      (!readWithdrawn && superseded === undefined) ||
       (!state.nodes.isEffect(args.action) &&
         !state.nodes.isComputation(args.action))
     ) return;
+    if (!readWithdrawn && superseded !== undefined) {
+      if (!await supersededOutputsOwed(state.runtime, superseded)) return;
+      // A newer run sealed during that wait, and its settlement decides now.
+      if (
+        owner.pendingWaveRun !== undefined ||
+        node.registrationToken !== registrationToken
+      ) return;
+    }
     const record = state.nodes.get(args.action);
     const current = fanOutRun === undefined
       ? record === node
