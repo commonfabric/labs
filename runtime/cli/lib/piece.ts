@@ -4772,7 +4772,7 @@ export async function inspectPiece(
     undefined,
     resolvedConfig.pieceScope,
   );
-  await pullServed(pieces, piece.getCell());
+  if (servedPieces(pieces)) await pullServed(pieces, piece.getCell());
 
   const id = piece.id;
   const name = piece.name();
