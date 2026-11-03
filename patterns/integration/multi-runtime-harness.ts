@@ -960,7 +960,14 @@ export class MultiRuntimeHarness {
         ...(runsInWorker() ? {} : { moduleByteCache }),
       })
       : StandaloneMemoryServer.start({
-        namesInstances: namesInstancesByDefault,
+        // The posture of a toolshed whose runtimes run the first session's
+        // flags (INV-16), as the server-execution posture above is read.
+        namesInstances: () =>
+          namesInstancesByDefault(
+            typeof firstSession === "string"
+              ? undefined
+              : firstSession.cfc?.experimental,
+          ),
         serve,
         ...(aclMode !== undefined ? { acl: { mode: aclMode } } : {}),
       });

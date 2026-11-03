@@ -242,11 +242,12 @@ A memory server in the same process as the runtimes it serves takes a posture
 as a toolshed would. A loopback server (`newLoopbackServer()`) given no
 posture takes the runtime's default for the flag
 (`namesInstancesByDefault()`), which is what a toolshed of the same build
-publishes. `StandaloneMemoryServer` takes a posture as the memory server does,
-and the servers `cf test` and the serving memory servers start give it the
-mode their runtimes' flags resolve to. A memory server a test builds itself
-takes the same default, so a test whose runtimes run that default is never
-refused for its server's posture, with the default on or off.
+publishes. `StandaloneMemoryServer`, like the memory server, takes a posture
+only from its caller and otherwise names none. The servers `cf test` and the
+serving memory servers start pass the mode their runtimes' flags resolve to,
+and so does each memory server this repository's tests build, so a test whose
+runtimes run the default is never refused for its server's posture, with the
+default on or off.
 
 The hazards `instance-naming-modes.test.ts` pins under `TODO(danfuzz)` become
 refusals: the positional runtime is refused the space, the test asserts the
