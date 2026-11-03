@@ -653,22 +653,26 @@ deliberately open-world. The `Invocation` shape is the first schema this
 applies to — it must be authored open-world so protocol fields such as a
 payload digest or retention metadata can be added later.
 
-"Results may narrow freely" governs *values*, not *named fields*. Removing a
-named property from a **result** is rejected outright — `objectSubsetIssue`
-returns "existing result field was removed" whenever the comparison is an
-evolution, on the stated principle that a result's named fields are the
-contract consumers read (`objectSubsetIssue`,
-`runtime/piece/src/schema-compatibility.ts`). An argument's named fields are
-not held that way: dropping one gives up a demand, which the same function
-accepts wherever the candidate object can still hold the value the piece
-carries. The removed-field check recurses, so a nested removal is rejected on
-a nested path
+"Results may narrow freely" governs *values*; *named fields* follow
+`required`. Removing a **required** property from a result is rejected —
+`objectSubsetIssues` returns "existing result field was removed" — because a
+required field is a guarantee its readers were given
+(`runtime/piece/src/schema-compatibility.ts`). Removing an **optional** one is
+allowed: every reader of it already handles its absence, and a durable link to
+it was admitted with that absence in the proof. What the candidate no longer
+names is outside the proof from then on, so a later update may name that field
+again with any shape the candidate object admits. A field of a verb's event is
+the exception, refused even when optional, because a caller still sends it and
+the event would strip it without a refusal. An argument's named fields are held
+neither way: dropping one gives up a demand, which the same function accepts
+wherever the candidate object can still hold the value the piece carries. The
+removed-field check recurses, so a nested removal is judged on a nested path
 (`result.topic.title: existing result field was removed`) exactly as a flat one
 is. Adding a **required** field is rejected at any depth unless it carries a
 default; adding an **optional** one is allowed at any depth; narrowing a
 *value* type is allowed at any depth. Nesting a pattern's result under a single
-key therefore buys it nothing: "results may narrow freely" is true of values
-and never of names, at every depth.
+key therefore buys it nothing: whether a name may go is decided by `required`
+at its own depth.
 
 A verb's `asCell` marker is pinned the same way: it is a semantic extension key
 compared for exact equality (`SEMANTIC_EXTENSION_KEYS`,

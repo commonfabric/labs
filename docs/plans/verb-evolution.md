@@ -47,7 +47,7 @@ here is what it does to a verb's author:
 | --- | --- |
 | Add a verb | allowed |
 | Add a verb to a type another pattern stores | **refused** |
-| Remove or rename a verb | refused |
+| Remove or rename a verb | refused, unless the verb was optional |
 | Mark a verb `@deprecated` | allowed, and it disappears from listings |
 | Turn a verb into data, or data into a verb | refused |
 | Add an optional field to a verb's input | allowed |
@@ -122,8 +122,9 @@ the pattern stopped reading leaves a writer's value unread rather than
 breaking a reader, so the argument side drops named fields freely; what it
 still proves is that the candidate can hold the value the piece already
 carries, which a closed candidate object fails as `source field is rejected
-by the target object`. The result side preserves every named field it
-published.
+by the target object`. The result side preserves every required field it
+published; an optional one, verb or data, it may stop publishing, since
+whoever reads it already reads its absence.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
@@ -205,8 +206,8 @@ have. Code that holds a piece and calls a verb writes no check: the
 declaration says the verb is there, and the compiler agrees.
 
 Names are stable by default. The gate refuses a shape that removes or renames
-a verb — the one rule in today's gate genuinely protecting callers, and it
-stays — so a verb does not vanish by accident. The ordinary way to retire one
+a required verb — the one rule in today's gate genuinely protecting callers,
+and it stays — so a verb does not vanish by accident. The ordinary way to retire one
 is to add its replacement and mark the old one `@deprecated`, which hides it
 from listings while keeping it callable. A verb whose contract must change
 incompatibly gets a new name, spelled `append_v2`, introduced when the second

@@ -316,7 +316,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-ocrU646RD4YKITBc",
     ],
     paths: [
-      "result.mentionable[].mention",
       "result.crossrefs[].fid",
       "result.crossrefs[].commentCount",
       "result.index[].fid",
@@ -325,15 +324,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // The unsigned caller retires: `agentName` is required on every verb, and the display-name mirrors that path filled go with it.
       "result.myName",
       "result.crossrefs[].topic",
-      "result.mentionable[].crossrefs",
       "result.mentionable[].links",
       "result.topics[].addComment",
-      "result.topics[].crossrefs",
       "result.topics[].links",
       "result.topics[].createdBy",
       "result.index[].topic",
       "result.crossrefs[].title",
-      "result.topics[].mention",
       // The paths from here on are recorded in
       // `docs/history/pattern-compat-every-issue-paths.md`, which names the
       // recorded change each one comes from.
@@ -343,18 +339,13 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.crossrefs[].refsOut",
       "result.mentionable[].addLink",
       "result.mentionable[].body",
-      "result.mentionable[].bodyUpdatedAt",
-      "result.mentionable[].bodyUpdatedBy",
       "result.mentionable[].commentCount",
       "result.mentionable[].comments",
       "result.mentionable[].createdAt",
-      "result.mentionable[].createdBy",
       "result.mentionable[].createdByName",
       "result.mentionable[].lastActivityAt",
       "result.mentionable[].setBody",
       "result.topics[].addLink",
-      "result.topics[].bodyUpdatedAt",
-      "result.topics[].bodyUpdatedBy",
       "result.topics[].comments",
       "result.topics[].createdByName",
       "result.topics[].setBody",
@@ -363,7 +354,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.index[].commentCount",
       "result.index[].lastActivityAt",
       "result.crossrefs[].createdAt",
-      "result.crossrefs[].createdBy",
       "result.crossrefs[].lastActivityAt",
       "result.crossrefs[].referencedByLinks",
       "result.crossrefs[].refsOutLinks",
@@ -371,11 +361,9 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.mentionable[].mentions",
       "result.mentionable[].referencedBy",
       "result.mentionable[].references",
-      "result.mentionable[].unmention",
       "result.topics[].mentioned",
       "result.topics[].referencedBy",
       "result.topics[].references",
-      "result.topics[].unmention",
     ],
     reason:
       "Two accepted breaks on one pattern: the reference-graph rebuild on cell " +
@@ -409,7 +397,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // recorded change each one comes from.
       "result.mentionable[].commentCount",
       "result.mentionable[].createdAt",
-      "result.mentionable[].createdBy",
       "result.mentionable[].lastActivityAt",
     ],
     reason:
@@ -456,7 +443,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "argument.boardCrossrefs",
-      "result.crossrefs",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
       "result.createdByName",
@@ -2373,9 +2359,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.$VIEWS.chat.recentActivity",
-      "result.$VIEWS.chat.messages.windows",
-      "result.room.recentActivity",
-      "result.room.messages.windows",
       // The reader's answers, per session again, which
       // `fabrichat-room-viewer-per-session-reland.md` records.
       "argument.room.canSend",
@@ -2401,11 +2384,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "result.$VIEWS.chat.recentActivity",
-      "result.$VIEWS.chat.messages.windows",
       "result.placement.$VIEWS.chat.recentActivity",
-      "result.placement.$VIEWS.chat.messages.windows",
-      "result.placement.room.recentActivity",
-      "result.placement.room.messages.windows",
       // The reader's answers, per session again, which
       // `fabrichat-room-viewer-per-session-reland.md` records.
       "argument.placement.$VIEWS.chat.canSend",

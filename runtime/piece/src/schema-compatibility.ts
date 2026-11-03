@@ -1300,20 +1300,35 @@ function objectSubsetIssues(
     ? source.patternProperties
     : target.patternProperties;
 
-  // A result's named fields are the contract consumers read, so evolution
-  // preserves every one of them even when the candidate object is otherwise
-  // open. An argument's are not: dropping one gives up a demand, which leaves a
-  // writer's value unread rather than breaking a reader. What the stored
-  // argument still needs — that the candidate can hold the value the piece
-  // already carries — the named-property proof below decides per field,
-  // accepting it under an open candidate and reporting it under a closed one. A
-  // durable-link subset proof reaches that same proof from the other side: a
-  // source may name additional fields that an open target accepts through
-  // patternProperties/additionalProperties, and treating those as "removed"
-  // rejects valid Fabric projections such as $FS.
+  // A result's required fields are a guarantee its readers were given, so
+  // evolution keeps every one of them. An optional field promised nothing of
+  // the kind: every reader of it already handles its absence, and a durable
+  // link to it was proved with that absence admitted, so the candidate may
+  // stop publishing it. Its old value is then outside the proof altogether,
+  // which is why a later update can name the field again with any shape the
+  // candidate object then admits. A verb's event is the exception: a caller
+  // still sends a field the event stops declaring, and an event strips
+  // undeclared fields before any handler runs, so the caller's value would be
+  // dropped without a refusal.
+  //
+  // An argument's named fields are not held either way: dropping one gives up
+  // a demand, which leaves a writer's value unread rather than breaking a
+  // reader. What the stored argument still needs — that the candidate can hold
+  // the value the piece already carries — the named-property proof below
+  // decides per field, accepting it under an open candidate and reporting it
+  // under a closed one. A durable-link subset proof reaches that same proof
+  // from the other side: a source may name additional fields that an open
+  // target accepts through patternProperties/additionalProperties, and treating
+  // those as "removed" rejects valid Fabric projections such as $FS.
+  const removed = new Set<string>();
   if (context.defaultComparison === "evolution" && context.role === "result") {
+    const previousRequired = new Set(target.required ?? []);
     for (const property of Object.keys(previousProperties)) {
       if (Object.hasOwn(candidateProperties, property)) continue;
+      if (!context.verbEvent && !previousRequired.has(property)) {
+        removed.add(property);
+        continue;
+      }
       if (
         report(property, [
           issueAt(`${path}.${property}`, `existing result field was removed`),
@@ -1518,7 +1533,7 @@ function objectSubsetIssues(
   }
 
   for (const property of Object.keys(previousProperties)) {
-    if (failed.has(property)) continue;
+    if (failed.has(property) || removed.has(property)) continue;
     const propertyPath = `${path}.${property}`;
     const sourceDirect = sourceProperties[property];
     const sourceContracts = [
