@@ -937,7 +937,7 @@ added in between.
 > commit included, marks the space, and the mark is recorded in the same store
 > transaction as that commit. A server admits a declaring session's open of an
 > unmarked space only while its own posture names instances. Nothing removes a
-> mark.
+> mark, except a reap of a deleted space.
 
 A positional runtime, one with the `instanceNames` experimental flag off, binds
 a parent's children by position, and a naming runtime binds a parent's named
@@ -962,6 +962,11 @@ that set it, rather than in a document or a commit field. The toolshed owning
 the space opens that database, so a change of owner keeps the mark. The server
 reads the mark from the space's store when it admits an open and when it
 admits a commit, as it reads the kind the space's genesis commit declares.
+
+A reap of a deleted space removes the mark along with the commit it names
+([`random-space-identities.md`](../random-space-identities.md#reaping-a-deleted-space)).
+A deleted space admits no session (INV-15), so nothing is left for the mark to
+decide.
 
 A server's posture is the deployment's value of the `instanceNames` flag, which
 the toolshed hosting it publishes on `/api/meta`. A server whose posture names
