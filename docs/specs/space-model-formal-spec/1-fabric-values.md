@@ -2246,7 +2246,7 @@ export abstract class BaseFabricInstance extends FabricInstance {
 > `[DEEP_CLONE_CORE]()` (the type-specific copy logic), plus the deep-freeze
 > pair; encoding lives on the class's `[CODEC]` (Section 2.4). Brand detection
 > uses `instanceof FabricInstance` directly — no type guard function is needed
-> (see Section 2.6).
+> (see Section 2.7).
 
 > **Why a separate `BaseFabricInstance`?** Keeping `FabricInstance` pure
 > abstract (no implementations) gives the protocol surface a clean, minimal
@@ -2678,7 +2678,7 @@ Key contracts:
   `lenient` exactly as it settles one the codec raises from inside the
   decoding (Section 4.5).
 - **`decode()` is codec-side, not constructor-side**, for two reasons: it
-  receives a `LiveEnvironment` (Section 2.5) which shouldn't be mandated in a
+  receives a `LiveEnvironment` (Section 2.6) which shouldn't be mandated in a
   constructor signature, and it may return an existing instance (interning)
   rather than creating a new one — essential for types like `Cell` where
   identity matters.
@@ -2696,7 +2696,94 @@ Key contracts:
   `fabric-primitives/` and `fabric-instances/`), not by ad-hoc registration
   scattered across the codebase. See Section 4.5.
 
-### 2.5 Live Environment
+### 2.5 Type Tags
+
+A **type tag** is the string that names the type of a codec's state: the
+`recognizedTypeTag` a codec is registered under, what its `tagForValue()`
+returns, the `typeTag` its `decode()` is handed, and what an `UnknownValue`
+preserves (Section 3). Each interchange format lays a tag out on the wire in its
+own way — JSON as a `/`-prefixed key (`3-json-encoding.md` Section 2), the realm
+format as one slot of a tagged form (`4-realm-encoding.md` Section 3.3) — and
+every one of them writes tags of the syntax defined here.
+
+#### 2.5.1 Syntax
+
+The interchange syntax of a type tag is exact, because that syntax is what
+separates an unrecognized type from a malformation. A tag is zero or more
+prefixes, each followed by `.`, then a name, `@`, and a version, with nothing
+before or after:
+
+```
+(<prefix>.)*<Name>@<Version>
+```
+
+- A **prefix** is a lowercase ASCII letter followed by any number of ASCII
+  letters and digits — `lowerCamelCase`.
+- A **name** is an uppercase ASCII letter followed by any number of ASCII
+  letters and digits — `UpperCamelCase`.
+- A **version** is a decimal integer with no leading zero, so the lowest
+  version is 1.
+
+`Bytes@1`, `Abc123@1234` and `sys.beep.Boop@1` are tags. None of these is:
+
+- `bytes@1` and `sys.boop@1`, whose names do not start uppercase.
+- `Sys.Boop@1`, whose prefix does not start lowercase.
+- `sys_x.Boop@1` and `By-tes@1`, which hold characters that are neither ASCII
+  letters nor digits.
+- `.Boop@1` and `sys..Boop@1`, which hold an empty prefix.
+- `Bytes@0`, `Bytes@01` and `Bytes@1.0`, whose versions are not decimal
+  integers without a leading zero, starting at 1.
+- `Bytes` and `sys.Boop`, which have no version.
+- Any tag padded with whitespace or a newline.
+
+A string outside that syntax is not an unrecognized tag; it is not a tag at
+all. A decoder reading one where an interchange format puts a tag treats it as
+a structural violation, never as an `UnknownValue`, and that is what lets an
+`UnknownValue` always hold a real tag. A string inside the syntax that no codec
+claims is an `UnknownValue`, whatever its prefixes are: a decoder gives no
+prefix, and no absence of one, any meaning of its own.
+
+#### 2.5.2 Conventional Reservations
+
+These reservations are conventions rather than syntax. A decoder sorts tags by
+the syntax of Section 2.5.1 alone, and treats a tag that departs from a
+convention exactly as it treats any other.
+
+- **A tag with no prefix** is reserved by convention for the types the
+  interchange specifications themselves define, such as `Bytes@1` and `Map@1`.
+  Anyone else defining a type gives its tag a prefix.
+- **A tag without its `@<Version>` suffix** is the recommended form for an
+  implementation's general use of tags in contexts other than interchange. Such
+  a tag is outside the interchange syntax, so it never reaches an interchange
+  format (Section 2.5.3).
+- **The prefix `core.`** is recommended to be reserved by each implementation
+  for its own implementation-specific purposes, where an unversioned tag is the
+  expected form. A `core.` tag with a version is still a conforming tag and may
+  reach the wire, where an implementation that does not claim it decodes it as
+  an `UnknownValue` like any other.
+
+#### 2.5.3 Interchange and Implementation Latitude
+
+The syntax binds interchange, not an implementation's internals. An
+implementation need not restrict the tags it uses internally at all, but a codec
+engine writing an interchange format — FVJ1 (`3-json-encoding.md`) or the realm
+format (`4-realm-encoding.md`) — **must not** encode a tag outside the syntax. A
+`ProblematicValue` is no exception: what it writes is its own tag,
+`Problematic@1`, and the tag it preserves travels as data (Section 3.2).
+
+What a decoder does is independent of that latitude. Reading an interchange
+format, it treats a string outside the syntax where a tag belongs as a
+structural violation, and a tag inside the syntax that no codec claims as an
+`UnknownValue` (Section 2.5.1).
+
+This implementation takes none of the latitude. It holds every tag to the
+interchange syntax: `UnknownValue` refuses construction over a tag outside it
+(Section 3.2), `CodecRegistry` refuses a codec that declares a fixed tag outside
+it (Section 4.5), and both decoders refuse one on the wire. A tag here is
+therefore always one an interchange format can carry. That is a choice of this
+implementation rather than a requirement of the formats.
+
+### 2.6 Live Environment
 
 ```typescript
 // Shown at module scope.
@@ -2727,7 +2814,7 @@ export interface LiveEnvironment {
 > fabric types may extend `LiveEnvironment` if they need capabilities beyond
 > `getCell`.
 
-### 2.6 Brand Detection
+### 2.7 Brand Detection
 
 Because `FabricInstance` is an abstract class, the idiomatic brand check is
 `instanceof`:
@@ -2746,7 +2833,7 @@ No dedicated type guard function is needed.
 > robust one: a property-brand test such as `DECONSTRUCT in value` admits any
 > object that happens to carry that property without extending the base class.
 
-### 2.7 Example: Temperature (Illustrative)
+### 2.8 Example: Temperature (Illustrative)
 
 The following example is artificial, designed to illustrate the `FabricInstance`
 protocol. It is not part of the codebase.
@@ -2873,7 +2960,7 @@ Reference types (such as the runtime's internal `Cell` type) use the
 `LiveEnvironment` parameter to look up or intern existing instances, ensuring
 that two references to the same logical entity decode to the same object.
 
-### 2.8 Encoded State and Recursion
+### 2.9 Encoded State and Recursion
 
 The value returned by a codec's `encode()` can contain any value that is
 itself a `FabricValue` — including other `FabricInstance`s (such as JS
@@ -2890,7 +2977,7 @@ type**, not the JS type. For example, the `FabricError` codec produces a
 `FabricError` instance, not a raw `Error`. Unwrapping to JS types is a
 separate step via `convertibleJsFromFabricValue()` (Section 8).
 
-### 2.9 Decode Guarantees
+### 2.10 Decode Guarantees
 
 The system follows an **immutable-forward** design. Unless an engine is
 constructed with `mutable` as `true`:
@@ -2926,7 +3013,7 @@ nature, such as a `FabricPrimitive`, is frozen either way.
 > `FrozenSet` (effectively-immutable wrappers) for collection types, preserving
 > the immutability guarantee even after unwrapping.
 
-### 2.10 Encode Input Contract
+### 2.11 Encode Input Contract
 
 Encoding is specified only for a **valid `FabricValue`** — one that has
 passed, or would pass, `isValidFabricValue()` (Section 1). Given such a value,
@@ -2986,10 +3073,10 @@ for round-tripping. They differ in what a preserved tag is allowed to be, and
 that difference decides how each reaches the wire.
 
 An `UnknownValue` preserves a tag that **is** a tag — syntactically valid per
-Section 9 of `3-json-encoding.md`, though claimed by no codec here. It is
-checked at construction. That is what lets the class encode back under the tag
-it preserved: a tag a decoder would refuse would otherwise make an instance
-that encodes and cannot be read back.
+Section 2.5, though claimed by no codec here. It is checked at construction.
+That is what lets the class encode back under the tag it preserved: a tag a
+decoder would refuse would otherwise make an instance that encodes and cannot be
+read back.
 
 A `ProblematicValue` preserves whatever was at fault, and a tag that is not a
 tag is among the faults it exists to report. It therefore **encodes under a
@@ -3638,8 +3725,8 @@ The decoding act's walk processes the `JsonCodecValue` tree:
 3. **State decode + tag syntax check** — for any other tag, the walker first
    recursively decodes the wrapped state, then rejects any tag that is not
    syntactically a type tag as an encoding error: a bare `"/"` key (the
-   empty tag), and equally a name that is not of the `<Type>@<Version>`
-   form, such as a meta-tag met outside the context that defines it. That
+   empty tag), and equally a name outside the tag syntax of Section 2.5,
+   such as a meta-tag found outside the context that defines it. That
    rejection, and every other malformed-wire fault the walker finds for
    itself, is settled against `lenient` exactly as a codec's is: a
    `ProblematicValue` leniently (Section 3.5), a raise strictly (see also
@@ -4351,7 +4438,7 @@ This applies at every point where decoded data is consumed:
   predicate over the codec's own state type, and the engine asking it of every
   state before dispatch is what makes the narrower `state` parameter `decode()`
   declares true rather than asserted. `decode()` keeps the checks whose only
-  implementation is the decoding itself. See the note in Section 2.7 for a
+  implementation is the decoding itself. See the note in Section 2.8 for a
   concrete example.
 
 - **JSON-side codec decoding** (Section 3 of `3-json-encoding.md`) must
@@ -4815,7 +4902,7 @@ produces a `FabricValue` that is structurally equivalent to `sv`.
 
 Every `FabricValue` tree an engine's `decode()` returns at a boundary crossing
 is deep-frozen, unless the engine was constructed with `mutable` as `true`
-(Section 2.9). This is enforced via a small protocol on `BaseFabricInstance`
+(Section 2.10). This is enforced via a small protocol on `BaseFabricInstance`
 together with a generic top-level utility that dispatches across the four kinds
 of values that can appear in a `FabricValue` tree. A codec's own `decode()`
 builds a mutable value only when passed `mutable` as `true` (Section 2.4), which
@@ -4973,7 +5060,7 @@ spec from being implementable.
   default-on) will be addressed in a separate document.
 
 - **`LiveEnvironment` extensibility**: The minimal interface defined in Section
-  2.5 covers `Cell` decoding. Other future fabric types may need additional
+  2.6 covers `Cell` decoding. Other future fabric types may need additional
   environment methods. Should the interface be extended, or should types cast to
   a broader interface? Recommendation: extend the interface as needed; the
   indirection through an interface (rather than depending on `Runtime` directly)

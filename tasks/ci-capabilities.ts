@@ -751,6 +751,12 @@ function exitOf(status: Deno.CommandStatus): string {
 }
 
 /**
+ * The interval, in milliseconds, between a lane server's metric exports:
+ * a week, which no lane outlives.
+ */
+export const METRIC_EXPORT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
  * Starts a Toolshed server and exports the addresses the suites reach it
  * at.
  *
@@ -811,6 +817,15 @@ async function startToolshed(
       CFTS_AI_LLM_ANTHROPIC_API_KEY: "fake",
       // Leak tests read the server's memory after a full collection.
       EXPOSE_GC: "true",
+      // A compiled server runs Deno's own OpenTelemetry with metrics on,
+      // since `build-binaries` compiles it under `OTEL_DENO`. Each metric
+      // export waits for the main thread to observe the isolate's gauges,
+      // and `Deno.exit()` waits on its main thread for the exporter to shut
+      // down, so an export that falls due while the server's main thread is
+      // busy with its own shutdown leaves the process never exiting and the
+      // close below waiting on it. An interval longer than any lane means no
+      // export falls due.
+      OTEL_METRIC_EXPORT_INTERVAL: `${METRIC_EXPORT_INTERVAL_MS}`,
       ...storeEnv,
       ...env,
       [BACKGROUND_LOG_ENV]: logFile,

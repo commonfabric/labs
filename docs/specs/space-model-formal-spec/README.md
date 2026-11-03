@@ -12,7 +12,8 @@ This spec covers:
 - **Fabric values** (Sections 1-2) -- the type universe for all persistent and
   in-flight data, and the fabric protocol (a per-class codec getter --
   `[CODEC]` or `[JSON_CODEC]` -- yielding a `FabricCodec`) for custom type
-  participation in encoding
+  participation in encoding, and the type-tag syntax every interchange format
+  shares
 - **Unknown types** (Section 3) -- forward-compatibility via `UnknownValue`
 - **Codec engines** (Section 4) -- boundary-crossing encoding strategy, the
   `encode()`/`decode()` boundary, and boundary inventory
@@ -32,8 +33,8 @@ system, schemas.
 ## Documents
 
 - [1-fabric-values.md](./1-fabric-values.md) -- Fabric value types, the
-  three-layer architecture, the fabric protocol, unknown types, encoding
-  contexts, hashing, implementation guidance, and conversion functions.
+  three-layer architecture, the fabric protocol, type tags, unknown types,
+  encoding contexts, hashing, implementation guidance, and conversion functions.
   (Sections 1-4, 6-8.)
 - [2-hash-byte-format.md](./2-hash-byte-format.md) -- Byte-level encoding for
   the hash algorithm.
