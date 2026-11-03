@@ -2099,6 +2099,7 @@ describe("stage F serving loop", () => {
     // feed skips as an echo, so no wave runs on it and only the notice's
     // reading of the access list can end the tenure.
     const seq = writeDeletionTombstone(engine, space, spaceSigner.did());
+    const tenure = host.spaceServer(space)!;
     server.noteExecutorCommit({
       space,
       seq,
@@ -2107,6 +2108,9 @@ describe("stage F serving loop", () => {
       sessionId: holder,
       writes: [{ id: `of:${space}`, scopeKey: "space" }],
     });
+    // The notice itself ends the tenure, before anything of the loop's
+    // could reach the engine's refusal.
+    expect(tenure.active).toBe(false);
     await parks.matching((entry) =>
       entry.space === space && entry.reason === "space-deleted"
     );
