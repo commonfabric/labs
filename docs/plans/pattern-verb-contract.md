@@ -661,9 +661,15 @@ required field is a guarantee its readers were given
 allowed: every reader of it already handles its absence, and a durable link to
 it was admitted with that absence in the proof. What the candidate no longer
 names is outside the proof from then on, so a later update may name that field
-again with any shape the candidate object admits. A field of a verb's event is
-the exception, refused even when optional, because a caller still sends it and
-the event would strip it without a refusal. An argument's named fields are held
+again with any shape the object's `patternProperties` and `additionalProperties`
+admit at that point: any shape when the object is open, none when it is closed.
+The allowance has three limits. A candidate that still constrains the name, by
+a matching pattern or a typed index signature, has to hold to the field's old
+contract. An object carrying a whole-object constraint such as
+`dependentRequired`, or a field compared within a union branch, keeps the
+refusal, since there another part of the schema may still name the field. And a
+field of a verb's event is refused even when optional, because a caller still
+sends it and the event would strip it without a refusal. An argument's named fields are held
 neither way: dropping one gives up a demand, which the same function accepts
 wherever the candidate object can still hold the value the piece carries. The
 removed-field check recurses, so a nested removal is judged on a nested path

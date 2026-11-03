@@ -1306,10 +1306,19 @@ function objectSubsetIssues(
   // link to it was proved with that absence admitted, so the candidate may
   // stop publishing it. Its old value is then outside the proof altogether,
   // which is why a later update can name the field again with any shape the
-  // candidate object then admits. A verb's event is the exception: a caller
-  // still sends a field the event stops declaring, and an event strips
-  // undeclared fields before any handler runs, so the caller's value would be
-  // dropped without a refusal.
+  // object's `patternProperties` and `additionalProperties` then admit — an
+  // open object admits any, a closed one none.
+  //
+  // Three things narrow that allowance. It is evolution policy, so it holds
+  // only at a whole contract boundary: inside a conjunct proof, a field one
+  // fragment does not name may be one another fragment does, and a
+  // whole-object constraint such as `dependentRequired` can name it too.
+  // A candidate that still constrains the name, through a matching pattern
+  // or a typed index signature, still publishes a value there, which must
+  // hold to every contract the previous object gave the name. And a verb's
+  // event refuses it outright: a caller still sends a field the event stops
+  // declaring, and an event strips undeclared fields before any handler
+  // runs, so the caller's value would be dropped without a refusal.
   //
   // An argument's named fields are not held either way: dropping one gives up
   // a demand, which leaves a writer's value unread rather than breaking a
@@ -1320,13 +1329,55 @@ function objectSubsetIssues(
   // from the other side: a source may name additional fields that an open
   // target accepts through patternProperties/additionalProperties, and treating
   // those as "removed" rejects valid Fabric projections such as $FS.
+  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
+    !hasComplexSameInstanceConstraints(source) &&
+    !hasComplexSameInstanceConstraints(target);
   const removed = new Set<string>();
   if (context.defaultComparison === "evolution" && context.role === "result") {
     const previousRequired = new Set(target.required ?? []);
     for (const property of Object.keys(previousProperties)) {
       if (Object.hasOwn(candidateProperties, property)) continue;
-      if (!context.verbEvent && !previousRequired.has(property)) {
+      if (
+        allowEvolutionPolicy && !context.verbEvent &&
+        !previousRequired.has(property)
+      ) {
         removed.add(property);
+        const candidatePatterns = matchingPatternPropertySchemas(
+          source.patternProperties,
+          property,
+        );
+        const published = (candidatePatterns.length > 0
+          ? candidatePatterns
+          : [additionalPropertiesOf(source)]).filter((contract) =>
+            typeof contract !== "boolean"
+          );
+        const previousContracts = [
+          targetProperties[property],
+          ...matchingPatternPropertySchemas(target.patternProperties, property),
+        ];
+        for (const candidateContract of published) {
+          for (const previousContract of previousContracts) {
+            if (
+              report(
+                property,
+                schemaSubsetIssues(
+                  candidateContract,
+                  previousContract,
+                  `${path}.${property}`,
+                  { ...context, allowEvolutionPolicy: false },
+                ),
+              )
+            ) {
+              return issues;
+            }
+            if (failed.has(property)) {
+              break;
+            }
+          }
+          if (failed.has(property)) {
+            break;
+          }
+        }
         continue;
       }
       if (
@@ -1339,9 +1390,6 @@ function objectSubsetIssues(
 
   const sourceRequired = new Set(source.required ?? []);
   const targetRequired = new Set(target.required ?? []);
-  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
-    !hasComplexSameInstanceConstraints(source) &&
-    !hasComplexSameInstanceConstraints(target);
   const allowEvolutionDefaults = allowEvolutionPolicy &&
     context.allowEvolutionDefaults;
   if (context.role === "argument") {

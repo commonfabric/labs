@@ -37,8 +37,11 @@ the old one. Two rules drive that comparison, in opposite directions:
 
 - What a pattern **accepts**, it may accept more of, never less. Accepting
   less breaks whoever was sending the thing you dropped.
-- What a pattern **provides**, it may provide more of, never less. Providing
-  less breaks whoever was reading the thing you dropped.
+- What a pattern **provides**, it may provide more of, never less of what it
+  guarantees. Providing less breaks whoever was reading the thing you
+  dropped. A field or verb it publishes as optional guarantees nothing about
+  presence, so it may stop publishing one: whoever reads it already handles
+  its absence.
 
 Sound in principle. Measured against the current runtime — not inferred —
 here is what it does to a verb's author:
@@ -406,14 +409,16 @@ Absence is evidence of retirement only on a listing that reports neither.
 | Widen a verb's input with an optional field | ok | ok | ok | ok | ok |
 | Require more of a verb's input | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** |
 | Change a verb's output | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** |
-| Rename or remove a verb | provider refused | provider refused | provider refused | provider refused | provider refused |
+| Rename or remove a required verb | provider refused | provider refused | provider refused | provider refused | provider refused |
 | Retire: add the replacement, deprecate the old | **holder refused** | ok | ok | ok | ok |
 
 "Holder refused" means the gate stops the *holder's* next update: nothing
 breaks at runtime, but the holder is stuck. "Breaks at call" means every
 gate passes and the failure arrives when someone calls the verb. "Provider
 refused" means the gate stops the provider by default — an owner may
-deliberately override it, forfeiting what the row protects.
+deliberately override it, forfeiting what the row protects. A verb the
+provider publishes as optional is outside that row: the gate lets the
+provider remove it, and a holder bound to it already handles its absence.
 
 Four things fall out of it.
 

@@ -2564,6 +2564,66 @@ describe("piece schema compatibility", () => {
       expect(patternSchemaIncompatibilities(oldPattern, closed)).toEqual([]);
     });
 
+    it("refuses dropping an optional field a typed index signature retypes", () => {
+      const retyped = pattern(oldPattern.argumentSchema, {
+        type: "object",
+        properties: { doubled: { type: "number" } },
+        required: ["doubled"],
+        additionalProperties: { type: "number" },
+      });
+      expect(
+        patternSchemaIncompatibilities(oldPattern, retyped).map(({ path }) =>
+          path
+        ),
+      ).toEqual(["result.status"]);
+    });
+
+    it("accepts dropping an optional field a typed index signature still holds", () => {
+      const held = pattern(oldPattern.argumentSchema, {
+        type: "object",
+        properties: { doubled: { type: "number" } },
+        required: ["doubled"],
+        additionalProperties: { type: "string" },
+      });
+      expect(patternSchemaIncompatibilities(oldPattern, held)).toEqual([]);
+    });
+
+    it("refuses an optional field retyped in a union branch that stops naming it", () => {
+      // Inside a conjunct proof, the `{ type: "object" }` fragment does not
+      // name `x`, but the branch beside it does: the field was retyped, not
+      // removed.
+
+      const branches = (first: "string" | "number"): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          anyOf: [
+            { properties: { x: { type: first } } },
+            { properties: { x: { type: "boolean" } } },
+          ],
+        });
+      expect(
+        patternSchemaIncompatibilities(branches("string"), branches("number")),
+      ).not.toEqual([]);
+    });
+
+    it("refuses dropping an optional field a whole-object constraint names", () => {
+      const dependent = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties,
+          dependentRequired: { y: ["x"] },
+        });
+      expect(
+        patternSchemaIncompatibilities(
+          dependent({ x: { type: "string" }, y: { type: "string" } }),
+          dependent({ y: { type: "string" } }),
+        ),
+      ).toEqual([{
+        path: "result.x",
+        reason: "existing result field was removed",
+      }]);
+    });
+
     it("refuses dropping a required field", () => {
       const withoutDoubled = pattern(oldPattern.argumentSchema, {
         type: "object",
