@@ -102,7 +102,7 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    creates load modules.
 
    ```bash
-   SERVER_EXECUTION_WORKER=false ./scripts/start-local-dev.sh --port-offset 640 --inspect
+   EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true SERVER_EXECUTION_WORKER=false ./scripts/start-local-dev.sh --port-offset 640 --inspect
    ```
 
    ```bash

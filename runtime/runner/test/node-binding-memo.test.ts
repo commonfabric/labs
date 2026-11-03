@@ -276,6 +276,22 @@ describe("node-binding-memo", () => {
       expect(memo.bindingFor(bound, () => "second")).toBe("second");
     });
 
+    it("keeps a binding whose argument is the result it forgot", () => {
+      const memo = new NodeBindingMemo<string>({
+        capacity: 16,
+        maxWeight: 1024 * 1024,
+      });
+      const consumer = subject({
+        resultLink: linkTo("consumer"),
+        argumentLink: linkTo("forgotten"),
+      });
+      memo.bindingFor(consumer, () => "first");
+
+      memo.forgetResult(linkTo("forgotten"));
+
+      expect(memo.bindingFor(consumer, () => "second")).toBe("first");
+    });
+
     it("keeps what it holds for another result", () => {
       const memo = new NodeBindingMemo<string>({
         capacity: 16,

@@ -78,7 +78,9 @@ async function removalOf(path: string, cuts: Cut[]): Promise<Removal> {
   const totals = new Map<string, number>([["(nothing removed)", reach()]]);
   for (const cut of cuts) {
     const index = graph.stringIndexOf(cut.name);
-    if (index !== undefined) {
+    if (index === undefined) {
+      console.error(`${path} has nothing named ${cut.name}; nothing removed`);
+    } else {
       (cut.kind === "node" ? nodeCut : edgeCut)[index] = 1;
     }
     totals.set(`${cut.kind}:${cut.name}`, reach());
@@ -136,8 +138,13 @@ if (import.meta.main) {
   const cuts: Cut[] = [];
   for (let i = 3; i < Deno.args.length; i++) {
     if (Deno.args[i] !== "--cut") continue;
-    const [kind, ...rest] = Deno.args[++i].split(":");
-    cuts.push({ kind, name: rest.join(":") });
+    const [kind, ...rest] = (Deno.args[++i] ?? "").split(":");
+    const name = rest.join(":");
+    if ((kind !== "edge" && kind !== "node") || name === "") {
+      console.error(`--cut takes edge:NAME or node:NAME, not ${Deno.args[i]}`);
+      Deno.exit(2);
+    }
+    cuts.push({ kind, name });
   }
   const a = await removalOf(pathA, cuts);
   const b = await removalOf(pathB, cuts);

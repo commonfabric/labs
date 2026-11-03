@@ -107,14 +107,14 @@ export class NodeBindingMemo<Binding> {
   }
 
   /**
-   * Drops every binding held whose subject names `resultLink`'s address, for a
-   * result nothing will bind on soon: a binding can hold the cells of the run
-   * that computed it, and each cell holds that run's transaction.
+   * Drops every binding held on `resultLink`'s address, for a result nothing
+   * will bind on soon: a binding can hold the cells of the run that computed it,
+   * and each cell holds that run's transaction.
    */
   forgetResult(resultLink: NormalizedFullLink): void {
-    const address = JSON.stringify(addressKey(resultLink));
+    const prefix = `[${JSON.stringify(addressKey(resultLink))},`;
     for (const key of [...this.#entries.keys()]) {
-      if (key.includes(address)) this.#entries.delete(key);
+      if (key.startsWith(prefix)) this.#entries.delete(key);
     }
   }
 
@@ -138,17 +138,20 @@ export class NodeBindingMemo<Binding> {
 
   /**
    * The key `subject`'s binding is held under: its members as one JSON
-   * array, so that no two subjects share a key.
+   * array, so that no two subjects share a key. The result's address comes
+   * first, which is what {@link forgetResult} finds a result's bindings by.
    */
   #key(subject: NodeBindingSubject): string {
+    const [resultAddress, resultSchema] = linkMembers(subject.resultLink);
     return JSON.stringify([
+      resultAddress,
+      resultSchema,
       this.#memberKey(subject.node),
       this.#memberKey(subject.pattern),
       subject.implementation === undefined
         ? null
         : this.#memberKey(subject.implementation),
       subject.variant,
-      linkMembers(subject.resultLink),
       subject.argumentLink === undefined
         ? null
         : linkMembers(subject.argumentLink),

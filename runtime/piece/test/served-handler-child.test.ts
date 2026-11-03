@@ -208,6 +208,49 @@ describe("served-handler-child", () => {
     }
   });
 
+  it("keeps running when a client demands what its nodes write at the commit", async () => {
+    const pieces = await clientPieces();
+    const demanded = await host.runLifecycleVerb(space, {
+      name: "stub demand",
+      run: (runtime) =>
+        Promise.resolve(
+          stub(runtime.scheduler, "pieceHasDemandedWriter", () => true),
+        ),
+    });
+    try {
+      const child = await addChildOnServer(pieces, "first");
+
+      expect(await runningOnServer(child.getAsNormalizedFullLink())).toBe(true);
+    } finally {
+      demanded.restore();
+    }
+  });
+
+  it("names a demanded writer once a client tracks a value it derives", async () => {
+    // The two tests above stub the demand, because a client cannot name a child's
+    // document before the handler that creates it has committed. This one is the
+    // real client demand those stubs stand in for.
+    const pieces = await clientPieces();
+    const child = await addChildOnServer(pieces, "first");
+    const { id } = child.getAsNormalizedFullLink();
+    const hasDemandedWriter = () =>
+      host.runLifecycleVerb(space, {
+        name: "inspect demand",
+        run: (runtime) =>
+          Promise.resolve(
+            runtime.scheduler.pieceHasDemandedWriter(space, id),
+          ),
+      });
+    expect(await hasDemandedWriter()).toBe(false);
+
+    const upper = child.key("upper") as Cell<unknown>;
+    const cancel = upper.sink(() => {});
+    expect(await pullFromServer(pieces.runtime, upper)).toBe(true);
+
+    expect(await hasDemandedWriter()).toBe(true);
+    cancel();
+  });
+
   it("indexes no pattern per event once the transaction commits", async () => {
     const pieces = await clientPieces();
     const child = await addChildOnServer(pieces, "first");

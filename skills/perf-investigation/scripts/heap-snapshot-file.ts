@@ -40,7 +40,7 @@ export type HeapGraph = {
   nameOf: (node: number) => string;
   typeOf: (node: number) => string;
   selfSizeOf: (node: number) => number;
-  /** The index of `text` among `strings`, for text under 80 characters. */
+  /** The index of `text` among the snapshot's strings, if it has it. */
   stringIndexOf: (text: string) => number | undefined;
   stringCount: number;
 };
@@ -96,9 +96,7 @@ export async function readHeapGraph(path: string): Promise<HeapGraph> {
   // A WeakMap's table names each pair with the table's own id.
   const tableOfPair = new Map<number, number>();
   const pairName = /pair in WeakMap \(table @(\d+)\)$/;
-  const indexes = new Map<string, number>();
   strings.forEach((text, index) => {
-    if (text.length < 80 && !indexes.has(text)) indexes.set(text, index);
     if (text.length < 40 || !text.includes("part of key")) return;
     const match = pairName.exec(text);
     if (match) tableOfPair.set(index, Number(match[1]));
@@ -141,7 +139,10 @@ export async function readHeapGraph(path: string): Promise<HeapGraph> {
     nameOf: (node) => strings[nodes[node * nodeFieldCount + nameField]] ?? "?",
     typeOf: (node) => nodeTypes[nodes[node * nodeFieldCount + typeField]],
     selfSizeOf: (node) => nodes[node * nodeFieldCount + selfField],
-    stringIndexOf: (text) => indexes.get(text),
+    stringIndexOf: (text) => {
+      const index = strings.indexOf(text);
+      return index === -1 ? undefined : index;
+    },
     stringCount: strings.length,
   };
 }

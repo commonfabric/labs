@@ -31,6 +31,10 @@ import {
   moduleWithReusedGraphBindings,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
+import {
+  KEYLESS_PATTERN_IDENTITY_PREFIX,
+  setArtifactEntryRef,
+} from "../src/builder/pattern-metadata.ts";
 import type { Module } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createCell, exportCell } from "../src/cell.ts";
@@ -460,7 +464,7 @@ describe("to-encodable-form", () => {
   });
 
   describe("moduleWithReusedGraphBindings", () => {
-    const closedGraph = () => ({
+    const graphOfNoIdentity = () => ({
       argumentSchema: {},
       resultSchema: {},
       result: { $alias: { cell: "result", path: ["title"] } },
@@ -470,6 +474,11 @@ describe("to-encodable-form", () => {
         outputs: {},
       }],
     });
+    const closedGraph = () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, { identity: "module", symbol: "default" });
+      return graph;
+    };
     const moduleOf = (implementation: unknown) =>
       ({ type: "pattern", implementation }) as unknown as Module;
 
@@ -495,6 +504,27 @@ describe("to-encodable-form", () => {
       const graph = closedGraph();
       const first = moduleWithAliasBindings(moduleOf(graph));
       const second = moduleWithAliasBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with no content identity again each time", () => {
+      // Only a content identity promises that the graph will not change.
+      const graph = graphOfNoIdentity();
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with a keyless identity again each time", () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, {
+        identity: `${KEYLESS_PATTERN_IDENTITY_PREFIX}built`,
+        symbol: "default",
+      });
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
 
       expect(second.implementation).not.toBe(first.implementation);
     });

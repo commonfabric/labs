@@ -90,9 +90,10 @@ type BindingWalk = {
 
 /**
  * Each pattern graph's bound form, for a graph whose binding depended on nothing
- * but the graph: it reached no cell, and closed no cycle through a record above
- * it. Binding such a graph again would rebuild the same structure, which for a
- * pattern a handler starts on every event is a copy of its whole graph per event.
+ * but the graph: it has a content identity, so it will not change, it reached no
+ * cell, and it closed no cycle through a record above it. Binding such a graph
+ * again would rebuild the same structure, which for a pattern a handler starts on
+ * every event is a copy of its whole graph per event.
  */
 const closedGraphBindings = new WeakMap<object, FabricExecValue>();
 
@@ -249,8 +250,8 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   // pattern's `nodes` are bound node by node, each node's module as a module;
   // see `bindGraphMember()`.
   if (isObjectOrArray(value) || isPattern(value)) {
-    if (walk.reusesClosedGraphs && isPattern(value)) {
-      return bindGraphOnce(value, walk);
+    if (walk.reusesClosedGraphs && hasContentIdentity(value)) {
+      return bindGraphOnce(value as object, walk);
     }
     // If this is a pattern, serialize it through the INTERNAL graph
     // serializer (its toJSON under the internal-serialization context): this
@@ -301,6 +302,13 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
     );
   }
   return value as FabricExecFunction;
+}
+
+/** Whether `value` is a pattern named by the content of the module defining it. */
+function hasContentIdentity(value: unknown): boolean {
+  if (!isPattern(value)) return false;
+  const ref = getArtifactEntryRef(value);
+  return ref !== undefined && !isKeylessPatternIdentity(ref.identity);
 }
 
 /**

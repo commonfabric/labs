@@ -5459,14 +5459,16 @@ export class Runner {
    * Helper for a handler's result on a serving runtime, which stops the pieces
    * the result started once its transaction has committed, leaving what the store
    * holds. A demand or an event starts one again, as either does after a restart.
-   * A piece a client demands at this moment keeps running: its demand has already
-   * made its one attempt to load the piece, and nothing would make another. A
-   * stopped piece's node bindings and index entry go with it, since they hold the
-   * cells of the run that started it, and those hold its transaction.
+   * A piece keeps running where a client demands, at this moment, its document or
+   * anything its nodes write: that demand has already made its one attempt to load
+   * the piece, and nothing would make another. A stopped piece's node bindings and
+   * index entry go with it, since they hold the cells of the run that started it,
+   * and those hold its transaction.
    */
   #releaseServedHandlerResult<T>(
     resultCell: Cell<T>,
     installedCancel: Cancel | undefined,
+    resultPattern: Pattern,
   ): void {
     const pointer = this.#sessionPatternPointer(resultCell);
     this.#releasingServedResult = true;
@@ -5475,8 +5477,10 @@ export class Runner {
     } finally {
       this.#releasingServedResult = false;
     }
-    const key = this.#getDocKey(resultCell);
-    if (pointer !== undefined && !this.#cancels.has(key)) {
+    if (pointer === undefined) return;
+    if (this.#cancels.has(this.#getDocKey(resultCell))) {
+      this.#runtime.patternManager.keepKeylessPattern(resultPattern);
+    } else {
       this.#runtime.patternManager.forgetKeylessPattern(pointer.identity);
     }
   }
@@ -5521,11 +5525,12 @@ export class Runner {
       : undefined;
     if (
       link !== undefined &&
-      this.#runtime.scheduler.isDemandedEntity({
+      (this.#runtime.scheduler.isDemandedEntity({
         space: link.space,
         id: link.id,
         scope: link.scope,
-      })
+      }) ||
+        this.#runtime.scheduler.pieceHasDemandedWriter(link.space, link.id))
     ) {
       this.#independentlyStartedResults.add(key);
       return;
@@ -13709,7 +13714,11 @@ export class Runner {
       } else {
         tx.addCommitCallback((_committedTx, commitResult) => {
           if (!commitResult.error) {
-            this.#releaseServedHandlerResult(resultCell, installedCancel);
+            this.#releaseServedHandlerResult(
+              resultCell,
+              installedCancel,
+              resultPattern,
+            );
           }
         });
       }

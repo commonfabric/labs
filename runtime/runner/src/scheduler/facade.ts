@@ -1587,6 +1587,15 @@ export class Scheduler {
     return this.#demandedEntityRefs.has(entityNameKey(address as never));
   }
 
+  /** Whether a client session tracks an instance a node of the piece `id` writes. */
+  pieceHasDemandedWriter(space: MemorySpace, id: string): boolean {
+    for (const action of this.#nodes.demandedWriters) {
+      const { viewPiece } = action as Partial<TelemetryAnnotations>;
+      if (viewPiece?.space === space && viewPiece.id === id) return true;
+    }
+    return false;
+  }
+
   /** LEAVE: the last session tracking the instance key left (R-D's
    * coarse boundary — never early). The 1→0 transition releases the
    * writers' root status (bracketed; `withdrawDemandFrom` re-derives from
