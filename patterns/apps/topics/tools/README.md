@@ -184,14 +184,14 @@ nothing the view draws, searches, or edits holds it, and a view puts a
 placeholder saying why in its place, where the commands leave it blank.
 
 The view follows the board as `watch` does. A Topic that changes lights up, and
-the one being read is drawn again as it stands. Which Topics have activity the
+the one being read is drawn again as it stands. A Topic's activity is the
+`lastActivityAt` stored on it, which, as the Topics README says, is reliable
+once every writer runs the current Topic module. Which Topics have activity the
 person has not read, which **View ▸ Mark all read** clears, is remembered
 between runs, along with drafts, writes not yet known to have landed, and the
 name writes are signed with, in a file under `$XDG_STATE_HOME` (or
 `~/.local/state`) beside the invocation session (`browse.ts`), readable only by
-its owner. A Topic's activity is the `lastActivityAt` stored on it, which, as
-the Topics README says, is reliable once every writer runs the current Topic
-module. Each change to a draft or a pending write stamps it later than any
+its owner. Each change to a draft or a pending write stamps it later than any
 version before it, and one thrown away is remembered by the stamp of the version
 thrown away. Each save takes a lock beside the file and merges what another
 browser saved there meanwhile, keeping the newer of each draft and pending
@@ -209,7 +209,8 @@ when the body or title it edits has changed on the board since the edit began,
 showing the board's version and asking before saving over it.
 
 Saving a draft takes it out of the drafts and keeps it as a pending write, under
-an invocation the browser mints for it, until the write is known to have landed;
+the invocation minted with that version of the draft, until the write is known
+to have landed, so that two browsers saving the same version write it once;
 meanwhile the editor for it will not open, so nothing is posted twice. A write
 runs the same command the client runs from the command line, one at a time
 (`writes.ts`), and each attempt is counted, and saved, before it is made; one

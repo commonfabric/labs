@@ -25,6 +25,7 @@ import {
   mix,
   paintRows,
   type Row,
+  type Span,
   span,
   spread,
 } from "./text.ts";
@@ -369,7 +370,7 @@ function card(
       links + event.topic.number,
     ),
     span("  ", { bg }),
-    span(event.topic.title, { fg: C.fgBright, bold: true, bg }),
+    shownTitle(event.topic, { fg: C.fgBright, bold: true, bg }),
   ];
   const shadow = span(" ", { bg: C.shadow });
   const rows: Row[] = [
@@ -499,17 +500,25 @@ function layOut(
           links + event.other.number,
         ),
         span("  "),
-        event.other.withheld
-          ? span("withheld", { fg: C.fgDim, italic: true })
-          : span(event.other.title, { fg: C.fgBright }),
+        shownTitle(event.other, { fg: C.fgBright }),
       ];
       return [event.kind === "mention" ? row : struck(row)];
     }
     case "retitled":
-      return [[span(event.topic.title, { fg: C.green, bold: true })]];
+      return [[shownTitle(event.topic, { fg: C.green, bold: true })]];
     case "body":
       return clipRows(bodyChange(event.before, event.topic.body, width), lines);
   }
+}
+
+/**
+ * `topic`'s title in `style`, or, for a Topic withheld from this display,
+ * that it is withheld.
+ */
+function shownTitle(topic: Topic, style: Style): Span {
+  return topic.withheld
+    ? span("withheld", { ...style, fg: C.fgDim, bold: false, italic: true })
+    : span(topic.title, style);
 }
 
 /** `row` dimmed and struck through, as what was taken back is. */

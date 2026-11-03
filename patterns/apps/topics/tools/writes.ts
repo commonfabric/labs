@@ -3,8 +3,10 @@
  * browser keeps it: drafts, kept until they are saved, and pending writes,
  * kept from the moment one is asked for until it is known to have landed.
  *
- * A write is made under an invocation minted for it here, so that naming
- * the invocation again settles it rather than writing twice. A write is
+ * A write is made under an invocation minted with the version of the
+ * draft it saves, so that naming the invocation again settles it rather
+ * than writing twice, and so that two browsers saving the same version
+ * write it once. A write is
  * given up as certainly not made only when its first attempt failed before
  * it was dispatched; a later attempt may be settling an earlier one that
  * landed, so it keeps the write pending whatever it reports.
@@ -146,7 +148,8 @@ export class Writes {
       request,
       agentName,
       attempts: 0,
-      at: this.#now(),
+      // Later than an attempt of it that failed and gave its draft back.
+      at: this.#stamp(invocation),
       ...(key === undefined || draft === undefined
         ? {}
         : { draft: { key, fields: draft.fields, base: draft.base } }),

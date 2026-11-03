@@ -753,7 +753,7 @@ describe("watch", () => {
       expect(errors).toEqual([14]);
     });
 
-    it("says a count or a timer as it stood when asked, and clears nothing once undone", () => {
+    it("says a count or a timer as it stood when asked, across holds, and clears nothing once undone", () => {
       const printed: [string, unknown[]][] = [];
       const record = (as: string) => (...args: unknown[]) =>
         void printed.push([as, args]);
@@ -772,25 +772,36 @@ describe("watch", () => {
       out.count("x");
       out.countReset("x");
       out.count("x");
+      out.count();
       out.clear();
       out.time("t");
+      out.timeLog("t", "half", 2);
       out.timeEnd("t");
       out.timeEnd("t");
       // A value with nothing to make it a string is said as it is.
       out.info(Object.create(null));
       undo();
 
-      expect(said.slice(0, 3)).toEqual(["x: 1", "x: 2", "x: 1"]);
-      expect(said[3]).toMatch(/^t: \d+\.\d{3}ms$/);
-      expect(said[4]).toBe("Timer 't' does not exist");
+      expect(said.slice(0, 4)).toEqual(["x: 1", "x: 2", "x: 1", "default: 1"]);
+      expect(said[4]).toMatch(/^t: \d+\.\d{3}ms half 2$/);
+      expect(said[5]).toMatch(/^t: \d+\.\d{3}ms$/);
+      expect(said[6]).toBe("Timer 't' does not exist");
       expect(printed.map(([as, [line]]) => [as, line])).toEqual([
         ["info", "x: 1"],
         ["info", "x: 2"],
         ["info", "x: 1"],
-        ["info", said[3]],
+        ["info", "default: 1"],
+        ["info", said[4].replace(/ half 2$/, "")],
+        ["info", said[5]],
         ["warn", "Timer 't' does not exist"],
         ["info", Object.create(null)],
       ]);
+
+      // A count outlasts the hold it was made in.
+      const again = terminal.hold((text) => said.push(text));
+      out.count("x");
+      again();
+      expect(said.at(-1)).toBe("x: 2");
     });
 
     it("writes all of a text however little each write takes, and hands on size, raw mode, input, and resizes", () => {

@@ -409,13 +409,14 @@ export function consoleTerminal(
   out: Pick<Console, ConsoleMethod> = console,
 ): Terminal {
   const encoder = new TextEncoder();
+  // Counts and timers outlast a hold, as the console's own do.
+  const counting = counter();
   return {
     hold(said) {
       // Each thing said, to say it again once the hold is undone.
       const held: (() => void)[] = [];
       const undo: (() => void)[] = [];
       const { info, warn } = out;
-      const counting = counter();
       for (const method of CONSOLE_METHODS) {
         const original = out[method];
         out[method] = (...args: unknown[]) => {

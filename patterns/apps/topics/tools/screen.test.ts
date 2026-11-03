@@ -364,7 +364,7 @@ describe("screen", () => {
       );
     });
 
-    it("says a Topic withheld from this display is withheld, in the list and in a mention", () => {
+    it("says a Topic withheld from this display is withheld, in the list, a card, and a mention", () => {
       const hidden = topic({ number: "3", title: "", withheld: true });
       const fryer = topic({ title: "Fryer fixed" });
       const shown = rows(
@@ -372,6 +372,12 @@ describe("screen", () => {
           state({
             topics: [hidden],
             feed: [
+              live({
+                kind: "comment",
+                topic: hidden,
+                comment: COMMENT,
+                at: NOW,
+              }),
               live({ kind: "mention", topic: fryer, other: hidden, at: NOW }),
             ],
           }),
@@ -382,7 +388,7 @@ describe("screen", () => {
       ).join("\n");
 
       expect(shown).toMatch(/ 3 withheld/);
-      expect(shown).toMatch(/top\/3 {2}withheld/);
+      expect(shown.match(/top\/3 {2}withheld/g)?.length).toBe(2);
     });
 
     it("links each Topic's number to where a browser opens it, in the list, a card, and a mention", () => {
