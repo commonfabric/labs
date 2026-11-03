@@ -10,10 +10,12 @@
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { exportCell, isCell } from "../cell.ts";
+import { applyLocalExperimentalDefaults } from "../experimental-defaults.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
+import type { ExperimentalOptions } from "../runtime.ts";
 import type { JSONObject, OpaqueCell } from "./types.ts";
 
 /** The name each instance root was given, keyed by its root cell. */
@@ -47,6 +49,22 @@ export function namesInstances(
   experimental: { readonly instanceNames?: boolean | undefined },
 ): boolean {
   return experimental.instanceNames === true;
+}
+
+/**
+ * Whether a runtime of this build given the experimental options
+ * `experimental` names instances, once its local defaults fill in what
+ * `experimental` leaves unset, as `namesInstances()` reads the flag. With no
+ * argument, whether a runtime given no option names them.
+ */
+export function namesInstancesByDefault(
+  experimental: { readonly instanceNames?: boolean | undefined } = {},
+): boolean {
+  const resolved: ExperimentalOptions = {
+    instanceNames: experimental.instanceNames,
+  };
+  applyLocalExperimentalDefaults(resolved);
+  return namesInstances(resolved);
 }
 
 /** The instance name given to the root cell `root`, if any. */

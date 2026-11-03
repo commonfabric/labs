@@ -148,6 +148,12 @@ export class StandaloneMemoryServer {
        * non-persistent store, which only this thread can reach.
        */
       store?: URL;
+
+      /**
+       * The server's posture (INV-16), as `Server` takes it. Default: none,
+       * and the server names no instances.
+       */
+      namesInstances?: () => boolean;
     } = {},
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
@@ -163,6 +169,9 @@ export class StandaloneMemoryServer {
       ...(options.inviteHost === undefined
         ? {}
         : { inviteHost: options.inviteHost }),
+      ...(options.namesInstances === undefined
+        ? {}
+        : { namesInstances: options.namesInstances }),
     });
     const channels = new Set<MemoryMessageCompressionChannel>();
     const http = Deno.serve({
