@@ -54,6 +54,7 @@ import {
 import { getArtifactEntryRef } from "../src/builder/pattern-metadata.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { getLogger } from "@commonfabric/logger";
+import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
 const spaceSigner = await Identity.fromPassphrase("serving loop space");
@@ -2087,6 +2088,47 @@ describe("stage F serving loop", () => {
     expect(host.spaceServer(space)).toBeUndefined();
   });
 
+  it("clears a deleted space's failure streak when it refuses the space, so later triggers do not back off", async () => {
+    const engine = await server.engineForSpace(space);
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    host = newHost({ failureParkBackoffBaseMs: 10 });
+    // The first activation fails before it reads anything, which starts a
+    // streak; the re-activation backs off once, then refuses the space.
+    engineOpenFailures = 1;
+    warmNotice(engine, "deleted-streak-1");
+    const first = await refused();
+    expect(host.stats().reactivationBackoffs).toBe(1);
+
+    warmNotice(engine, "deleted-streak-2");
+    await activations.matching((entry) =>
+      entry !== first && entry.space === space && entry.outcome === "refused"
+    );
+    expect(host.stats().reactivationBackoffs).toBe(1);
+  });
+
+  it("discards the runtime kept from a deleted space's idle park when it refuses the space", async () => {
+    server = newSharedServer({
+      sessions: new MemoryV2Server.SessionRegistry({ ttlMs: 50 }),
+      subscriptionRefreshDelayMs: 0,
+    });
+    onServingRuntime = () => Promise.resolve();
+    host = newHost({ flushDeadlineMs: 500, idleParkMs: 100 });
+    const { engine } = await activateOnClientWrite("deleted-kept-input");
+    // Drop the client so the space parks idle, keeping its runtime.
+    await clientRuntime.dispose();
+    await clientManager.close();
+    openClient();
+    await parks.matching((entry) =>
+      entry.space === space && entry.reason === "idle"
+    );
+    expect(host.stats().parkedRuntimes.held).toBe(1);
+
+    writeDeletionTombstone(engine, space, spaceSigner.did());
+    warmNotice(engine, "deleted-kept-warm");
+    await refused();
+    expect(host.stats().parkedRuntimes.held).toBe(0);
+  });
+
   it("ends a tenure for good on the host's notice that its space's access list became a deletion tombstone", async () => {
     onServingRuntime = () => Promise.resolve();
     host = newHost({ idleParkMs: 600_000 });
@@ -2100,6 +2142,12 @@ describe("stage F serving loop", () => {
     // reading of the access list can end the tenure.
     const seq = writeDeletionTombstone(engine, space, spaceSigner.did());
     const tenure = host.spaceServer(space)!;
+    let engineOpens = 0;
+    const engineForSpace = server.engineForSpace.bind(server);
+    server.engineForSpace = (openedSpace) => {
+      if (openedSpace === space) engineOpens += 1;
+      return engineForSpace(openedSpace);
+    };
     server.noteExecutorCommit({
       space,
       seq,
@@ -2114,12 +2162,16 @@ describe("stage F serving loop", () => {
     await parks.matching((entry) =>
       entry.space === space && entry.reason === "space-deleted"
     );
-    await host.spaceServer(space)?.whenParked;
+    await tenure.whenParked;
     expect(engine.executionLeases.holderOf(space)).toBeUndefined();
+    // Nothing re-evaluates the space once its tenure has parked, though the
+    // client's session is still live demand: no activation opens its engine
+    // again until a trigger asks.
+    await flushMicrotasks();
+    expect(engineOpens).toBe(0);
 
-    // The client's session is still live demand, and the space is still not
-    // served: a later trigger is refused, and the park was no failure to
-    // back off from.
+    // A later trigger is refused, and the park was no failure to back off
+    // from.
     warmNotice(engine, "deleted-notice-warm");
     await refused();
     expect(host.spaceServer(space)).toBeUndefined();
@@ -2142,10 +2194,11 @@ describe("stage F serving loop", () => {
       sessionId: "other-process",
       writes: [{ id: "of:deleted-commit-wake", scopeKey: "space" }],
     });
+    const tenure = host.spaceServer(space)!;
     await parks.matching((entry) =>
       entry.space === space && entry.reason === "space-deleted"
     );
-    await host.spaceServer(space)?.whenParked;
+    await tenure.whenParked;
     expect(engine.executionLeases.holderOf(space)).toBeUndefined();
     warmNotice(engine, "deleted-commit-warm");
     await refused();

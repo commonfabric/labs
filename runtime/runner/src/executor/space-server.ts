@@ -968,6 +968,8 @@ export class SpaceServer implements TransactionSealDestination {
   #active = false;
   #loopRunning = false;
   #parkRequested = false;
+  /** Set by a park for the space's deletion; see `endedForDeletion`. */
+  #endedForDeletion = false;
   readonly #parked = Promise.withResolvers<void>();
   #idleSince: number | undefined;
   #demandedRoots = new Set<string>();
@@ -1611,6 +1613,12 @@ export class SpaceServer implements TransactionSealDestination {
 
   get watermark(): number {
     return this.#watermark;
+  }
+
+  /** Whether this tenure ended because its space is deleted, which no
+   * successor serves (serving-loop.md, "A deleted space"). */
+  get endedForDeletion(): boolean {
+    return this.#endedForDeletion;
   }
 
   /** Resolves when this SpaceServer has fully parked: its runtime
@@ -8253,6 +8261,7 @@ export class SpaceServer implements TransactionSealDestination {
 
   async #parkResources(reason: string): Promise<void> {
     const wasActive = this.#active;
+    if (reason === SPACE_DELETED_PARK) this.#endedForDeletion = true;
     // Only an idle park offers the runtime on (serving-loop.md §1,
     // "Parking"): the loop settled, nothing was queued, and no session
     // demanded anything, so the runtime holds a served state a successor

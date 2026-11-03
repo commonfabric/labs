@@ -2951,6 +2951,13 @@ export class WaveAccumulator
           changes,
         );
         if (result.error === undefined) continue;
+        // A change to this tenure's own list refused for its deletion ends
+        // the tenure, as the home commit's refusal would; one to another
+        // space's list requeues like any other refusal, and the replay's
+        // seal refuses it.
+        if (result.error.name === "SpaceDeleted" && space === this.#space) {
+          return this.#abortForDeletedSpace(outcome);
+        }
         logger.warn("access-list-change-commit-refused", () => [
           `access-list change to ${space} by event ` +
           `${contribution.context.eventId} refused at the wave commit; ` +
