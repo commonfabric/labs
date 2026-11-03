@@ -1475,9 +1475,12 @@ const performManagerAct = (
           return;
         }
       }
-      // The counterpart is kept, since `direct` stops naming it once a
-      // replacement takes the room's place there.
-      const counterpart = membership?.counterpart;
+      const counterpart = forgottenCounterpart(
+        kind,
+        membership,
+        direct.get() ?? {},
+        room,
+      );
       const entry: RoomMembership = {
         room,
         container: membership?.container ?? container,
@@ -1530,11 +1533,18 @@ const performManagerAct = (
       });
       return;
     }
+    const counterpart = forgottenCounterpart(
+      kind,
+      membership,
+      direct.get() ?? {},
+      room,
+    );
     state.roomMembership.set([
       ...memberships,
       {
         room,
         kind,
+        ...(counterpart === undefined ? {} : { counterpart }),
         since: epochNsecFromMsec(entry?.since ?? 0),
         state: "archived",
         revision: eventKey(),
@@ -1978,6 +1988,23 @@ const counterpartOf = (
   const creator = principalOf(aboutRecordOf(room), "authored-by");
   return creator === self ? undefined : creator;
 };
+
+/**
+ * The counterpart a forgotten direct room's membership keeps: its own
+ * record's, or else the one `direct` or the room's creator names now. A
+ * room held only through the catalog has no record of its own, and `direct`
+ * stops naming its counterpart once a replacement takes the room's place
+ * there, so it is read while it still does.
+ */
+const forgottenCounterpart = (
+  kind: ChatIndexEntry["kind"],
+  membership: RoomMembership | undefined,
+  direct: Record<string, ChatIndexEntry>,
+  room: Cell<ChatRoomLink>,
+): string | undefined =>
+  kind === "direct"
+    ? membership?.counterpart ?? counterpartOf(direct, room, currentPrincipal())
+    : undefined;
 
 /**
  * Whether `room`'s space is deleted: by the catalog's word, an entry in the

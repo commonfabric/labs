@@ -2272,4 +2272,107 @@ describe("Home chat manager and a deleted room", () => {
       );
     });
   }
+
+  it("keeps the counterpart of a forgotten direct room the manager held only through the catalog", async () => {
+    // A room from before the manager recorded memberships is held through the
+    // catalog alone. Forgetting it records a membership, which has to name the
+    // counterpart while `direct` still does: once a replacement takes the
+    // room's place there, nothing else names it.
+
+    let refuse: ReturnType<typeof refusingServer>["refuse"] | undefined;
+    const BOB = "did:key:z6MkBob";
+    await withHome(
+      false,
+      async (runtime, home, _peer, server) => {
+        await sendReviewed(
+          runtime,
+          home.key("createProfile"),
+          { name: "Ada" },
+          "ProfileCreateSurface",
+          "CreateProfile",
+        );
+        const manager = home.key("chatManager");
+        const start = async (requestId: string) => {
+          await sendReviewed(
+            runtime,
+            manager.key("openDirect"),
+            { requestId, counterpart: BOB },
+            "ChatStartSurface",
+            "ChatStart",
+          );
+          const outcome = await waitForCellValue<{ status: string }>(
+            runtime,
+            manager.key("requests").key(requestId),
+            (value) => value !== undefined && value.status !== "pending",
+            { stuckLabel: `the ${requestId} request` },
+          );
+          expect(outcome.status).toBe("done");
+          return manager.key("requests").key(requestId).key("entry").key("room")
+            .resolveAsCell();
+        };
+        const room = await start("d-1");
+        const first = room.space;
+        const { error } = await runtime.editWithRetry((tx) => {
+          manager.key("roomMembership").withTx(tx).set([]);
+        });
+        expect(error).toBeUndefined();
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the room found through the catalog" },
+        );
+        sendEvent(manager.key("forget"), {
+          requestId: "forget-d-1",
+          room,
+          revision: (await home.key("sharedSpaceCatalog").pull()).entries[first]
+            .revision,
+        });
+        const forgotten = await waitForCellValue<{ status: string }>(
+          runtime,
+          manager.key("requests").key("forget-d-1"),
+          (value) => value !== undefined && value.status !== "pending",
+          { stuckLabel: "the forget-d-1 request" },
+        );
+        expect(forgotten.status).toBe("done");
+        writeDeletionTombstone(
+          await server.engineForSpace(first),
+          first,
+          owner.did(),
+        );
+        refuse!(first, "deleted");
+        const commands = home.key("sharedSpaces").key("commands")
+          .asSchema(sharedSpaceCommandsSchema);
+        sendEvent(commands.key("markDeleted"), {
+          space: first,
+          expectedRevision:
+            (await home.key("sharedSpaceCatalog").pull()).entries[first]
+              .revision,
+        });
+        await waitForCellValue<Record<string, { state: string }>>(
+          runtime,
+          home.key("sharedSpaceCatalog").key("entries"),
+          (value) => value?.[first]?.state === "deleted",
+          { stuckLabel: "the entry marked deleted" },
+        );
+        const second = await start("d-2");
+        expect(second.space).not.toBe(first);
+        const deleted = await waitForCellValue<
+          { kind: string; counterpart?: string }[]
+        >(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => value?.length === 1,
+          { stuckLabel: "the forgotten room listed as deleted" },
+        );
+        expect(deleted[0]).toMatchObject({ kind: "direct", counterpart: BOB });
+      },
+      undefined,
+      (server) => {
+        const refusing = refusingServer(server);
+        refuse = refusing.refuse;
+        return refusing.server as Server;
+      },
+    );
+  });
 });
