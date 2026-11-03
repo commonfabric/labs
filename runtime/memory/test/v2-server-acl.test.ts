@@ -3825,7 +3825,10 @@ describe("v2-server-acl", () => {
         );
         try {
           const seq = await deleteElsewhere(store, space, ALICE);
-          const refusal = { refused: `Space ${space} is deleted` };
+          const refusal = {
+            refused: `Space ${space} is deleted`,
+            deleted: true,
+          };
           const change = served(ALICE, "e1", { [CAROL]: "WRITE" });
 
           expect(await server.checkServedAclChange(change)).toEqual(refusal);

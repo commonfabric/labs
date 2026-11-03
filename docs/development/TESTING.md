@@ -496,6 +496,23 @@ EOF wait. When investigating a teardown stall, capture every holder of the
 pipe, including renderers and detached updater processes, and record assertion
 completion separately from suite and process completion.
 
+A browser also ends with the process that launched it, whether or not anything
+closed it. An `afterAll` does not run after an uncaught error ends a test file,
+and nothing runs after `SIGKILL`, so this cannot be left to the test process.
+`spawnBrowserProcess()` in `runtime/integration/browser-process.ts` starts
+Chrome through a short shell program, which leaves one background job in the
+browser's process group. The job blocks reading a pipe that only the launching
+process holds open. The kernel closes that pipe however the process ends, and
+the job then sends `SIGKILL` to the group. The profile directory stays behind in
+that case, because removing it is `Browser.close()`'s work.
+
+On macOS, a running test's browser and a leftover one differ in their parent and
+their output pipes. A running test's browser has the test process as its parent,
+and `lsof` shows a peer on its standard output and standard error. A leftover
+browser has PID 1 as its parent and no peer on either pipe, and nothing can give
+it back a reader. Stop a leftover browser by its PID, since other test runs on
+the machine may be using browsers that look the same by name.
+
 Browser tests require macOS or Linux. The launcher rejects other platforms
 before it starts a browser.
 

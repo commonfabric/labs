@@ -772,6 +772,13 @@ export type LifecycleVerb<T> = {
 export const LIFECYCLE_VERB_SPACE_PARKED =
   "the space parked before the lifecycle verb ran";
 
+/**
+ * The park reason of a tenure ended because its space is deleted
+ * (serving-loop.md, "A deleted space"). The host starts no tenure for the
+ * space again.
+ */
+export const SPACE_DELETED_PARK = "space-deleted";
+
 /** The reason carried by a seal a tenure refuses once it has parked. */
 export const SEAL_AFTER_PARK_REFUSED = "seal-after-park-refused";
 
@@ -961,6 +968,8 @@ export class SpaceServer implements TransactionSealDestination {
   #active = false;
   #loopRunning = false;
   #parkRequested = false;
+  /** Set by a park for the space's deletion; see `endedForDeletion`. */
+  #endedForDeletion = false;
   readonly #parked = Promise.withResolvers<void>();
   #idleSince: number | undefined;
   #demandedRoots = new Set<string>();
@@ -1606,6 +1615,12 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#watermark;
   }
 
+  /** Whether this tenure ended because its space is deleted, which no
+   * successor serves (serving-loop.md, "A deleted space"). */
+  get endedForDeletion(): boolean {
+    return this.#endedForDeletion;
+  }
+
   /** Resolves when this SpaceServer has fully parked: its runtime
    * disposed, and its lease released or the release's failure logged. The
    * host chains its re-evaluation of the space's ACTIVE criteria on it. */
@@ -2114,6 +2129,16 @@ export class SpaceServer implements TransactionSealDestination {
    */
   noteSpaceAclChanged(space: MemorySpace): void {
     this.#runtime?.storageManager.noteSpaceAclChanged?.(space);
+    // For this tenure's own space, the notice is also how it hears of a
+    // deletion: it holds no session there for a revocation to reach
+    // (serving-loop.md, "A deleted space"). A deleted space ends the
+    // tenure for good.
+    if (
+      space === this.#options.space && this.#active &&
+      Engine.findSpaceDeletion(this.#options.engine, space) !== undefined
+    ) {
+      void this.park(SPACE_DELETED_PARK);
+    }
   }
 
   /** The host's in-process feed (plane (d)): every admitted commit for
@@ -8013,6 +8038,17 @@ export class SpaceServer implements TransactionSealDestination {
       await this.park("lease-lost-abort");
       return;
     }
+    if (outcome.aborted === "space-deleted") {
+      // The engine refused the home commit for the space's deletion, the
+      // backstop for a deletion committed through another process, whose
+      // commit the host never announces (serving-loop.md, "A deleted
+      // space"). The tenure ends for good, as on the host's notice.
+      logger.warn("wave-aborted", () => [
+        "wave aborted: the space is deleted; ending the tenure",
+      ]);
+      await this.park(SPACE_DELETED_PARK);
+      return;
+    }
     if (outcome.seq !== undefined) {
       bumpDerivedCommits(stats, String(this.#options.space));
       this.#wavesCommitted += 1;
@@ -8211,7 +8247,8 @@ export class SpaceServer implements TransactionSealDestination {
    * runtime to `retainParkedRuntime` — an idle park, when the caller keeps
    * it — or dispose it, as every other park does. Once the park
    * completes, the host re-activates a space that still meets the ACTIVE
-   * criteria, unless a rival's lease caused the park. */
+   * criteria, unless a rival's lease caused the park or the park is
+   * `SPACE_DELETED_PARK`, which ends the space's tenures for good. */
   async park(reason: string): Promise<void> {
     // A park already in flight — the loop's idle park runs unawaited — is
     // what a second caller waits for: the host's close must not return while
@@ -8225,6 +8262,7 @@ export class SpaceServer implements TransactionSealDestination {
 
   async #parkResources(reason: string): Promise<void> {
     const wasActive = this.#active;
+    if (reason === SPACE_DELETED_PARK) this.#endedForDeletion = true;
     // Only an idle park offers the runtime on (serving-loop.md §1,
     // "Parking"): the loop settled, nothing was queued, and no session
     // demanded anything, so the runtime holds a served state a successor
