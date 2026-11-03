@@ -1853,7 +1853,9 @@ export interface FabriChatManagerOutput {
   /**
    * Makes a room this user has entered one of their chats: lists it, or
    * lists it again once forgotten, and adds them to its participants. A room
-   * their chats list already is left as it is.
+   * their chats list already keeps its membership as it is; a join that no
+   * message or reaction sent brings its catalog title up to date with the
+   * room's.
    */
   joinRoom: Stream<ManagerStreamEvent>;
 
