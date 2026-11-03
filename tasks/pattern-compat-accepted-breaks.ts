@@ -325,8 +325,10 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       // The unsigned caller retires: `agentName` is required on every verb, and the display-name mirrors that path filled go with it.
       "result.myName",
       "result.crossrefs[].topic",
+      "result.mentionable[].crossrefs",
       "result.mentionable[].links",
       "result.topics[].addComment",
+      "result.topics[].crossrefs",
       "result.topics[].links",
       "result.topics[].createdBy",
       "result.index[].topic",
@@ -447,6 +449,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     ],
     paths: [
       "argument.boardCrossrefs",
+      "result.crossrefs",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
       "result.createdByName",

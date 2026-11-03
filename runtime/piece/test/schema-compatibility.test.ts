@@ -2709,6 +2709,49 @@ describe("piece schema compatibility", () => {
       }]);
     });
 
+    it("refuses dropping an optional field that holds a verb", () => {
+      // The field takes the verb with it: a holder bound to `ui.tick` is left
+      // with the same unreadable absence as one bound to a verb at the top.
+
+      expect(
+        patternSchemaIncompatibilities(
+          verbs({
+            doubled: { type: "number" },
+            ui: { type: "object", properties: { tick } },
+          }, ["doubled"]),
+          verbs({ doubled: { type: "number" } }, ["doubled"]),
+        ),
+      ).toEqual([{
+        path: "result.ui",
+        reason: "existing result field was removed",
+      }]);
+    });
+
+    it("refuses dropping an optional list whose items reach a verb by reference", () => {
+      const withRows = (properties: Record<string, JSONSchema>): Pattern =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties,
+          $defs: {
+            Row: {
+              type: "object",
+              properties: { label: { type: "string" }, tick },
+            },
+          },
+        });
+      expect(
+        patternSchemaIncompatibilities(
+          withRows({
+            rows: { type: "array", items: { $ref: "#/$defs/Row" } },
+          }),
+          withRows({}),
+        ),
+      ).toEqual([{
+        path: "result.rows",
+        reason: "existing result field was removed",
+      }]);
+    });
+
     it("refuses dropping a required verb", () => {
       expect(
         patternSchemaIncompatibilities(

@@ -1316,8 +1316,8 @@ function objectSubsetIssues(
   // A candidate that still constrains the name, through a matching pattern
   // or a typed index signature, still publishes a value there, which must
   // hold to every contract the previous object gave the name. A verb is
-  // refused even when optional, because its absence is not something a
-  // holder can read: a stream handle reads as itself when nothing is stored,
+  // refused even when optional, and so is a field holding one at any depth,
+  // because a verb's absence is not something a holder can read: a stream handle reads as itself when nothing is stored,
   // so a holder still bound to it keeps sending, and each event is dropped
   // for want of a handler. And a verb's event refuses it outright: a caller
   // still sends a field the event stops declaring, and an event strips
@@ -1785,14 +1785,38 @@ function matchingPatternPropertySchemas(
   return matches;
 }
 
+/** The keywords that hold a table of schemas only a `$ref` reaches. */
+const REFERENCE_TABLE_KEYS: ReadonlySet<string> = new Set<string>([
+  ...DEFS_KEYS,
+  "definitions",
+]);
+
 /**
- * Whether `schema`, a field's contract under `root`, publishes a verb: the
- * stream marker on the field's own node, or on what its reference names.
+ * Whether `schema`, a field's contract under `root`, publishes a verb anywhere
+ * in what it holds: a stream marker on its own node, on a node nested below it,
+ * or on what a reference along the way names. A field that only holds a verb,
+ * as `ui` holds `ui.tick`, takes that verb with it when it goes.
+ *
+ * Reference tables are not searched as such, since a definition no reference
+ * reaches publishes nothing; each reference is followed instead, once.
  */
 function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
-  if (declaresVerbStream(schema)) return true;
-  const resolved = resolveSchema(schema, root).schema;
-  return resolved !== undefined && declaresVerbStream(resolved);
+  const seen = new Set<object>();
+  const visit = (node: unknown, nodeRoot: JSONSchema): boolean => {
+    if (!isObjectNotArray(node) || seen.has(node)) return false;
+    seen.add(node);
+    if (declaresVerbStream(node as JSONSchema)) return true;
+    if (typeof (node as SchemaObject).$ref === "string") {
+      const resolved = resolveSchema(node as JSONSchema, nodeRoot);
+      if (
+        resolved.schema !== undefined && visit(resolved.schema, resolved.root)
+      ) return true;
+    }
+    return subschemaChildren(node, REFERENCE_TABLE_KEYS).some((child) =>
+      visit(child, nodeRoot)
+    );
+  };
+  return visit(schema, root);
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {

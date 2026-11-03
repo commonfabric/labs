@@ -126,11 +126,12 @@ the pattern stopped reading leaves a writer's value unread rather than breaking
 a reader, so the argument side drops named fields freely; what it still proves
 is that the candidate can hold the value the piece already carries, which a
 closed candidate object fails as `source field is rejected by the target
-object`. The result side preserves every required field it published, and every
-verb. An optional data field it may stop publishing, since whoever reads it
-already reads its absence. An optional verb it may not: a stream handle reads
-as itself when nothing is stored, so a holder still bound to a removed verb
-keeps sending to it, and each event is dropped for want of a handler.
+object`. The result side preserves every required field it published, every
+verb, and every field that holds a verb at any depth. An optional data field it
+may stop publishing, since whoever reads it already reads its absence. An
+optional verb it may not: a stream handle reads as itself when nothing is
+stored, so a holder still bound to a removed verb keeps sending to it, and each
+event is dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
