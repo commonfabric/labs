@@ -26,8 +26,8 @@ This spec covers:
     transport: the envelope and the marker that identifies it, per-type
     encodings, the ownership contract on decode, and what the format refuses
 - **Hashing** (Section 6) -- content-based identity for `FabricValue`s
-- **Unifying JSON encoding** (Section 7) -- the conventions still met in stored
-  JSON that are not part of the JSON encoding, and their retirement
+- **Unifying JSON encoding** (Section 7) -- the conventions still found in
+  stored JSON that are not part of the JSON encoding, and their retirement
 - **Conversion functions** (Section 8) -- the bridge between arbitrary
   JavaScript values and `FabricValue`s
 
@@ -60,6 +60,7 @@ system, schemas.
 
 ## Citing these documents
 
-Cite a section by the file name of its document, as in "`1-fabric-values.md`
-Section 2.4". "The formal spec" names the whole series, so it does not say
-which document a section number belongs to.
+From outside a document, cite a section by the file name of its document, as
+in "`1-fabric-values.md` Section 2.4". "The formal spec" names the whole series,
+so it does not say which document a section number belongs to. Within a
+document, a bare section number names a section of that same document.

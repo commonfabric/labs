@@ -22,16 +22,16 @@ The hash function is **SHA-256** (FIPS 180-4). All byte sequences described in
 this document are fed to a SHA-256 context in the order specified.
 
 The digest output is **32 raw bytes** (256 bits). The `hashOf()` function wraps
-the raw bytes into a `FabricHash` instance (Section 1.4.9 of the formal spec)
-with algorithm tag `fid1`. Callers who need a string representation call
-`toString()` on the result, which produces `fid1:<base64urlhash>` (unpadded
-base64url, RFC 4648 Section 5). `hashStringOf()` returns the base64url hash
-directly as a plain string, avoiding `FabricHash` allocation when only the
-string form is needed.
+the raw bytes into a `FabricHash` instance (Section 1.4.9 of
+`1-fabric-values.md`) with algorithm tag `fid1`. Callers who need a string
+representation call `toString()` on the result, which produces
+`fid1:<base64urlhash>` (unpadded base64url, RFC 4648 Section 5).
+`hashStringOf()` returns the base64url hash directly as a plain string, avoiding
+`FabricHash` allocation when only the string form is needed.
 
-> **Future addition.** BLAKE2b is listed as a recommended second algorithm in
-> the formal spec. When added, it will use the same byte-level input format
-> defined here; only the digest function changes.
+> **Future addition.** BLAKE2b is named as a possible second algorithm in
+> `1-fabric-values.md` Section 6.4. When added, it will use the same byte-level
+> input format defined here; only the digest function changes.
 
 ---
 
@@ -584,7 +584,7 @@ Bytes: TAG_CYCLE  DISTANCE_LEB128
 
 Total: 1 + len(LEB128) bytes (typically 2).
 
-A value may hold a cycle (formal spec Section 1.6). At any point in the
+A value may hold a cycle (`1-fabric-values.md` Section 1.6). At any point in the
 traversal, the **path** is the sequence of containers whose encodings enclose
 that point, outermost first. The containers are arrays (Section 4.12), plain
 objects (Section 4.13), and `FabricInstance`s (Section 4.14). An instance

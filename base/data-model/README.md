@@ -98,13 +98,14 @@ the code disagree.
 
 ## Module layout
 
-Paths here are under `src/`. Where each part of the model is declared:
+Paths here are under `src/` unless written in full. Where each part of the model
+is declared:
 
 - `api.ts` declares the `FabricValue` union and the types beside it, together
   with the pattern-visible declarations of the special-object classes
-  (`FabricInstance`, `FabricPrimitive`) and their union `FabricSpecialObject`,
-  each as an `interface` plus a `declare const`. `base/api/index.ts` re-exports
-  it as part of the `commonfabric` surface.
+  (`FabricInstance`, `FabricPrimitive`), each as an `interface` plus a
+  `declare const`, and their union, the type `FabricSpecialObject`.
+  `base/api/index.ts` re-exports it as part of the `commonfabric` surface.
 - `interface.ts` declares the classes themselves, the layer types, and the
   conversion-layer types, and re-exports every type `api.ts` declares.
 - The in-process lifecycle symbols (`DEEP_FREEZE`, `IS_DEEP_FROZEN`) live in
@@ -115,11 +116,13 @@ Paths here are under `src/`. Where each part of the model is declared:
   `codec-common/` -- including `BaseEncodeAct` and `BaseDecodeAct`, which are
   classes the walk carries rather than contracts a caller implements.
 - The conversion functions are in `convertible-js.ts`.
-- `codecs.ts` pairs the JSON format with the set of fabric classes this package
-  defines, and holds the storage-boundary functions (`jsonFromFabricValue()` and
-  its siblings). It creates a single stateless `JsonCodecEngine` at module load
-  time and reuses it for every encode and decode. The format itself, and the
-  recognizer for text in it, live one layer down in `codec-json/`.
+- `codecs.ts` pairs each wire format, JSON and realm-crossing, with the set of
+  fabric classes this package defines. For each it holds the boundary functions
+  (`jsonFromFabricValue()`, `realmFromFabricValue()`, and their siblings), built
+  on one engine created at module load, and a factory
+  (`newDefaultJsonCodecEngine()`, `newDefaultRealmCodecEngine()`) for a caller
+  that needs an engine of its own configuration. The formats themselves live one
+  layer down, in `codec-json/` and `codec-realm/`.
 - Each `FabricInstance` and `FabricPrimitive` class lives in its own file: the
   `FabricInstance` subclasses `FabricError`, `FabricLink`, `FabricMap`,
   `FabricSet` and `FabricNativeWrapper` under `fabric-instances/`, with
@@ -179,9 +182,11 @@ The files and directories, in more detail:
   `isValidFabricConvertibleJsValue`.
 - `fabric-bases/`: The abstract bases a concrete `FabricValue` extends, one per
   branch of the type hierarchy: `BaseFabricInstance.ts`,
-  `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the
-  implementer's half of the hierarchy; `interface.ts` is the client's, and
-  reaching it does not reach these.
+  `BaseFabricPrimitive.ts`, and the root both extend,
+  `BaseFabricSpecialObject.ts` (plus an `index.ts` barrel, and `blessing.ts`,
+  which hands the package's own primitive classes the token they construct
+  with). These are the implementer's half of the hierarchy; `interface.ts` is
+  the client's, and reaching it does not reach these.
 - `fabric-instances/`: Concrete `FabricInstance` subclasses, each in its own
   file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`,
   `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes

@@ -326,11 +326,13 @@ function-valued member is not representable.
 
 ### 1.4 Special Objects
 
-This section specifies the classes the data model defines beyond the JavaScript
-built-ins. Section 1.4.6 gives the hierarchy they share. The `FabricInstance`
-classes are `FabricError`, `FabricMap`, `FabricSet` (1.4.2–1.4.4) and
-`FabricLink` (1.4.15); the `FabricPrimitive` classes are `FabricRegExp`
-(1.4.5) and those of Sections 1.4.7–1.4.14.
+This section specifies classes the data model defines beyond the JavaScript
+built-ins, and Section 1.4.6 gives the hierarchy they share. Of the classes
+specified here, the `FabricInstance` classes are `FabricError`, `FabricMap`,
+`FabricSet` (1.4.2–1.4.4) and `FabricLink` (1.4.15), and the `FabricPrimitive`
+classes are `FabricRegExp` (1.4.5) and those of Sections 1.4.7–1.4.14.
+`UnknownValue` and `ProblematicValue`, also `FabricInstance`s, are specified
+in Section 3.
 
 Certain built-in JS types (`Error`, `Map`, `Set`) cannot have `Symbol`-keyed
 methods added via prototype patching in a reliable, cross-realm way. Rather than
@@ -346,23 +348,24 @@ Because each wrapper genuinely implements `FabricInstance` and hosts a `[CODEC]`
 dispatch as every other fabric class — no special cases needed in the encoder.
 The hashing system also uses the standard `TAG_INSTANCE` path for all wrappers.
 `FabricBytes` (the byte-sequence type) has a dedicated `TAG_BYTES` tag for
-content-level identity (see Section 6.3), but it is a `FabricPrimitive`, not a
-`FabricInstance`.
+content-level identity (see `2-hash-byte-format.md` Section 2), but it is a
+`FabricPrimitive`, not a `FabricInstance`.
 
 The **special primitive** types (`FabricEpochNsec`, `FabricEpochDay`,
 `FabricDurationNsec`, `FabricDurationDay`, `FabricHash`, `FabricBytes`,
 `FabricKeyPair`, `FabricRegExp`, `FabricUnavailable`) are **not**
 `FabricInstance`s — they are `FabricPrimitive` subclasses (Section 1.4.6).
-`FabricPrimitive` is an arm of the `FabricValue` union, so all
-`FabricPrimitive` subclasses are implicitly members of `FabricValue`. They are always-frozen value types that
-bypass the `freeze` option in conversion functions. Each hosts its own codec for
-wire-format encoding, but bound per wire format — under `[JSON_CODEC]` for JSON
-— rather than under the format-neutral `[CODEC]` a wrapper binds, because a
-primitive's codec terminates an encoding where a wrapper's only decomposes. What
-further distinguishes them is the hashing layer, where each has a dedicated
-primitive hash tag rather than the `TAG_INSTANCE` path (Section 6.3). They do
-not carry a `wireTypeTag` property (no fabric type does, save `UnknownValue` and
-`ProblematicValue`; the wire tag is the codec's concern).
+`FabricPrimitive` is an arm of the `FabricValue` union, so all `FabricPrimitive`
+subclasses are implicitly members of `FabricValue`. They are always-frozen value
+types that bypass the `freeze` option in conversion functions. Each hosts its
+own codec for wire-format encoding, but bound per wire format — under
+`[JSON_CODEC]` for JSON — rather than under the format-neutral `[CODEC]` a
+wrapper binds, because a primitive's codec terminates an encoding where a
+wrapper's only decomposes. What further distinguishes them is the hashing layer,
+where each has a dedicated primitive hash tag rather than the `TAG_INSTANCE`
+path (`2-hash-byte-format.md` Section 2). They do not carry a `wireTypeTag`
+property (no fabric type does, save `UnknownValue` and `ProblematicValue`; the
+wire tag is the codec's concern).
 
 #### 1.4.1 Wrapper Class Summary
 
@@ -809,10 +812,10 @@ regular expression is a leaf type with respect to references (it holds no nested
 `FabricValue`s) and is reasonably conceived of as stateless: although a JS
 `RegExp` carries mutable internal state (notably `lastIndex`), a `FabricRegExp`
 never hands out its stored `RegExp` un-cloned, so no mutable state is exposed.
-It therefore has a dedicated hash tag (`TAG_REGEXP`, Section 6.3). Like every
-fabric class, it hosts its own `[CODEC]` (tag `RegExp@1`) for wire-format
-encoding; being a `FabricPrimitive`, it does not implement the `FabricInstance`
-members.
+It therefore has a dedicated hash tag (`TAG_REGEXP`, `2-hash-byte-format.md`
+Section 2). Like every fabric class, it hosts its own `[CODEC]` (tag `RegExp@1`)
+for wire-format encoding; being a `FabricPrimitive`, it does not implement the
+`FabricInstance` members.
 
 ```typescript
 // Shown for illustration only.
@@ -962,7 +965,7 @@ import { FABRIC_INSTANCE_PLUS_BRAND, FABRIC_PRIMITIVE_BRAND } from "./api.ts";
  * at construction; a subclass keeps its state in private fields, which the
  * freeze does not reach.
  *
- * See Section 1.4.6 of the formal spec.
+ * See Section 1.4.6 of `1-fabric-values.md`.
  */
 export abstract class FabricPrimitive extends BaseFabricSpecialObject {
   /**
@@ -1281,7 +1284,7 @@ export class FabricBytes extends FabricPrimitive {
 `FabricInstance` members; like every `FabricPrimitive`, it hosts its own
 `[JSON_CODEC]` (tag `Bytes@1`), the same shape as `FabricEpochNsec` and
 `FabricEpochDay`. The hashing system uses the dedicated `TAG_BYTES` primitive
-tag (Section 6.3).
+tag (`2-hash-byte-format.md` Section 2).
 
 #### 1.4.11 `FabricKeyPair`
 
@@ -2012,7 +2015,7 @@ import { FABRIC_INSTANCE_PLUS_BRAND, FABRIC_PRIMITIVE_BRAND } from "./api.ts";
  * protocol as non-primitives. An instance may hold and expose arbitrary
  * outgoing `FabricValue` references, and is mutable until frozen.
  * `FabricSpecialObject` says how this differs from `FabricPrimitive`. See
- * Section 2.3 of the formal spec.
+ * Section 2.3 of `1-fabric-values.md`.
  *
  * This is the pure abstract protocol -- the `instanceof`-able contract that
  * external code is written against. Concrete `FabricInstance` classes in the
@@ -2905,7 +2908,7 @@ type TemperatureState = { value: number; unit: TemperatureUnit };
 class Temperature extends BaseFabricInstance {
   // (deepFreeze protocol members
   //  omitted for brevity; see §2.3
-  //  and §8 for the full pattern.)
+  //  for the full pattern.)
 
   constructor(
     readonly value: number,
@@ -3169,7 +3172,7 @@ This applies at every point where decoded data is consumed:
   returning a `ProblematicValue`, and the engine settles all three against its
   `lenient` setting (Section 4.5).
 
-- **Hashing** (Section 6.3) may operate on values that have been through a
+- **Hashing** (Section 6.4) may operate on values that have been through a
   decoding round-trip. Code that extracts properties from `FabricInstance`
   values must validate those properties at runtime.
 
@@ -3935,7 +3938,7 @@ The JSON encoding for `FabricValue`s — the `fvj1:` encoding prefix, the
 `/`-key reservation rule, the canonical text an encoder writes, and the floors
 on the size guarantees an implementation states — is specified in
 [`3-json-encoding.md`](./3-json-encoding.md). Section 7 covers conventions
-still met in stored JSON that are not part of that encoding.
+still found in stored JSON that are not part of that encoding.
 
 The storage boundary routes through functions that bridge between the
 storage layer (JSON strings) and the runtime layer (`FabricValue`), pairing the
@@ -4155,8 +4158,8 @@ array, `FabricMap`, `FabricSet`, or other `FabricInstance` inherits the same
 equality. Deciding object equality by content hash (rather than by a naive
 property walk) is also what lets structurally distinct values be told apart —
 a sparse array hole vs. a stored `undefined`, a present `undefined` vs. an
-absent key (Section 6.4), and two distinct `FabricInstance`s of the same class
-that carry no enumerable own-properties.
+absent key (`2-hash-byte-format.md` Sections 4.7 and 4.13), and two distinct
+`FabricInstance`s of the same class that carry no enumerable own-properties.
 
 Instance identity and concrete wrapper class do not replace the codec's
 definition of content: an `UnknownValue` preserving an instance's type tag and
@@ -4614,12 +4617,12 @@ type is what names it.
 
 > **Implementation: `FabricNativeWrapper` dispatch.** The unwrapping functions
 > use a single `instanceof FabricNativeWrapper` check to identify all native
-> object wrappers, then delegate to `toNativeValue(frozen)` on the base class.
-> This replaces the previous pattern of per-wrapper `instanceof` cascades
-> (`instanceof FabricError`, `instanceof FabricMap`, etc.) with a single branch.
-> The `toNativeValue()` method (defined on `FabricNativeWrapper`, Section 1.4.1)
-> handles the freeze-state check and delegates to the subclass's
-> `toNativeFrozen()` or `toNativeThawed()` when a state change is needed.
+> object wrappers, then delegate to `toNativeValue(frozen)` on the base class,
+> rather than checking for each wrapper class (`instanceof FabricError`,
+> `instanceof FabricMap`, etc.) in turn. The `toNativeValue()` method (defined
+> on `FabricNativeWrapper`, Section 1.4.1) handles the freeze-state check and
+> delegates to the subclass's `toNativeFrozen()` or `toNativeThawed()` when a
+> state change is needed.
 
 **The `frozen` parameter is always honored.** The freeze state of every value in
 the output tree matches the `frozen` argument. Specifically:
@@ -4732,11 +4735,11 @@ spec from being implementable.
   refining `T` of `IAnyCell` to `extends FabricValue`, is open, and so is
   whether any caller would break if it were.
 
-- **Early conversion points**: Some code still converts values to
-  JSON-compatible shapes before they reach a boundary, rather than leaving that
-  to a codec engine at the boundary (Section 5.1) as late serialization
-  (Section 1.1) has it. One is `convertCellsToLinks()`, which the `html`
-  reconciler calls, among others. The intent is to remove these conversions.
+- **Early conversion points**: Some code converts values to JSON-compatible
+  shapes before they reach a boundary, rather than leaving that to a codec
+  engine at the boundary (Section 5.1) as late serialization (Section 1.1) has
+  it. One is `convertCellsToLinks()`, which the `html` reconciler calls, among
+  others. Whether such conversions should stay or go is open.
 
 - **`FabricFactory`**: A proposed, deliberately narrow exception to the
   exclusion of functions (Section 1.2) adds a `FabricFactory` arm for

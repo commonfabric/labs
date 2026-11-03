@@ -581,10 +581,10 @@ pipeline, dispatching per-type work to the codecs through a registry:
 
 ```typescript
 // Shown at module scope.
-// The public boundary (formal spec Section 4.3): an engine exposes
+// The public boundary (`1-fabric-values.md` Section 4.3): an engine exposes
 // `encode()` and `decode()`, and mints a context per act of each.
 // Internally, a registry maps classes -> codecs (for encoding) and
-// tags -> codecs (for decoding); see formal spec Section 4.5.
+// tags -> codecs (for decoding); see `1-fabric-values.md` Section 4.5.
 ```
 
 This separation enables:
