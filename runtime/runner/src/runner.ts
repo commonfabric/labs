@@ -73,6 +73,7 @@ import {
   isModule,
   isPattern,
   type JSONSchema,
+  type JSONSchemaObj,
   JSONValue,
   type Module,
   NAME,
@@ -12863,9 +12864,9 @@ export class Runner {
     argumentSchema: JSONSchema | undefined,
     value: unknown,
     resultCell: Cell<any>,
-  ): { links: NormalizedFullLink[]; forwarded: number } {
+  ): { links: NormalizedFullLink[]; forwarded: NormalizedFullLink[] } {
     const links: NormalizedFullLink[] = [];
-    let forwarded = 0;
+    const forwarded: NormalizedFullLink[] = [];
     const seen = new WeakMap<object, Set<unknown>>();
     // The argument schema at rest can be a `cid:` reference, whose
     // definitions live on the document it names.
@@ -12874,25 +12875,47 @@ export class Runner {
       : undefined;
     const rootDefinitions = argumentRoot?.$defs;
 
+    // Whether `schema` declares its position opaque, itself, through a
+    // reference, or in every arm of a union a present value can take. A shape
+    // this does not recognize reads as not opaque, which only reads more.
+    const declaredOpaque = (schema: unknown): boolean => {
+      if (!isObjectNotArray(schema)) return false;
+      const inherited = cfcSchemaWithInheritedDefs(
+        schema as JSONSchema,
+        rootDefinitions,
+      );
+      const resolved = isObjectNotArray(inherited)
+        ? ContextualFlowControl.resolveSchemaRefs(inherited as JSONSchemaObj) ??
+          inherited
+        : inherited;
+      if (!isObjectNotArray(resolved)) return false;
+      const isOpaque = (candidate: JSONSchema) =>
+        ContextualFlowControl.getAsCellValues(candidate).some((entry) =>
+          ContextualFlowControl.getAsCellKind(entry) === "opaque"
+        );
+      if (isOpaque(schema as JSONSchema) || isOpaque(resolved)) return true;
+      const arms = resolved.anyOf ?? resolved.oneOf;
+      if (!Array.isArray(arms)) return false;
+      const present = arms.filter((arm) =>
+        !isObjectNotArray(arm) ||
+        (arm.type !== "undefined" && arm.type !== "null")
+      );
+      return present.length > 0 && present.every(declaredOpaque);
+    };
+
     const visit = (schema: unknown, currentValue: unknown): void => {
       // Sigil-only: the value is post-unwrap, where the only `$alias`
       // records left belong to embedded Pattern values (their `defer`
       // bookkeeping resolves them at that pattern's own instantiation) —
       // parsing one here would read it at the wrong nesting level.
       if (isWriteRedirectLink(currentValue)) {
+        const link = parseLink(currentValue, resultCell);
         // An opaque input is forwarded and never read, so its writers owe the
         // reader nothing.
-        if (
-          schema !== undefined && ContextualFlowControl.getAsCellValues(
-            schema as JSONSchema,
-          ).some((entry) =>
-            ContextualFlowControl.getAsCellKind(entry) === "opaque"
-          )
-        ) {
-          forwarded += 1;
+        if (declaredOpaque(schema)) {
+          forwarded.push(link);
           return;
         }
-        const link = parseLink(currentValue, resultCell);
         links.push({
           ...link,
           schema: combineOptionalSchema(
@@ -14340,9 +14363,11 @@ export class Runner {
         inputs,
         resultCell,
       );
-    const declaredSchedulerReads = schedulerReads.length > 0 || forwarded > 0
+    const declaredSchedulerReads = schedulerReads.length > 0
       ? schedulerReads
-      : reads;
+      : reads.filter((read) =>
+        !forwarded.some((link) => areNormalizedLinksSame(link, read))
+      );
     const populateDependencies = reads.length > 0
       ? (depTx: IExtendedStorageTransaction, event: any) => {
         this.#populateDeclaredSchedulerReads(declaredSchedulerReads, depTx);

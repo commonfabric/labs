@@ -541,7 +541,8 @@ charging a read, whether the value is the call's argument or a member of an
 object literal passed as one, and whether the call sits in the body of a
 `handler`, an `action`, a `lift` or a `computed` or in a callback nested there.
 Its schema takes `asCell: ["opaque"]`, whatever type the value has and whichever
-cell type the pattern's input declares. Any other use at, above or below the
+cell type the pattern's input declares. A value forwarded whole covers its
+members, forwarded alongside it or not. Any other use at, above or below the
 position, such as a read or an escape, decides its schema instead. A handler's
 event is not forwarded, since an event's values are copied into what they are
 handed to.

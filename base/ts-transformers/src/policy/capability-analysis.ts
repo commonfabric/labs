@@ -2332,6 +2332,13 @@ function normalizeObservedCapabilityUsage(
           : forwarded.every((segment, index) => path[index] === segment)
       )
     );
+  const isBelow = (path: readonly string[], above: readonly string[]) =>
+    above.length < path.length &&
+    above.every((segment, index) => path[index] === segment);
+  // A value forwarded whole covers its members, forwarded alongside it or not.
+  const outermostForwardedPaths = forwardedPaths.filter((path) =>
+    !forwardedPaths.some((above) => isBelow(path, above))
+  );
   const identityPaths = Array.from(state.rawIdentityPaths)
     .map(decodePath)
     .filter((identityPath) => {
@@ -2394,8 +2401,10 @@ function normalizeObservedCapabilityUsage(
     readPaths,
     fullShapePaths,
     writePaths,
-    opaquePaths,
-    forwardedPaths,
+    opaquePaths: opaquePaths.filter((path) =>
+      !outermostForwardedPaths.some((above) => isBelow(path, above))
+    ),
+    forwardedPaths: outermostForwardedPaths,
     escapedPaths,
     passthrough: state.passthrough,
     wildcard: state.wildcard,
@@ -2648,7 +2657,8 @@ export function analyzeFunctionCapabilities(
 
     // Whether `name` is a handler's event. An event's values are copied into
     // what they are handed to, not linked: the entry holding them is retired
-    // once the event has been handled.
+    // once the event has been handled. So they are never forwarded, and what
+    // they are handed to is charged as any other callee is.
     const isHandlerEvent = (name: string): boolean =>
       name === parameterStateKeys[0] && checker !== undefined &&
       fn.parent !== undefined && ts.isCallExpression(fn.parent) &&
@@ -2662,7 +2672,7 @@ export function analyzeFunctionCapabilities(
       path: readonly string[],
     ): void => {
       recordOpaquePath(name, path);
-      if (isSelfReference(name, path) || isHandlerEvent(name)) return;
+      if (isSelfReference(name, path)) return;
       ensureState(name).rawForwardedPaths.add(encodePath(path));
     };
 
@@ -4378,7 +4388,11 @@ export function analyzeFunctionCapabilities(
             : [];
           for (const source of usedRefs) {
             const resolvedSource = materializeSourceRef(source);
-            if (!resolvedSource.dynamic && forwardedToPattern(node)) {
+            if (
+              !resolvedSource.dynamic &&
+              !isHandlerEvent(resolvedSource.root) &&
+              forwardedToPattern(node)
+            ) {
               recordForwardedPath(resolvedSource.root, resolvedSource.path);
               continue;
             }
@@ -4593,7 +4607,7 @@ export function analyzeFunctionCapabilities(
                 escapesWhole(node);
               const forwarded = forwardedToPattern(node);
               for (const ref of refs) {
-                if (forwarded && !ref.dynamic) {
+                if (forwarded && !ref.dynamic && !isHandlerEvent(ref.root)) {
                   recordForwardedPath(ref.root, ref.path);
                   continue;
                 }
@@ -4775,10 +4789,12 @@ export function analyzeFunctionCapabilities(
                 ]);
               }
               for (const forwarded of paramSummary.forwardedPaths ?? []) {
-                recordForwardedPath(source.root, [
-                  ...source.path,
-                  ...forwarded,
-                ]);
+                const path = [...source.path, ...forwarded];
+                if (isHandlerEvent(source.root)) {
+                  trackEscape(source.root, path);
+                } else {
+                  recordForwardedPath(source.root, path);
+                }
               }
               if (
                 paramSummary.capability === "opaque" &&
