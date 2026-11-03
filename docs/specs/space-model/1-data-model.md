@@ -732,7 +732,7 @@ came from the fabric encoder from arbitrary JSON of unrelated origin.
 digit reserves space for future incompatible revisions of the wire format.
 
 For full details — including how decoders verify and strip the prefix —
-see Section 1.1 of the formal spec.
+see `space-model-formal-spec/3-json-encoding.md` Section 1.1.
 
 #### Current State: Two Conventions
 
@@ -845,8 +845,8 @@ Use cases for `/quote`:
 `/`-prefixed keys, it must emit `/quote` when the entire subtree is fully
 literal (no descendants need encoding) and `/object` otherwise, so that each
 value has one text. The rule binds the encoder alone: **a conforming decoder
-must accept both forms**. See Section 6 of the formal spec for the precise
-dispatch rule and motivation.
+must accept both forms**. See `space-model-formal-spec/3-json-encoding.md`
+Section 6 for the precise dispatch rule and motivation.
 
 #### Reservation Rule
 
@@ -870,8 +870,8 @@ Concretely:
   `ProblematicValue` from a lenient engine, a raise from a strict one. It is
   not a valid plain object.
 
-See Section 9 of the formal spec for the full rule and the
-`ProblematicValue` interpretation across the cases above.
+See `space-model-formal-spec/3-json-encoding.md` Section 9 for the full rule
+and the `ProblematicValue` interpretation across the cases above.
 
 #### Unknown Type Handling
 

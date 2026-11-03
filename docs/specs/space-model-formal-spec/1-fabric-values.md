@@ -1660,7 +1660,7 @@ constructed it with, and `decode()` rebuilds a `FabricLink` from it (or a
 `ProblematicValue`, Section 3.5, if the payload is malformed). The
 JSON wire form is the `/Link@1`-tagged envelope `{ "/Link@1": <payload> }`; see
 Section 3 of `3-json-encoding.md` for the wire encoding, and the table in
-Section 7.2 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
+Section 7 for how legacy link forms (the IPLD sigil `{ "/": { "link@1": … }
 }`) map onto it.
 
 ```typescript
