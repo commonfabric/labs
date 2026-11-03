@@ -877,6 +877,75 @@ describe("local-jobs/api", () => {
       expect(await keys("/jobs")).toEqual(["e", "d", "c", "b", "a"]);
     });
 
+    it("finds retained context references before limiting and pages without repeating jobs", async () => {
+      const { post, call, store } = apiWith();
+      try {
+        for (let index = 0; index < 108; index++) {
+          await post("/jobs", {
+            ...BODY,
+            idempotencyKey: `history-${index}`,
+            context: {
+              refs: index < 2
+                ? ["target", "another"]
+                : index === 2
+                ? "target"
+                : index === 107
+                ? { nested: "target" }
+                : ["unrelated"],
+            },
+          });
+        }
+        const query =
+          "/jobs?caller=cfs%3Aweaver&profile=ask&contextKey=refs&contextValue=target&limit=2";
+        const first = await (await call(query)).json();
+        expect(
+          first.jobs.map((job: { idempotencyKey: string }) =>
+            job.idempotencyKey
+          ),
+        )
+          .toEqual(["history-2", "history-1"]);
+        expect(first.nextCursor).toBe(first.jobs[1].id);
+        await post("/jobs", {
+          ...BODY,
+          idempotencyKey: "new",
+          context: { refs: ["target"] },
+        });
+        const last = await (await call(`${query}&before=${first.nextCursor}`))
+          .json();
+        expect(
+          last.jobs.map((job: { idempotencyKey: string }) =>
+            job.idempotencyKey
+          ),
+        )
+          .toEqual(["history-0"]);
+        expect(last.nextCursor).toBeNull();
+        const missing = await (await call(query.replace("target", "absent")))
+          .json();
+        expect(missing.jobs).toEqual([]);
+        expect(missing.nextCursor).toBeNull();
+      } finally {
+        store.close();
+      }
+    });
+
+    it("refuses incomplete context filters and unknown history cursors", async () => {
+      const { call, store } = apiWith();
+      try {
+        for (
+          const query of [
+            "contextKey=refs",
+            "contextValue=target",
+            "contextKey=x.y&contextValue=z",
+            "before=unknown",
+          ]
+        ) {
+          expect((await call(`/jobs?${query}`)).status).toBe(400);
+        }
+      } finally {
+        store.close();
+      }
+    });
+
     it("returns 400 for a caller or profile named empty, twice or too long", async () => {
       const { call } = apiWith();
       for (

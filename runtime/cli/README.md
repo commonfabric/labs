@@ -1934,6 +1934,14 @@ error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
 
+The listing also accepts `contextKey` and `contextValue` together: a simple
+identifier naming a top-level context field, and the string it equals or its
+array contains. All filters apply before the limit. The response's `nextCursor`
+is null at the end of retained history; otherwise pass it as `before`, keeping
+the same filters, to read the next page. Jobs added between pages do not shift
+the continuation. An unknown cursor is refused. These are read filters on the
+private socket, not grants of authority over a job.
+
 `interactive` is an optional boolean indicating that a person is waiting.
 Interactive queued jobs start ahead of every queued background job, oldest first
 within each class. The local lane runs at most `--max-concurrent-local` jobs at
