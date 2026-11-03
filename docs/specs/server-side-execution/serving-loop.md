@@ -520,7 +520,10 @@ successor tenure could have it admitted.
   such as a failure notice or a row's retirement, are refused like any other
   commit to the space, and the drain stops there too.
 
-Deletion is not implemented yet.
+Deletion is not implemented yet. The Memory server refuses a deleted space's
+commits, derived and delegated ones included, with the `ProtocolError` naming
+the deletion, and marks a foreign grant's refusal on one `deleted`; the serving
+loop does none of the above yet.
 
 ## 3. The loop, normatively
 

@@ -911,8 +911,18 @@ the list names other than the deleting principal or its chain's root issuer
 still holds, or lets a deleted space take writes again. Over-rejection leaves
 the space's owner no way to delete it.
 
-Checked by: nothing yet. The server does not implement deleting a space, and
-refuses a deletion tombstone under INV-12's validity clause.
+Checked by: the "a deleted space" cases of
+`runtime/memory/test/v2-server-acl.test.ts`, for the refusal of a space whose
+ACL document holds a deletion tombstone: at `session.open` in every mode; on
+each command of an open session, ahead of the command's other checks, in `off`
+and `enforce`; on an operator's direct write; on an invitation operation; on
+the foreign grant; and on a fresh commit inside the engine's write transaction,
+with an exact replay still answered. The same file's served-change cases cover
+a served change to a deleted space's access list, and
+`runtime/toolshed/test/space-invites.test.ts` the invitation route's
+`space-deleted`. Admitting the commit that writes a deletion tombstone is not
+implemented yet: the server refuses one under INV-12's validity clause, so no
+deletion is committed through it.
 
 ### INV-16 — Instance-naming admission
 

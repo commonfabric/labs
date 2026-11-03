@@ -27,9 +27,10 @@ rewrite. In particular:
 - the server ACL policy gates session opens and commands when enabled
 - fresh spaces require a space-identity- or service-authorized ACL genesis
   transaction before ordinary writes
-- deleting a space (section 4.5.1, INV-15) is specified and not yet implemented:
-  the server refuses the deletion tombstone it writes under INV-12's validity
-  clause, as it refuses any ACL document that is not an access list
+- deleting a space (section 4.5.1, INV-15) is implemented in part: the server
+  refuses a space whose ACL document holds a deletion tombstone, but does not
+  yet admit the commit that writes one, refusing it under INV-12's validity
+  clause as it refuses any ACL document that is not an access list
 - the client in this repository handles the `deleted` marker and
   `session/revoked` reason, which the server sends neither of yet. Every
   client in use handles both before the server sends either, those built
