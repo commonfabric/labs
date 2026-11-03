@@ -53,7 +53,8 @@ function sourceDigest(
 
 /**
  * The runtime surface the dump reaches, which is the same in every checkout
- * the gate compiles with.
+ * the gate compiles with, apart from whether evaluating a graph returns a
+ * promise.
  */
 export interface DumpRuntime {
   harness: {
@@ -66,7 +67,7 @@ export interface DumpRuntime {
       graph: unknown,
       mainSpecifier: string,
       program: Program,
-    ): EvaluatedModules;
+    ): EvaluatedModules | Promise<EvaluatedModules>;
   };
   patternManager: {
     registerEvaluatedModules(evaluated: unknown): void;
@@ -144,7 +145,7 @@ export async function buildAssignment(
   // `cfcheck` type-checks this tree in its own job.
   const { id, graph, mainSpecifier } = await runtime.harness
     .compileToRecordGraph(program, { noCheck: true });
-  const evaluated = runtime.harness.evaluateRecordGraph(
+  const evaluated = await runtime.harness.evaluateRecordGraph(
     id,
     graph,
     mainSpecifier,
