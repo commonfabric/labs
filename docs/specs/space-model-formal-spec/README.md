@@ -1,9 +1,8 @@
 # Space Model Formal Spec: Data Model
 
-This directory contains the formal specification for the Space Model data model.
-It is derived from the proposal sections of the original [data model
-spec](../space-model/1-data-model.md), reformulated as a self-contained,
-implementable specification.
+This directory contains the formal specification for the Space Model data model
+that the [data model spec](../space-model/1-data-model.md) describes: a
+self-contained, implementable specification.
 
 ## Scope
 
@@ -15,17 +14,22 @@ This spec covers:
   participation in encoding, and the type-tag syntax every interchange format
   shares
 - **Unknown types** (Section 3) -- forward-compatibility via `UnknownValue`
-- **Codec engines** (Section 4) -- boundary-crossing encoding strategy, the
-  `encode()`/`decode()` boundary, and boundary inventory
-- **JSON encoding** -- the `fvj1:` encoding prefix, the `/<Type>@<Version>`
-  wire format for special types, escaping, detection rules, the `/`-key
-  reservation rule, the canonical text an encoder writes, and the floors on
-  the size guarantees an implementation states
-- **Realm-crossing encoding** -- the wire format for a structured-clone
-  transport: the envelope and the marker that identifies it, per-type
-  encodings, the ownership contract on decode, and what the format refuses
+- **Codec engines** (Section 4) -- boundary-crossing encoding strategy, and the
+  `encode()`/`decode()` boundary
+- **Wire formats and boundaries** (Section 5) -- the boundary inventory, and
+  the two wire formats, each specified in a document of its own:
+  - **JSON encoding** -- the `fvj1:` encoding prefix, the `/<Type>@<Version>`
+    wire format for special types, escaping, detection rules, the `/`-key
+    reservation rule, the canonical text an encoder writes, and the floors on
+    the size guarantees an implementation states
+  - **Realm-crossing encoding** -- the wire format for a structured-clone
+    transport: the envelope and the marker that identifies it, per-type
+    encodings, the ownership contract on decode, and what the format refuses
 - **Hashing** (Section 6) -- content-based identity for `FabricValue`s
-- **Implementation guidance** (Section 7) -- migration from legacy formats
+- **Unifying JSON encoding** (Section 7) -- the conventions still met in stored
+  JSON that are not part of the JSON encoding, and their retirement
+- **Conversion functions** (Section 8) -- the bridge between arbitrary
+  JavaScript values and `FabricValue`s
 
 Out of scope: CRDT-based storage layer, network sync protocols, the reactive
 system, schemas.
@@ -34,8 +38,8 @@ system, schemas.
 
 - [1-fabric-values.md](./1-fabric-values.md) -- Fabric value types, the
   three-layer architecture, the fabric protocol, type tags, unknown types,
-  encoding contexts, hashing, implementation guidance, and conversion functions.
-  (Sections 1-4, 6-8.)
+  codec engines, wire formats and boundaries, hashing, the unification of JSON
+  encoding, and conversion functions. (Sections 1-8.)
 - [2-hash-byte-format.md](./2-hash-byte-format.md) -- Byte-level encoding for
   the hash algorithm.
 - [3-json-encoding.md](./3-json-encoding.md) -- The JSON wire format for

@@ -132,7 +132,7 @@ exposes them through the protocol of Section 2.3. Arms (a) and (b) are the
 non-containers. A `FabricPrimitive` may hold `FabricValue`s of its own — a
 `FabricRegExp` its source and flags, a `FabricKeyPair` holding material two
 `FabricBytes` — but holds them privately and self-freezes at construction, so it
-exposes none of them and a walk stops there (Section 8.6).
+exposes none of them and a walk stops there (Section 2.3).
 
 > **Fabric values are deeply read-only, with one intentional hole.** The plain
 > container arms are read-only, and because their element and property types are
@@ -140,7 +140,7 @@ exposes none of them and a walk stops there (Section 8.6).
 > `FabricValue` tree cannot be written through at any depth. The implementation
 > names those two arms `FabricArray` (`ReadonlyArray<FabricValue>`) and
 > `FabricPlainObject` (`Readonly<Record<string, FabricValue>>`); this is the
-> type-level counterpart of the runtime deep-freeze contract in Section 8.6, and
+> type-level counterpart of the runtime deep-freeze contract in Section 2.3, and
 > the two are meant to agree.
 >
 > The hole is the `FabricInstance` arm — the one container the guarantee does
@@ -150,7 +150,7 @@ exposes none of them and a walk stops there (Section 8.6).
 > beyond it. This is deliberate rather than an oversight: the intended semantics
 > *are* expressible in TypeScript, but not concisely enough to be worth the cost
 > at every use site. Treat the type-level guarantee as covering the plain
-> containers and the primitives, and Section 8.6 as the statement that actually
+> containers and the primitives, and Section 2.3 as the statement that actually
 > binds instances.
 >
 > **Construction is the exception that proves the rule.** Building a plain
@@ -174,7 +174,7 @@ exposes none of them and a walk stops there (Section 8.6).
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
 >   so it is enforced at runtime by membership, by the tag dispatch (which tags
 >   a unique symbol `null`, as it does a function), and by the conversion,
->   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   hashing, and encoding boundaries (Sections 8, 6, and 5). Symbol-keyed
 >   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
@@ -304,7 +304,7 @@ function-valued member is not representable.
 > `-0`, `NaN`, `+Infinity`, and `-Infinity` as first-class values, distinct from
 > `0` and from each other. All four values pass through
 > `shallowFabricFromConvertibleJsValue()` and `fabricFromConvertibleJsValue()`
-> (Section 4.9) unchanged — `-0` retains its sign (`Object.is(result, -0) ===
+> (Section 8.2) unchanged — `-0` retains its sign (`Object.is(result, -0) ===
 > true`), and `NaN` / `±Infinity` round-trip through hashing and JSON encoding
 > via the byte-level forms in `2-hash-byte-format.md` Section 4.3 and the
 > `SpecialNumber@1` envelope in `3-json-encoding.md` Section 3. Value-equality
@@ -319,7 +319,7 @@ function-valued member is not representable.
 > `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 > are rejected at every layer. Interned symbols pass through
 > `shallowFabricFromConvertibleJsValue()` and `fabricFromConvertibleJsValue()`
-> (Section 4.9) unchanged: round-trip via `Symbol.for(key)` yields a result that
+> (Section 8.2) unchanged: round-trip via `Symbol.for(key)` yields a result that
 > is `===` to any other `Symbol.for(key)` in the same realm. Unique symbols
 > throw with the message ``"Not representable as a `FabricValue`: unique
 > (uninterned) symbol"``.
@@ -391,7 +391,7 @@ Each wrapper class above:
 - **Has `[DEEP_FREEZE]` and `[IS_DEEP_FROZEN]` methods plus a
   `deepClone(frozen)` method** per the `FabricInstance` protocol (Section 2.3);
   the deep-freeze pair participates in the generic `deepFreeze()` dispatch
-  (Section 8.6).
+  (Section 2.3).
 
 ##### `FabricNativeWrapper<T>` Base Class
 
@@ -1956,7 +1956,7 @@ export const JSON_CODEC: unique symbol =
  * Well-known symbol for deeply freezing a `FabricInstance` in place. The
  * implementation freezes the instance's own internal slot(s) and recurses
  * into any nested `FabricValue`s via a `subFreeze` callback supplied by the
- * generic `deepFreeze()` utility. See Section 8.6.
+ * generic `deepFreeze()` utility. See Section 2.3.
  */
 export const DEEP_FREEZE: unique symbol = Symbol('data-model.deepFreeze');
 
@@ -1966,7 +1966,7 @@ export const DEEP_FREEZE: unique symbol = Symbol('data-model.deepFreeze');
  * `[DEEP_FREEZE]`: verifies the instance's own internal slot(s) are in
  * canonical deep-frozen form and recurses into any nested `FabricValue`s
  * via a `subIsDeepFrozen` callback, returning the boolean conjunction.
- * See Section 8.6.
+ * See Section 2.3.
  */
 export const IS_DEEP_FROZEN: unique symbol = Symbol('data-model.isDeepFrozen');
 
@@ -2210,6 +2210,103 @@ export abstract class BaseFabricInstance extends FabricInstance {
 > `Object.isFrozen()` again tracks the instance's frozen state. Such a property
 > is invisible to a spread, `Object.keys()`, and `JSON.stringify()` alike, so
 > instances still present no properties to a client.
+
+#### Deep freezing
+
+Every `FabricValue` tree an engine's `decode()` returns at a boundary crossing
+is deep-frozen, unless the engine was constructed with `mutable` as `true`
+(Section 2.10). This is enforced via a small protocol on `BaseFabricInstance`
+together with a generic top-level utility that dispatches across the four kinds
+of values that can appear in a `FabricValue` tree. A codec's own `decode()`
+builds a mutable value only when passed `mutable` as `true` (Section 2.4), which
+the decode walker does exactly when its engine is mutable.
+
+##### Instance protocol members
+
+Every concrete `FabricInstance` provides the three members below.
+Their declarations are split by concern: the freeze-protocol members
+`[DEEP_FREEZE]` and `[IS_DEEP_FROZEN]` are declared on `BaseFabricInstance` —
+the abstract base that concrete instance classes extend — keeping this
+implementation plumbing off the pure-protocol `FabricInstance` interface, while
+`deepClone()` and the inherited `shallowClone()` are declared on
+`FabricInstance` itself. These members, plus the class-side `[CODEC]` (encoding;
+Section 2.4), are the whole instance protocol:
+
+- **`[DEEP_FREEZE](subFreeze)`** — Deeply freezes this instance in place
+  and returns it. The implementation freezes the instance's own internal
+  slot(s) and calls the provided `subFreeze` callback on each nested
+  `FabricValue`. Implementations must NOT call `deepFreeze()` directly:
+  recursion is handed through the callback so that the freeze utility's
+  caching and cycle-detection bookkeeping is preserved and no import cycle
+  is introduced.
+
+- **`[IS_DEEP_FROZEN](subIsDeepFrozen)`** — Side-effect-free sibling of
+  `[DEEP_FREEZE]`: returns `true` if this instance's own internal slot(s) are in
+  canonical deep-frozen form and every nested `FabricValue` (visited via the
+  `subIsDeepFrozen` callback) is also deep-frozen. An instance that is not in
+  canonical deep-frozen form returns `false`; the check must not throw.
+
+- **`deepClone(frozen)`** — Returns a new deep clone of this instance with
+  equivalent data but no shared structure for any unfrozen data in the original.
+  When `frozen === true`, produces a frozen instance with maximal structural
+  sharing (including returning `this` if already deep-frozen). When `frozen ===
+  false`, produces a deeply-mutable instance with no visible shared reference
+  structure with the original.
+
+The `subFreeze` / `subIsDeepFrozen` callbacks (rather than direct utility
+imports) keep the protocol layering clean and let the outer utility thread
+its shared cycle-detection state through implementations transparently.
+
+##### `deepFreeze()` and the 4-arm dispatch
+
+The generic top-level utility
+(`base/data-model/src/deep-freeze.ts`) recursively freezes a
+`FabricValue` in place. It dispatches on four arms in order:
+
+1. **Necessarily- or already-known-deep-frozen value** — primitives (`null` and
+   `typeof !== "object"`) and objects already recorded in the internal
+   deep-frozen cache. Short-circuits unchanged.
+
+2. **`FabricPrimitive` instance** — `FabricPrimitive` subclasses
+   (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
+   `FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
+   `FabricRegExp`; Section 1.4.6) self-freeze at
+   construction and expose no `FabricValue` for a walk to descend into.
+   Short-circuits unchanged. (A `FabricKeyPair` holding material does hold
+   two `FabricBytes`, but privately, and each froze itself in its own
+   constructor.)
+
+3. **`FabricInstance`** — Delegates to the instance's `[DEEP_FREEZE]` member
+   with a `subFreeze` callback that recurses back through the same utility,
+   threading the shared cycle-detection state. The dispatch gates on
+   `instanceof` against the abstract base; it does not enumerate concrete
+   subclasses. The (now deep-frozen) result is recorded in the deep-frozen cache
+   so subsequent `isDeepFrozen()` checks short-circuit in O(1).
+
+4. **Plain object or array** — Recurses into children, then freezes the
+   container with `Object.freeze()`. Arrays preserve sparse holes. The
+   container is recorded in the deep-frozen cache.
+
+A shared `inProgress` set, threaded through all recursive calls (including
+into participating `FabricInstance`s' `[DEEP_FREEZE]` impls via the
+`subFreeze` callback closure), makes the utility cycle-safe: a cycle back
+to a value the outer call is already deep-freezing short-circuits rather
+than recursing.
+
+##### `isValidDeepFrozenFabricValue()` and the 4-arm type guard
+
+The type guard (`isValidDeepFrozenFabricValue`) is the side-effect-free sibling
+of `deepFreeze()`. It mirrors the same arm shape:
+
+1. Primitives are accepted directly.
+2. `FabricPrimitive` instances are accepted directly.
+3. `FabricInstance` instances delegate to their `[IS_DEEP_FROZEN]` member
+   with a `subIsDeepFrozen` callback that recurses back through the same
+   guard.
+4. Plain objects and arrays must be `Object.isFrozen` and have every child
+   accepted by the guard.
+
+Visited objects are tracked in a per-call `Set` for cycle safety.
 
 ### 2.4 Codec Protocol
 
@@ -2876,7 +2973,7 @@ class Temperature extends BaseFabricInstance {
 > is what lets `decode()` read `state.value` and `state.unit` without a cast:
 > the state has been through encoding and decoding and need not conform to any
 > TypeScript type until something checks it at run time. Every codec owes that
-> check, and `canDecode()` is where the cheap part of it goes. See Section 7.4
+> check, and `canDecode()` is where the cheap part of it goes. See Section 2.11
 > for the full rationale.
 
 **Why the protocol matters.** Without the codec protocol, the encoding system
@@ -2951,7 +3048,57 @@ nature, such as a `FabricPrimitive`, is frozen either way.
 > `FrozenSet` (effectively-immutable wrappers) for collection types, preserving
 > the immutability guarantee even after unwrapping.
 
-### 2.11 Encode Input Contract
+#### Egress-freezing call sites
+
+The deep-freeze contract is enforced at the points where decoded values cross
+from internal codec machinery to callers. Those on a decode's path freeze
+nothing for a mutable engine:
+
+- **Every value the decode walker returns is deep-frozen at the boundary**,
+  whichever arm produced it. The arms reach that by two routes. A leaf arm
+  calls `deepFreeze()`: the codec-produced value (often a `FabricPrimitive`
+  subclass, already frozen — the cache hit makes this O(1)), the lenient-mode
+  `ProblematicValue` fallback, and the unknown-tag arm's `UnknownValue`. A
+  plain-container arm calls `Object.freeze()` on the array or object it has
+  just built, whose children the leaf arms have already deep-frozen, so the
+  guarantee holds without walking them a second time. Which arm produced a
+  value is therefore not something a caller has to know. See Section 4.5
+  step 4.
+
+- **`ProblematicStateError.asProblematicValue()`.** The rendering of a thrown
+  refusal as a returned value is deep-frozen where it is built, unless asked
+  for a mutable one, rather than at each call site, so a caller reaching it
+  outside the walker gets the same guarantee.
+
+- **`JsonCodecValue` parse boundary.** The `parseWireText()` helper (invoked by
+  the JSON decoding act's `encodedFromSerializedForm()`) deep-freezes the parsed
+  tree before handing it to the decode walker. This is what makes the
+  decode-side `JsonCodecValue` invariant load-bearing: tag-unwrap and the
+  `/quote` arm can hand back extracted sub-trees directly without further
+  copying because the input tree is already deep-frozen. For a mutable engine
+  the parse is left unfrozen, which the same shortcut relies on the other way:
+  the tree is freshly built, and shared with nothing.
+
+- **Codec `decode()` implementations freezing what they build.** Unless a
+  decode call passes `mutable` as `true` (Section 2.4), each codec `decode()`
+  implementation freezes the value it builds, and only that; the deep freeze
+  of the whole is the decode walker's, above.
+
+**`deepFreeze` at schema merge/combine sites.** The `deepFreeze()` utility (in
+`base/data-model/src/deep-freeze.ts`) recursively freezes an
+object tree in place; Section 2.3 gives its protocol and dispatch shape. At
+sites where schema objects are merged
+or combined (e.g., schema `merge()` and `combine()` functions), pass-through
+paths — where the input is returned as the result without structural
+modification — must copy the value before freezing to avoid mutating
+caller-owned schema objects. The general principle: `deepFreeze()` freezes in
+place, so if the caller retains a reference to a mutable object, the function
+must not freeze that object as a side effect. Callers at these sites should copy
+before freezing rather than relying on the input being "safe to freeze."
+
+### 2.11 Input Contracts
+
+#### Encoding
 
 Encoding is specified only for a **valid `FabricValue`** — one that has
 passed, or would pass, `isValidFabricValue()` (Section 1). Given such a value,
@@ -2986,6 +3133,8 @@ Two consequences follow, and neither is a defect:
   `canEncode()` has already returned `true` for it. Re-checking either is work
   spent on input that is correct by contract.
 
+#### Decoding
+
 **Decoding is governed the opposite way.** A serialized form is untrusted
 input in its own right — it arrives from another writer, another version, or
 another realm — so a form that is not this format's, or a payload that will
@@ -2993,6 +3142,44 @@ not parse, is refused rather than handled best-effort, and `lenient` decides
 only whether the caller sees a throw or a `ProblematicValue` (Section 4.5).
 The asymmetry is deliberate: an encoder is handed a value by its own caller,
 and a decoder is handed one by a stranger.
+
+**Decoded values must not be trusted for type safety.** After encoding and
+decoding, a value may not conform to the TypeScript type that code assumes — the
+wire format carries no type guarantees, and a round-trip through JSON (or any
+other encoding) can silently produce values whose runtime shape does not match
+their static type.
+
+This applies at every point where decoded data is consumed:
+
+- **Codec implementations** (Section 2.4) are handed a state whose internal
+  structure is whatever was on the wire. Checking it at run time — property
+  existence, types, constraints — is the codec's obligation, and a type cast
+  (`state as { value: number }`) discharges none of it. What a codec is spared
+  is checking twice: `canDecode()` holds the cheap part, stated as a type
+  predicate over the codec's own state type, and the engine asking it of every
+  state before dispatch is what makes the narrower `state` parameter `decode()`
+  declares true rather than asserted. `decode()` keeps the checks whose only
+  implementation is the decoding itself. See the note in Section 2.8 for a
+  concrete example.
+
+- **JSON-side codec decoding** (Section 3 of `3-json-encoding.md`) must
+  validate the format of its state before processing. Malformed input must
+  be rejected rather than silently producing garbage; a codec rejects by
+  refusing the state in `canDecode()`, or from `decode()` by throwing or by
+  returning a `ProblematicValue`, and the engine settles all three against its
+  `lenient` setting (Section 4.5).
+
+- **Hashing** (Section 6.3) may operate on values that have been through a
+  decoding round-trip. Code that extracts properties from `FabricInstance`
+  values must validate those properties at runtime.
+
+- **Application code** that reads values from cells, IPC messages, or any other
+  boundary listed in Section 5.1 should treat the values as untrusted until
+  validated.
+
+The general principle: a type cast (`as T`) is a compile-time assertion with no
+runtime effect. After an encoding boundary, the only reliable way to
+confirm a value's shape is runtime checking.
 
 ---
 
@@ -3102,7 +3289,7 @@ export class UnknownValue extends BaseFabricInstance {
 
   // ([DEEP_FREEZE] / [IS_DEEP_FROZEN] freeze `this` and recurse into
   // `state`; `[SHALLOW_UNFROZEN_CLONE]()` copies the two fields. Omitted for
-  // brevity; see §2.3 and §8.6 for the pattern.)
+  // brevity; see §2.3 for the pattern.)
 
   static #codec = Object.freeze(
     new (class UnknownValueCodec extends BaseNonterminalCodec {
@@ -3237,7 +3424,7 @@ export class ProblematicValue extends BaseFabricInstance {
 
   // ([DEEP_FREEZE] / [IS_DEEP_FROZEN] freeze `this` and recurse into
   // `state`; `[SHALLOW_UNFROZEN_CLONE]()` copies the three fields. Omitted
-  // for brevity; see §2.3 and §8.6 for the pattern.)
+  // for brevity; see §2.3 for the pattern.)
 
   static #codec = Object.freeze(
     new (class ProblematicValueCodec extends BaseNonterminalCodec {
@@ -3315,7 +3502,11 @@ successful product is a `ProblematicValue` — see Section 3.2.
 
 Classes provide the *capability* to encode via the fabric protocol, but they
 don't own the wire format. A **codec engine** owns the mapping between classes
-and wire format tags, and handles format-specific encoding/decoding.
+and wire format tags, and handles format-specific encoding/decoding. Keeping
+that mapping in the engine is what lets one class be carried under different
+tags by different protocol versions and under different wire formats, lets a
+reader of a legacy format sit beside a writer of the current one, and lets a
+test substitute an engine of its own.
 
 ### 4.2 Codec Value Types
 
@@ -3339,7 +3530,7 @@ the public boundary interface.
  * encode-side trees are transient (`JSON.stringify`-ed and discarded)
  * and are not covered by this invariant. The `readonly` on the array and
  * object arms of the union expresses the decode-side contract at the
- * type level. See Section 8.6.
+ * type level. See Section 2.10.
  */
 export type JsonCodecValue =
   | null
@@ -3678,8 +3869,8 @@ The decoding act's walk processes the `JsonCodecValue` tree:
    holds for both the codec-produced value and the lenient-mode
    `ProblematicValue`), so callers need not each freeze. Every other arm
    guarantees the same, the unknown-tag arm (step 5) included, so a caller need
-   not ask which arm produced what it was handed. See Section 8.6 for the full
-   deep-freeze protocol and the egress-freezing call sites.
+   not ask which arm produced what it was handed. See Section 2.3 for the
+   deep-freeze protocol and Section 2.10 for the egress-freezing call sites.
 5. **Unknown tags** — a syntactically valid tag with no registered codec
    produces an `UnknownValue` wrapping the tag and (already-decoded) state,
    preserving the form for round-tripping (Section 3). Syntax is what
@@ -3709,17 +3900,15 @@ The decoding act's walk processes the `JsonCodecValue` tree:
 > as the methods that consult it — so no recursive call threads it. What an act
 > needs of its engine, it reads through `CodecEngineConfig`.
 
-### 4.6 Separation of Concerns
+---
 
-This architecture enables:
+## 5. Wire Formats and Boundaries
 
-- **Protocol versioning**: Same class, different tags in v1 vs v2.
-- **Format flexibility**: JSON context vs CBOR context vs Automerge context.
-- **Migration paths**: Old context reads legacy format, new context writes
-  modern format.
-- **Testing**: Mock contexts for unit tests.
+A codec engine (Section 4) carries `FabricValue`s across a boundary in one wire
+format. This section says where those boundaries are, and which document
+specifies each format.
 
-### 4.7 Encoding Boundaries
+### 5.1 Encoding Boundaries
 
 The boundaries where encoding occurs:
 
@@ -3739,7 +3928,14 @@ requirements.
 > options to this call site requires worker-initialization-time configuration,
 > since the reconciler does not have direct access to a `Runtime` instance.
 
-### 4.8 JSON Encoding
+### 5.2 JSON
+
+The JSON encoding for `FabricValue`s — the `fvj1:` encoding prefix, the
+`/<Type>@<Version>` wire format, type encodings, escaping mechanisms, the
+`/`-key reservation rule, the canonical text an encoder writes, and the floors
+on the size guarantees an implementation states — is specified in
+[`3-json-encoding.md`](./3-json-encoding.md). Section 7 covers conventions
+still met in stored JSON that are not part of that encoding.
 
 The storage boundary routes through functions that bridge between the
 storage layer (JSON strings) and the runtime layer (`FabricValue`), pairing the
@@ -3789,58 +3985,13 @@ declare class ExampleJsonCodecEngine {
 }
 ```
 
-### 4.9 Fabric Value Conversion
+### 5.3 Realm Crossing
 
-The functions `fabricFromConvertibleJsValue()` /
-`convertibleJsFromFabricValue()` bridge the left layer (JS wild west) and the
-middle layer (`FabricValue`) at the `Cell` read/write boundary. Beside them are
-a shallow conversion function (`shallowFabricFromConvertibleJsValue()`) and a
-type-check function (`isValidFabricConvertibleJsValue()`).
-
-```typescript
-// Shown for illustration only.
-// file: base/data-model/src/convertible-js.ts
-
-/**
- * Convert a convertible JS value to fabric form (deep, recursive). Wraps
- * convertible JS types into fabric wrappers (Section 8.2). When `freeze` is
- * `true` (the default), the result tree is deep-frozen; when `false`, wrapping
- * and validation still occur but the result is left mutable. An input that is
- * already a deep-frozen `FabricValue` is returned as-is (identity
- * optimization).
- */
-export function fabricFromConvertibleJsValue(
-  value: unknown,
-  freeze = true,
-): FabricValue;
-
-/**
- * Convert a `FabricValue` back to convertible JS form, unwrapping fabric
- * wrappers back to convertible JS types (Section 8.4).
- */
-export function convertibleJsFromFabricValue(
-  value: FabricValue,
-  frozen?: boolean,
-): FabricConvertibleJsValue;
-```
-
-In the `Cell` implementation:
-
-- **Read path:** `Cell.getRaw()` calls `convertibleJsFromFabricValue(value)` to
-  unwrap fabric wrappers before returning values to the JS wild west.
-- **Write path:** `Cell.setRaw()` calls `fabricFromConvertibleJsValue(value)` to
-  wrap JS types into fabric form before storing.
-
----
-
-## 5. JSON Encoding for Special Types
-
-The JSON encoding for `FabricValue`s — the `/<Type>@<Version>` wire format,
-type encodings, escaping mechanisms, the `/`-key reservation rule, the
-canonical text an encoder writes, and the floors on the size guarantees an
-implementation states — is specified in a dedicated document:
-
-**See [`3-json-encoding.md`](./3-json-encoding.md)**
+The realm-crossing format carries `FabricValue`s over a structured-clone
+transport — `structuredClone()` and `postMessage()`, and a durable store one
+realm writes for a later one to read — at a boundary internal to a runtime,
+where whatever encodes a value is what decodes it. It is specified in
+[`4-realm-encoding.md`](./4-realm-encoding.md).
 
 ---
 
@@ -4199,40 +4350,7 @@ Freezing or caching a container's hash does not change its equality result.
 
 ---
 
-## 7. Implementation Guidance
-
-### 7.1 Adopting Late Serialization
-
-Migration to the spec involves replacing early JSON-form conversion with
-boundary-only encoding and the three-layer architecture:
-
-1. Update `FabricValue` to exclude convertible JS types, include
-   `FabricInstance` (Section 1.2).
-2. Introduce the JS object wrapper classes (`FabricError`, etc.) that
-   implement `FabricInstance` (Section 1.4).
-3. Rework `shallowFabricFromConvertibleJsValue()` /
-   `fabricFromConvertibleJsValue()` to wrap JS types into `FabricInstance`
-   wrappers and return frozen results (Section 8).
-4. Add `convertibleJsFromFabricValue()` for unwrapping back to JS types
-   (Section 8).
-5. Remove early conversion points (e.g., `convertCellsToLinks()`, legacy `Error`
-   wrapping as `{ "@Error": ... }`).
-6. Introduce a codec engine at each boundary (Section 4.7).
-7. Update internal code to work with `FabricValue` types rather than JSON
-   shapes or convertible JS objects.
-
-> **`toJSON()` is not a conversion route.** The conversion functions give a
-> `toJSON()` method no standing: a value that is not a `FabricValue`, a
-> `FabricConvertibleJsObject`, or an accepted plain container does not become
-> representable by carrying one. An object bearing `toJSON` is read as the
-> record it is, so the method itself is an ordinary member — a function, which
-> no record may hold. Anything that needs a representation of its own implements
-> the fabric protocol (`FabricInstance` + `[CODEC]`); anything that a caller
-> wants encoded on its way in is that caller's to encode before it reaches the
-> conversion. Honoring `toJSON()` would eagerly convert to JSON-compatible
-> shapes, which is incompatible with late serialization.
-
-### 7.2 Unifying JSON Encoding
+## 7. Unifying JSON Encoding
 
 **The JSON layering defined by `codec-json` is to be the only JSON layering the
 system defines. This is settled.** It is the direction the system is committed
@@ -4314,53 +4432,6 @@ from the very rule that gives `/` its meaning.
 > measures distance from the end state rather than the effort to close it, since
 > it does not distinguish a live wire path from a debugging or inspection one.
 
-### 7.3 Replacing CID-Based Hashing
-
-The hashing approach (Section 6) replaces `merkle-reference` / CID-based
-hashing. Since the system does not participate in the IPFS network, CID
-formatting adds overhead without interoperability benefit. The hash operates
-on the logical data structure directly.
-
-### 7.4 Untrusted Decoded Input
-
-**Decoded values must not be trusted for type safety.** After encoding and
-decoding, a value may not conform to the TypeScript type that code assumes — the
-wire format carries no type guarantees, and a round-trip through JSON (or any
-other encoding) can silently produce values whose runtime shape does not match
-their static type.
-
-This applies at every point where decoded data is consumed:
-
-- **Codec implementations** (Section 2.4) are handed a state whose internal
-  structure is whatever was on the wire. Checking it at run time — property
-  existence, types, constraints — is the codec's obligation, and a type cast
-  (`state as { value: number }`) discharges none of it. What a codec is spared
-  is checking twice: `canDecode()` holds the cheap part, stated as a type
-  predicate over the codec's own state type, and the engine asking it of every
-  state before dispatch is what makes the narrower `state` parameter `decode()`
-  declares true rather than asserted. `decode()` keeps the checks whose only
-  implementation is the decoding itself. See the note in Section 2.8 for a
-  concrete example.
-
-- **JSON-side codec decoding** (Section 3 of `3-json-encoding.md`) must
-  validate the format of its state before processing. Malformed input must
-  be rejected rather than silently producing garbage; a codec rejects by
-  refusing the state in `canDecode()`, or from `decode()` by throwing or by
-  returning a `ProblematicValue`, and the engine settles all three against its
-  `lenient` setting (Section 4.5).
-
-- **Hashing** (Section 6.3) may operate on values that have been through a
-  decoding round-trip. Code that extracts properties from `FabricInstance`
-  values must validate those properties at runtime.
-
-- **Application code** that reads values from cells, IPC messages, or any other
-  boundary listed in Section 4.7 should treat the values as untrusted until
-  validated.
-
-The general principle: a type cast (`as T`) is a compile-time assertion with no
-runtime effect. After an encoding boundary, the only reliable way to
-confirm a value's shape is runtime checking.
-
 ---
 
 ## 8. Conversion Functions
@@ -4377,6 +4448,13 @@ There are two directions:
   (shallow) and `fabricFromConvertibleJsValue()` (deep, recursive).
 - **`FabricValue` -> JS wild west:** `convertibleJsFromFabricValue()` (deep,
   recursive).
+
+They are used at the `Cell` read/write boundary:
+
+- **Read path:** `Cell.getRaw()` calls `convertibleJsFromFabricValue(value)` to
+  unwrap fabric wrappers before returning values to the JS wild west.
+- **Write path:** `Cell.setRaw()` calls `fabricFromConvertibleJsValue(value)` to
+  wrap JS types into fabric form before storing.
 
 ### 8.2 `shallowFabricFromConvertibleJsValue()` and `fabricFromConvertibleJsValue()`
 
@@ -4447,6 +4525,17 @@ export function fabricFromConvertibleJsValue(
 | `Uint8Array` | Wrapped into `FabricBytes`. The input bytes are copied (the caller may mutate the original afterward). Extra enumerable properties on the `Uint8Array` object cause **rejection** (throw) — it is better to fail loudly than silently lose data. |
 | `FabricValue[]` | Shallow: returned as-is (frozen if `freeze` is true). Deep: elements recursively converted (frozen at each level if `freeze` is true). |
 | `{ [key: string]: FabricValue }` | Shallow: returned as-is (frozen if `freeze` is true). Deep: values recursively converted (frozen at each level if `freeze` is true). |
+
+> **`toJSON()` is not a conversion route.** The conversion functions give a
+> `toJSON()` method no standing: a value that is not a `FabricValue`, a
+> `FabricConvertibleJsObject`, or an accepted plain container does not become
+> representable by carrying one. An object bearing `toJSON` is read as the
+> record it is, so the method itself is an ordinary member — a function, which
+> no record may hold. Anything that needs a representation of its own implements
+> the fabric protocol (`FabricInstance` + `[CODEC]`); anything that a caller
+> wants encoded on its way in is that caller's to encode before it reaches the
+> conversion. Honoring `toJSON()` would eagerly convert to JSON-compatible
+> shapes, which is incompatible with late serialization.
 
 > **Implementation: tag-based type dispatch.** The conversion functions
 > classify a value through `tagOfConvertibleJsValueElseNull()` (in
@@ -4533,18 +4622,6 @@ after the call returns. (Wrapper objects like `FabricError` are freshly
 constructed by the conversion function, so freezing them is not a mutation of
 caller state.)
 
-**`deepFreeze` at schema merge/combine sites.** The `deepFreeze()` utility (in
-`base/data-model/src/deep-freeze.ts`) recursively freezes an
-object tree in place; see Section 8.6 for its full protocol, dispatch shape, and
-the boundary-crossing egress contracts. At sites where schema objects are merged
-or combined (e.g., schema `merge()` and `combine()` functions), pass-through
-paths — where the input is returned as the result without structural
-modification — must copy the value before freezing to avoid mutating
-caller-owned schema objects. The general principle: `deepFreeze()` freezes in
-place, so if the caller retains a reference to a mutable object, the function
-must not freeze that object as a side effect. Callers at these sites should copy
-before freezing rather than relying on the input being "safe to freeze."
-
 **Always-frozen types bypass the `freeze` option.** JS primitives (`null`,
 `boolean`, `number`, `string`, `undefined`, `bigint`) are inherently immutable
 and pass through unchanged regardless of the `freeze` setting. `FabricPrimitive`
@@ -4559,7 +4636,7 @@ If the input is already frozen (or deep-frozen for the deep variant), the same
 object is returned — no defensive copying. This avoids unnecessary allocation
 in the common case where values are already immutable.
 
-The deep freeze check is `isValidDeepFrozenFabricValue()` (Section 8.6), which
+The deep freeze check is `isValidDeepFrozenFabricValue()` (Section 2.3), which
 remembers each root it proves deep-frozen, so checking the same tree again is
 O(1).
 
@@ -4799,141 +4876,6 @@ fabricFromConvertibleJsValue(convertibleJsFromFabricValue(sv))
 
 produces a `FabricValue` that is structurally equivalent to `sv`.
 
-### 8.6 Deep-Freeze Protocol and Egress Contracts
-
-Every `FabricValue` tree an engine's `decode()` returns at a boundary crossing
-is deep-frozen, unless the engine was constructed with `mutable` as `true`
-(Section 2.10). This is enforced via a small protocol on `BaseFabricInstance`
-together with a generic top-level utility that dispatches across the four kinds
-of values that can appear in a `FabricValue` tree. A codec's own `decode()`
-builds a mutable value only when passed `mutable` as `true` (Section 2.4), which
-the decode walker does exactly when its engine is mutable.
-
-#### Instance protocol members
-
-Every concrete `FabricInstance` provides the three members below (Section 2.3).
-Their declarations are split by concern: the freeze-protocol members
-`[DEEP_FREEZE]` and `[IS_DEEP_FROZEN]` are declared on `BaseFabricInstance` —
-the abstract base that concrete instance classes extend — keeping this
-implementation plumbing off the pure-protocol `FabricInstance` interface, while
-`deepClone()` and the inherited `shallowClone()` are declared on
-`FabricInstance` itself. These members, plus the class-side `[CODEC]` (encoding;
-Section 2.4), are the whole instance protocol:
-
-- **`[DEEP_FREEZE](subFreeze)`** — Deeply freezes this instance in place
-  and returns it. The implementation freezes the instance's own internal
-  slot(s) and calls the provided `subFreeze` callback on each nested
-  `FabricValue`. Implementations must NOT call `deepFreeze()` directly:
-  recursion is handed through the callback so that the freeze utility's
-  caching and cycle-detection bookkeeping is preserved and no import cycle
-  is introduced.
-
-- **`[IS_DEEP_FROZEN](subIsDeepFrozen)`** — Side-effect-free sibling of
-  `[DEEP_FREEZE]`: returns `true` if this instance's own internal slot(s) are in
-  canonical deep-frozen form and every nested `FabricValue` (visited via the
-  `subIsDeepFrozen` callback) is also deep-frozen. An instance that is not in
-  canonical deep-frozen form returns `false`; the check must not throw.
-
-- **`deepClone(frozen)`** — Returns a new deep clone of this instance with
-  equivalent data but no shared structure for any unfrozen data in the original.
-  When `frozen === true`, produces a frozen instance with maximal structural
-  sharing (including returning `this` if already deep-frozen). When `frozen ===
-  false`, produces a deeply-mutable instance with no visible shared reference
-  structure with the original.
-
-The `subFreeze` / `subIsDeepFrozen` callbacks (rather than direct utility
-imports) keep the protocol layering clean and let the outer utility thread
-its shared cycle-detection state through implementations transparently.
-
-#### `deepFreeze()` and the 4-arm dispatch
-
-The generic top-level utility
-(`base/data-model/src/deep-freeze.ts`) recursively freezes a
-`FabricValue` in place. It dispatches on four arms in order:
-
-1. **Necessarily- or already-known-deep-frozen value** — primitives (`null` and
-   `typeof !== "object"`) and objects already recorded in the internal
-   deep-frozen cache. Short-circuits unchanged.
-
-2. **`FabricPrimitive` instance** — `FabricPrimitive` subclasses
-   (`FabricEpochNsec`, `FabricEpochDay`, `FabricDurationNsec`,
-   `FabricDurationDay`, `FabricHash`, `FabricBytes`, `FabricKeyPair`,
-   `FabricRegExp`; Section 1.4.6) self-freeze at
-   construction and expose no `FabricValue` for a walk to descend into.
-   Short-circuits unchanged. (A `FabricKeyPair` holding material does hold
-   two `FabricBytes`, but privately, and each froze itself in its own
-   constructor.)
-
-3. **`FabricInstance`** — Delegates to the instance's `[DEEP_FREEZE]` member
-   with a `subFreeze` callback that recurses back through the same utility,
-   threading the shared cycle-detection state. The dispatch gates on
-   `instanceof` against the abstract base; it does not enumerate concrete
-   subclasses. The (now deep-frozen) result is recorded in the deep-frozen cache
-   so subsequent `isDeepFrozen()` checks short-circuit in O(1).
-
-4. **Plain object or array** — Recurses into children, then freezes the
-   container with `Object.freeze()`. Arrays preserve sparse holes. The
-   container is recorded in the deep-frozen cache.
-
-A shared `inProgress` set, threaded through all recursive calls (including
-into participating `FabricInstance`s' `[DEEP_FREEZE]` impls via the
-`subFreeze` callback closure), makes the utility cycle-safe: a cycle back
-to a value the outer call is already deep-freezing short-circuits rather
-than recursing.
-
-#### `isValidDeepFrozenFabricValue()` and the 4-arm type guard
-
-The type guard (`isValidDeepFrozenFabricValue`) is the side-effect-free sibling
-of `deepFreeze()`. It mirrors the same arm shape:
-
-1. Primitives are accepted directly.
-2. `FabricPrimitive` instances are accepted directly.
-3. `FabricInstance` instances delegate to their `[IS_DEEP_FROZEN]` member
-   with a `subIsDeepFrozen` callback that recurses back through the same
-   guard.
-4. Plain objects and arrays must be `Object.isFrozen` and have every child
-   accepted by the guard.
-
-Visited objects are tracked in a per-call `Set` for cycle safety.
-
-#### Egress-freezing call sites
-
-The deep-freeze contract is enforced at the points where decoded values cross
-from internal codec machinery to callers. Those on a decode's path freeze
-nothing for a mutable engine:
-
-- **Every value the decode walker returns is deep-frozen at the boundary**,
-  whichever arm produced it. The arms reach that by two routes. A leaf arm
-  calls `deepFreeze()`: the codec-produced value (often a `FabricPrimitive`
-  subclass, already frozen — the cache hit makes this O(1)), the lenient-mode
-  `ProblematicValue` fallback, and the unknown-tag arm's `UnknownValue`. A
-  plain-container arm calls `Object.freeze()` on the array or object it has
-  just built, whose children the leaf arms have already deep-frozen, so the
-  guarantee holds without walking them a second time. Which arm produced a
-  value is therefore not something a caller has to know. See Section 4.5
-  step 4.
-
-- **`ProblematicStateError.asProblematicValue()`.** The rendering of a thrown
-  refusal as a returned value is deep-frozen where it is built, unless asked
-  for a mutable one, rather than at each call site, so a caller reaching it
-  outside the walker gets the same guarantee.
-
-- **`JsonCodecValue` parse boundary.** The `parseWireText()` helper (invoked by
-  the JSON decoding act's `encodedFromSerializedForm()`) deep-freezes the parsed
-  tree before handing it to the decode walker. This is what makes the
-  decode-side `JsonCodecValue` invariant load-bearing: tag-unwrap and the
-  `/quote` arm can hand back extracted sub-trees directly without further
-  copying because the input tree is already deep-frozen. For a mutable engine
-  the parse is left unfrozen, which the same shortcut relies on the other way:
-  the tree is freshly built, and shared with nothing.
-
-- **Codec `decode()` implementations freezing what they build.** Unless a
-  decode call passes `mutable` as `true` (Section 2.4), each codec `decode()`
-  implementation freezes the value it builds, and only that; the deep freeze
-  of the whole is the decode walker's, above.
-
-- **`deepFreeze()` at schema merge/combine sites.** See Section 8.2.
-
 ---
 
 ## Appendix A: Open Design Decisions
@@ -4965,7 +4907,7 @@ spec from being implementable.
   `T` of `IAnyCell` to `extends FabricValue`) would make the implicit
   expectation explicit without breaking a caller. The
   `convertibleJsFromFabricValue()` / `fabricFromConvertibleJsValue()`
-  conversion in these methods (Section 4.9) is correct but forward-looking: it
+  conversion in these methods (Section 8.1) is correct but forward-looking: it
   will become load-bearing when user-facing patterns start storing rich types
   through the schema-aware `set()` path.
 

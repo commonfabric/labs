@@ -434,9 +434,9 @@ The `[DEEP_FREEZE]` / `[IS_DEEP_FROZEN]` pair lets a generic top-level
 abstract `FabricInstance` base. The `subFreeze` / `subIsDeepFrozen`
 callbacks (rather than direct utility imports) thread shared
 cycle-detection state through implementations without creating an import
-cycle. See `space-model-formal-spec/1-fabric-values.md` Section 8.6 for
-the full protocol, dispatch shape, and boundary-crossing egress
-contracts.
+cycle. See `space-model-formal-spec/1-fabric-values.md` Section 2.3 for
+the full protocol and dispatch shape, and Section 2.10 for the
+boundary-crossing egress contracts.
 
 `decode()` lives on the codec rather than being a constructor for two
 reasons:
