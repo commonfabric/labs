@@ -45,6 +45,41 @@ describe("servingRuntimeFactory()", () => {
     }
   });
 
+  it("has its runtimes take turns at a cold compile only when they share a byte cache", async () => {
+    // The turns keep a shared cache from compiling one program twice. Runtimes
+    // with no cache to share have no reason to wait for each other's compiles.
+    const identity = await Identity.fromPassphrase("serving runtime turns");
+    const server = newLoopbackServer({
+      store: new URL(`memory://serving-runtime-${crypto.randomUUID()}`),
+    });
+    const space = identity.did() as MemorySpace;
+    const options = {
+      server,
+      identity,
+      apiUrl: new URL("http://localhost:9999/"),
+    };
+    const uncached = await servingRuntimeFactory(options)(space, {});
+    const createCached = servingRuntimeFactory({
+      ...options,
+      moduleByteCache: new ProcessModuleByteCache(),
+    });
+    const cached = [
+      await createCached(space, {}),
+      await createCached(space, {}),
+    ];
+    try {
+      expect(uncached.runtime.compileTurns).toBeUndefined();
+      expect(cached[0].runtime.compileTurns).toBeDefined();
+      expect(cached[1].runtime.compileTurns).toBe(
+        cached[0].runtime.compileTurns,
+      );
+    } finally {
+      await uncached.dispose();
+      await Promise.all(cached.map(({ dispose }) => dispose()));
+      await server.close();
+    }
+  });
+
   it("builds every serving runtime over the one module byte cache it is given", async () => {
     const identity = await Identity.fromPassphrase("serving runtime factory");
     const server = newLoopbackServer({
