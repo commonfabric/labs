@@ -291,6 +291,39 @@ describe("piece-connection", () => {
       target: { feed: null },
     };
 
+    it("asks the link to start nothing under server execution", async () => {
+      const controller = stubController([], endpoints);
+      const options: unknown[] = [];
+      const served = {
+        ...controller,
+        runtime: { experimental: { serverExecution: true } },
+        link: (...args: Parameters<PiecesController["link"]>) => {
+          options.push(args[4]);
+          return Promise.resolve();
+        },
+      } as unknown as PiecesController;
+
+      await captureStderr(() =>
+        linkPieces(
+          config,
+          "source-slug",
+          ["items"],
+          "target-slug",
+          ["feed"],
+          undefined,
+          {
+            loadPieces: () => Promise.resolve(served),
+            resolvePieceAddress: (_pieces, token) =>
+              Promise.resolve(
+                token === "source-slug" ? "fid1:source" : "fid1:target",
+              ),
+          },
+        )
+      );
+
+      expect(options).toEqual([{ start: false }]);
+    });
+
     it("links the resolved endpoints at the paths it checked", async () => {
       resetWriteReceipts();
       const links: LinkCall[] = [];

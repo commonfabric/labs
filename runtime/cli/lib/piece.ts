@@ -4443,7 +4443,8 @@ export async function linkSqliteDiskSource(
     deps,
   );
   await pieces.link(id, [], resolvedTarget.piece, resolvedTarget.pathAfter, {
-    start: options?.start,
+    // The serving loop runs the piece a link reaches.
+    start: servedPieces(pieces) ? false : options?.start,
     targetScope: resolvedTarget.scope ?? options?.targetScope,
   });
   await pieces.synced();
