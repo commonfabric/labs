@@ -268,8 +268,8 @@ export default pattern(() => {
     home.sharedSpaceCatalog.entries["did:key:catalog-test-unlisted"] ===
       undefined &&
     home.sharedSpaces.view.status === "ready" &&
-    home.sharedSpaces.view.deleted.length === 0 &&
-    home.sharedSpaces.view.byKind.loom.deleted.length === 0
+    home.sharedSpaces.view.deleted?.length === 0 &&
+    home.sharedSpaces.view.byKind.loom.deleted?.length === 0
   );
   return {
     [TESTS]: [

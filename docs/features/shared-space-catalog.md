@@ -73,7 +73,10 @@ unavailable observation reports `loading` for an undefined value and `malformed`
 for a value the complete catalog validator refuses. A ready view has `entries`,
 keyed by space DID, and `saved`, `archived`, `deleted`, and `other` lists. It
 also has `byKind`, whose keys are the kinds actually present and whose values
-contain those four lists. An absent kind has no entry. For presentation, lists
+contain those four lists. An absent kind has no entry. The `deleted` lists are
+absent from a view a Home older than them produced, and the host projections
+in `@commonfabric/home-schemas` declare them optional for that reason; a reader
+takes their absence as empty. For presentation, lists
 sort admission hints newest first, treating missing times as zero and breaking
 ties by space DID. This display order establishes no authoritative chronology or
 conflict precedence. Entries retain extension fields and opaque revisions;
