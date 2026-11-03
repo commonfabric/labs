@@ -50,6 +50,7 @@ import { DASHBOARD_MESSAGE_LIFETIME_MS } from "./dashboard-message.ts";
 import { type GitHubDelivery, GitHubWebhooks } from "./github-webhooks.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 import { dashboardCacheFile } from "./history-files.ts";
+import { SERVING_VERSION, VERSION_HEADER } from "./version.ts";
 import {
   sampleManifest,
   serializeManifest,
@@ -2047,6 +2048,8 @@ boardTest("sse: a repository's page is live and follows the tiles' views", async
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
   const gantt = await handle(req("/bench?view=gantt&repo=loom"));
   assertEquals(gantt.status, 200);
+  assertEquals(gantt.headers.get(VERSION_HEADER), SERVING_VERSION);
+  assertEquals(gantt.headers.get("content-type"), "text/html; charset=utf-8");
   const html = await gantt.text();
   assertStringIncludes(html, "<title>CI run Gantt</title>");
   assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);

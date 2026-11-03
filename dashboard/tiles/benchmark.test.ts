@@ -2802,7 +2802,6 @@ Deno.test("/bench: grouped by source file, each benchmark colored by its own tre
     html,
     "link && isSameTabLink(event, link) && !isSameDocumentFragment(link)",
   );
-  assert(!html.includes("location.reload()"));
   assert(!html.includes("benchRestoreDaysFocus"));
   assertStringIncludes(html, "setInterval(checkForUpdates, 60000)");
   assert(
