@@ -11,6 +11,7 @@ import type {
   WatchSetResult,
 } from "../v2.ts";
 import { verifyConnectionAuthorization } from "../v2/connection-auth.ts";
+import * as Engine from "../v2/engine.ts";
 import {
   MAX_CONNECTION_AUTH_LEASE_SECONDS,
   MAX_CONNECTION_PRINCIPALS,
@@ -633,6 +634,54 @@ describe("connection authentication", () => {
         expect(admissible(guest)).toEqual([
           { type: "session/admissible", space: SPACE, principal: bob.did() },
         ]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a deleted space's commands with the deletion, ahead of a run-out lease", async () => {
+      const clock = { now: 1_000_000 };
+      const server = createServer("lease-deleted", { clock });
+      try {
+        const peer = await connectPeer(server);
+        await authenticate(peer, alice, { exp: clock.now + 60 }, clock);
+        const opened = await open(peer, SPACE, alice.did());
+        const sessionId = opened.ok!.sessionId;
+        // The deletion tombstone, written as the commit admitting a deletion
+        // would write it.
+        const engine = await server.engineForSpace(SPACE);
+        const seq = Engine.applyCommit(engine, {
+          sessionId: "deletion-stand-in",
+          space: SPACE,
+          commitClass: "system",
+          commit: {
+            localSeq: Engine.serverSeq(engine) + 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${SPACE}`,
+              value: { value: { deleted: { by: alice.did() } } },
+            }],
+          },
+        }).seq;
+
+        clock.now += 61;
+        const refusal = {
+          name: "AuthorizationError",
+          message: `Space ${SPACE} is deleted`,
+          deleted: true,
+          permanentEvidence: true,
+          aclRevision: seq,
+        };
+        expect((await query(peer, SPACE, sessionId)).error).toEqual(refusal);
+        expect(
+          (await request(peer, {
+            type: "presence.join",
+            space: SPACE,
+            sessionId,
+            room: "room-0123456789abcdefghijklmnop",
+          })).error,
+        ).toEqual(refusal);
       } finally {
         await server.close();
       }

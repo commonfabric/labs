@@ -4578,6 +4578,33 @@ describe("v2-server-acl", () => {
               "of:doc:after",
             );
             expect(read.error).toEqual(refusal);
+            // A report and a presence update are answered as they are handed
+            // over, and are refused the same way.
+            for (
+              const immediate of [
+                {
+                  type: "session.report",
+                  report: {
+                    kind: "echo-breaker",
+                    event: "trip",
+                    document: { id: "of:doc:after", scopeKey: "space" },
+                    action: "cf:module/abc:__cfLift_1:xyz",
+                  },
+                },
+                {
+                  type: "presence.join",
+                  room: "room-0123456789abcdefghijklmnop",
+                },
+              ]
+            ) {
+              await alice.connection.receive(encodeMemoryBoundary({
+                ...immediate,
+                requestId: nextRequestId(immediate.type),
+                space,
+                sessionId: opened.ok.sessionId,
+              }));
+              expect(nextResponse(alice.messages).error).toEqual(refusal);
+            }
           },
         );
       });

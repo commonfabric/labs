@@ -2091,32 +2091,56 @@ class Connection {
    * Whether the session `sessionId` on `space` is open on this connection
    * and may take a command, sending the refusal when it may not. A session
    * on a deleted space is open until its revocation reaches it, and its
-   * command is refused here, after the session is found and before every
-   * other check (INV-15).
+   * command is refused here, once the session is found and its routing
+   * holds, and before every other check, an ended chain's and a run-out
+   * lease's included (INV-15).
    */
   async #requireSession(
     requestId: string,
     space: string,
     sessionId: string,
   ): Promise<boolean> {
-    if (!this.#requireOpenSession(requestId, space, sessionId)) return false;
+    const handle = this.#findSession(requestId, space, sessionId);
+    if (handle === undefined) return false;
     const deleted = await this.#server.deletedSpaceRefusal(space);
     if (deleted !== null) {
       this.#send({ type: "response", requestId, error: deleted });
       return false;
     }
-    return true;
+    return this.#requireSessionStanding(requestId, space, sessionId, handle);
   }
 
   /**
-   * Like {@link #requireSession}, except that it reads nothing from the
-   * store, and so makes no deletion check.
+   * Like {@link #requireSession}, for a report or a presence update, which
+   * is answered as it is handed over, so its deletion check reads the
+   * space's open engine without waiting.
    */
-  #requireOpenSession(
+  #requireImmediateSession(
     requestId: string,
     space: string,
     sessionId: string,
   ): boolean {
+    const handle = this.#findSession(requestId, space, sessionId);
+    if (handle === undefined) return false;
+    const deleted = this.#server.deletedSpaceRefusalNow(space);
+    if (deleted !== null) {
+      this.#send({ type: "response", requestId, error: deleted });
+      return false;
+    }
+    return this.#requireSessionStanding(requestId, space, sessionId, handle);
+  }
+
+  /**
+   * Helper for {@link #requireSession} and {@link #requireImmediateSession},
+   * which returns the handle of the session `sessionId` on `space` when it is
+   * open on this connection and its routed authority holds, and otherwise
+   * sends the refusal and returns `undefined`.
+   */
+  #findSession(
+    requestId: string,
+    space: string,
+    sessionId: string,
+  ): SessionHandle | undefined {
     const handle = this.#sessions.get(sessionKey(space, sessionId));
     if (handle === undefined) {
       this.#send({
@@ -2127,7 +2151,7 @@ class Connection {
           "Session is not open on this connection",
         ),
       });
-      return false;
+      return undefined;
     }
     if (
       this.#routedOwns !== undefined &&
@@ -2140,8 +2164,23 @@ class Connection {
         requestId,
         error: toError("SessionRevokedError", "Routed memory authority ended"),
       });
-      return false;
+      return undefined;
     }
+    return handle;
+  }
+
+  /**
+   * Helper for {@link #requireSession} and {@link #requireImmediateSession},
+   * which returns whether the session `handle` names still stands: its proof
+   * chain has not ended and its authentication lease has not run out. It
+   * sends the refusal when it does not.
+   */
+  #requireSessionStanding(
+    requestId: string,
+    space: string,
+    sessionId: string,
+    handle: SessionHandle,
+  ): boolean {
     if (this.#delegationEnded(handle)) {
       // Not renewable: the grant came from the chain, and only a new open
       // with a fresh chain brings one. The session is ended so the client
@@ -2236,10 +2275,8 @@ class Connection {
       });
       return;
     }
-    // A report or a presence update stores nothing, and is answered in
-    // arrival order, so it meets no deletion check, which reads the store.
     if (
-      !this.#requireOpenSession(
+      !this.#requireImmediateSession(
         message.requestId,
         message.space,
         message.sessionId,
@@ -3948,6 +3985,17 @@ export class Server {
   async deletedSpaceRefusal(space: string): Promise<V2Error | null> {
     if (!(await this.#spaceStoreExists(space))) return null;
     return this.#deletedRefusal(await this.#openEngine(space), space);
+  }
+
+  /**
+   * Like {@link deletedSpaceRefusal}, from the engine already open for
+   * `space`, without waiting, for a request answered as it is handed over.
+   * A session open on `space` has that engine open, since its open opened
+   * it; with none open, `null`.
+   */
+  deletedSpaceRefusalNow(space: string): V2Error | null {
+    const engine = this.#resolvedEngines.get(space);
+    return engine === undefined ? null : this.#deletedRefusal(engine, space);
   }
 
   #resolveCapability(
