@@ -926,3 +926,12 @@ fail. The server exits with a non-zero status when its shutdown fails or runs
 out of time, so the close reports those as well. There is no deadline on that
 wait either. The server puts its own limit on how long its shutdown takes, and
 then exits.
+
+One wait sits outside that limit, inside `Deno.exit()` itself. A compiled server
+runs Deno's own OpenTelemetry with metrics on, and each metric export waits for
+the main thread to observe the isolate's gauges, while `Deno.exit()` waits on
+the main thread for the metric exporter to shut down. An export that falls due
+while the main thread is busy with the server's shutdown leaves each waiting on
+the other, and the process never exits. So the capability starts every server
+with `OTEL_METRIC_EXPORT_INTERVAL` set to a week, which no lane outlives, and no
+export falls due.
