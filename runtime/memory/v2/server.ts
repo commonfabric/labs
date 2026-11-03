@@ -1129,9 +1129,13 @@ export type ServedAclChange = {
   change: (stored: unknown) => ACL;
 };
 
-/** What {@link Server.checkServedAclChange} and its commit decide. */
+/**
+ * What {@link Server.checkServedAclChange} and its commit decide. A refusal
+ * carries `deleted` when the space whose list the change names is deleted
+ * (INV-15).
+ */
 export type ServedAclChangeVerdict =
-  | { readonly refused: string }
+  | { readonly refused: string; readonly deleted?: true }
   | { readonly admitted: true; readonly seq?: number };
 
 /**
@@ -5764,7 +5768,11 @@ export class Server {
       const sourceEngine = await this.#openEngine(request.sourceEvent.space);
       const outcome = Engine.runAtomicCommit(
         engine,
-        (apply): { refused: string } | { applied?: Engine.AppliedCommit } => {
+        (
+          apply,
+        ):
+          | { refused: string; deleted?: true }
+          | { applied?: Engine.AppliedCommit } => {
           const prepared = this.#prepareServedAclChange(
             engine,
             sourceEngine,
@@ -5821,7 +5829,9 @@ export class Server {
     sourceEngine: Engine.Engine,
     request: ServedAclChange,
     localSeq: number,
-  ): { refused: string } | { commit: ClientCommit | undefined } {
+  ):
+    | { refused: string; deleted?: true }
+    | { commit: ClientCommit | undefined } {
     const { space, actingPrincipal, sourceEvent } = request;
     if (request.capabilityRef !== `event-consequence:${sourceEvent.eventId}`) {
       return {
@@ -5864,7 +5874,10 @@ export class Server {
     const committer = { principal: actingPrincipal };
     const invalid = this.#validateAclCommit(engine, space, committer, commit) ??
       this.#authorizeCommitWithEngine(engine, space, actingPrincipal, commit);
-    return invalid === null ? { commit } : { refused: invalid.message };
+    return invalid === null ? { commit } : {
+      refused: invalid.message,
+      ...(invalid.deleted === true ? { deleted: true as const } : {}),
+    };
   }
 
   async sqliteQuery(
