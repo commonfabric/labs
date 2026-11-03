@@ -206,3 +206,73 @@ Deno.test("a width change that crosses no stackBelow leaves a drag in progress a
   expect(page.first.style.width).toBe("46%");
   document.dispatchEvent(new MouseEvent("mouseup"));
 });
+
+Deno.test("panel sizes a renderer assigns as properties after the panels are in place reach the group", async () => {
+  const group = new CFResizablePanelGroup();
+  group.style.width = "400px";
+  group.style.height = "400px";
+  const first = new CFResizablePanel();
+  const handle = new CFResizableHandle();
+  const second = new CFResizablePanel();
+  group.append(first, handle, second);
+  document.body.append(group);
+  try {
+    await laidOut(group);
+    expect(first.style.width).toBe("50%");
+
+    first.defaultSize = 36;
+    first.minSize = 20;
+    second.defaultSize = 64;
+    await laidOut(group);
+    expect(first.style.width).toBe("36%");
+    expect(second.style.width).toBe("64%");
+    handle.focus();
+    await pressKey("Home");
+    expect(first.style.width).toBe("31%");
+  } finally {
+    group.remove();
+  }
+});
+
+Deno.test("a size a person dragged to stays when the group reads its panels again", async () => {
+  using page = await mounted("horizontal");
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+
+  page.second.minSize = 25;
+  await laidOut(page.group);
+  expect(page.first.style.width).toBe("37%");
+
+  page.first.defaultSize = 40;
+  await laidOut(page.group);
+  expect(page.first.style.width).toBe("40%");
+});
+
+Deno.test("the group and its handle name their orientation, the handle's for assistive technology as the line it draws", async () => {
+  using page = await mounted("horizontal");
+  expect(page.group.dataset.orientation).toBe("horizontal");
+  expect(page.handle.getAttribute("aria-orientation")).toBe("vertical");
+
+  page.group.direction = "vertical";
+  await page.group.updateComplete;
+  expect(page.group.dataset.orientation).toBe("vertical");
+  expect(page.handle.getAttribute("aria-orientation")).toBe("horizontal");
+});
+
+Deno.test("a stackBelow that is not a positive width is refused, and a removed one stops stacking", async () => {
+  for (const bad of [Number.NaN, 0, -10]) {
+    using page = await mounted("horizontal");
+    page.group.stackBelow = bad;
+    await expect(page.group.updateComplete).rejects.toThrow(RangeError);
+  }
+  using page = built("horizontal");
+  page.group.setAttribute("stack-below", "500");
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.group.orientation).toBe("vertical");
+  page.group.removeAttribute("stack-below");
+  await laidOut(page.group);
+  expect(page.group.orientation).toBe("horizontal");
+  expect(page.first.style.width).toBe("36%");
+});

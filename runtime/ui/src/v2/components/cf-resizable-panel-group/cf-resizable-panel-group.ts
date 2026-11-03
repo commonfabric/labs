@@ -1,5 +1,6 @@
 import { css, html, type PropertyValues } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import { CFResizablePanel } from "../cf-resizable-panel/cf-resizable-panel.ts";
 
 /**
  * @fileoverview UI Resizable Panel Group Component - Container for resizable panels
@@ -53,6 +54,8 @@ interface PanelInfo {
  *
  * @attribute {string} direction - Sets the layout direction for panels
  * @attribute {number} stack-below - Sets `stackBelow`
+ * @attribute {string} data-orientation - Set by the group: the direction its
+ *   panels lie in now, "horizontal" or "vertical"
  *
  * @event {CustomEvent} cf-resize - Fired when panels are resized
  *   @detail {Object} detail - Event detail object
@@ -69,14 +72,15 @@ export class CFResizablePanelGroup extends BaseElement {
     _width: { state: true },
   };
   declare direction: PanelGroupDirection;
-  declare stackBelow: number | undefined;
+  /** Null when the attribute is removed. */
+  declare stackBelow: number | null | undefined;
   /** The group's own width, as last measured; undefined before the first. */
   declare _width: number | undefined;
 
   /** The direction the panels lie in now: `direction`, or vertical while the
    * group is narrower than `stackBelow`. */
   get orientation(): PanelGroupDirection {
-    return this.stackBelow !== undefined && this._width !== undefined &&
+    return this.stackBelow != null && this._width !== undefined &&
         this._width < this.stackBelow
       ? "vertical"
       : this.direction;
@@ -176,6 +180,7 @@ export class CFResizablePanelGroup extends BaseElement {
     // Set up mutation observer to watch for panel changes
     this._observer = new MutationObserver(() => this.updatePanels());
     this._observer.observe(this, { childList: true });
+    this.addEventListener("cf-panel-sizes", this.#onPanelSizes);
     this.#resizeObserver ??= new ResizeObserver((entries) => {
       const entry = entries.at(-1);
       if (entry) this._width = entry.contentRect.width;
@@ -191,6 +196,7 @@ export class CFResizablePanelGroup extends BaseElement {
 
     // Clean up observer
     this._observer?.disconnect();
+    this.removeEventListener("cf-panel-sizes", this.#onPanelSizes);
     this.#resizeObserver?.disconnect();
 
     // Clean up event listeners
@@ -215,6 +221,17 @@ export class CFResizablePanelGroup extends BaseElement {
     `;
   }
 
+  override willUpdate(changed: PropertyValues<this>): void {
+    super.willUpdate(changed);
+    const below = this.stackBelow;
+    if (below != null && !(Number.isFinite(below) && below > 0)) {
+      throw new RangeError(
+        "cf-resizable-panel-group: stackBelow must be a positive width " +
+          `in pixels, not ${below}`,
+      );
+    }
+  }
+
   override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
     const orientation = this.orientation;
@@ -225,37 +242,35 @@ export class CFResizablePanelGroup extends BaseElement {
     // turn with it. A drag measures along one axis from where it started, so
     // a drag in progress ends. A width that crosses nothing changes nothing.
     if (this._activeHandle) this.#cancelResize();
-    for (const handle of this._handles) {
-      handle.setAttribute("data-orientation", orientation);
-    }
+    for (const handle of this._handles) this.#orient(handle);
     this.applyPanelSizes();
   }
 
+  #onPanelSizes = (): void => this.updatePanels();
+
   private updatePanels(): void {
+    const previous = new Map(this._panels);
     this._panels.clear();
     this._handles = [];
 
-    const panels = Array.from(this.querySelectorAll("cf-resizable-panel"));
+    const panels = Array.from(this.querySelectorAll("cf-resizable-panel"))
+      .filter((panel) => panel instanceof CFResizablePanel);
     const handles = Array.from(this.querySelectorAll("cf-resizable-handle"));
 
-    // Store panel information
+    // A panel's sizes are its properties, which its attributes set too: a
+    // renderer assigns properties and sets no attribute. A size a person
+    // dragged to stays until that panel's default changes.
     panels.forEach((panel) => {
-      const minSize = panel.getAttribute("min-size")
-        ? parseFloat(panel.getAttribute("min-size")!)
-        : 0;
-      const maxSize = panel.getAttribute("max-size")
-        ? parseFloat(panel.getAttribute("max-size")!)
-        : 100;
-      const defaultSize = panel.getAttribute("default-size")
-        ? parseFloat(panel.getAttribute("default-size")!)
-        : 50;
-
-      this._panels.set(panel as HTMLElement, {
-        element: panel as HTMLElement,
+      const { minSize, maxSize, defaultSize } = panel;
+      const known = previous.get(panel);
+      this._panels.set(panel, {
+        element: panel,
         minSize,
         maxSize,
         defaultSize,
-        currentSize: defaultSize,
+        currentSize: known?.defaultSize === defaultSize
+          ? known.currentSize
+          : defaultSize,
       });
     });
 
@@ -274,11 +289,7 @@ export class CFResizablePanelGroup extends BaseElement {
         "cf-handle-adjust",
         this.handleAdjust as EventListener,
       );
-      // Set orientation on handle
-      (handle as HTMLElement).setAttribute(
-        "data-orientation",
-        this.orientation,
-      );
+      this.#orient(handle);
     });
 
     // Apply initial sizes
@@ -453,6 +464,19 @@ export class CFResizablePanelGroup extends BaseElement {
     }
   };
 
+  /** Gives a handle the group's orientation: its grip reads
+   * `data-orientation`, and assistive technology reads `aria-orientation`,
+   * which names the line itself, so panels side by side have a vertical
+   * separator between them. */
+  #orient(handle: Element): void {
+    const orientation = this.orientation;
+    handle.setAttribute("data-orientation", orientation);
+    handle.setAttribute(
+      "aria-orientation",
+      orientation === "horizontal" ? "vertical" : "horizontal",
+    );
+  }
+
   private applyPanelSizes(): void {
     const panels = Array.from(this._panels.values());
     const orientation = this.orientation;
@@ -468,5 +492,7 @@ export class CFResizablePanelGroup extends BaseElement {
     });
     this.#sizedDimension = dimension;
     this.#laidOut = orientation;
+    // On the group too, so a host can style either orientation.
+    this.dataset.orientation = orientation;
   }
 }
