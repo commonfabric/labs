@@ -73,9 +73,10 @@ remove it after changing profiles.
 
 ## A reaction the room can't read
 
-No `sendReaction` stores a reaction that lacks a field above, or holds an
+No `sendReaction` stores a reaction that lacks a field above, holds an
 `emoji` or a `sentAt` of another type than the one above, such as a `sentAt`
-that is a bare `bigint` rather than a `FabricEpochNsec`. A message's reactions
+that is a bare `bigint` rather than a `FabricEpochNsec`, or holds a
+`reactorProfile` that isn't a link. A message's reactions
 can still hold one, as data stored under another shape can, just as a room's
 messages can hold [a message it can't
 read](ChatMessage.md#a-message-the-room-cant-read). The room leaves such a

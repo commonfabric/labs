@@ -175,6 +175,16 @@ describe("message-row", () => {
           })),
         );
       });
+
+      it("is left out when its `reactorProfile` isn't a link", async () => {
+        expectOnlyWellFormed(
+          await talliesAround(() => ({
+            emoji: "😀",
+            sentAt: new FabricEpochNsec(11n),
+            reactorProfile: 42,
+          })),
+        );
+      });
     });
   });
 });

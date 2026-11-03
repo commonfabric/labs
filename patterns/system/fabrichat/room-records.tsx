@@ -561,10 +561,10 @@ export interface ReadableReaction {
 
 /**
  * Every reaction of `list` the room can read, in the order added: each with
- * every field `ChatReaction` requires, and an `emoji` and a `sentAt` of the
- * types it gives them (see `readableRecord()`). A reaction it can't read is
- * one no handler stores, and is left out, so the other reactions don't depend
- * on it.
+ * every field `ChatReaction` requires, an `emoji` and a `sentAt` of the types
+ * it gives them (see `readableRecord()`), and a `reactorProfile` that is a
+ * link. A reaction it can't read is one no handler stores, and is left out, so
+ * the other reactions don't depend on it.
  */
 export const readableReactions = (
   list: Cell<ReactionsValue>,
@@ -572,7 +572,14 @@ export const readableReactions = (
   indexesOf(list).flatMap((index): ReadableReaction[] => {
     const cell: Cell<ChatReaction> = list.key(index);
     const record = readableRecord(cell, ["emoji", "sentAt"]);
-    return record === undefined ? [] : [{ cell, record }];
+    if (record === undefined) return [];
+    // Read as its own cell's value, a `reactorProfile` is a cell either way:
+    // over what it links where it is a link, and over itself where it isn't,
+    // one that refuses any read of it through the reaction. The field is
+    // addressed in the reaction's own document, where a cell over itself has
+    // the field's own link.
+    const reactor = cell.resolveAsCell().key("reactorProfile");
+    return reactor.equalLinks(reactor.get()) ? [] : [{ cell, record }];
   });
 
 /**
