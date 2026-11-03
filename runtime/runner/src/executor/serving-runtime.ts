@@ -93,9 +93,12 @@ export type ServingRuntimeFactoryOptions = {
 export function servingRuntimeFactory(
   options: ServingRuntimeFactoryOptions,
 ): ExecutorHostOptions["createRuntime"] {
-  // A serving runtime yields while it compiles, so the runtimes this factory
-  // builds take turns, which keeps `moduleByteCache` compiling a program once.
-  const compileTurns = new CompileTurns();
+  // A serving runtime yields while it compiles, so the runtimes that share a
+  // byte cache take turns, which keeps it compiling a program once.
+  const sharedByteCache = options.moduleByteCache === undefined ? {} : {
+    moduleByteCache: options.moduleByteCache,
+    compileTurns: new CompileTurns(),
+  };
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
       as: options.identity,
@@ -129,10 +132,7 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
-      ...(options.moduleByteCache === undefined
-        ? {}
-        : { moduleByteCache: options.moduleByteCache }),
-      compileTurns,
+      ...sharedByteCache,
     });
     return Promise.resolve({
       runtime,
