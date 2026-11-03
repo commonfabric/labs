@@ -224,9 +224,9 @@ const emails = table(
 written `any(...)`, which is what the example above declares. Written with
 `all(...)`, the same atom set means *all-of*: a row fits only a ceiling listing
 every participant, so per-user views return nothing. The surface keeps the two
-combinators explicit — `all(...)` (one conjunctive clause per atom) and
-`any(...)` (one OR-clause, CFC spec §18.5.3), both accepted by `table()` — so
-the wrong semantics is never chosen silently.
+combinators explicit — `all(...)` (a conjunction: each term contributes its own
+clauses) and `any(...)` (one OR-clause, CFC spec §18.5.3), both accepted by
+`table()` — so the wrong semantics is never chosen silently.
 
 The closed helper set
 ([`row-label.ts`](../../../runtime/memory/v2/sqlite/row-label.ts); each helper
@@ -237,7 +237,7 @@ returns a plain-JSON AST node):
 | `match(f.col, /re/, {group?, min?})` | run the regex (forced global) over the column's text ⟹ the ordered list of matches (or capture `group`). The universal field extractor — split + clean in one; subsumes JSON arrays and dirty `Name <addr>` lists. **Strict-if-present:** a non-empty value yielding zero matches fails closed at evaluation (never under-label); `min` makes the field a required anchor |
 | `principal(protocol, match(…))` | `did:<protocol>:<v>` for each extracted `v` (distributes over the match list). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
 | `dbOwner()` | the db's owner — the principal that created the SqliteDb cell, resolved from the db ref (a fixed db property, so the rule stays pure; for a per-user-scoped db this is that user). Creation under SERVED execution mints the CREATING RUN's acting principal — the demanded run's carried identity, never the serving runtime's ambient (service) identity (`docs/specs/server-side-execution/serving-loop.md` §3c); a served creating run with no carried actor mints NO owner, and `dbOwner()` fails closed (RATIFIED — RULED 2026-08-22; `docs/specs/server-side-execution/verification-coverage.md` OW53 records the ruling) |
-| `all(...t)` | separate **conjunctive** clauses, one per atom — every atom an independent requirement; the counterpart of `any(...)` |
+| `all(...t)` | a **conjunction**: each term contributes its own clauses, so each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`); the counterpart of `any(...)` |
 | `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause; each alternative is a single principal-like term, not an `all(...)` or `any(...)` — never silently lowered to the conjunctive form |
 | `intersect(...t)` | set ∩ over integrity atom sets (the trust-floor meet) — integrity only |
 | `whenMatches(f.col, /re/, term)` | include `term` only when the regex TESTS true against the column (gate trust, or a data-dependent conjunct, on extracted metadata). One **fused** helper — a bare `when(matches(…))` pair would collide with the builder's control-flow `when`, whose transformer lowering matches by NAME and mangles any local so named. NB: a gated confidentiality alternative is absent from some rows, so it never has the common-alternative property (CFC spec §8.17.4) |

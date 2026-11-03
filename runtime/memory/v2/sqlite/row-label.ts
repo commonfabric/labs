@@ -140,8 +140,9 @@ export function constant(atom: FabricValue): { constant: FabricValue } {
   return { constant: atom };
 }
 
-/** Separate conjunctive clauses, one per atom (every principal an independent
- *  requirement). The conjunctive counterpart of `any()`. */
+/** Conjunctive composition of terms; each term contributes its own clauses, so
+ *  each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`).
+ *  The conjunctive counterpart of `any()`. */
 export function all(...terms: FabricValue[]): { allOf: FabricValue[] } {
   return { allOf: terms };
 }
