@@ -23,7 +23,7 @@ const useUint8ArrayToFromHex: boolean = !!Uint8Array.fromHex;
 /**
  * Converts a bigint to its minimal two's-complement big-endian byte
  * representation. The encoding is the same one used by the hash
- * byte-level spec (Section 3.7).
+ * (`2-hash-byte-format.md` Section 4.5).
  *
  * Edge cases:
  * - `0n` -> `[0x00]` (single zero byte)

@@ -115,7 +115,7 @@ type TransientReason = Exclude<UnavailableReason, "error">;
  * failed. Only the `error` reason carries a kind, and it always does; only
  * the `error` reason may carry a message, and `errorMessage` supplies one for
  * its kind when none was given. The constructor refuses the other pairings.
- * See Section 1.4.12 of the formal spec.
+ * See Section 1.4.12 of `1-fabric-values.md`.
  */
 export class FabricUnavailable extends BaseFabricPrimitive
   implements ApiFabricUnavailable {

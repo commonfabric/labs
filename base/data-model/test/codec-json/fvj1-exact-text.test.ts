@@ -560,8 +560,8 @@ describe("fvj1-exact-text", () => {
   });
 
   describe("a record holding `undefined` and a record lacking the key", () => {
-    // The two are distinct values (`1-fabric-values.md` Section 6.4), so they
-    // have distinct texts.
+    // The two are distinct values (`2-hash-byte-format.md` Sections 4.7 and
+    // 4.13), so they have distinct texts.
 
     it("encodes a record holding `undefined` with the key present", () => {
       expect(jsonFromFabricValue({ u: undefined })).toBe(

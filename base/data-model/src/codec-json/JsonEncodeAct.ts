@@ -167,7 +167,7 @@ export class JsonEncodeAct extends BaseEncodeAct<JsonCodecValue, string> {
     // assignment below. JavaScript enumerates integer-index-like keys first
     // and in numeric order, so an object carrying `"10"` and `"2"` is written
     // in the wrong order however this walk sorted them, and `JSON.stringify()`
-    // never sees the order this loop chose. Section 10 of the formal spec
+    // never sees the order this loop chose. Section 10 of `3-json-encoding.md`
     // requires the UTF-8 order, so serializing the members directly -- rather
     // than by way of an object whose enumeration reorders them -- is what
     // would actually deliver it. The case
