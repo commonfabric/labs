@@ -1649,9 +1649,33 @@ function unwrapOuterHandle(schema: JSONSchemaObj): JSONSchemaObj {
 
 /**
  * How many microtask turns `crossSpaceSettled()` and `synced()` wait, once
- * the cross-space promises are all settled, before taking the set as empty:
- * follow-up work that a reaction to a settling promise tracks within that many
- * turns of it keeps them waiting.
+ * the cross-space promises are all settled, before taking the set as empty.
+ * Work that joins the set within those turns keeps them waiting.
+ *
+ * Nothing signals that no more follow-up work is coming. A reaction to settling
+ * work can track follow-up work a few promise hops later, and a waiter released
+ * the instant the set empties lets a caller that awaits `synced()` once read
+ * before that follow-up lands. Eight turns hold through a reaction that tracks
+ * its follow-up as late as six or seven hops after the work settles: a margin
+ * over the four or five hops that waiting on a `Promise.all()` over the set
+ * holds through, and over the `.then()` hops of a reaction that chains a step
+ * or two before it tracks.
+ *
+ * This is a partial fix. It covers only follow-up work that a promise reaction
+ * tracks within those turns. Follow-up work that goes through the scheduler is
+ * not covered: a load lands, the scheduler, which wakes and yields on
+ * macrotasks, runs an action later, and that action tracks new loads, past
+ * where any count of microtasks reaches. So a caller that awaits `synced()` or
+ * `crossSpaceSettled()` once can resume before the work a load set off has
+ * run. `Cell.pull()` covers that case by looping, the barrier then the
+ * scheduler's idle, until both stay quiet; the other callers do not. The call
+ * sites in this runtime that track follow-up work chain it into the work they
+ * track, so the count guards against a reaction that does not.
+ *
+ * TODO(danfuzz): Replace the count with a structural barrier: every
+ * `trackUntilSettled()` call tracks its whole follow-up chain, and the
+ * scheduler's pending work joins the barrier, so that waiters are released
+ * once both the set and the scheduler are quiet.
  */
 const CROSS_SPACE_SETTLE_TURNS = 8;
 
@@ -4104,7 +4128,10 @@ export class StorageManager implements IStorageManager {
    * Releases every waiter of `#resolveCrossSpace()` once `#crossSpacePromises`
    * has been empty for {@link CROSS_SPACE_SETTLE_TURNS} microtask turns with
    * nothing joining it, so that follow-up work which a settling promise's
-   * reactions track within those turns keeps the waiters waiting.
+   * reactions track within those turns keeps the waiters waiting. The count of
+   * additions tells this emptying apart from a later one: a check that sees it
+   * change stops, and the later emptying starts its own. The constant's
+   * comment says what the count leaves uncovered.
    */
   #releaseCrossSpaceWaiters(): void {
     if (
