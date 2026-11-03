@@ -14,8 +14,8 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /**
- * `WeakMap` cache from frozen objects to already-calculated sorted keys. Used
- * by `utf8SortedKeysOf()`.
+ * `WeakMap` cache from frozen objects whose keys needed sorting to their
+ * sorted keys. Used by `utf8SortedKeysOf()`.
  */
 const sortedKeyCache = new WeakMap<object, readonly string[]>();
 
@@ -117,8 +117,8 @@ export function utf8Compare(a: string, b: string): number {
 
 /**
  * Produces a frozen array containing the ordered keys of the given object,
- * in UTF-8 sort order. If the given object is frozen, it gets cached for
- * possible reuse.
+ * in UTF-8 sort order. If the given object is frozen and its keys needed
+ * sorting, the result is cached for possible reuse.
  */
 export function utf8SortedKeysOf(value: object): readonly string[] {
   if (value === null) {
@@ -144,7 +144,11 @@ export function utf8SortedKeysOf(value: object): readonly string[] {
 
   const sorted = Object.freeze(ordered ? keys : keys.sort(utf8Compare));
 
-  if (Object.isFrozen(value)) {
+  // An entry lives as long as its object does, so one is kept only where it
+  // saves a sort. Reading keys already in order again takes one
+  // `Object.keys()` call and the check above, which costs less than holding a
+  // copy of them for the object's whole life.
+  if (!ordered && Object.isFrozen(value)) {
     sortedKeyCache.set(value, sorted);
   }
 
