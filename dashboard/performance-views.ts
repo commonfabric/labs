@@ -2,17 +2,24 @@
  * Holds what the three performance views behind /bench — the runtime
  * benchmarks, the CI durations, and the Gantt chart — have in common: the
  * state their query string carries, the navigation that moves between them
- * while keeping that state, the styles their rows and progress bars share, and
- * the bounds on how a history is scaled to a chart.
+ * while keeping that state, the styles their rows and progress bars share, the
+ * bounds on how a history is scaled to a chart, the progress panel, and the
+ * settings the two history pages' scripts share.
  */
 
 import { DETAIL_PAGE_STYLES } from "./detail-page.ts";
+import type {
+  CollectionProgress,
+  HistoryPage,
+  ProgressText,
+} from "./history-page-client.ts";
 import { escapeHtml } from "./lib.ts";
 import {
   STATUS_EDGE,
   STATUS_WASH,
 } from "./palette.ts";
 import { statusLayer } from "./theme.ts";
+import { SERVING_VERSION, VERSION_HEADER } from "./version.ts";
 
 export type PerformanceView = "runtime" | "ci" | "gantt";
 
@@ -35,9 +42,109 @@ export interface PerformanceViewState {
   keyOnly?: boolean;
 }
 
-export const PERFORMANCE_CHECK_MS = 60_000;
+const PERFORMANCE_CHECK_MS = 60_000;
 export const PERFORMANCE_HISTORY_SCALE_MIN_VALUES = 20;
 export const PERFORMANCE_HISTORY_SCALE_TRIM = 2;
+
+/** The settings of a history page's script: `page`'s own, and the shared ones. */
+export function historyPage(
+  page: Pick<HistoryPage, "hideGreenKey" | "progressPath" | "subject">,
+): HistoryPage {
+  return {
+    ...page,
+    version: SERVING_VERSION,
+    versionHeader: VERSION_HEADER,
+    checkMs: PERFORMANCE_CHECK_MS,
+  };
+}
+
+/** How a progress panel is labelled and tied to its page's script. */
+export interface ProgressPanelOptions {
+  readonly ariaLabel: string;
+  /** Where the page's script checks for new data. */
+  readonly checkUrl?: string;
+  /** The version of the data the page shows. */
+  readonly snapshotVersion?: string;
+  /** Whether the page loads its charts when the collection finishes. */
+  readonly refreshOnComplete?: boolean;
+  /** Where a collection's progress streams from, given its `id`. */
+  readonly progressPath?: string;
+  /** Why the last collection stopped, when none is under way. */
+  readonly lastRequestError?: string;
+}
+
+/** `progress`, when it is of a collection still under way. */
+export function underWay<P extends CollectionProgress>(
+  progress: P | null | undefined,
+): P | undefined {
+  return progress?.phase === "complete" || progress?.phase === "error"
+    ? undefined
+    : progress ?? undefined;
+}
+
+/**
+ * A performance view's progress panel as the server renders it, saying what
+ * `describeProgress` says about a collection under way, and otherwise that
+ * none is.
+ */
+export function progressPanel<
+  P extends CollectionProgress & { readonly warning?: string },
+>(
+  progress: P | null | undefined,
+  describeProgress: (state: P) => ProgressText,
+  options: ProgressPanelOptions,
+): string {
+  const active = underWay(progress);
+  const lastRequestError = progress?.phase === "error"
+    ? progress.error ?? "unknown error"
+    : progress
+    ? undefined
+    : options.lastRequestError;
+  const warning = active || lastRequestError ? undefined : progress?.warning;
+  const text = active ? describeProgress(active) : {
+    title: "Idle",
+    total: "0 outstanding",
+    detail: lastRequestError
+      ? `Last collection stopped: ${lastRequestError}`
+      : warning ?? "No requests in progress.",
+  };
+  const attributes = [
+    options.checkUrl ? `data-check-url="${escapeHtml(options.checkUrl)}"` : "",
+    options.snapshotVersion !== undefined
+      ? `data-snapshot-version="${escapeHtml(options.snapshotVersion)}"`
+      : "",
+    options.refreshOnComplete !== undefined
+      ? `data-refresh-on-complete="${options.refreshOnComplete ? "1" : "0"}"`
+      : "",
+    active && options.progressPath
+      ? `data-progress-url="${
+        escapeHtml(
+          `${options.progressPath}?id=${encodeURIComponent(active.id)}`,
+        )
+      }"`
+      : "",
+    lastRequestError
+      ? `data-last-request-error="${escapeHtml(lastRequestError)}"`
+      : "",
+  ].filter(Boolean).join(" ");
+  return `<section class="fetch-progress${
+    lastRequestError ? " error" : warning ? " warning" : ""
+  }" id="fetch-progress" aria-live="polite"${
+    attributes ? ` ${attributes}` : ""
+  }><div class="fetch-head"><strong id="fetch-title">${
+    escapeHtml(text.title)
+  }</strong><span id="fetch-total">${
+    escapeHtml(text.total)
+  }</span></div><progress id="fetch-bar" max="${
+    active ? Math.max(1, active.totalRuns) : 1
+  }"${
+    active && (active.phase === "discovering" || !active.totalRuns)
+      ? ""
+      : ` value="${active ? active.completedRuns : 0}"`
+  } aria-label="${escapeHtml(options.ariaLabel)}"></progress><p id="fetch-detail">${
+    escapeHtml(text.detail)
+  }</p></section>`;
+}
 
 export const PERFORMANCE_PROGRESS_STYLES = `
   .fetch-progress{background:var(--surface);border:1px solid var(--border-strong);border-radius:10px;padding:10px 12px;margin:0 0 12px}

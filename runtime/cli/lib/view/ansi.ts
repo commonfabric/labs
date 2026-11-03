@@ -132,8 +132,18 @@ export const term = {
   resetDefaultBg: `${OSC}111${BEL}`,
 
   /** `text` as a link to `url` (OSC 8), which a terminal without links
-   * shows as the text alone. */
+   * shows as the text alone. Every character of `url` outside printable
+   * ASCII is percent-encoded as its UTF-8 bytes, so that a link taken
+   * from content cannot end the sequence or start another. */
   hyperlink(url: string, text: string): string {
-    return `${OSC}8;;${url}${BEL}${text}${OSC}8;;${BEL}`;
+    const safe = url.replace(
+      /[^!-~]/gu,
+      (char) =>
+        Array.from(
+          new TextEncoder().encode(char),
+          (byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+        ).join(""),
+    );
+    return `${OSC}8;;${safe}${BEL}${text}${OSC}8;;${BEL}`;
   },
 };

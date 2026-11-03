@@ -205,10 +205,11 @@ export class CacheFile<T = never> {
 }
 
 /**
- * Replaces the file at `path` with `bytes` through a temporary file, as the
- * top of this module describes, and returns what `Deno.stat()` says of the new
- * file. The caller holds the lock that every process writing the file holds.
- * The temporary file is removed when the write fails.
+ * Replaces the file at `path` with `bytes` through a temporary file named
+ * `<path>.<UUID>.tmp`, and returns what `Deno.stat()` says of the new file.
+ * The temporary file is removed when the write fails. Anything that removes
+ * leftover temporary files beside `path` leaves this one alone until the call
+ * settles; `CacheFile` does so by holding the file's lock for both.
  */
 export async function replaceFile(
   path: string,

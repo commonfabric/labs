@@ -18,6 +18,7 @@ function topicOf(
     title,
     body,
     createdAt: 1000,
+    updatedAt: 1000,
     createdBy: "Sol (agent)",
     lastActivityAt: 1000,
     comments: comments.map((body) => ({
