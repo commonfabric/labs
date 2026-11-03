@@ -11,7 +11,7 @@
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isDeletionTombstone } from "@commonfabric/memory/acl";
 
-import { type CompactionCheck, type StoreVerification } from "./compaction.ts";
+import type { CompactionCheck, StoreVerification } from "./compaction.ts";
 import { openSpace } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 
