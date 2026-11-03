@@ -15,6 +15,9 @@
  * which a spawn leaves inherited for any stream it asks no pipe
  * for. The browser is spawned here and astral attached to the running browser,
  * which is what keeps those pipes in reach.
+ *
+ * A browser also ends with the process that spawned it, whether or not anything
+ * closed it. `ENDS_WITH_ITS_SPAWNER` says how.
  */
 
 import {
@@ -37,6 +40,34 @@ import {
  * names the same string the throw does.
  */
 export const BOOT_FAILURE_MESSAGE = "Your binary refused to boot";
+
+/**
+ * The shell program a browser starts through, which takes the browser's command
+ * as its arguments.
+ *
+ * It starts one background job and then replaces itself with the browser, so
+ * the process the spawn reports is the browser and leads the group the spawn
+ * made. The job stays in that group, blocked reading the pipe on its standard
+ * input. The spawning process holds the only write end and writes nothing to
+ * it, so the read returns once that process has ended. The kernel closes the
+ * descriptor however a process ends, which covers `SIGKILL` and an uncaught
+ * error that skips every `afterAll` as well as a normal exit. The job then
+ * sends `SIGKILL` to the group, itself included.
+ *
+ * File descriptor 3 is what gets the pipe to the job: a background job's
+ * standard input is /dev/null unless it is redirected explicitly. The job
+ * writes its own output to /dev/null so that it holds neither of the browser's
+ * output pipes, which `stopBrowserProcess()` waits to see closed.
+ *
+ * This ends processes and nothing else, so a profile directory stays where it
+ * is. It does not reach a process that left the group, such as a detached crash
+ * handler.
+ */
+const ENDS_WITH_ITS_SPAWNER = `
+exec 3<&0
+{ read -r line <&3; kill -s KILL 0; } >/dev/null 2>&1 &
+exec "$@" </dev/null 3<&-
+`;
 
 /** A browser that has started, its endpoint, and its output completion. */
 type SpawnedBrowser = {
@@ -93,6 +124,51 @@ export async function stopBrowserProcess(
     await closed;
   } finally {
     await child.status;
+  }
+}
+
+/**
+ * Spawns `binary` in a process group of its own, through
+ * `ENDS_WITH_ITS_SPAWNER`, with all three standard streams piped. The returned
+ * child's `pid` and `status` are those of `binary` itself.
+ *
+ * Closing `stdin` ends the whole group, as the end of the calling process does.
+ * A `binary` that cannot be run is reported on `stderr` and as the exit status,
+ * rather than by this throwing.
+ */
+export function spawnBrowserProcess(
+  binary: string,
+  args: string[],
+): Deno.ChildProcess {
+  return new Deno.Command("sh", {
+    args: ["-c", ENDS_WITH_ITS_SPAWNER, "browser", binary, ...args],
+    detached: true,
+    stdin: "piped",
+    stdout: "piped",
+    stderr: "piped",
+  }).spawn();
+}
+
+/**
+ * Helper for everything that ends a browser this module spawned, which stops
+ * its process group and then closes the pipe that group's job was reading.
+ *
+ * Closing a stream that is already closed rejects with a `TypeError`, which is
+ * where a second close arrives after a first that failed further on, so that is
+ * not a failure here. Any other rejection is.
+ */
+async function stopSpawnedBrowser(
+  child: Deno.ChildProcess,
+  closed: Promise<void>,
+): Promise<void> {
+  try {
+    await stopBrowserProcess(child, closed);
+  } finally {
+    await child.stdin.close().catch((error) => {
+      if (!(error instanceof TypeError)) {
+        throw error;
+      }
+    });
   }
 }
 
@@ -179,17 +255,12 @@ async function spawnBrowser(options: LaunchOptions): Promise<SpawnedBrowser> {
     throw new Error("A browser launch has to name a `--user-data-dir`.");
   }
 
-  const child = new Deno.Command(binary, {
-    args,
-    detached: true,
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
+  const child = spawnBrowserProcess(binary, args);
   const { endpoint, closed } = readBrowserOutput(child);
   try {
     return { child, endpoint: await endpoint, outputClosed: closed };
   } catch (error) {
-    await stopBrowserProcess(child, closed);
+    await stopSpawnedBrowser(child, closed);
     throw error;
   }
 }
@@ -279,7 +350,7 @@ export class BrowserProcess {
    */
   async close(): Promise<void> {
     try {
-      await stopBrowserProcess(this.#child, this.#outputClosed);
+      await stopSpawnedBrowser(this.#child, this.#outputClosed);
     } finally {
       await this.#browser.disconnect();
     }
@@ -308,7 +379,7 @@ export class BrowserProcess {
         browser,
       );
     } catch (error) {
-      await stopBrowserProcess(spawned.child, spawned.outputClosed);
+      await stopSpawnedBrowser(spawned.child, spawned.outputClosed);
       throw error;
     }
   }
