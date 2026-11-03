@@ -323,7 +323,7 @@ describe("Engine.compileToRecordGraph", () => {
         expect(m.js).not.toContain("//cached");
       }
 
-      const { main } = engine.evaluateRecordGraph(
+      const { main } = await engine.evaluateRecordGraph(
         compiled.id,
         compiled.graph,
         compiled.mainSpecifier,
@@ -349,7 +349,7 @@ describe("Engine.compileToRecordGraph", () => {
         expect(m.js).toContain(`//cached:${m.identity}`);
       }
 
-      const { main } = engine.evaluateRecordGraph(
+      const { main } = await engine.evaluateRecordGraph(
         compiled.id,
         compiled.graph,
         compiled.mainSpecifier,
