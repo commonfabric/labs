@@ -58,7 +58,17 @@ const setName = handler<
 export default pattern<{ seed?: string }>(() => {
   const name = new Writable<string>("initial").for("name");
   const upper = computed(() => name.get().toUpperCase());
-  return { [NAME]: "Served reads", name, upper, setName: setName({ name }) };
+  const rows = computed(() => [
+    { title: name.get(), rank: 1, hidden: "a" },
+    { title: "other", rank: 2, hidden: "b" },
+  ]);
+  return {
+    [NAME]: "Served reads",
+    name,
+    upper,
+    rows,
+    setName: setName({ name }),
+  };
 });
 `,
   }],
@@ -245,6 +255,66 @@ describe("served reads and calls", () => {
       await expect(
         getCellValue(config, ["setName"], { run: false }, depsFor(pieces)),
       ).rejects.toThrow(PieceVerbReadError);
+    });
+
+    describe("with a selection", () => {
+      const select = async (
+        path: (string | number)[],
+        options: Parameters<typeof parseCellSelectionOptions>[0],
+      ) => {
+        const pieces = await clientPieces();
+        const start = spy(pieces.runtime, "start");
+        const setup = spy(pieces.runtime, "setup");
+        const value = await getCellValue(config, path, {
+          selection: (await parseCellSelectionOptions(options))!,
+        }, depsFor(pieces));
+        expect(start.calls).toHaveLength(0);
+        expect(setup.calls).toHaveLength(0);
+        return value;
+      };
+
+      it("returns the fields a schema names, with no graph and no start", async () => {
+        expect(
+          await select(["rows"], {
+            schema:
+              '{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"}},"additionalProperties":false}}',
+          }),
+        ).toEqual([{ title: "initial" }, { title: "other" }]);
+      });
+
+      it("returns the elements a filter keeps", async () => {
+        expect(await select(["rows"], { filter: ".rank == 2" })).toEqual([
+          { title: "other", rank: 2, hidden: "b" },
+        ]);
+      });
+
+      it("returns the fields of the elements a filter keeps", async () => {
+        expect(
+          await select(["rows"], {
+            filter: ".rank == 1",
+            schema:
+              '{"type":"array","items":{"type":"object","properties":{"rank":{"type":"number"}},"additionalProperties":false}}',
+          }),
+        ).toEqual([{ rank: 1 }]);
+      });
+
+      it("returns what a concise projection names from each element", async () => {
+        expect(await select(["rows"], { select: "title" })).toEqual([
+          { title: "initial" },
+          { title: "other" },
+        ]);
+      });
+
+      it("returns the value the server derives for a scalar", async () => {
+        expect(await select(["upper"], { schema: '{"type":"string"}' })).toBe(
+          "INITIAL",
+        );
+      });
+
+      it("refuses a filter over a value that is not an array", async () => {
+        await expect(select(["upper"], { filter: ".rank == 1" })).rejects
+          .toThrow("--filter can only be applied to an array");
+      });
     });
 
     it("starts nothing for a read with `step`", async () => {
