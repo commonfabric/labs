@@ -590,6 +590,16 @@ describe("history page scripts", () => {
           .toHaveLength(2);
       });
 
+      it("leaves the progress panel as it was when leaving the page stops a check", async () => {
+        const page = await open({ firstPending: true });
+        const title = page.elements.get("fetch-title")!;
+        title.textContent = "Saving completed responses…";
+        page.startCheck();
+        await page.dispatch(page.window, "pagehide");
+
+        expect(title.textContent).toBe("Saving completed responses…");
+      });
+
       it("puts a newly chosen window in place when the same version serves it", async () => {
         const page = await open({});
         await choose(page, "7");

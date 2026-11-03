@@ -2286,6 +2286,7 @@ ${DASHBOARD_THEME_CLIENT}
       else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");
       else if (!collectionFailed) renderIdle();
     } catch {
+      if (controller.signal.aborted) return;
       if (!eventStream && !collectionFailed && !transportFailed) renderIdle();
     } finally {
       if (checkRequest === controller) checkRequest = null;
