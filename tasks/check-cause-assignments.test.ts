@@ -817,6 +817,12 @@ describe("check-cause-assignments", () => {
         LOG_LEVEL: "error",
       });
     });
+
+    it("leaves out the coverage directory, so the dumper writes no profile", () => {
+      expect(
+        dumperEnvironment({ PATH: "/bin", DENO_COVERAGE_DIR: "coverage/raw" }),
+      ).toStrictEqual({ PATH: "/bin", LOG_LEVEL: "error" });
+    });
   });
 
   describe("the script", () => {
