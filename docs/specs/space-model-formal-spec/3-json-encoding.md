@@ -8,7 +8,7 @@ and the floors on the guarantees an implementation states.
 
 ## Status
 
-Draft formal spec — extracted from Section 5 of `1-fabric-values.md`.
+Draft formal spec.
 
 ---
 
@@ -258,7 +258,7 @@ the only way negative zero is written: the JSON number `-0` is refused
 (Section 1.1).
 
 Whether such a value reaches the encoder at all depends on the `FabricValue`
-conversion gate (`1-fabric-values.md` Section 4.9). The encoding above is the
+conversion gate (`1-fabric-values.md` Section 8.2). The encoding above is the
 encoder's contract however the value arrived.
 
 ### `Symbol@1` — registry-interned symbols
@@ -273,7 +273,7 @@ declines to encode one rather than coercing it to a key. On decoding, a state
 that is not a string produces a `ProblematicValue`.
 
 Whether such a value reaches the encoder at all depends on the `FabricValue`
-conversion gate (`1-fabric-values.md` Section 4.9). The encoding above is the
+conversion gate (`1-fabric-values.md` Section 8.2). The encoding above is the
 encoder's contract however the value arrived.
 
 ### `Problematic@1` — preserved failures
@@ -321,7 +321,7 @@ See `1-fabric-values.md` Section 3.5.
 > (see `1-fabric-values.md` Section 4.5). Which one a codec uses is therefore a
 > matter of what reads well where it is written, and carries no meaning for a
 > caller. This principle applies to all codecs. Wire data is untrusted input.
-> See `1-fabric-values.md` Section 7.4 for the broader principle that applies to
+> See `1-fabric-values.md` Section 2.11 for the broader principle that applies to
 > all code consuming decoded values.
 
 > **Sparse array encoding in JSON.** Even when an array contains holes, it is

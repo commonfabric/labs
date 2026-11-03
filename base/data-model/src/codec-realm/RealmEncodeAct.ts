@@ -14,10 +14,10 @@ import {
  * recognized by.
  *
  * The marker is minted here, which is to say once per `encode()` and after the
- * value to be encoded already exists -- what Section 2.2 of the realm spec
- * requires of it, and why a payload cannot forge one. Being per act is the
- * whole of its correctness: two acts must not share a marker, or one act's
- * data becomes another's structure.
+ * value to be encoded already exists -- what Section 2.2 of
+ * `4-realm-encoding.md` requires of it, and why a payload cannot forge one.
+ * Being per act is the whole of its correctness: two acts must not share a
+ * marker, or one act's data becomes another's structure.
  */
 export class RealmEncodeAct
   extends BaseEncodeAct<RealmCodecValue, RealmEncodedValue> {
