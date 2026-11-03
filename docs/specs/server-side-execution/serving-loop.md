@@ -1562,8 +1562,8 @@ concurrency check.
 2026-08-05).** A dropped superseded write has no recompute trigger of
 its own: basis rows are reads-only, so an intrusion on a producer's
 OUTPUT doc that the producer never read re-arms nothing — and the
-ruling keeps it that way; no re-arm mechanism exists. In the owner's
-words:
+ruling keeps it that way, with the one exception ruled below. In the
+owner's words:
 
 > if it's truly a derived doc, there can't be other writers anyway.
 > if it's shared state (which derives can update as well), then it's
@@ -1586,7 +1586,7 @@ its BASIS ROWS — its reads are true, and no recompute-owed mark
 exists.
 
 **A drop that leaves the document with no value re-arms its run**
-(PROPOSED 2026-11-02, awaiting ruling). The reasoning above takes the
+(RULED 2026-11-03). The reasoning above takes the
 superseding commit to be the fresh state readers reconverge from. A
 client's piece start is an authored commit to a genuinely derived
 document that holds no such state: it stores a computed document's

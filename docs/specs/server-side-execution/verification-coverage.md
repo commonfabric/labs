@@ -10628,8 +10628,8 @@ supply; OW29/OW32/OW34 closed):
     seam exists for: a ceiling keyed by principal (or persisted with
     the event's `firedAt` pair) rather than by a live session.
 
-- **A superseded write over a document left with no value (PROPOSED
-  2026-11-02, awaiting ruling; serving-loop.md §3d).** The Q1 entry's
+- **A superseded write over a document left with no value (RULED
+  2026-11-03; serving-loop.md §3d).** The Q1 entry's
   "the drop re-arms nothing" stands for a commit that wrote a value.
   Commits that left every document the run lost with no value re-arm
   the run once the replica has taken them, impl-gate: pinned in
