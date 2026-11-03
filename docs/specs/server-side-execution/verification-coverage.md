@@ -10628,6 +10628,17 @@ supply; OW29/OW32/OW34 closed):
     seam exists for: a ceiling keyed by principal (or persisted with
     the event's `firedAt` pair) rather than by a live session.
 
+- **A superseded write over a document left with no value (RULED
+  2026-11-03; serving-loop.md §3d).** The Q1 entry's
+  "the drop re-arms nothing" stands for a commit that wrote a value.
+  Commits that left every document the run lost with no value re-arm
+  the run once the replica has taken them, impl-gate: pinned in
+  `runtime/runner/test/scheduler-wave-withdrawal.test.ts` (the re-run,
+  over a commit this replica held and one it had not taken, and the
+  mixed run that stays down) and
+  `runtime/runner/test/scheduler/supersededOutputsOwed.test.ts` (the
+  verdict, and the wait for the commit that decides it).
+
 ## 4. Standing rule
 
 A ruling batch that adds a BINDING sentence adds its coverage row
