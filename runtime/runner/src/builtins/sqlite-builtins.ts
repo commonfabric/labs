@@ -376,11 +376,22 @@ function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
     .properties;
   if (!props || typeof props !== "object") return [];
   return Object.entries(props)
-    .filter(([, v]) =>
-      !!v && typeof v === "object" &&
-      Array.isArray((v as { asCell?: unknown }).asCell)
-    )
+    .filter(([, v]) => readsAsCell(v))
     .map(([k]) => k);
+}
+
+/** Whether `schema`, or a branch of its `anyOf` or `oneOf`, reads as a cell. */
+function readsAsCell(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const { asCell, anyOf, oneOf } = schema as {
+    asCell?: unknown;
+    anyOf?: unknown;
+    oneOf?: unknown;
+  };
+  return Array.isArray(asCell) ||
+    [anyOf, oneOf].some((branches) =>
+      Array.isArray(branches) && branches.some(readsAsCell)
+    );
 }
 
 /** Replace each asCell column's stored sigil-link STRING with the parsed sigil
