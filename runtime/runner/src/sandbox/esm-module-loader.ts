@@ -177,7 +177,7 @@ function moduleEvaluationOrder(
       earliest = Math.min(earliest, enteredAt.get(target) ?? visit(target));
     }
     if (earliest === entry) {
-      const closed = unclosed.splice(unclosed.indexOf(specifier));
+      const closed = unclosed.splice(unclosed.lastIndexOf(specifier));
       for (const member of closed) enteredAt.set(member, Infinity);
       if (closed.length > 1) order.length = orderOnEntry;
       order.push(specifier);
