@@ -29,7 +29,7 @@ import {
   type CachedCiRunReference,
   isCachedGanttJob,
 } from "./ci-job-cache.ts";
-import { dashboardCacheFile } from "./history-files.ts";
+import { dashboardCacheFile, replaceFile } from "./history-files.ts";
 
 export const CI_GANTT_DETAIL_DIRNAME = "fabric-wall-ci-gantt";
 
@@ -109,7 +109,8 @@ export class CiGanttDetailStore {
    */
   #directory: string | (() => string) | undefined;
 
-  #temporaries = new Set<string>();
+  /** The path of each file being written, once for each write in progress. */
+  #writing: string[] = [];
 
   constructor(directory?: string | (() => string)) {
     this.#directory = directory;
@@ -170,20 +171,11 @@ export class CiGanttDetailStore {
       if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
     }
     const value: StoredCiGanttDetail = { version: DETAIL_VERSION, jobs };
-    const temporary = `${target}.${crypto.randomUUID()}.tmp`;
-    this.#temporaries.add(temporary);
+    this.#writing.push(target);
     try {
-      await Deno.writeFile(temporary, await gzip(JSON.stringify(value)));
-      await Deno.rename(temporary, target);
-    } catch (error) {
-      try {
-        await Deno.remove(temporary);
-      } catch {
-        // Ignore cleanup when no temporary file remains.
-      }
-      throw error;
+      await replaceFile(target, await gzip(JSON.stringify(value)));
     } finally {
-      this.#temporaries.delete(temporary);
+      this.#writing.splice(this.#writing.indexOf(target), 1);
     }
   }
 
@@ -191,7 +183,7 @@ export class CiGanttDetailStore {
    * Drops the attempts of one repository and workflow that `keep` does not
    * name, and removes temporary files a crashed write left behind. Attempts of
    * other repositories are left alone, so pruning one source can never take
-   * another's detail. A temporary this process is still writing is left alone.
+   * another's detail. A temporary this store is still writing is left alone.
    */
   async prune(
     source: CiGanttDetailSource,
@@ -206,18 +198,19 @@ export class CiGanttDetailStore {
     try {
       for await (const entry of Deno.readDir(this.directory)) {
         if (!entry.isFile) continue;
+        const path = join(this.directory, entry.name);
         const parsed = parseDetailName(entry.name);
         if (!parsed) {
           if (
             entry.name.endsWith(".tmp") &&
-            !this.#temporaries.has(join(this.directory, entry.name))
-          ) removals.push(join(this.directory, entry.name));
+            !this.#writing.some((target) => path.startsWith(`${target}.`))
+          ) removals.push(path);
           continue;
         }
         if (
           parsed.prefix === prefix &&
           !wanted.has(`${parsed.runId}.${parsed.runAttempt}`)
-        ) removals.push(join(this.directory, entry.name));
+        ) removals.push(path);
       }
     } catch (error) {
       if (error instanceof Deno.errors.NotFound) return;
