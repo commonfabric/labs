@@ -22,7 +22,10 @@ import {
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  namesInstancesByDefault,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
 
 import { startAgentRunner } from "../commands/agent.ts";
 import { getAcl } from "../lib/acl.ts";
@@ -67,9 +70,12 @@ function startHost(
     serve?: (request: Request) => Response | undefined;
   } = {},
 ): Promise<{ url: URL; close(): Promise<void> }> {
-  return serverExecution
-    ? listenServingMemoryServer(options)
-    : Promise.resolve(StandaloneMemoryServer.start(options));
+  return serverExecution ? listenServingMemoryServer(options) : Promise.resolve(
+    StandaloneMemoryServer.start({
+      ...options,
+      namesInstances: namesInstancesByDefault,
+    }),
+  );
 }
 
 describe("agent-connections", () => {

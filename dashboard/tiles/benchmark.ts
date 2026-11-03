@@ -117,13 +117,19 @@ import {
   REPO,
 } from "../config.ts";
 import {
-  PERFORMANCE_CHECK_MS,
+  historyPage,
   PERFORMANCE_HISTORY_SCALE_MIN_VALUES,
   PERFORMANCE_HISTORY_SCALE_TRIM,
   PERFORMANCE_VIEW_STYLES,
   performanceViewHref,
   performanceViewNav,
+  progressPanel,
+  underWay,
 } from "../performance-views.ts";
+import {
+  historyPageScript,
+  type ProgressText,
+} from "../history-page-client.ts";
 import {
   distinctTrendDays,
   trendPct,
@@ -1760,6 +1766,36 @@ const dateLabel = (at: number): string =>
     day: "numeric",
   });
 
+/** What the runtime benchmark history page tells its script. */
+export const RUNTIME_HISTORY_PAGE = historyPage({
+  hideGreenKey: "benchHideGreen",
+  progressPath: "/bench/runtime-progress",
+  subject: "benchmark",
+});
+
+/**
+ * What the runtime benchmark history page's progress panel says about a
+ * collection under way. The page carries it serialized.
+ */
+export function describeBenchmarkProgress(
+  state: BenchmarkFetchProgress,
+): ProgressText {
+  return {
+    title: state.phase === "discovering"
+      ? "Finding benchmark runs…"
+      : state.phase === "saving"
+      ? "Saving completed responses…"
+      : `${state.completedRuns} of ${state.totalRuns} artifact checks complete`,
+    total: state.phase === "discovering"
+      ? "starting"
+      : `${state.completedRuns} / ${state.totalRuns || "?"}`,
+    detail:
+      `${state.cachedRuns} cached · ${state.requestsMade} artifact checks made · ${state.responsesReceived} responded · ${state.outstandingRequests} outstanding · ${state.queuedRuns} queued${
+        state.failedResponses ? ` · ${state.failedResponses} failed` : ""
+      }`,
+  };
+}
+
 // The /bench drill-down: every benchmark's processor-specific lines for the
 // chosen measurement, grouped by source file.
 interface BenchmarkPageOptions {
@@ -1814,50 +1850,15 @@ export function benchPage(
   const version = benchmarkSnapshotVersion();
   const handoff = benchmarkRerunHandoff(latestBenchmarkRuns);
   const progress = options.progress;
-  const progressIdle = !progress || progress.phase === "complete" ||
-    progress.phase === "error";
-  const lastRequestError = progress?.phase === "error"
-    ? progress.error ?? "unknown error"
-    : !progress
-    ? options.lastRequestError
-    : undefined;
-  const progressTitle = progressIdle
-    ? "Idle"
-    : progress.phase === "discovering"
-    ? "Finding benchmark runs…"
-    : `${progress.completedRuns} of ${progress.totalRuns} artifact checks complete`;
-  const progressTotal = progressIdle
-    ? "0 outstanding"
-    : `${progress.completedRuns} / ${progress.totalRuns || "?"}`;
-  const progressDetail = lastRequestError
-    ? `Last collection stopped: ${escapeHtml(lastRequestError)}`
-    : !progressIdle && progress
-    ? `${progress.cachedRuns} cached · ${progress.requestsMade} artifact checks made · ${progress.responsesReceived} responded · ${progress.outstandingRequests} outstanding · ${progress.queuedRuns} queued`
-    : "No requests in progress.";
-  const progressUrl = progress
-    ? `/bench/runtime-progress?id=${
-      escapeHtml(encodeURIComponent(progress.id))
-    }`
-    : "";
-  const progressHtml = `<section class="fetch-progress${
-    lastRequestError ? " error" : ""
-  }" id="fetch-progress" aria-live="polite" data-check-url="/bench/check?view=runtime" data-snapshot-version="${
-    escapeHtml(version)
-  }" data-refresh-on-complete="${
-    progress && !progressIdle && !snapshot.series.length ? "1" : "0"
-  }"${
-    lastRequestError
-      ? ` data-last-request-error="${escapeHtml(lastRequestError)}"`
-      : ""
-  }${
-    progressUrl ? ` data-progress-url="${progressUrl}"` : ""
-  }><div class="fetch-head"><strong id="fetch-title">${progressTitle}</strong><span id="fetch-total">${progressTotal}</span></div><progress id="fetch-bar" max="${
-    progressIdle ? 1 : Math.max(1, progress?.totalRuns ?? 1)
-  }"${
-    !progressIdle && progress && !progress.totalRuns
-      ? ""
-      : ` value="${progressIdle ? 0 : progress?.completedRuns ?? 0}"`
-  } aria-label="Runtime benchmark fetch progress"></progress><p id="fetch-detail">${progressDetail}</p></section>`;
+  const collecting = underWay(progress) !== undefined;
+  const progressHtml = progressPanel(progress, describeBenchmarkProgress, {
+    ariaLabel: "Runtime benchmark fetch progress",
+    checkUrl: "/bench/check?view=runtime",
+    snapshotVersion: version,
+    refreshOnComplete: collecting && !snapshot.series.length,
+    progressPath: RUNTIME_HISTORY_PAGE.progressPath,
+    lastRequestError: options.lastRequestError,
+  });
   const refreshNotice = options.refreshError && snapshot.series.length
     ? `<p class="refresh-error">${escapeHtml(options.refreshError)}</p>`
     : "";
@@ -1865,7 +1866,7 @@ export function benchPage(
   let body: string;
   let cpuLegend = "";
   if (!snapshot.series.length) {
-    body = progress && !progressIdle ? "" : `<p class="empty">${
+    body = collecting ? "" : `<p class="empty">${
       escapeHtml(
         options.refreshError ??
           "No runtime benchmark samples were found in the history window.",
@@ -2113,7 +2114,7 @@ ${DASHBOARD_THEME_HEAD}
   .cpu-detail{display:block;font-size:10px;color:var(--text-subtle);margin-top:2px}
   body.hide-green .brow.good{display:none}
   body.hide-green .benchmark-group:not(:has(.brow:not(.good))){display:none}
-</style></head><body data-snapshot-version="${escapeHtml(version)}">
+</style></head><body>
   <div class="top"><a class="back" href="/">← dashboard</a><b>Performance history</b><span>${
     escapeHtml(REPO)
   } · ${WORKFLOW}</span></div>
@@ -2122,322 +2123,10 @@ ${DASHBOARD_THEME_HEAD}
     escapeHtml(stat.label)
   }"><input type="hidden" name="sort" value="${sort}"><label class="field" for="days">window <output id="daysv" for="days">${days} day${
     days === 1 ? "" : "s"
-  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
+  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}" autocomplete="off"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1" autocomplete="off"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
   ${rangeContent}
 ${dashboardThemeToggle()}
 ${DASHBOARD_THEME_CLIENT}
-<script>
-  const hg = document.getElementById("hg"), days = document.getElementById("days"), daysv = document.getElementById("daysv"), controls = days.form, KEY = "benchHideGreen", DEFAULT_DAYS = days.value;
-  let rangeContent = document.getElementById("range-content"), fetchProgress = document.getElementById("fetch-progress"), title = document.getElementById("fetch-title"), total = document.getElementById("fetch-total"), detail = document.getElementById("fetch-detail"), bar = document.getElementById("fetch-bar"), pageVersion = fetchProgress.dataset.snapshotVersion, appliedDays = days.value;
-  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", serverVersionChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
-  const apply = () => document.body.classList.toggle("hide-green", hg.checked);
-  hg.checked = sessionStorage.getItem(KEY) === "1";
-  apply();
-  hg.addEventListener("change", () => {
-    sessionStorage.setItem(KEY, hg.checked ? "1" : "0");
-    apply();
-  });
-  const keyOnly = document.getElementById("key-only");
-  const restoreKeyOnly = () => keyOnly.checked = new URL(location.href).searchParams.get("key") === "1";
-  keyOnly.addEventListener("change", () => controls.requestSubmit());
-  const syncDayLinks = () => {
-    for (const link of document.querySelectorAll('a[href^="/bench?"]')) {
-      const target = new URL(link.href);
-      target.searchParams.set("days", days.value);
-      link.href = target.pathname + "?" + target.searchParams.toString();
-    }
-  };
-  days.addEventListener("input", () => {
-    daysv.value = days.value + (days.value === "1" ? " day" : " days");
-    syncDayLinks();
-  });
-  const applyDays = () => {
-    if (days.value !== appliedDays) {
-      if (!rangeRequest || rangeRequestDays !== days.value) void loadRange("push");
-    } else if (rangeRequest && rangeRequestDays !== days.value) {
-      void loadRange("restore");
-    } else if (pendingRefresh && !rangeRequest) {
-      pendingRefresh = false;
-      void loadRange("refresh");
-    }
-  };
-  days.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      applyDays();
-    }
-  });
-  days.addEventListener("change", applyDays);
-  const isSameTabLink = (event, link) =>
-    link.target !== "_blank" && event.button === 0 && !event.metaKey &&
-    !event.ctrlKey && !event.shiftKey && !event.altKey;
-  const isSameDocumentFragment = (link) => {
-    const url = new URL(link.href);
-    return url.origin === location.origin &&
-      url.pathname === location.pathname &&
-      url.search === location.search &&
-      url.hash !== "";
-  };
-  document.addEventListener("click", (event) => {
-    const link = event.target.closest?.("a[href]");
-    if (
-      link && isSameTabLink(event, link) && !isSameDocumentFragment(link)
-    ) navigating = true;
-  }, true);
-  controls.addEventListener("submit", () => navigating = true);
-  window.addEventListener("pagehide", () => {
-    navigating = true;
-    rangeRequest?.abort();
-    eventStream?.close();
-  });
-  const renderIdle = (lastRequestError = fetchProgress.dataset.lastRequestError || "") => {
-    collectionFailed = Boolean(lastRequestError);
-    transportFailed = false;
-    if (lastRequestError) {
-      fetchProgress.dataset.lastRequestError = lastRequestError;
-    } else delete fetchProgress.dataset.lastRequestError;
-    fetchProgress.classList.toggle("error", collectionFailed);
-    title.textContent = "Idle";
-    total.textContent = "0 outstanding";
-    bar.max = 1;
-    bar.value = 0;
-    detail.textContent = lastRequestError
-      ? "Last collection stopped: " + lastRequestError
-      : "No requests in progress.";
-  };
-  const refreshRangeWhenIdle = () => {
-    if (navigating) return;
-    if (
-      days.value !== appliedDays || rangeContent.contains(document.activeElement) ||
-      rangeRequest
-    ) {
-      pendingRefresh = true;
-      return;
-    }
-    void loadRange("refresh");
-  };
-  document.addEventListener("focusout", () => {
-    requestAnimationFrame(() => {
-      if (
-        pendingRefresh && !navigating && !rangeRequest &&
-        !rangeContent.contains(document.activeElement)
-      ) {
-        pendingRefresh = false;
-        refreshRangeWhenIdle();
-      }
-    });
-  });
-  const renderProgress = (state) => {
-    collectionFailed = state.phase === "error";
-    transportFailed = false;
-    fetchProgress.classList.remove("error");
-    if (collectionFailed) {
-      fetchProgress.dataset.lastRequestError = state.error || "unknown error";
-    } else delete fetchProgress.dataset.lastRequestError;
-    if (state.phase === "discovering") {
-      title.textContent = "Finding benchmark runs…";
-      total.textContent = "starting";
-      bar.removeAttribute("value");
-    } else {
-      title.textContent = state.phase === "saving"
-        ? "Saving completed responses…"
-        : state.completedRuns + " of " + state.totalRuns + " artifact checks complete";
-      total.textContent = state.completedRuns + " / " + state.totalRuns;
-      bar.max = Math.max(1, state.totalRuns);
-      bar.value = state.completedRuns;
-    }
-    detail.textContent = state.cachedRuns + " cached · " +
-      state.requestsMade + " artifact checks made · " +
-      state.responsesReceived + " responded · " +
-      state.outstandingRequests + " outstanding · " +
-      state.queuedRuns + " queued" +
-      (state.failedResponses ? " · " + state.failedResponses + " failed" : "");
-    if (state.phase === "error") {
-      fetchProgress.classList.add("error");
-      title.textContent = "Idle";
-      total.textContent = "0 outstanding";
-      bar.max = 1;
-      bar.value = 0;
-      detail.textContent = "Last collection stopped: " +
-        fetchProgress.dataset.lastRequestError;
-      eventStream?.close();
-      eventStream = null;
-      connectedProgressUrl = "";
-    } else if (state.phase === "complete") {
-      eventStream?.close();
-      eventStream = null;
-      connectedProgressUrl = "";
-      if (state.needsReload || serverVersionChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
-      else renderIdle();
-    }
-  };
-  const connectProgress = (url) => {
-    if (!url || connectedProgressUrl === url) return;
-    eventStream?.close();
-    connectedProgressUrl = url;
-    const stream = new EventSource(url);
-    eventStream = stream;
-    stream.addEventListener("progress", (event) => {
-      if (eventStream !== stream) return;
-      try {
-        renderProgress(JSON.parse(event.data));
-      } catch {
-        stream.close();
-        eventStream = null;
-        connectedProgressUrl = "";
-        transportFailed = true;
-        fetchProgress.classList.add("error");
-        title.textContent = "Could not read collection progress";
-      }
-    });
-    stream.onerror = () => {
-      if (eventStream !== stream) return;
-      stream.close();
-      eventStream = null;
-      connectedProgressUrl = "";
-      transportFailed = true;
-      fetchProgress.classList.add("error");
-      title.textContent = "Progress connection closed; collection continues on the server";
-    };
-  };
-  const checkForUpdates = async () => {
-    if (checking || navigating || document.visibilityState === "hidden") return;
-    checking = true;
-    const revision = viewRevision;
-    try {
-      const response = await fetch(fetchProgress.dataset.checkUrl, { headers: { accept: "application/json" } });
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const state = await response.json();
-      if (revision !== viewRevision) return;
-      serverVersionChanged ||= state.version !== pageVersion;
-      if (state.progress) {
-        connectProgress("/bench/runtime-progress?id=" + encodeURIComponent(state.progress.id));
-        renderProgress(state.progress);
-      } else if (serverVersionChanged) refreshRangeWhenIdle();
-      else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");
-      else if (!collectionFailed) renderIdle();
-    } catch {
-      if (!eventStream && !collectionFailed && !transportFailed) renderIdle();
-    } finally {
-      checking = false;
-    }
-  };
-  const bindRangeContent = () => {
-    viewRevision++;
-    fetchProgress = rangeContent.querySelector("#fetch-progress");
-    title = rangeContent.querySelector("#fetch-title");
-    total = rangeContent.querySelector("#fetch-total");
-    detail = rangeContent.querySelector("#fetch-detail");
-    bar = rangeContent.querySelector("#fetch-bar");
-    pageVersion = fetchProgress.dataset.snapshotVersion;
-    document.body.dataset.snapshotVersion = pageVersion;
-    serverVersionChanged = false;
-    collectionFailed = false;
-    transportFailed = false;
-    connectedProgressUrl = "";
-    if (fetchProgress.dataset.progressUrl) connectProgress(fetchProgress.dataset.progressUrl);
-    else renderIdle();
-  };
-  const showRangeLoading = (requestedDays) => {
-    rangeContent.setAttribute("aria-busy", "true");
-    fetchProgress.classList.remove("error");
-    title.textContent = "Loading " + requestedDays + "-day view…";
-    total.textContent = "updating";
-    bar.removeAttribute("value");
-    detail.textContent = "Reading cached history and checking for new benchmark data.";
-  };
-  const loadRange = async (mode) => {
-    if (navigating) return;
-    if (rangeRequest) {
-      if (mode === "refresh") {
-        pendingRefresh = true;
-        return;
-      }
-      rangeRequest.abort();
-    }
-    const requestedDays = days.value;
-    const url = new URL(location.href);
-    url.searchParams.set("days", requestedDays);
-    const sequence = ++rangeSequence;
-    const controller = new AbortController();
-    rangeRequest = controller;
-    rangeRequestDays = requestedDays;
-    let loaded = false;
-    showRangeLoading(requestedDays);
-    try {
-      const requestUrl = new URL(url);
-      requestUrl.searchParams.set("fragment", "range");
-      const response = await fetch(requestUrl.pathname + requestUrl.search, {
-        cache: "no-store",
-        headers: { accept: "text/html" },
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      const page = new DOMParser().parseFromString(await response.text(), "text/html");
-      const replacement = page.getElementById("range-content");
-      if (!replacement) throw new Error("Range content was missing from the response.");
-      if (sequence !== rangeSequence || navigating) return;
-      eventStream?.close();
-      eventStream = null;
-      connectedProgressUrl = "";
-      rangeContent.replaceWith(replacement);
-      rangeContent = replacement;
-      appliedDays = requestedDays;
-      const target = url.pathname + url.search;
-      if (mode === "push" && target !== location.pathname + location.search) {
-        history.pushState(null, "", target);
-      }
-      bindRangeContent();
-      syncDayLinks();
-      loaded = true;
-    } catch (error) {
-      if (controller.signal.aborted || sequence !== rangeSequence) return;
-      pendingRefresh = false;
-      rangeContent.removeAttribute("aria-busy");
-      fetchProgress.classList.add("error");
-      title.textContent = "Could not update the history window";
-      total.textContent = "0 outstanding";
-      bar.max = 1;
-      bar.value = 0;
-      detail.textContent = error instanceof Error ? error.message : String(error);
-    } finally {
-      if (sequence === rangeSequence) {
-        rangeRequest = null;
-        rangeRequestDays = "";
-        if (loaded && pendingRefresh) {
-          pendingRefresh = false;
-          refreshRangeWhenIdle();
-        }
-      }
-    }
-  };
-  const daysFromLocation = () => {
-    const parameter = new URL(location.href).searchParams.get("days");
-    if (parameter === null || parameter.trim() === "") return DEFAULT_DAYS;
-    const value = Number(parameter);
-    if (!Number.isFinite(value)) return DEFAULT_DAYS;
-    return String(Math.max(Number(days.min), Math.min(Number(days.max), Math.floor(value))));
-  };
-  window.addEventListener("popstate", () => {
-    restoreKeyOnly();
-    days.value = daysFromLocation();
-    daysv.value = days.value + (days.value === "1" ? " day" : " days");
-    syncDayLinks();
-    void loadRange("pop");
-  });
-  window.addEventListener("pageshow", (event) => {
-    navigating = false;
-    restoreKeyOnly();
-    if (event.persisted) {
-      bindRangeContent();
-      void checkForUpdates();
-    }
-  });
-  bindRangeContent();
-  setInterval(checkForUpdates, ${PERFORMANCE_CHECK_MS});
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void checkForUpdates();
-  });
-</script>
+${historyPageScript(RUNTIME_HISTORY_PAGE, describeBenchmarkProgress)}
 </body></html>`;
 }

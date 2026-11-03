@@ -14,6 +14,7 @@ import {
   createStorageAddressResolver,
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const INVITE_HOST = "https://invites.example";
 
@@ -29,6 +30,7 @@ describe("RemoteSessionFactory.redeemInvite()", () => {
 
   beforeEach(async () => {
     server = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
       acl: { mode: "enforce" },
       inviteHost: INVITE_HOST,
     });

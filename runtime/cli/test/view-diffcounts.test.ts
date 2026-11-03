@@ -968,6 +968,23 @@ describe("diffcounts", () => {
       ).toEqual([true, true, true, true, true, true, true]);
     });
 
+    it("returns false for a change after a shell comment inside backticks, which ends at the closing backtick", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "run.sh",
+            before: ["echo `echo a # b`; run 1"],
+            after: ["echo `echo a # b`; run 2"],
+          },
+          {
+            path: "note.sh",
+            before: ["echo `echo a # b`; run 1"],
+            after: ["echo `echo a # c`; run 1"],
+          },
+        ),
+      ).toEqual([false, true]);
+    });
+
     it("returns false for files whose changes alter code or whitespace", async () => {
       expect(
         await commentOnly(

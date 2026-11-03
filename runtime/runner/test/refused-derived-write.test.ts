@@ -10,6 +10,7 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { defer } from "@commonfabric/async/defer";
 
 import { ACLManager } from "../src/acl-manager.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { readConfirmed } from "../src/confirmed-read.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
@@ -99,6 +100,7 @@ describe("refused derived write", () => {
 
   beforeEach(() => {
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL(`memory://refused-derived-write-${crypto.randomUUID()}`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: AUDIENCE },

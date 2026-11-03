@@ -16,6 +16,7 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";
 import {
   markRendererTrustedEvent,
@@ -195,6 +196,7 @@ describe("executor-space-access-change", () => {
       beforeEach(async () => {
         storeSeq += 1;
         server = new MemoryV2Server.Server({
+          namesInstances: namesInstancesByDefault,
           store: new URL(`memory://served-access-change-${mode}-${storeSeq}`),
           subscriptionRefreshDelayMs: 0,
           authorizeSessionOpen: authorizeLoopbackSessionOpen,

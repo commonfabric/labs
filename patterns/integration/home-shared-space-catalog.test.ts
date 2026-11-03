@@ -38,7 +38,10 @@ import {
   type ExecutorHostOptions,
 } from "@commonfabric/runner/executor/host";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  namesInstancesByDefault,
+} from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
 
 import { createTransactionCommitReceipt } from "../../runtime/runner/src/storage/commit-receipt.ts";
@@ -268,6 +271,7 @@ async function withHome(
   decorateWaveCommitSink?: ExecutorHostOptions["decorateWaveCommitSink"],
 ) {
   const server = new Server({
+    namesInstances: namesInstancesByDefault,
     acl: { mode: "enforce", delegatingDids: [service.did()] },
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: "did:key:home-catalog-memory" },

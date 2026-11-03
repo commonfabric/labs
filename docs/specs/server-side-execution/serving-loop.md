@@ -583,11 +583,13 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // settle that follows (anchor: facade.ts #processExecuteEventPhases):
   // the demanded derivations several events invalidate run once over
   // all of them, which is where a wave of several events coalesces;
-  // a head the preflight parks on its loads behind events the pass
-  // ran ends the pass without its settle, which the pass the park's
-  // end queues runs behind it (the park ends on its loads' release, on
-  // a failed load, or on a drop of the parked head; events.md §2 says
-  // what a deadline that comes first commits), and an event the
+  // a head waiting on loads behind events the pass ran, parked on its
+  // closure's by the preflight or held for its handler's input presync,
+  // ends the pass without its settle, which the pass the wait's end
+  // queues runs behind it (the wait ends on its loads' release, on a
+  // failed load, on the presync's settlement, or on a drop of the
+  // waiting head; events.md §2 says what a deadline that comes first
+  // commits), and an event the
   // preflight holds for an invalid input ends the run of handlers, so
   // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()
@@ -1218,7 +1220,16 @@ demanded-piece startup path's setup/instantiation writes
 instantiation tx, the missing-stream-marker setup REPAIR, the
 deferred piece-start/run transactions, and the runtime-internal
 pattern-update/rollforward writes — the same `applySetupState`
-output the pattern-swap choke point already stamps). A piece-start
+output the pattern-swap choke point already stamps). A deferred
+start minted on behalf of a run that carries an instance identity
+— the start a demanded run defers until the piece's execution
+family lands — carries that identity in its `bookkeeping` stamp as
+ADDRESSING: the start reads that principal's instances, and the
+seal resolves its scoped writes (the defaults setup seeds in the
+start's own transaction among them) against the same instances
+rather than the wave-level service identity. The stamp still
+carries no acting principal (protocol.md §1's "The SpaceServer's
+own writes"). A piece-start
 commit that FAILS after start() resolved (the path is
 fire-and-forget by design) must SURFACE — loudly logged in every
 arm and counted into §7's `structureLoadFailures` on a serving

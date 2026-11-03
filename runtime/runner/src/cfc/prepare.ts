@@ -1000,6 +1000,25 @@ function* resolvedLocations(
 }
 
 /**
+ * The label of everything reading the whole value at `path` of a document
+ * whose resolved envelope is `metadata` consumes, resolved as a read of the
+ * classes `consumes` selects resolves it, a content read by default. This
+ * is for a reader outside the runtime that shows a stored value to a
+ * person, such as a terminal view of it, and so has to say what CFC says
+ * of what it shows.
+ */
+export const wholeValueLabel = (
+  metadata: CfcMetadata,
+  path: readonly string[],
+  consumes: ReadClassSelection = "value",
+): IFCLabel | undefined =>
+  labelForConsumedEntries(
+    consumedEntriesForRead(metadata, path, { nonRecursive: false, consumes }),
+    path,
+    false,
+  );
+
+/**
  * The input witnesses one observation holds: the retained atoms common to
  * every confidential location it consumed (`input-witness.ts`), or
  * `undefined` when it consumed nothing confidential. The arguments are

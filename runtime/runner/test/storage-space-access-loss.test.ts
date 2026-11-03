@@ -11,6 +11,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -28,6 +29,7 @@ describe("storage space access loss", () => {
     const identity = await Identity.fromPassphrase("throwing access observer");
     const space = identity.did();
     const server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL("memory://throwing-access-observer"),
       sessionOpenAuth: { audience: space },
       authorizeSessionOpen: () => space,
@@ -103,6 +105,7 @@ describe("storage space access loss", () => {
     const guest = await Identity.fromPassphrase("access-loss guest");
     const space = owner.did();
     const server = new Server({
+      namesInstances: namesInstancesByDefault,
       store: new URL("memory://storage-space-access-loss"),
       sessionOpenAuth: { audience: "did:key:z6Mk-access-loss-audience" },
       authorizeSessionOpen: (message) =>

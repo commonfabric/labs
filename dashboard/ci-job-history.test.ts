@@ -13,7 +13,6 @@ import {
   CI_HISTORY_MIN_DAYS,
   CI_HISTORY_POINT_TARGET,
   CI_HISTORY_SOURCES,
-  ciFetchProgressPanel,
   type CiGanttInput,
   ciGanttOptions,
   ciGanttProgressResponse,
@@ -28,6 +27,7 @@ import {
   ciJobHistoryResponse,
   ciJobHistorySnapshotVersion,
   collectCiGanttInput,
+  describeCiProgress,
   type GanttSelection,
   PROGRESS_RECORD_MAX,
   projectWorkflowRun,
@@ -59,7 +59,7 @@ import {
 } from "./github-auth.ts";
 import { github } from "./lib.ts";
 import { GitHubRateLimitBudgetError } from "./github-rate-limit.ts";
-import { PERFORMANCE_VIEW_STYLES } from "./performance-views.ts";
+import { PERFORMANCE_VIEW_STYLES, progressPanel } from "./performance-views.ts";
 
 // Existing collector tests exercise history and persistence behavior against
 // precise request stubs. The rate-budget implementation has its own tests.
@@ -414,7 +414,10 @@ Deno.test("CI job history page shows the slowest shard, every shard, and unshard
     html,
     'href="/bench?view=ci&amp;repo=labs&amp;days=45&amp;sort=job&amp;stat=p99" aria-current="page"',
   );
-  assertStringIncludes(html, '<select id="repo" name="repo">');
+  assertStringIncludes(
+    html,
+    '<select id="repo" name="repo" autocomplete="off">',
+  );
   assertStringIncludes(
     html,
     'type="range" id="days" name="days" min="1" max="45"',
@@ -607,66 +610,26 @@ Deno.test("CI job history page exposes live collection progress without disablin
     html,
     "12 run requests made · 2 shared · 8 responded",
   );
-  assertStringIncludes(html, 'state.sharedRequests + " shared');
-  assertStringIncludes(
-    html,
-    "state.responsesReceived + state.sharedResponses",
-  );
   assertStringIncludes(html, "6 outstanding · 8 queued");
   assertStringIncludes(html, 'data-refresh-on-complete="1"');
-  assertStringIncludes(html, "const stream = new EventSource(url)");
   assertStringIncludes(html, 'id="days" name="days"');
   assert(!html.includes('id="days" name="days" disabled'));
-  assertStringIncludes(html, 'controls.addEventListener("submit"');
   assertStringIncludes(html, '<div id="range-content">');
-  assertStringIncludes(html, 'days.addEventListener("keydown"');
-  assertStringIncludes(html, "syncDayLinks()");
-  assertStringIncludes(html, 'days.addEventListener("change", applyDays)');
-  assert(!html.includes("keyboardEditing"));
-  assertStringIncludes(html, "new DOMParser().parseFromString");
-  assertStringIncludes(html, "rangeContent.replaceWith(replacement)");
-  assertStringIncludes(html, "history.pushState(null");
-  assertStringIncludes(html, 'window.addEventListener("popstate"');
-  assertStringIncludes(html, 'void loadRange("pop")');
-  assertStringIncludes(html, 'void loadRange("restore")');
-  assertStringIncludes(html, 'if (mode === "refresh")');
-  assertStringIncludes(html, "rangeRequestDays !== days.value");
-  assertStringIncludes(html, "if (loaded && pendingRefresh)");
-  assertStringIncludes(html, "days.value !== appliedDays ||");
-  assertStringIncludes(
-    html,
-    "if (!Number.isFinite(value)) return DEFAULT_DAYS",
+  assertEquals(describeCiProgress(progress), {
+    title: "16 of 30 run checks complete",
+    total: "16 / 30",
+    detail:
+      "8 cached · 12 run requests made · 2 shared · 8 responded · 6 outstanding · 8 queued · 1 failed",
+  });
+  assertEquals(
+    describeCiProgress({ ...progress, phase: "saving", failedResponses: 0 }),
+    {
+      title: "Saving completed responses…",
+      total: "16 / 30",
+      detail:
+        "8 cached · 12 run requests made · 2 shared · 8 responded · 6 outstanding · 8 queued",
+    },
   );
-  assertStringIncludes(html, "rangeRequest.abort()");
-  assertStringIncludes(html, "refreshRangeWhenIdle()");
-  assert(!html.includes("location.reload()"));
-  assert(!html.includes("ciJobsRestoreDaysFocus"));
-  assertStringIncludes(html, "setInterval(checkForUpdates, 60000)");
-  assertStringIncludes(
-    html,
-    'fetchProgress.dataset.refreshOnComplete === "1"',
-  );
-  assertStringIncludes(
-    html,
-    'collectionFailed = state.phase === "error"',
-  );
-  assertStringIncludes(
-    html,
-    'else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");',
-  );
-  assertStringIncludes(
-    html,
-    "else if (!collectionFailed) renderIdle();",
-  );
-  assertStringIncludes(
-    html,
-    "else delete fetchProgress.dataset.lastRequestError;",
-  );
-  assertStringIncludes(
-    html,
-    "if (!eventStream && !collectionFailed && !transportFailed) renderIdle()",
-  );
-  assertStringIncludes(html, "transportFailed = true");
   assert(
     !html.includes(
       "No completed CI job timings were found in the history window.",
@@ -726,14 +689,16 @@ Deno.test("CI job history page reports workflow discovery requests", () => {
     html,
     "3 workflow requests made · 2 responded · 1 outstanding",
   );
-  assertStringIncludes(
-    html,
-    'state.discoveryRequestsMade + " workflow requests made',
-  );
+  assertEquals(describeCiProgress(progress), {
+    title: "Finding workflow runs…",
+    total: "1 outstanding",
+    detail: "3 workflow requests made · 2 responded · 1 outstanding",
+  });
 });
 
 Deno.test("CI fetch progress panel retains a completed collection warning", () => {
-  const html = ciFetchProgressPanel({
+  const html = progressPanel(
+    {
     id: "gantt-cached-warning",
     source: "loom",
     days: 45,
@@ -755,7 +720,10 @@ Deno.test("CI fetch progress panel retains a completed collection warning", () =
     needsReload: false,
     updatedAt: NOW,
     warning: "Showing cached runs because GitHub reported rate limit hit.",
-  });
+    },
+    describeCiProgress,
+    { ariaLabel: "CI history fetch progress" },
+  );
 
   assertStringIncludes(html, 'class="fetch-progress warning"');
   assertStringIncludes(html, '<strong id="fetch-title">Idle</strong>');
@@ -766,7 +734,8 @@ Deno.test("CI fetch progress panel retains a completed collection warning", () =
 });
 
 Deno.test("CI fetch progress panel retains the last failed collection", () => {
-  const html = ciFetchProgressPanel({
+  const html = progressPanel(
+    {
     id: "ci-failed",
     source: "labs",
     days: 45,
@@ -788,7 +757,10 @@ Deno.test("CI fetch progress panel retains the last failed collection", () => {
     needsReload: false,
     updatedAt: NOW,
     error: "source unreachable",
-  });
+    },
+    describeCiProgress,
+    { ariaLabel: "CI history fetch progress" },
+  );
 
   assertStringIncludes(html, 'class="fetch-progress error"');
   assertStringIncludes(html, '<strong id="fetch-title">Idle</strong>');
@@ -825,10 +797,6 @@ Deno.test("CI job history response keeps a remembered failure in its idle panel"
   assertStringIncludes(
     html,
     '<p id="fetch-detail">Last collection stopped: source unreachable</p>',
-  );
-  assertStringIncludes(
-    html,
-    'else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");',
   );
 });
 

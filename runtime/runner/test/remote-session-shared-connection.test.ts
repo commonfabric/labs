@@ -8,6 +8,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createNativeMemorySocket,
   type MemorySocketFactory,
@@ -55,7 +56,10 @@ describe("RemoteSessionFactory connection sharing", () => {
   const startServer = (
     options: { connectionAuth?: boolean } = {},
   ): StandaloneMemoryServer => {
-    const server = StandaloneMemoryServer.start(options);
+    const server = StandaloneMemoryServer.start({
+      ...options,
+      namesInstances: namesInstancesByDefault,
+    });
     servers.push(server);
     return server;
   };

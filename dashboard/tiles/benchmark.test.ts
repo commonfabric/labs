@@ -40,6 +40,7 @@ import {
   benchmarkTrend,
   benchmarkTrendRuns,
   benchPage,
+  describeBenchmarkProgress,
   forgetBenchmarkRunsForTest,
   formatNs,
   keyBenchmarks,
@@ -803,31 +804,6 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     );
     assert(!html.includes("reload in a moment"));
     assert(!html.includes('id="days" name="days" disabled'));
-    assertStringIncludes(
-      html,
-      'fetchProgress.dataset.refreshOnComplete === "1"',
-    );
-    assertStringIncludes(
-      html,
-      'collectionFailed = state.phase === "error"',
-    );
-    assertStringIncludes(
-      html,
-      'else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");',
-    );
-    assertStringIncludes(
-      html,
-      "else if (!collectionFailed) renderIdle();",
-    );
-    assertStringIncludes(
-      html,
-      "else delete fetchProgress.dataset.lastRequestError;",
-    );
-    assertStringIncludes(
-      html,
-      "if (!eventStream && !collectionFailed && !transportFailed) renderIdle()",
-    );
-    assertStringIncludes(html, "transportFailed = true");
 
     const progressUrl = new URL(
       `http://x/bench/runtime-progress?id=${state.progress.id}`,
@@ -857,6 +833,48 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     } else Deno.env.set("DASHBOARD_CACHE_DIR", previousCacheDirectory);
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+Deno.test("runtime history describes each phase of a collection in its progress panel", () => {
+  const fetching: BenchmarkFetchProgress = {
+    id: "runtime-phases",
+    phase: "fetching",
+    totalRuns: 9,
+    cachedRuns: 2,
+    requestsMade: 5,
+    responsesReceived: 4,
+    successfulResponses: 3,
+    failedResponses: 1,
+    completedRuns: 6,
+    queuedRuns: 3,
+    outstandingRequests: 1,
+    needsReload: false,
+    updatedAt: BASE,
+  };
+  const detail =
+    "2 cached · 5 artifact checks made · 4 responded · 1 outstanding · 3 queued";
+
+  assertEquals(describeBenchmarkProgress(fetching), {
+    title: "6 of 9 artifact checks complete",
+    total: "6 / 9",
+    detail: `${detail} · 1 failed`,
+  });
+  assertEquals(
+    describeBenchmarkProgress({
+      ...fetching,
+      phase: "discovering",
+      failedResponses: 0,
+    }),
+    { title: "Finding benchmark runs…", total: "starting", detail },
+  );
+  assertEquals(
+    describeBenchmarkProgress({
+      ...fetching,
+      phase: "saving",
+      failedResponses: 0,
+    }),
+    { title: "Saving completed responses…", total: "6 / 9", detail },
+  );
 });
 
 Deno.test("/bench before any data shows an idle progress panel", async () => {
@@ -2773,38 +2791,6 @@ Deno.test("/bench: grouped by source file, each benchmark colored by its own tre
   );
   assertStringIncludes(html, '<input type="hidden" name="repo" value="labs">');
   assertStringIncludes(html, '<div id="range-content">');
-  assertStringIncludes(html, 'days.addEventListener("keydown"');
-  assertStringIncludes(html, "syncDayLinks()");
-  assertStringIncludes(html, 'days.addEventListener("change", applyDays)');
-  assert(!html.includes("keyboardEditing"));
-  assertStringIncludes(html, "new DOMParser().parseFromString");
-  assertStringIncludes(html, "rangeContent.replaceWith(replacement)");
-  assertStringIncludes(html, "history.pushState(null");
-  assertStringIncludes(html, 'window.addEventListener("popstate"');
-  assertStringIncludes(html, 'void loadRange("pop")');
-  assertStringIncludes(html, 'void loadRange("restore")');
-  assertStringIncludes(html, 'if (mode === "refresh")');
-  assertStringIncludes(html, "rangeRequestDays !== days.value");
-  assertStringIncludes(html, "if (loaded && pendingRefresh)");
-  assertStringIncludes(html, "days.value !== appliedDays ||");
-  assertStringIncludes(
-    html,
-    "if (!Number.isFinite(value)) return DEFAULT_DAYS",
-  );
-  assertStringIncludes(html, "rangeRequest.abort()");
-  assertStringIncludes(html, "refreshRangeWhenIdle()");
-  assertStringIncludes(html, "const isSameDocumentFragment = (link) => {");
-  assertStringIncludes(
-    html,
-    'url.search === location.search &&\n      url.hash !== ""',
-  );
-  assertStringIncludes(
-    html,
-    "link && isSameTabLink(event, link) && !isSameDocumentFragment(link)",
-  );
-  assert(!html.includes("location.reload()"));
-  assert(!html.includes("benchRestoreDaysFocus"));
-  assertStringIncludes(html, "setInterval(checkForUpdates, 60000)");
   assert(
     !html.includes(
       ".views a.on{background:#6ea8fe;border-color:#6ea8fe;color:#0d0e11;font-weight",
@@ -4216,7 +4202,9 @@ describe("keyBenchmarks", () => {
       const initial =
         await (await benchmark.routes![0].handler(new Request(url), url))
           .text();
-      expect(initial).toContain('id="key-only" name="key" value="1" checked');
+      expect(initial).toContain(
+        'id="key-only" name="key" value="1" autocomplete="off" checked',
+      );
       expect(rows(initial).map((row) => row.name).sort()).toEqual([
         "topic board scale/100",
         "topic board/journey",
@@ -4245,7 +4233,9 @@ describe("keyBenchmarks", () => {
         expect(rows(fragment)).toEqual(rows(html));
       }
       const all = await page("");
-      expect(all).toContain('id="key-only" name="key" value="1">');
+      expect(all).toContain(
+        'id="key-only" name="key" value="1" autocomplete="off">',
+      );
       expect(rows(all)).toHaveLength(4);
       expect(all).toContain('<span class="cpu-detail">4 benchmarks ·');
       expect(rows(await page("key=0"))).toEqual(rows(all));

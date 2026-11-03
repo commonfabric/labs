@@ -19,6 +19,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { type ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
@@ -416,6 +417,7 @@ describe("engine-read-through", () => {
     // A separate server, so closing its engine here leaves the suite's own
     // teardown nothing to close twice.
     const closing = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       subscriptionRefreshDelayMs: 0,
       authorizeSessionOpen: () => aliceSigner.did(),
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,

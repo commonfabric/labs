@@ -39,7 +39,9 @@ Deno.test("decode: arrow keys (CSI)", () => {
 });
 
 Deno.test("decode: SGR mouse wheel reports", () => {
-  assertEquals(names(bytes("\x1b[<64;12;7M")), ["wheel-up"]);
+  assertEquals(decodeKeys(bytes("\x1b[<64;12;7M")).keys, [
+    { name: "wheel-up", at: { x: 11, y: 6 } },
+  ]);
   assertEquals(names(bytes("\x1b[<65;12;7M")), ["wheel-down"]);
   assertEquals(names(bytes("\x1b[<68;12;7M")), ["wheel-up"]);
   assertEquals(names(bytes("\x1b[<69;12;7M")), ["wheel-down"]);
@@ -53,12 +55,37 @@ Deno.test("decode: SGR primary-button presses and releases carry their cell", ()
   ]);
   // A shift-click is still a click.
   assertEquals(names(bytes("\x1b[<4;1;1M")), ["mouse"]);
-  // The middle and right buttons are not the primary button, and a report of
-  // the pointer moving is not a press.
-  for (const report of ["<1;12;7M", "<1;12;7m", "<2;12;7M", "<2;12;7m"]) {
+  // The middle and right buttons are not the primary button, and the pointer
+  // moving with no button held is not a press.
+  for (
+    const report of ["<1;12;7M", "<1;12;7m", "<2;12;7M", "<2;12;7m", "<35;1;1M"]
+  ) {
     assertEquals(names(bytes(`\x1b[${report}`)), ["unknown"], report);
   }
-  assertEquals(names(bytes("\x1b[<32;12;7M")), ["unknown"]);
+});
+
+Deno.test("decode: the pointer moving with the primary button held is a drag carrying its cell", () => {
+  assertEquals(decodeKeys(bytes("\x1b[<32;12;7M")).keys, [
+    { name: "drag", at: { x: 11, y: 6 } },
+  ]);
+});
+
+Deno.test("decode: a bracketed paste is one key holding the text, and waits for its end, split anywhere", () => {
+  const paste = bytes("\x1b[200~line one\nline\x1b[A two\x1b[201~x");
+  assertEquals(decodeKeys(paste).keys, [
+    { name: "paste", text: "line one\nline\x1b[A two" },
+    { name: "x", char: "x" },
+  ]);
+  const open = bytes("\x1b[200~partial");
+  const result = decodeKeys(open);
+  assertEquals(result.keys, []);
+  assertEquals(result.rest, open);
+  const ending = decodeKeys(bytes("\x1b[200~ab\x1b[20"));
+  assertEquals(ending.keys, []);
+  assertEquals(
+    decodeKeys(new Uint8Array([...ending.rest, ...bytes("1~")])).keys,
+    [{ name: "paste", text: "ab" }],
+  );
 });
 
 Deno.test("decode: an SGR mouse report missing a number is unknown", () => {
@@ -83,9 +110,9 @@ Deno.test("decode: X10 presses and releases carry their cell", () => {
       { name: "mouse", mouse: { down: false, x: 0, y: 0 } },
     ],
   );
-  // The right button, and the pointer moving.
+  // The right button, and the pointer moving with no button held.
   assertEquals(names(raw(0x1b, 0x5b, 0x4d, 34, 33, 33)), ["unknown"]);
-  assertEquals(names(raw(0x1b, 0x5b, 0x4d, 64, 33, 33)), ["unknown"]);
+  assertEquals(names(raw(0x1b, 0x5b, 0x4d, 67, 33, 33)), ["unknown"]);
 });
 
 Deno.test("decode: an incomplete X10 mouse report remains buffered", () => {

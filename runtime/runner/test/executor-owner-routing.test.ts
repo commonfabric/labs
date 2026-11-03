@@ -56,6 +56,7 @@ import {
   type WaveCommitSink,
   type WaveSpaceCommit,
 } from "../src/executor/wave.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -110,6 +111,8 @@ describe("executor owner routing", () => {
       subscriptionRefreshDelayMs: 0,
       store: toFileUrl(`${directory}/`),
       acl: { mode: "off", delegatingDids: [serviceSigner.did()] },
+      // A toolshed's posture: the runtime's naming default.
+      namesInstances: namesInstancesByDefault,
     });
 
   const newHost = (label: Label): ExecutorHost => {

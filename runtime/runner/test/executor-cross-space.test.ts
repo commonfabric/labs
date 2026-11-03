@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { Options, SpaceReplica } from "../src/storage/v2.ts";
 import {
@@ -1083,6 +1084,7 @@ describe("Phase 5 cross-space serving", () => {
 
   it("OW31 read posture under enforce: a serving manager reads an OWNER-ONLY home space through the acting-as-owner binding; a non-serving manager as the same identity is denied", async () => {
     const enforceServer = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       subscriptionRefreshDelayMs: 0,
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,

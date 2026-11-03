@@ -23,7 +23,8 @@ import {
   type JSONSchema,
   type SinkConsumedLabel,
 } from "@commonfabric/runner";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import {
   atomsOutsideCeiling,
   CFC_LABEL_READ_FAILED_ATOM,
@@ -560,4 +561,40 @@ function sameCell(left: Cell<unknown>, right: Cell<unknown>): boolean {
   } catch {
     return left === right;
   }
+}
+
+/** Whether a value with a label may be shown on a display. */
+export type LabelDisplayFit = (label: IFCLabel) => boolean;
+
+/**
+ * The fit of a display that no authored policy covers, whose audience is
+ * `owner` (§8.10.6): a label fits the default display ceiling built for
+ * that audience, atom by atom, without the exchange rules that would admit
+ * a space the owner reads, so it is never wider than a render's. A clause
+ * of alternatives fits only as a whole, as an atom of the ceiling, not as
+ * one of its alternatives would, so such a clause naming the owner among
+ * others is withheld where a render with a resolver could show it. With no
+ * owner, only a label naming no one fits, which any display may show. A
+ * label too malformed to fit at all does not fit.
+ */
+export function defaultDisplayFit(owner?: string): LabelDisplayFit {
+  const policy = rootRenderPolicyFor(
+    owner === undefined
+      ? { atoms: [], caveatKinds: [] }
+      : defaultDisplayCeiling(owner),
+  );
+  return (label) => {
+    try {
+      return policy !== undefined &&
+        canRenderLabelUnderPolicy(
+          label.confidentiality ?? [],
+          label.integrity ?? [],
+          () => [],
+          policy,
+          {},
+        );
+    } catch {
+      return false;
+    }
+  };
 }
