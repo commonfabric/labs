@@ -359,7 +359,8 @@ export class CFSuggestions extends BaseElement {
     }
     this.#aboutResolution = this.#linkTarget.follow(about, superseded).then(
       (followed) => {
-        if (!followed) return;
+        // A resolution started after `follow()` settled supersedes this one.
+        if (!followed || superseded()) return;
         this.#aboutTarget = followed.cell;
         this.requestUpdate();
       },
