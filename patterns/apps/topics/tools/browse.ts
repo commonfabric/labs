@@ -233,7 +233,8 @@ function isStrings(value: unknown): value is string[] {
 
 function isDraft(value: unknown): value is Draft {
   return isObjectNotArray(value) && isStrings(value.fields) &&
-    typeof value.base === "string" && typeof value.at === "number";
+    typeof value.base === "string" && typeof value.at === "number" &&
+    (value.invocation === undefined || typeof value.invocation === "string");
 }
 
 function isDropped(value: unknown): value is Dropped {

@@ -503,6 +503,7 @@ function counter(): (
   const counts = new Map<string, number>();
   const started = new Map<string, number>();
   return (method, args) => {
+    if (!COUNTING.has(method)) return [method, args];
     const [label = "default", ...data] = args;
     const name = String(label);
     switch (method) {
@@ -534,6 +535,16 @@ function counter(): (
     return [method, args];
   };
 }
+
+/** The ways of saying something on the console that count or time. */
+const COUNTING: ReadonlySet<ConsoleMethod> = new Set([
+  "clear",
+  "count",
+  "countReset",
+  "time",
+  "timeLog",
+  "timeEnd",
+]);
 
 /** The ways of saying something on the console that warn or err. */
 const ERRING: ReadonlySet<ConsoleMethod> = new Set([

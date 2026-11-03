@@ -51,7 +51,15 @@ describe("browse", () => {
     it("returns what was saved, drafts, pending writes, and the name writes are signed with included", async () => {
       const saved: Saved = {
         ...state(1),
-        drafts: { "comment:1": { fields: ["Hi."], base: "", at: 2 } },
+        drafts: {
+          "comment:1": { fields: ["Hi."], base: "", at: 2 },
+          "comment:2": {
+            fields: ["Yo."],
+            base: "",
+            invocation: "topics-2",
+            at: 2,
+          },
+        },
         pending: {
           "topics-1": {
             request: { verb: "mention", topic: "1", other: "2" },
@@ -80,13 +88,16 @@ describe("browse", () => {
       }
     });
 
-    it("returns the file without a pending write it cannot read", async () => {
+    it("returns the file without a pending write or a draft it cannot read", async () => {
       const path = join(dir, "strange.json");
       await Deno.writeTextFile(
         path,
         JSON.stringify({
           ...state(1),
           pending: { x: { request: { verb: "delete" }, at: 1 } },
+          drafts: {
+            "comment:1": { fields: ["Hi."], base: "", invocation: 7, at: 2 },
+          },
         }),
       );
 

@@ -776,6 +776,8 @@ describe("watch", () => {
       out.time("t");
       out.timeEnd("t");
       out.timeEnd("t");
+      // A value with nothing to make it a string is said as it is.
+      out.info(Object.create(null));
       undo();
 
       expect(said.slice(0, 3)).toEqual(["x: 1", "x: 2", "x: 1"]);
@@ -787,6 +789,7 @@ describe("watch", () => {
         ["info", "x: 1"],
         ["info", said[3]],
         ["warn", "Timer 't' does not exist"],
+        ["info", Object.create(null)],
       ]);
     });
 
