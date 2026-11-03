@@ -1687,6 +1687,13 @@ export class StorageManager implements IStorageManager {
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
+  /**
+   * The callers of `crossSpaceSettled()` and `synced()` waiting for
+   * `#crossSpacePromises` to empty, which `#releaseCrossSpaceWaiters()`
+   * releases together.
+   */
+  #crossSpaceWaiters: (() => void)[] = [];
+
   /** The store read-throughs installed per space (see
    * IStorageManager.installStoreReadThrough); a provider resolves its
    * replica's through this map, so a replica built after the install and
@@ -3502,6 +3509,7 @@ export class StorageManager implements IStorageManager {
 
   removeCrossSpacePromise(promise: Promise<void>): void {
     this.#crossSpacePromises.delete(promise);
+    this.#releaseCrossSpaceWaiters();
   }
 
   /**
@@ -3715,9 +3723,14 @@ export class StorageManager implements IStorageManager {
   }
 
   trackUntilSettled(work: Promise<unknown>): void {
-    const tracked = work.finally(() =>
-      this.#crossSpacePromises.delete(tracked)
-    ) as Promise<void>;
+    // Settles either way and never rejects: no waiter attaches to it, so a
+    // rejection carried here would go unhandled. `work` is still its
+    // owner's to observe.
+    const settle = () => {
+      this.#crossSpacePromises.delete(tracked);
+      this.#releaseCrossSpaceWaiters();
+    };
+    const tracked: Promise<void> = work.then(settle, settle);
     this.#crossSpacePromises.add(tracked);
   }
 
@@ -3727,7 +3740,7 @@ export class StorageManager implements IStorageManager {
 
   crossSpaceSettled(): Promise<void> {
     const { resolve, promise } = Promise.withResolvers<void>();
-    void this.#resolveCrossSpace(resolve);
+    this.#resolveCrossSpace(resolve);
     return promise;
   }
 
@@ -4052,21 +4065,36 @@ export class StorageManager implements IStorageManager {
     }, failLoad);
   }
 
-  #resolveCrossSpace(resolve: () => void): Promise<void> {
-    const promises = [...this.#crossSpacePromises.values()];
-    if (promises.length === 0) {
-      queueMicrotask(() => {
-        if (this.#crossSpacePromises.size === 0) {
-          resolve();
-          return;
-        }
-        void this.#resolveCrossSpace(resolve);
-      });
-      return Promise.resolve();
+  /**
+   * Calls `resolve` once `#crossSpacePromises` is empty. The caller joins the
+   * one list of waiters the set's emptying releases, and nothing is chained
+   * onto the pending promises themselves, so the cost of waiting is the
+   * number of waiters plus the number of pending promises rather than their
+   * product: a client starting many pieces at once has thousands of each.
+   */
+  #resolveCrossSpace(resolve: () => void): void {
+    this.#crossSpaceWaiters.push(resolve);
+    this.#releaseCrossSpaceWaiters();
+  }
+
+  /**
+   * Releases every waiter of `#resolveCrossSpace()` if `#crossSpacePromises`
+   * is empty. The set is asked again on a microtask, so that work which a
+   * settling promise's own reactions register keeps the waiters waiting.
+   */
+  #releaseCrossSpaceWaiters(): void {
+    if (
+      this.#crossSpacePromises.size !== 0 ||
+      this.#crossSpaceWaiters.length === 0
+    ) {
+      return;
     }
-    return Promise.all(promises)
-      .then(() => undefined)
-      .finally(() => this.#resolveCrossSpace(resolve));
+    queueMicrotask(() => {
+      if (this.#crossSpacePromises.size !== 0) return;
+      const waiters = this.#crossSpaceWaiters;
+      this.#crossSpaceWaiters = [];
+      for (const resolve of waiters) resolve();
+    });
   }
 
   async #syncImmutableCell<T>(
