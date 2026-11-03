@@ -32,8 +32,9 @@ rewrite. In particular:
   reason `deleted`, and refuses the space from then on
 - the client in this repository handles the `deleted` marker and
   `session/revoked` reason, which the server sends once a space is deleted.
-  Every client in use handles both before any space is deleted, those built
-  outside this repository included
+  Every client in use, those built outside this repository included, fails
+  safely on both before any space is deleted: a deleted space crashes none of
+  them and stops none from handling the spaces still live
   ([the order it lands in](../../plans/random-space-identities.md#deleting-a-space))
 - instance-naming admission (sections 4.1.1 and 4.1.2, INV-16) is enforced
   by the server, which advertises `instanceNameMark`, records the mark and

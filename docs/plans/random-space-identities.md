@@ -126,15 +126,16 @@ describes.
 [Deleting a space](../specs/random-space-identities.md#deleting-a-space) lands
 in this order, each step a change of its own:
 
-1. **Every client handles the deletion before any server sends it.** The Memory
-   server sends the `deleted` marker and the `deleted` revocation reason to
-   every client whatever it advertises, so each client in use has to handle
-   both first: this repository's Memory client, runtime, renderer and shell,
-   and every client outside this repository, including one that runs against a
-   pinned tag of it, whose tag then has to be one that handles them. That
-   includes reading an invitation operation's `space-deleted` as final rather
-   than retrying it, and an `AuthorizationError` marked `deleted` as a refusal
-   no later grant heals.
+1. **Every client fails safely on a deletion before any server sends it.** The
+   Memory server sends the `deleted` marker and the `deleted` revocation
+   reason to every client whatever it advertises, so a deleted space must
+   crash no client in use, and must stop none from handling the spaces still
+   live. This repository's Memory client, runtime, renderer and shell handle
+   both outright: they read an invitation operation's `space-deleted` as final
+   rather than retrying it, and an `AuthorizationError` marked `deleted` as a
+   refusal no later grant heals. A client outside this repository, including
+   one that runs against a pinned tag of this one, may instead treat a deleted
+   space as any space it is refused, so long as it fails safely.
 2. **`aclRevision` names the access-control document's `seq`.** Done: every
    ACL refusal's `aclRevision` is the `seq` at which the space's
    access-control document is stored, or 0 where it has none, rather than the
