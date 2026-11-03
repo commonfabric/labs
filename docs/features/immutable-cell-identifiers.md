@@ -36,12 +36,13 @@ transactions share the lifetime of their schema memo. An unbound transaction
 cannot mint snapshots; transparent transaction wrappers inherit their owner's
 store.
 
-Explicit `getImmutableCell()` values remain owned until runtime disposal.
-Array-element snapshots have a shorter ownership policy: their frozen source
-value, live cells, annotated views, and exported link objects keep them alive.
-Discarding a document version and its handles allows those snapshots to be
-collected, even in a long-lived server runtime. Equal content and origin share a
-snapshot. A bare URI string does not retain an element snapshot; use
+`getImmutableCell()` values and array-element snapshots are owned the same
+way: their frozen source value, live cells, annotated views, and exported link
+objects keep them alive. Dropping a cell and its handles, or discarding a
+document version and its handles, allows those snapshots to be collected, even
+in a long-lived server runtime. A snapshot made by the store's own `create()`
+remains owned until runtime disposal. Equal content and origin share a
+snapshot. A bare URI string does not retain an owned snapshot; use
 `portableSnapshotId()` when the reference must outlive its source and handles.
 
 A weak realm lookup lets link parsing and expansion resolve a URI without
