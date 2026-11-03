@@ -8,6 +8,7 @@
 
 import { CSI, type Rgb, term } from "@commonfabric/cli/view/ansi";
 import { palette } from "@commonfabric/cli/view/theme";
+import { appViewToUrlPath, spaceViewRef } from "@commonfabric/navigation";
 
 import { changes, history, type TopicEvent } from "./events.ts";
 import { followBoard } from "./live.ts";
@@ -101,10 +102,7 @@ export async function watchBoard(
   const start = await copied(data, board.board);
   const state: WatchState = {
     space: board.space,
-    topicLinks: new URL(
-      `${encodeURIComponent(board.space)}/top/`,
-      board.apiUrl.endsWith("/") ? board.apiUrl : `${board.apiUrl}/`,
-    ).href,
+    topicLinks: topicLinks(board),
     topics: start,
     feed: past(start),
     touched: new Map(),
@@ -209,6 +207,26 @@ export async function watchBoard(
       }
     }
   }
+}
+
+/**
+ * The address that opens a Topic of `board` in a browser, less its number.
+ * The shell's own writer writes the path, so the shell reads back the space
+ * and the Topic that went in. The path is resolved as a relative one, which
+ * keeps it under any path `apiUrl` has and keeps a space DID's `did:` from
+ * being read as the scheme of a URL.
+ */
+export function topicLinks(
+  board: Pick<WatchBoard, "apiUrl" | "space">,
+): string {
+  const space = spaceViewRef(board.space, undefined);
+  if (!space) {
+    throw new Error("A board's Topics cannot be linked to without a space.");
+  }
+  return new URL(
+    `.${appViewToUrlPath({ ...space, pieceSlug: "top" })}/`,
+    board.apiUrl.endsWith("/") ? board.apiUrl : `${board.apiUrl}/`,
+  ).href;
 }
 
 /**

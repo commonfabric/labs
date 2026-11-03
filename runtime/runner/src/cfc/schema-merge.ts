@@ -14,6 +14,7 @@ import {
   mapSubschemas,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -1714,7 +1715,7 @@ export const cfcSchemaMergeIssue = (
       return { message: error.message, migration: true };
     }
     return {
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
       migration: false,
     };
   }

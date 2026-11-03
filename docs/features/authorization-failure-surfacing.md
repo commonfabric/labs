@@ -98,7 +98,8 @@ session replacement. `subscribeSpaceAccessLoss` remains loss-only.
 changing what the sync barrier does:
 
 - `toPullError` keeps a real `AuthorizationError` — its name, message, and the
-  `retriable` marker — rather than flattening it to a `ConnectionError`.
+  server's markers, `retriable` and `deleted` among them — rather than
+  flattening it to a `ConnectionError`.
   `PullError` admits `AuthorizationError`.
 - Each replica holds its current authorization status: a permanent
   (non-retriable) `AuthorizationError` from a watch refresh is remembered, and a
@@ -125,8 +126,9 @@ and `spaceaccessrestored` with the space once a retry admits the principal
 again; it does not send the server's diagnostic error text to the UI. For a
 deleted space
 ([`space-access.md`](space-access.md#a-deleted-space)) `spaceaccesslost` also
-carries `deleted: true`, the one marker of the refusal it forwards; that marker
-is not implemented yet.
+carries `deleted: true`, the one marker of the refusal it forwards. A space
+already refused that turns out to be deleted is reported again, with the
+marker, to the storage provider's loss and access-change observers alike.
 
 The worker renderer subscribes at cell boundaries. Revoking a foreign target
 removes that target's content and event handlers while retaining the authorized
@@ -138,8 +140,8 @@ content reads "Access unavailable" beside a Retry button, which asks for the
 revoked space once more, and the status reads "Retrying…" until the answer
 comes; an
 admission restores the content. Content of a deleted space is replaced by a
-placeholder reading "Deleted", with no Retry button, once deleting a space is
-implemented.
+placeholder reading "Deleted", marked `data-space-deleted`, with no Retry
+button.
 
 A `cf-render` or `cf-picker` bound to content of a revoked space shows the same
 placeholder as revoked content shown directly, while its binding is withheld,

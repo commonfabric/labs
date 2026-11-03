@@ -66,6 +66,7 @@ import {
   WaveStaleReadError,
 } from "@commonfabric/memory/v2/engine";
 import type { CellScope } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Operation } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
@@ -139,7 +140,7 @@ export function waveCommitFailureResult(
   return {
     error: {
       name: "WaveCommitRejected",
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
     },
   };
 }

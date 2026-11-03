@@ -28,9 +28,10 @@ import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type {
-  PresenceEvent,
-  PresenceMembership,
+import {
+  isDeletedSpaceError,
+  type PresenceEvent,
+  type PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
@@ -784,6 +785,8 @@ export function renderSpaceAccessProviderFor(
   const storage = runtime.storageManager;
   return {
     error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    deleted: (space) =>
+      isDeletedSpaceError(storage.spaceAccessError?.(space as MemorySpace)),
     subscribe: (space, onChange) => {
       const changed = (changedSpace: MemorySpace) => {
         if (changedSpace === space) onChange();
@@ -1126,9 +1129,13 @@ export class RuntimeProcessor {
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
-      ?.subscribeSpaceAccessLoss?.((space) => {
+      ?.subscribeSpaceAccessLoss?.((space, error) => {
         for (const client of clients()) {
-          client.post({ type: NotificationType.SpaceAccessLost, space });
+          client.post({
+            type: NotificationType.SpaceAccessLost,
+            space,
+            ...(isDeletedSpaceError(error) && { deleted: true as const }),
+          });
         }
       });
     // An access change is a denial or a recovery, and only a recovery leaves

@@ -18,6 +18,8 @@ import { kotlinGrammar } from "./kotlin.ts";
 export const kotlinLanguage: Language = {
   id: "kotlin",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

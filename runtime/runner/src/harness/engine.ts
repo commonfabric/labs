@@ -14,6 +14,7 @@ import {
   composeBundleSourceMap,
   identitySourceMap,
 } from "@commonfabric/js-compiler/source-map";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { StaticCache } from "@commonfabric/static";
 import type {
   BuilderSourceSiteOptions,
@@ -1148,7 +1149,7 @@ export class Engine extends EventTarget {
         } catch (error) {
           diagnostics.push({
             file: name,
-            message: error instanceof Error ? error.message : String(error),
+            message: describeFailure(error),
           });
         }
         verified.set(name, (verified.get(name) ?? 0) + performance.now() - at);

@@ -9,6 +9,7 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { openSpace, tableNames } from "./db.ts";
 import type { DiscoveredSpace } from "./discover.ts";
@@ -86,14 +87,12 @@ export function discoverProfiles(
   const listed: ListedProfile[] = [];
   const shaped: UnlistedProfile[] = [];
   const unreadable: UnreadableSpace[] = [];
-  const reasonOf = (error: unknown) =>
-    error instanceof Error ? error.message : String(error);
   for (const d of discovered) {
     let space;
     try {
       space = openSpace(d.path);
     } catch (error) {
-      unreadable.push({ space: d.did, reason: reasonOf(error) });
+      unreadable.push({ space: d.did, reason: describeFailure(error) });
       continue;
     }
     if (!isMemorySpace(space.db)) {
@@ -126,7 +125,7 @@ export function discoverProfiles(
         }
       }
     } catch (error) {
-      unreadable.push({ space: d.did, reason: reasonOf(error) });
+      unreadable.push({ space: d.did, reason: describeFailure(error) });
       continue;
     } finally {
       space.close();

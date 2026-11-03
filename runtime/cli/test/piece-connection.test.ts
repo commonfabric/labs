@@ -121,6 +121,7 @@ describe("piece-connection", () => {
       expect(landed).toEqual({
         piece: RESOLVED_PIECE,
         path: ["items", 0, "title"],
+        served: false,
       });
       expect(lines).toContain(`wrote to space ${SPACE}`);
     });

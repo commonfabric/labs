@@ -671,6 +671,30 @@ describe("cli piece parsing", () => {
     });
   });
 
+  it("parseSpaceOptions() reads the space of a --url as the shell does", () => {
+    // The shell percent-encodes a space name and may write the space's mark
+    // ahead of it.
+    for (const segment of [SPACE, `@${SPACE}`, `%40${SPACE}`]) {
+      expect(parseSpaceOptions({ url: `${API_URL}/${segment}`, identity: ID }))
+        .toMatchObject({ space: SPACE });
+    }
+    expect(parseSpaceOptions({ url: `${API_URL}/a%20b`, identity: ID }))
+      .toMatchObject({ space: "a b" });
+    expect(parseSpaceOptions({ url: `${API_URL}/@%40work`, identity: ID }))
+      .toMatchObject({ space: "@work" });
+    expect(() => parseSpaceOptions({ url: `${API_URL}/@`, identity: ID }))
+      .toThrow(/does not contain a space/);
+    // The embed prefix says how the shell shows the page, not what it names.
+    expect(
+      parsePieceOptions({
+        url: `${API_URL}/.embed/${SPACE}/tracker`,
+        identity: ID,
+      }),
+    ).toMatchObject({ apiUrl: API_URL, space: SPACE, piece: "tracker" });
+    expect(() => parseSpaceOptions({ url: `${API_URL}/.embed`, identity: ID }))
+      .toThrow(/does not contain a space/);
+  });
+
   it("parseSpaceOptions() takes both URL encodings off a path segment", () => {
     // A URL escapes with percent-encoding and a cell path is a JSON Pointer,
     // so a key holding "/" or "~" arrives doubly escaped and a segment taken

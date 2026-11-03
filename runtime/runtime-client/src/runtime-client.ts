@@ -169,7 +169,12 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
-  spaceaccesslost: [{ space: DID }];
+
+  /**
+   * The memory server refused the runtime principal a space. `deleted` is
+   * present when the space is deleted, which no retry can undo.
+   */
+  spaceaccesslost: [{ space: DID; deleted?: true }];
 
   /**
    * A space that refused the runtime principal admitted it again. A load the
@@ -1861,8 +1866,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.emit("eventintentoutcome", { space, eventId, kind, reason });
   };
 
-  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
-    this.emit("spaceaccesslost", { space });
+  #onSpaceAccessLost = (
+    { space, deleted }: SpaceAccessLostNotification,
+  ): void => {
+    this.emit("spaceaccesslost", { space, ...(deleted && { deleted }) });
   };
 
   #onSpaceAccessRestored = (

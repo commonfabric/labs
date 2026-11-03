@@ -374,6 +374,38 @@ describe("view plan publisher", () => {
       expect(fixture.publications.calls).toHaveLength(1);
     });
 
+    it("returns `false` for a settled view the server refuses the answer for", async () => {
+      asReadView();
+      fixture.publications.restore();
+      fixture.publications = stub(
+        fixture.server,
+        "setViewSelection",
+        () => Promise.resolve(false),
+      );
+
+      expect(
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        ),
+      ).toBe(false);
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns whether a view has not settled yet", async () => {
+      asReadView();
+      const publish = (settled: boolean) =>
+        fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+          settled: () => settled,
+        });
+
+      expect(await publish(false)).toBe(true);
+      expect(await publish(true)).toBe(false);
+      expect(await publish(false)).toBe(false);
+    });
+
     it("publishes for a view whose component contract differs from the server's", async () => {
       asReadView();
       fixture.interest.view.componentContractVersion = "another-build";

@@ -730,7 +730,10 @@ than that pass, no structure load or structure retry outstanding, no commit in
 flight, and no input left to process. Documents that settlement committed precede
 the plan on the session's stream, so a client holding the plan holds what the
 server derived for the view's roots. A view that registers while a cycle is
-running is not in that cycle's demand pass, so it waits for the next one.
+running is not in that cycle's demand pass, so it waits for the next one. While a
+`read` view has no plan and nothing else is owed, the serving loop runs another
+cycle rather than wait for input, since no input follows a settlement the flush
+deadline cut.
 
 - Clients subscribe to docs/queries as today
   (`runtime/runner/src/storage/query.ts` path). The SpaceServer

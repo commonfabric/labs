@@ -47,6 +47,7 @@ import {
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { maxOf } from "@commonfabric/collections/math";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
@@ -1642,9 +1643,7 @@ export class CfHarnessEngine {
       await this.sandbox.close?.();
     } catch (error) {
       console.error(
-        `cf-harness: sandbox close failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `cf-harness: sandbox close failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -2486,9 +2485,7 @@ export class CfHarnessEngine {
         createHarnessFailureRecord({
           kind: "harness_error",
           source: "cell_labels",
-          detail: `cell label snapshot failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          detail: `cell label snapshot failed: ${describeFailure(error)}`,
           at: now,
         }),
         now,

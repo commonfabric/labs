@@ -1,6 +1,7 @@
 import { basename, resolve } from "@std/path";
 
 import { Command, ValidationError } from "@cliffy/command";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import ports from "@commonfabric/ports" with { type: "json" };
 
 import { parseAttrcacheTimeoutSeconds } from "../../fuse/mount-options.ts";
@@ -696,7 +697,7 @@ export async function defaultSystemUnmount(
     child?.unref();
     return {
       code: 1,
-      stderr: error instanceof Error ? error.message : String(error),
+      stderr: describeFailure(error),
     };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -860,9 +861,7 @@ export const fuseSupervisor = new Command()
     try {
       parsed = parseSupervisorArgs(supervisorArgs);
     } catch (error) {
-      throw new ValidationError(
-        error instanceof Error ? error.message : String(error),
-      );
+      throw new ValidationError(describeFailure(error));
     }
     if (parsed.help) {
       console.log(supervisorHelp());

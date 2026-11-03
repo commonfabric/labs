@@ -57,6 +57,7 @@ import type {
   StreamLinkRef,
 } from "@commonfabric/memory/v2";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const logger = getLogger("event-append-queue", {
   enabled: true,
@@ -527,7 +528,7 @@ export class EventAppendQueue {
         attempt = 0;
       } catch (error) {
         const name = (error as { name?: string })?.name ?? "";
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         if (name === "EventAppendDuplicateError") {
           // The first append landed; its consequences are (or will be)
           // the authoritative outcome (events.md §5).

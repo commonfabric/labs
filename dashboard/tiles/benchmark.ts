@@ -64,6 +64,7 @@
  */
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Ctx, Route, Status, Tile, TileView } from "../types.ts";
 import {
   isCalibrationKey,
@@ -123,6 +124,7 @@ import {
   performanceViewHref,
   performanceViewNav,
 } from "../performance-views.ts";
+import { VERSION_CLIENT } from "../version.ts";
 import {
   distinctTrendDays,
   trendPct,
@@ -215,7 +217,30 @@ interface BenchmarkSeries {
   cpus: BenchmarkCpuSeries[];
 }
 
-let snapshot: BenchmarkSeries[] = [];
+/** What the /bench drill-down charts, and its version. */
+export interface BenchmarkSnapshot {
+  /** The runs the snapshot was assembled from, oldest first. */
+  runs: readonly CachedBenchmarkRun[];
+  /** Every charted benchmark, in key order. */
+  series: BenchmarkSeries[];
+  /**
+   * A hash of the run attempts that `series` holds, in time order. An open
+   * page compares it with the one the update check reports, and refreshes its
+   * charts when they differ. `BenchmarkHistoryStore` never replaces a cached
+   * run attempt that names a processor, and `series` holds only such
+   * attempts, so for one version of the dashboard's code the attempts
+   * determine `series`. The hash changes when `series` does, unless two
+   * attempt lists collide in its 32 bits. It does not cover the code that
+   * builds or draws `series`.
+   */
+  version: string;
+}
+
+let snapshot: BenchmarkSnapshot = {
+  runs: [],
+  series: [],
+  version: benchmarkVersion(""),
+};
 // The benchmarks.yml runs, as far down as the window reaches, for each GitHub
 // client that reads them: the tile's, and the drill-down's, which reads on the
 // performance views' rate budget. Each keeps its own, so that neither waits
@@ -283,18 +308,22 @@ let benchmarkRefreshFailedAt = 0;
 let benchmarkRefreshError = "";
 const benchmarkProgressById = new Map<string, BenchmarkProgressRecord>();
 
-function benchmarkVersion(value: BenchmarkSeries[]): string {
-  const serialized = JSON.stringify(value);
+function benchmarkVersion(text: string): string {
   let hash = 0x811c9dc5;
-  for (let index = 0; index < serialized.length; index++) {
-    hash ^= serialized.charCodeAt(index);
+  for (let index = 0; index < text.length; index++) {
+    hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(36);
 }
 
 export function benchmarkSnapshotVersion(): string {
-  return benchmarkVersion(snapshot);
+  return snapshot.version;
+}
+
+/** The snapshot the /bench drill-down currently charts. */
+export function benchmarkSnapshotForTest(): BenchmarkSnapshot {
+  return snapshot;
 }
 
 function newBenchmarkProgress(baseline?: string): BenchmarkProgressRecord {
@@ -380,7 +409,7 @@ export function subscribeBenchmarkProgress(
 // How many of a run's product benchmarks match the selection. Zero means the
 // run measured nothing the tile trends, whatever else its artifact holds.
 const productMetricCount = (
-  run: { metrics: Map<string, Stats> },
+  run: { metrics: ReadonlyMap<string, Stats> },
   select: (key: string) => boolean = () => true,
 ): number => {
   let count = 0;
@@ -518,14 +547,27 @@ function currentBenchmarkRun(run: Run): CachedBenchmarkRun | undefined {
     : undefined;
 }
 
-function currentRunMetrics(run: Run): Map<string, Stats> | undefined {
+function currentRunMetrics(run: Run): ReadonlyMap<string, Stats> | undefined {
   const cached = currentBenchmarkRun(run);
   return cached?.cpu === undefined ? undefined : cached.metrics;
 }
 
-function assembleBenchmarkSeries(
+/**
+ * Groups the measurements in `runs` into series by benchmark and processor,
+ * leaving out calibration benchmarks and runs that name no processor, and
+ * versions the result by the run attempts it holds. When the current snapshot
+ * was assembled from the same run objects, returns it instead.
+ * `BenchmarkHistoryStore` replaces a run rather than changing it, so the same
+ * objects hold the same measurements.
+ */
+function assembleCachedBenchmarkSnapshot(
   runs: CachedBenchmarkRun[],
-): BenchmarkSeries[] {
+): BenchmarkSnapshot {
+  const sorted = runs.toSorted((a, b) => a.at - b.at);
+  if (
+    sorted.length === snapshot.runs.length &&
+    sorted.every((run, index) => run === snapshot.runs[index])
+  ) return snapshot;
   const byKey = new Map<
     string,
     Map<
@@ -538,10 +580,13 @@ function assembleBenchmarkSeries(
       }[]
     >
   >();
-  for (const run of [...runs].sort((a, b) => a.at - b.at)) {
+  const attempts: string[] = [];
+  for (const run of sorted) {
     if (run.cpu === undefined) continue;
+    let held = false;
     for (const [key, stats] of run.metrics) {
       if (isCalibrationKey(key)) continue;
+      held = true;
       let byCpu = byKey.get(key);
       if (!byCpu) {
         byCpu = new Map();
@@ -559,8 +604,9 @@ function assembleBenchmarkSeries(
         stats,
       });
     }
+    if (held) attempts.push(`${run.runId}.${run.runAttempt}`);
   }
-  return [...byKey]
+  const series = [...byKey]
     .map(([key, byCpu]) => ({
       key,
       cpus: [...byCpu]
@@ -570,10 +616,15 @@ function assembleBenchmarkSeries(
     }))
     .filter((series) => series.cpus.length > 0)
     .sort((a, b) => a.key.localeCompare(b.key));
+  return {
+    runs: sorted,
+    series,
+    version: benchmarkVersion(attempts.join(" ")),
+  };
 }
 
-function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSeries[] {
-  return assembleBenchmarkSeries(
+function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSnapshot {
+  return assembleCachedBenchmarkSnapshot(
     runs.flatMap((run) => {
       const cached = currentBenchmarkRun(run);
       return cached?.cpu !== undefined && productMetricCount(cached) > 0
@@ -581,12 +632,6 @@ function assembleBenchmarkSnapshot(runs: Run[]): BenchmarkSeries[] {
         : [];
     }),
   );
-}
-
-function assembleCachedBenchmarkSnapshot(
-  runs: CachedBenchmarkRun[],
-): BenchmarkSeries[] {
-  return assembleBenchmarkSeries(runs);
 }
 
 async function loadCachedBenchmarkSnapshot(now = Date.now()): Promise<void> {
@@ -681,9 +726,6 @@ function benchmarkUnavailable(sub: string, aside?: string): TileView {
     sub,
   };
 }
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 // The geometric mean of the per-benchmark ratios between two runs on the same
 // processor, over the benchmarks they share that match `select` (each with a
@@ -1200,7 +1242,7 @@ async function collectBenchmark(
       needsReload: missing.length > 0,
     });
     if (!chosen.length) {
-      snapshot = [];
+      snapshot = assembleCachedBenchmarkSnapshot([]);
       await markBenchmarkRefreshed([], "no-runs");
       return {};
     }
@@ -1256,20 +1298,20 @@ async function collectBenchmark(
       (currentRunMetrics(run)?.size ?? 0) > 0
     );
     if (!withData.length) {
-      if (firstReadError === undefined) snapshot = [];
       if (firstReadError === undefined) {
+        snapshot = assembleCachedBenchmarkSnapshot([]);
         await markBenchmarkRefreshed(chosen, "data-unavailable");
       }
       return { error: firstReadError };
     }
     const collectedSnapshot = assembleBenchmarkSnapshot(withData);
-    if (collectedSnapshot.length || firstReadError === undefined) {
+    if (collectedSnapshot.series.length || firstReadError === undefined) {
       snapshot = collectedSnapshot;
     }
     if (firstReadError === undefined) {
       await markBenchmarkRefreshed(
         chosen,
-        collectedSnapshot.length ? "data" : "no-metric",
+        collectedSnapshot.series.length ? "data" : "no-metric",
       );
     }
     return { error: firstReadError };
@@ -1348,9 +1390,7 @@ function startBenchmarkRefresh(
   const result = collection().then((outcome) => {
     finishRefresh();
     if (outcome.error) {
-      const message = outcome.error instanceof Error
-        ? outcome.error.message
-        : String(outcome.error);
+      const message = describeFailure(outcome.error);
       if (scope === "bench") {
         benchmarkRefreshFailedAt = Date.now();
         benchmarkRefreshError = friendlyError(message);
@@ -1465,7 +1505,7 @@ async function collectBenchmarkTileRuns(
   await refresh;
   return {
     runs: runs ?? [],
-    offline: runs ? undefined : friendlyError(errorMessage(listError)),
+    offline: runs ? undefined : friendlyError(describeFailure(listError)),
   };
 }
 
@@ -1557,7 +1597,7 @@ export async function benchmarkHistoryResponse(
   let progress: BenchmarkFetchProgress | undefined;
   let refreshError: string | undefined;
   if (!credential) {
-    refreshError = snapshot.length
+    refreshError = snapshot.series.length
       ? "Set GH_TOKEN to refresh runtime benchmark history."
       : "Set GH_TOKEN to collect runtime benchmark history.";
   }
@@ -1805,7 +1845,7 @@ export function benchPage(
   }" id="fetch-progress" aria-live="polite" data-check-url="/bench/check?view=runtime" data-snapshot-version="${
     escapeHtml(version)
   }" data-refresh-on-complete="${
-    progress && !progressIdle && !snapshot.length ? "1" : "0"
+    progress && !progressIdle && !snapshot.series.length ? "1" : "0"
   }"${
     lastRequestError
       ? ` data-last-request-error="${escapeHtml(lastRequestError)}"`
@@ -1819,13 +1859,13 @@ export function benchPage(
       ? ""
       : ` value="${progressIdle ? 0 : progress?.completedRuns ?? 0}"`
   } aria-label="Runtime benchmark fetch progress"></progress><p id="fetch-detail">${progressDetail}</p></section>`;
-  const refreshNotice = options.refreshError && snapshot.length
+  const refreshNotice = options.refreshError && snapshot.series.length
     ? `<p class="refresh-error">${escapeHtml(options.refreshError)}</p>`
     : "";
 
   let body: string;
   let cpuLegend = "";
-  if (!snapshot.length) {
+  if (!snapshot.series.length) {
     body = progress && !progressIdle ? "" : `<p class="empty">${
       escapeHtml(
         options.refreshError ??
@@ -1838,7 +1878,7 @@ export function benchPage(
     const axisSpan = axisEnd - axisStart || 1;
     const bucketMs = ciHistoryBucketMs(days);
     const colors = cpuColors(
-      snapshot.flatMap((series) => series.cpus.map((cpu) => cpu.cpu)),
+      snapshot.series.flatMap((series) => series.cpus.map((cpu) => cpu.cpu)),
     );
     const cpuKeys = new Map(
       [...colors.keys()].map((cpu, index) => [
@@ -1846,7 +1886,7 @@ export function benchPage(
         { label: `CPU ${index + 1}`, anchor: `cpu-type-${index + 1}` },
       ]),
     );
-    const rows = snapshot.flatMap((s) => {
+    const rows = snapshot.series.flatMap((s) => {
       if (options.keyOnly && !isKeyBenchmark(s.key)) return [];
       const visibleCpus = s.cpus.flatMap((series) => {
         const sourcePoints = series.points.filter((point) =>
@@ -2083,14 +2123,15 @@ ${DASHBOARD_THEME_HEAD}
     escapeHtml(stat.label)
   }"><input type="hidden" name="sort" value="${sort}"><label class="field" for="days">window <output id="daysv" for="days">${days} day${
     days === 1 ? "" : "s"
-  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
+  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}" autocomplete="off"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
   ${rangeContent}
 ${dashboardThemeToggle()}
 ${DASHBOARD_THEME_CLIENT}
 <script>
+  ${VERSION_CLIENT}
   const hg = document.getElementById("hg"), days = document.getElementById("days"), daysv = document.getElementById("daysv"), controls = days.form, KEY = "benchHideGreen", DEFAULT_DAYS = days.value;
   let rangeContent = document.getElementById("range-content"), fetchProgress = document.getElementById("fetch-progress"), title = document.getElementById("fetch-title"), total = document.getElementById("fetch-total"), detail = document.getElementById("fetch-detail"), bar = document.getElementById("fetch-bar"), pageVersion = fetchProgress.dataset.snapshotVersion, appliedDays = days.value;
-  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", serverVersionChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
+  let navigating = false, pendingRefresh = false, checkRequest = null, eventStream = null, connectedProgressUrl = "", snapshotChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
   const apply = () => document.body.classList.toggle("hide-green", hg.checked);
   hg.checked = sessionStorage.getItem(KEY) === "1";
   apply();
@@ -2149,6 +2190,8 @@ ${DASHBOARD_THEME_CLIENT}
   window.addEventListener("pagehide", () => {
     navigating = true;
     rangeRequest?.abort();
+    checkRequest?.abort();
+    checkRequest = null;
     eventStream?.close();
   });
   const renderIdle = (lastRequestError = fetchProgress.dataset.lastRequestError || "") => {
@@ -2228,7 +2271,7 @@ ${DASHBOARD_THEME_CLIENT}
       eventStream?.close();
       eventStream = null;
       connectedProgressUrl = "";
-      if (state.needsReload || serverVersionChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
+      if (state.needsReload || snapshotChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
       else renderIdle();
     }
   };
@@ -2262,29 +2305,39 @@ ${DASHBOARD_THEME_CLIENT}
     };
   };
   const checkForUpdates = async () => {
-    if (checking || navigating || document.visibilityState === "hidden") return;
-    checking = true;
+    if (checkRequest || navigating || document.visibilityState === "hidden") return;
+    const controller = new AbortController();
+    checkRequest = controller;
     const revision = viewRevision;
     try {
-      const response = await fetch(fetchProgress.dataset.checkUrl, { headers: { accept: "application/json" } });
+      const response = await fetch(fetchProgress.dataset.checkUrl, {
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (servedByAnotherVersion(response)) {
+        refreshRangeWhenIdle();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const state = await response.json();
       if (revision !== viewRevision) return;
-      serverVersionChanged ||= state.version !== pageVersion;
+      snapshotChanged ||= state.version !== pageVersion;
       if (state.progress) {
         connectProgress("/bench/runtime-progress?id=" + encodeURIComponent(state.progress.id));
         renderProgress(state.progress);
-      } else if (serverVersionChanged) refreshRangeWhenIdle();
+      } else if (snapshotChanged) refreshRangeWhenIdle();
       else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");
       else if (!collectionFailed) renderIdle();
     } catch {
+      if (controller.signal.aborted) return;
       if (!eventStream && !collectionFailed && !transportFailed) renderIdle();
     } finally {
-      checking = false;
+      if (checkRequest === controller) checkRequest = null;
     }
   };
   const bindRangeContent = () => {
     viewRevision++;
+    rangeContent.removeAttribute("aria-busy");
     fetchProgress = rangeContent.querySelector("#fetch-progress");
     title = rangeContent.querySelector("#fetch-title");
     total = rangeContent.querySelector("#fetch-total");
@@ -2292,7 +2345,7 @@ ${DASHBOARD_THEME_CLIENT}
     bar = rangeContent.querySelector("#fetch-bar");
     pageVersion = fetchProgress.dataset.snapshotVersion;
     document.body.dataset.snapshotVersion = pageVersion;
-    serverVersionChanged = false;
+    snapshotChanged = false;
     collectionFailed = false;
     transportFailed = false;
     connectedProgressUrl = "";
@@ -2333,6 +2386,13 @@ ${DASHBOARD_THEME_CLIENT}
         headers: { accept: "text/html" },
         signal: controller.signal,
       });
+      if (servedByAnotherVersion(response)) {
+        if (navigating) return;
+        navigating = true;
+        if (mode === "push") location.assign(url.pathname + url.search);
+        else location.reload();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const page = new DOMParser().parseFromString(await response.text(), "text/html");
       const replacement = page.getElementById("range-content");
@@ -2379,19 +2439,24 @@ ${DASHBOARD_THEME_CLIENT}
     if (!Number.isFinite(value)) return DEFAULT_DAYS;
     return String(Math.max(Number(days.min), Math.min(Number(days.max), Math.floor(value))));
   };
-  window.addEventListener("popstate", () => {
-    restoreKeyOnly();
+  const restoreDays = () => {
     days.value = daysFromLocation();
     daysv.value = days.value + (days.value === "1" ? " day" : " days");
     syncDayLinks();
+  };
+  window.addEventListener("popstate", () => {
+    restoreKeyOnly();
+    restoreDays();
     void loadRange("pop");
   });
   window.addEventListener("pageshow", (event) => {
     navigating = false;
     restoreKeyOnly();
     if (event.persisted) {
+      restoreDays();
       bindRangeContent();
-      void checkForUpdates();
+      if (days.value !== appliedDays) void loadRange("pop");
+      else void checkForUpdates();
     }
   });
   bindRangeContent();

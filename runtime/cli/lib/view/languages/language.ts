@@ -285,6 +285,13 @@ export interface Language {
    * tree, and a name → definition index. `fileName` is advisory. */
   parseDocument(text: string, fileName?: string): Document;
 
+  /**
+   * Whether adding or removing a line that holds only comments and whitespace
+   * leaves what the source means as it was. Absent where it may not, such as
+   * in XML text, a YAML scalar, or JSON, which has no comments.
+   */
+  readonly commentLinesAreInert?: boolean;
+
   /** Color `text` into rendered lines only — the per-keystroke-safe subset of
    * {@link parseDocument}, with no structure tree or definitions. Used by the
    * non-interactive fast path and the diff fragment renderer. `fileName` is

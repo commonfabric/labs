@@ -198,6 +198,45 @@ export const dash = createRoute({
   },
 });
 
+/** The memory one isolate holds after a full collection, in bytes. */
+const collectedMemorySchema = z.object({
+  heapUsed: z.number().int().nonnegative(),
+  external: z.number().int().nonnegative(),
+});
+
+/**
+ * The memory this process's threads hold after a full garbage collection of
+ * each: the thread that answers, and the serving loop's worker where the loop
+ * runs in one. Unlike `processMemory` on `/api/health/stats`, a reading does
+ * not depend on when the collector last ran, so two readings differ by what
+ * the server retained between them. Collecting pauses each thread it
+ * measures, so the route answers only on a server started with
+ * `EXPOSE_GC=true`.
+ */
+export const collectedMemory = createRoute({
+  path: "/api/health/collected-memory",
+  method: "get",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        timestamp: z.number(),
+        mainThread: collectedMemorySchema,
+        servingLoopWorker: collectedMemorySchema.optional(),
+      }),
+      "The memory each thread holds after a full collection",
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ error: z.string() }),
+      "This server was started without EXPOSE_GC=true",
+    ),
+    [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
+      z.object({ error: z.string() }),
+      "The serving loop's worker is not serving",
+    ),
+  },
+});
+
 /** On-demand attribution of one content-addressed document to retained sessions. */
 export const documentInterests = createRoute({
   path: "/api/health/document-interests",
@@ -262,6 +301,7 @@ export const documentInterests = createRoute({
 export type IndexRoute = typeof index;
 export type StatsRoute = typeof stats;
 export type ServingLoopRealmRoute = typeof servingLoopRealm;
+export type CollectedMemoryRoute = typeof collectedMemory;
 export type DashRoute = typeof dash;
 
 /** Handler contract for the document-interest diagnostic. */

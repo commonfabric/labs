@@ -40,6 +40,7 @@ import {
 } from "@commonfabric/runner/pattern-release-time";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
@@ -389,9 +390,7 @@ export function classifyOrigin(
     ref = parseFabricRef(source);
   } catch (cause) {
     throw new PieceOriginError(
-      `${source} is not a usable fabric URL: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
+      `${source} is not a usable fabric URL: ${describeFailure(cause)}`,
     );
   }
   if (ref !== undefined) {

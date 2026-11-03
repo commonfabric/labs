@@ -35,6 +35,7 @@ import {
   storageAddressForHost,
 } from "@commonfabric/runner/storage/v2-remote-session";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -334,7 +335,7 @@ async function loadIdentity(path: string): Promise<Identity> {
   } catch (error) {
     throw new Error(
       `The identity keyfile \`${path}\` cannot be read (${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }); name another with \`--identity\` or \`CF_IDENTITY\`.`,
       { cause: error },
     );

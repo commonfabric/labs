@@ -71,6 +71,17 @@ describe("RunListFile", () => {
   const write = (value: unknown) =>
     Deno.writeTextFile(path, JSON.stringify(value));
 
+  /**
+   * Changes what the file holds without changing its version, which no writer
+   * does, so that a read of the file can be told from a read of what an
+   * instance last wrote.
+   */
+  async function overwriteInPlace(file: string): Promise<void> {
+    const { size, mtime } = await Deno.stat(file);
+    await Deno.writeTextFile(file, " ".repeat(size));
+    await Deno.utime(file, mtime!, mtime!);
+  }
+
   /** Reads the file's head of `repo`'s `workflow`. */
   const load = (workflow: string | number = "ci.yml", repo = "example/repo") =>
     new RunListFile(path).load(repo, workflow);
@@ -147,6 +158,18 @@ describe("RunListFile", () => {
           .toMatchObject({ name: null, path: null });
       });
 
+      it("returns only the first line of a run's head commit message", async () => {
+        await write({
+          heads: [head([
+            { ...run(30), head_commit: { message: "Fix it\n\nAt length." } },
+            run(29),
+          ])],
+        });
+
+        expect((await loadHead()).runs.map((held) => held.head_commit))
+          .toEqual([{ message: "Fix it" }, { message: "commit 29" }]);
+      });
+
       it("ignores fields it does not know", async () => {
         await write({
           later: true,
@@ -197,6 +220,113 @@ describe("RunListFile", () => {
         expect(await load()).toBeUndefined();
       });
 
+      it("returns the heads it last wrote while the file is at the version it wrote", async () => {
+        const file = new RunListFile(path);
+        await file.save(() => [head(runs(30, 21))], 0);
+        await overwriteInPlace(path);
+
+        expect(await file.load("example/repo", "ci.yml")).toEqual(
+          head(runs(30, 21)),
+        );
+        expect(await load()).toBeUndefined();
+      });
+
+      it("returns a head as it was saved after the runs given to `save()` change", async () => {
+        const file = new RunListFile(path);
+        const held = runs(30, 21);
+        await file.save(() => [head(held)], 0);
+        held.length = 0;
+
+        const loaded = await file.load("example/repo", "ci.yml");
+        loaded?.runs.splice(5);
+
+        expect(await file.load("example/repo", "ci.yml")).toEqual(
+          head(runs(30, 21)),
+        );
+      });
+
+      it("returns no heads, and logs why, when the file cannot be checked", async () => {
+        await Deno.mkdir(join(directory, "nested"));
+        const file = new RunListFile(
+          join(directory, "nested", "run-lists.json"),
+        );
+        await file.save(() => [head(runs(30, 21))], 0);
+        await Deno.remove(join(directory, "nested"), { recursive: true });
+        await Deno.writeTextFile(join(directory, "nested"), "");
+        const logged: string[] = [];
+        const realError = console.error;
+        console.error = (...parts: unknown[]) =>
+          void logged.push(parts.map(String).join(" "));
+        try {
+          expect(await file.load("example/repo", "ci.yml")).toBeUndefined();
+        } finally {
+          console.error = realError;
+        }
+
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).toContain("could not be read");
+      });
+
+      it("keeps a head another instance saved while a load of an older version was in progress", async () => {
+        const file = new RunListFile(path);
+        await file.save(() => [head(runs(30, 21), { workflow: "a.yml" })], 0);
+        await new RunListFile(path).save(
+          () => [head(runs(30, 21), { workflow: "b.yml" })],
+          0,
+        );
+        // The load opens the version holding a.yml and b.yml, and is held
+        // there until `file` has taken the lock to save, by which time another
+        // instance has saved c.yml.
+        const opened = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const realOpen = Deno.open;
+        const realLock = Deno.FsFile.prototype.lock;
+        Deno.open = (async (target, options) => {
+          const handle = await realOpen(target, options);
+          if (target === path && options === undefined) {
+            Deno.open = realOpen;
+            opened.resolve();
+            await release.promise;
+          }
+          return handle;
+        }) as typeof Deno.open;
+        try {
+          const loading = file.load("example/repo", "a.yml");
+          await opened.promise;
+          await new RunListFile(path).save(
+            () => [head(runs(30, 21), { workflow: "c.yml" })],
+            0,
+          );
+          Deno.FsFile.prototype.lock = async function (exclusive) {
+            await realLock.call(this, exclusive);
+            release.resolve();
+          };
+
+          await file.save(
+            () => [head(runs(30, 21), { workflow: "d.yml" })],
+            0,
+          );
+          await loading;
+        } finally {
+          Deno.open = realOpen;
+          Deno.FsFile.prototype.lock = realLock;
+        }
+
+        for (const workflow of ["a.yml", "b.yml", "c.yml", "d.yml"]) {
+          expect(await load(workflow)).toBeDefined();
+        }
+      });
+
+      it("returns a head another instance saved since it last read the file", async () => {
+        const file = new RunListFile(path);
+        await file.save(() => [head(runs(30, 21))], 0);
+
+        const other = head(runs(50, 41), { workflow: "other.yml" });
+        await new RunListFile(path).save(() => [other], 0);
+
+        expect(await file.load("example/repo", "other.yml")).toEqual(other);
+      });
+
       it("drops a head that records a time later than the present", async () => {
         const later = Date.now() + 60_000;
         await write({
@@ -233,6 +363,23 @@ describe("RunListFile", () => {
           names.push(entry.name);
         }
         expect(names.sort()).toEqual(["run-lists.json", "run-lists.json.lock"]);
+      });
+
+      it("removes the temporary files that interrupted saves left beside the file", async () => {
+        const leftover = `run-lists.json.${crypto.randomUUID()}.tmp`;
+        const other = `other.json.${crypto.randomUUID()}.tmp`;
+        await Deno.writeTextFile(join(directory, leftover), "{");
+        await Deno.writeTextFile(join(directory, other), "{");
+
+        await new RunListFile(path).save(() => [head(runs(30, 21))], 0);
+
+        const names: string[] = [];
+        for await (const entry of Deno.readDir(directory)) {
+          names.push(entry.name);
+        }
+        expect(names.sort()).toEqual(
+          [other, "run-lists.json", "run-lists.json.lock"].sort(),
+        );
       });
 
       it("replaces a file that is not JSON", async () => {

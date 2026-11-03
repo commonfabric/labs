@@ -546,4 +546,113 @@ describe("space access loss notification", () => {
       await client.dispose();
     }
   });
+  describe("a deleted space", () => {
+    /** The refusal of a deleted space, as the memory client rejects with it. */
+    const deletedRefusal = () =>
+      Object.assign(new Error("Space is deleted"), {
+        name: "AuthorizationError",
+        deleted: true as const,
+      });
+
+    it("posts `deleted: true` with the loss of a deleted space, and nothing of the kind with another loss", async () => {
+      const identity = await Identity.fromPassphrase(
+        "processor deleted access loss",
+      );
+      const storage = StorageManager.emulate({ as: identity });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager: storage,
+      });
+      let loss: ((space: MemorySpace, error: Error) => void) | undefined;
+      const subscribe = stub(
+        storage,
+        "subscribeSpaceAccessLoss",
+        (observer) => {
+          loss = observer;
+          return () => {};
+        },
+      );
+      const notices: IPCRemotePost[] = [];
+      const post = stub(ownerClient, "post", (notice) => {
+        notices.push(notice);
+        return true;
+      });
+      const processor = buildProcessor({
+        runtime,
+        identity,
+        space: identity.did(),
+      });
+      try {
+        const other = "did:key:z6Mk-processor-deleted-other" as MemorySpace;
+        loss!(identity.did(), deletedRefusal());
+        loss!(other, new Error("access denied"));
+        expect(notices).toStrictEqual([
+          {
+            type: NotificationType.SpaceAccessLost,
+            space: identity.did(),
+            deleted: true,
+          },
+          { type: NotificationType.SpaceAccessLost, space: other },
+        ]);
+      } finally {
+        await processor.dispose();
+        subscribe.restore();
+        post.restore();
+        await storage.close();
+      }
+    });
+
+    it("tells a render boundary whether a refused space is deleted", async () => {
+      const identity = await Identity.fromPassphrase("render deleted space");
+      const storage = StorageManager.emulate({ as: identity });
+      let current: Error | undefined = deletedRefusal();
+      const read = stub(storage, "spaceAccessError", () => current);
+      try {
+        const provider = renderSpaceAccessProviderFor({
+          storageManager: storage,
+        });
+        expect(provider.deleted?.(identity.did())).toBe(true);
+        current = new Error("access denied");
+        expect(provider.deleted?.(identity.did())).toBe(false);
+        current = undefined;
+        expect(provider.deleted?.(identity.did())).toBe(false);
+      } finally {
+        read.restore();
+        await storage.close();
+      }
+    });
+
+    it("passes the `deleted` marker through the connection and client, and refuses a notice whose marker is not `true`", async () => {
+      const identity = await Identity.fromPassphrase(
+        "deleted access-loss client event",
+      );
+      const transport = new TestTransport();
+      const client = await RuntimeClient.initialize(transport, {
+        identity,
+        apiUrl: new URL("https://fabric.example"),
+        spaceDid: identity.did(),
+      });
+      const observed: unknown[] = [];
+      client.on("spaceaccesslost", (notice) => observed.push(notice));
+      try {
+        const notice = {
+          type: NotificationType.SpaceAccessLost,
+          space: identity.did(),
+          deleted: true,
+        } as const;
+        expect(isSpaceAccessLostNotification(notice)).toBe(true);
+        transport.emit("message", notice);
+        expect(observed).toStrictEqual([{
+          space: identity.did(),
+          deleted: true,
+        }]);
+        for (const deleted of [false, "true", 1, null]) {
+          expect(isSpaceAccessLostNotification({ ...notice, deleted }))
+            .toBe(false);
+        }
+      } finally {
+        await client.dispose();
+      }
+    });
+  });
 });

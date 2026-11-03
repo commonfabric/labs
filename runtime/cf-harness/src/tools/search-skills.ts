@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type {
@@ -104,9 +105,6 @@ export const searchSkillsToolDescriptor: HarnessToolDescriptor = {
   tags: ["skill", "search", "registry"],
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 export const searchSkillsTool: HarnessToolDefinition<
   SearchSkillsToolInput,
   SearchSkillsToolOutput
@@ -130,7 +128,7 @@ export const searchSkillsTool: HarnessToolDefinition<
       client = await context.getSkillsShSearchClient();
     } catch (error) {
       return errorOutput(
-        `skills.sh registry unavailable: ${errorMessage(error)}`,
+        `skills.sh registry unavailable: ${describeFailure(error)}`,
       );
     }
     try {
@@ -146,7 +144,7 @@ export const searchSkillsTool: HarnessToolDefinition<
         rejected: result.rejected,
       };
     } catch (error) {
-      return errorOutput(errorMessage(error));
+      return errorOutput(describeFailure(error));
     }
   },
 };

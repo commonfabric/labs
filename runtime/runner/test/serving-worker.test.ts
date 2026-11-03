@@ -17,6 +17,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
 
 import { type Cell, sendEvent } from "../src/cell.ts";
+import { exposeGarbageCollector } from "../src/collected-memory.ts";
 import { ServingWorker } from "../src/executor/serving-worker-host.ts";
 import type { ServingLoopStats } from "../src/executor/stats.ts";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
@@ -30,6 +31,9 @@ const spaceSigner = await Identity.fromPassphrase("serving worker space");
 const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase("serving worker service");
 const aliceSigner = await Identity.fromPassphrase("serving worker alice");
+
+// Before any worker starts, as a server does.
+exposeGarbageCollector();
 
 const PARENT_PATTERN = `
 import { computed, pattern } from "commonfabric";
@@ -208,5 +212,15 @@ describe("serving-worker", () => {
     expect(countedAtCover?.events.processed).toBe(1);
     // The events post updates the last full copy rather than replacing it.
     expect(countedAtCover?.activeSpaces).toBe(1);
+  });
+
+  it("reports the memory of the worker's isolate after a collection, which leaves out what this thread holds", async () => {
+    const size = 64 * 1024 * 1024;
+    const before = await worker.collectedMemory();
+    expect(before.heapUsed).toBeGreaterThan(0);
+    const held = new Uint8Array(size);
+    const during = await worker.collectedMemory();
+    expect(during.external - before.external).toBeLessThan(size);
+    expect(held.length).toBe(size);
   });
 });

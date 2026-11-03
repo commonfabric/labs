@@ -148,7 +148,9 @@ export class ViewPlanPublisher {
    * ends it, over the snapshot that settlement left. `settled` says whether a
    * `read` view has the answer it waits for, and is asked with the list of
    * views already in hand, since that list can hold a view that registered after
-   * the settlement ended.
+   * the settlement ended. Returns whether a `read` view has not settled yet,
+   * which leaves out one the server refused the answer for: a refusal, such as
+   * of a session that lost READ, is no reason to run another cycle.
    */
   async publish(
     runtime: Runtime,
@@ -158,13 +160,14 @@ export class ViewPlanPublisher {
       quiescent?: boolean;
       settled?: (handle: SessionViewHandle) => boolean;
     } = {},
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (this.#runtime !== runtime) {
       this.dispose();
       this.#runtime = runtime;
       runtime.storageManager.subscribe(this.#subscription);
     }
     const live = new Set<string>();
+    let readUnanswered = false;
     const interests = await server.viewInterestsForSpace(space);
     // A read view holds demand and runs nothing, so it consumes no handler
     // observations.
@@ -210,8 +213,12 @@ export class ViewPlanPublisher {
         continue;
       }
       if (view.mode === "read") {
+        if (this.#published.has(key)) continue;
+        if (!settled(handle)) {
+          readUnanswered = true;
+          continue;
+        }
         if (
-          !this.#published.has(key) && settled(handle) &&
           await server.setViewSelection(space, handle, {
             ...SETTLED_READ,
             generation: (interest.selectionGeneration ?? 0) + 1,
@@ -542,5 +549,6 @@ export class ViewPlanPublisher {
     for (const key of this.#views.keys()) {
       if (!live.has(key)) this.#views.delete(key);
     }
+    return readUnanswered;
   }
 }

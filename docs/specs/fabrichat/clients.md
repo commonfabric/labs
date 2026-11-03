@@ -142,6 +142,16 @@ A client that draws natively MUST:
   [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+- **Show a deleted room as deleted, with no controls**: an entry of the
+  manager's `deletedRooms`, or a placement whose `state` is `"deleted"` (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#facts)). Deleting a room is
+  deleting its space, which FabriChat itself offers no way to do. A room
+  declared inside a container's space, as a loom's `chatRoom` is, lives in
+  that space, so it is deleted only together with the container, and
+  everything else the container holds goes with it. Deleting such a room apart
+  from its container is not offered. Once the container's space is deleted,
+  the room is one of the manager's `deletedRooms`, as any room whose space is
+  deleted is.
 
 A client MUST NOT copy a room's contents into any other space, including as a
 cache inside a piece. A copy loses the room's label and is readable by everyone

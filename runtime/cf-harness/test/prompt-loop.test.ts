@@ -7973,6 +7973,178 @@ Deno.test("CfHarnessPromptLoop completes a direct assistant response without too
 });
 
 describe("CfHarnessPromptLoop terminal responses", () => {
+  for (const finalizeOnTurnLimit of [false, true]) {
+    it(`fails a blank finish_task reply with no following tool turn (finalize: ${finalizeOnTurnLimit})`, async () => {
+      let requests = 0;
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: "run-empty-chat-budget",
+          model: "gpt-5.6",
+        }),
+        allowedToolIds: ["finish_task"],
+        maxModelTurns: finalizeOnTurnLimit ? 2 : 1,
+        finalizeOnTurnLimit,
+        fetchFn: (_input, init) => {
+          requests += 1;
+          return Promise.resolve(
+            new Response(JSON.stringify(
+              responsesBodyFromChatFixture({
+                choices: [{ message: { role: "assistant", content: "" } }],
+              }, init?.body),
+            )),
+          );
+        },
+      });
+      await expect(loop.runPrompt({ prompt: "Summarize the notes." }))
+        .rejects.toMatchObject({
+          code: "provider-unavailable",
+          message:
+            "The model returned an empty assistant response with no tool calls",
+        });
+      expect(requests).toBe(1);
+    });
+  }
+
+  for (const ending of ["text", "finish_task", "blank"] as const) {
+    it(`offers finish_task once after a blank reply and records the ${ending} ending`, async () => {
+      const artifactRoot = await Deno.makeTempDir({
+        prefix: "cf-harness-empty-chat-",
+      });
+      const runId = "run-empty-chat";
+      const artifactStore = createFileSystemHarnessArtifactStore({
+        artifactRoot,
+        runId,
+      });
+      const requests: ReturnType<typeof chatViewOfRequest>[] = [];
+      const answer = "Here are the notes.";
+      try {
+        const loop = new CfHarnessPromptLoop({
+          apiKey: "test-key",
+          engine: new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            runId,
+            model: "gpt-5.6",
+            artifactStore,
+          }),
+          allowedToolIds: ["finish_task"],
+          maxModelTurns: 4,
+          fetchFn: (_input, init) => {
+            requests.push(chatViewOfRequest(JSON.parse(String(init?.body))));
+            if (requests.length === 1) {
+              return Promise.resolve(
+                new Response(JSON.stringify({
+                  status: "completed",
+                  output: [{
+                    type: "message",
+                    role: "assistant",
+                    status: "completed",
+                    content: [{ type: "output_text", text: "" }],
+                  }],
+                })),
+              );
+            }
+            return Promise.resolve(
+              new Response(JSON.stringify(
+                responsesBodyFromChatFixture({
+                  choices: [{
+                    message: {
+                      role: "assistant",
+                      content: ending === "text" ? answer : " \n",
+                      ...(ending === "finish_task"
+                        ? {
+                          tool_calls: [{
+                            id: "call-finish",
+                            type: "function",
+                            function: {
+                              name: "finish_task",
+                              arguments: JSON.stringify({
+                                outcome: "completed",
+                                message: answer,
+                              }),
+                            },
+                          }],
+                        }
+                        : {}),
+                    },
+                    finish_reason: "stop",
+                  }],
+                }, init?.body),
+              )),
+            );
+          },
+        });
+
+        const run = loop.runPrompt({
+          prompt: "Summarize the notes.",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+        if (ending === "blank") {
+          await expect(run).rejects.toMatchObject({
+            name: "HarnessControlError",
+            code: "provider-unavailable",
+            message:
+              "The model returned an empty assistant response with no tool calls",
+          });
+        } else {
+          const result = await run;
+          expect(result.runState.status).toBe("completed");
+          expect(result.finalAssistantText).toBe(answer);
+          expect(result.modelTurns).toBe(2);
+        }
+        expect(requests).toHaveLength(2);
+        expect(requests[1].tools).toEqual(["finish_task"]);
+        expect(requests[1].messages).toContainEqual({
+          role: "user",
+          content:
+            "Host completion check: the last turn carried no words and no tool call. Call finish_task with the answer, or with why it cannot be given.",
+        });
+        const report = await readHarnessRunReport(
+          join(artifactStore.runRoot, "run-report.json"),
+        );
+        expect(report.modelTurns).toBe(2);
+        if (ending === "blank") {
+          expect(report.status).toBe("failed");
+          expect(report.terminalReason).toBe("prompt_loop_error");
+          expect(report.primaryFailure?.detail).toBe(
+            "The model returned an empty assistant response with no tool calls",
+          );
+          expect(report.finalAssistantText).toBeUndefined();
+          expect(report.taskOutcome).toBeUndefined();
+        }
+        const emptyArtifacts = [];
+        for await (const entry of Deno.readDir(artifactStore.runRoot)) {
+          if (entry.name.endsWith("-empty-reply.json")) {
+            emptyArtifacts.push(entry.name);
+          }
+        }
+        expect(emptyArtifacts).toHaveLength(ending === "blank" ? 2 : 1);
+        const firstArtifact = emptyArtifacts.find((name) =>
+          name.startsWith("model-turn-1-")
+        );
+        expect(firstArtifact).toBeDefined();
+        const diagnostic = JSON.parse(
+          await Deno.readTextFile(
+            join(artifactStore.runRoot, firstArtifact!),
+          ),
+        );
+        expect(diagnostic).toMatchObject({
+          modelTurn: 1,
+          modelAttemptSequence: 1,
+          diagnostic: {
+            decision: {
+              reason: "no-non-whitespace-text-or-tool-calls",
+              toolCallCount: 0,
+            },
+          },
+        });
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+  }
+
   for (const model of ["claude-sonnet-5", "gpt-5.6"]) {
     for (const content of ["", " \n\t"]) {
       it(`fails a blank ${model} reply and retains its diagnostics (${JSON.stringify(content)})`, async () => {
@@ -7995,6 +8167,7 @@ describe("CfHarnessPromptLoop terminal responses", () => {
               model,
               artifactStore,
             }),
+            allowedToolIds: ["read_file"],
             fetchFn: (_input, init) => {
               requests += 1;
               return Promise.resolve(

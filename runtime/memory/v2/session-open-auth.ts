@@ -36,6 +36,7 @@ import {
   delegationCovers,
   verifyDelegation,
 } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 import { type ClientInfo, parseClientInfo } from "./client-info.ts";
@@ -403,7 +404,7 @@ export const verifySessionOpenProofs = async (
       delegation = await decodeDelegation(proof.slice());
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
     if (cids !== undefined && cids[i] !== delegation.cid) {
@@ -446,7 +447,7 @@ export const verifySessionOpenProofs = async (
       await verifyDelegation(delegation);
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
   }

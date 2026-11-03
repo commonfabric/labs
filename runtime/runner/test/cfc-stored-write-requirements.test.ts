@@ -308,7 +308,9 @@ describe("stored write requirements", () => {
         },
         required: ["out"],
       }, { out: "unapproved" });
-      expect(refusalOf(result)).toContain("requiredIntegrity failed at /out");
+      // The write path's own read of `/out` gates nothing (§18.6.2), so no
+      // read feeds the write and the write floor is what refuses it.
+      expect(refusalOf(result)).toContain("write floor failed at /out");
     });
 
     it("refuses a writer whose schema declares nothing at the path when the floor is the only claim stored there", async () => {

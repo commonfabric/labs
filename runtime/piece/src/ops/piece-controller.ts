@@ -459,7 +459,7 @@ export function pinnedSourceMoved(
   pinned: { identity: string; symbol: string } | undefined,
 ): unknown {
   if (pinned === undefined) return error;
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   if (!message.includes(PIECE_SOURCE_MOVED)) return error;
   return new PieceSourceChangedError(
     `The piece moved off ${pinned.identity}#${pinned.symbol} before the ` +
@@ -1950,7 +1950,7 @@ function linkMatchesCommittedState(
 function incompatibleLinkError(displayPath: string, cause: unknown): Error {
   return new Error(
     `input link at ${displayPath} schema is not compatible: ${
-      cause instanceof Error ? cause.message : String(cause)
+      describeFailure(cause)
     }`,
   );
 }
@@ -3393,7 +3393,7 @@ class PiecePropIo implements PieceCellIo {
         } catch (error) {
           throw new Error(
             `updated ${this.#type} does not match its write destination: ${
-              error instanceof Error ? error.message : String(error)
+              describeFailure(error)
             }`,
           );
         }
@@ -4891,9 +4891,7 @@ export class PieceController<T = unknown> {
                     previous.pattern?.argumentSchema,
                   );
                 } catch (error) {
-                  const message = error instanceof Error
-                    ? error.message
-                    : String(error);
+                  const message = describeFailure(error);
                   if (acceptedReview?.issues.retainedLinks === message) return;
                   throw error;
                 }
@@ -5498,7 +5496,7 @@ function assertPieceSourceRetainedLinksCompatible(
   } catch (error) {
     throw new Error(
       RETAINED_INPUT_COMPATIBILITY_PREFIX +
-        (error instanceof Error ? error.message : String(error)),
+        describeFailure(error),
       { cause: error },
     );
   }
@@ -5671,7 +5669,7 @@ async function pieceSourceCompatibilityReview(
     try {
       assertPatternSchemasBackwardCompatible(previous.pattern, candidate);
     } catch (error) {
-      schema = error instanceof Error ? error.message : String(error);
+      schema = describeFailure(error);
     }
   }
   if (schema !== undefined && !options.gatedRelease) issues.schema = schema;
@@ -5699,9 +5697,7 @@ async function pieceSourceCompatibilityReview(
       previous.pattern?.argumentSchema,
     );
   } catch (error) {
-    issues.retainedLinks = error instanceof Error
-      ? error.message
-      : String(error);
+    issues.retainedLinks = describeFailure(error);
   }
 
   const cfc = pieceSourceCfcEnvelopeIssue(

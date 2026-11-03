@@ -19,6 +19,8 @@ const SECTION_FIRST =
 export const iniLanguage: Language = {
   id: "ini",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

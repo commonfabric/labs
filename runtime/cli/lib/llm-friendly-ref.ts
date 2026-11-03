@@ -30,6 +30,7 @@ import { ValidationError } from "@cliffy/command";
 import type { CellScope } from "@commonfabric/api";
 import { legacySpaceDid, type Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isPieceHandle,
   linkPathSegmentToCellPathSegment,
@@ -181,7 +182,7 @@ export function splitArgumentSuffix(
     parsed = parseCellReference(reference);
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }
@@ -232,7 +233,7 @@ export function normalizeLLMFriendlyRef(
     );
   } catch (error) {
     throw new ValidationError(
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
       { exitCode: 1 },
     );
   }

@@ -835,7 +835,10 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
  * own message's place by key.
  */
 export interface MessageFacts {
-  /** Every stored message, in the order recorded. */
+  /**
+   * Every stored message the room can read (see `messageEntries()`), in the
+   * order recorded.
+   */
   entries: MessageEntry[];
 
   /**
@@ -999,7 +1002,10 @@ export interface ChatThreadSummary {
 
 /** A room's messages: facts, the newest, and its threads. */
 export interface ChatMessageList {
-  /** How many messages the room holds, obliterated tombstones included. */
+  /**
+   * How many messages the room holds, obliterated tombstones included, and
+   * those it can't read left out (see `messageEntries()`).
+   */
   count: number;
 
   /** The oldest message's `sentAt`; absent while there are none. */
@@ -1142,15 +1148,19 @@ export interface ChatRoomView {
   /** The room's messages. */
   messages: ChatMessageList;
 
-  /** Whether this reader can send, edit, delete, and react. */
+  /**
+   * Whether this reader can send, edit, delete, and react. Absent until this
+   * session has derived it.
+   */
   canSend: PerSession<boolean>;
 
   /** Who is reading the room: their profile, its principal, and their access. */
   viewer: PerSession<ChatRoomViewer>;
 
   /**
-   * What this reader may do to each of the room's messages, oldest first.
-   * Nothing at all while `canSend` doesn't hold.
+   * What this reader may do to each of the room's messages, oldest first: one
+   * entry per message, all `false` while `canSend` doesn't hold. Absent until
+   * this session has derived it.
    */
   messageRights: PerSession<ChatMessageRights[]>;
 
@@ -1566,10 +1576,10 @@ export const FabriChatRoomCore = pattern<
   // sessions would let one whose profile hasn't resolved tell another, whose
   // profile has, that it can't send. Each binding's name is its cause, the
   // identity of the document that stores it, so renaming one moves its data.
-  // It defaults to `false`, which a reader reads until this session has
-  // derived it.
+  // It has no default: `false` is the answer for a reader who can't send, so
+  // until this session has derived it, a reader reads it absent.
   const canSendForSession = computed(
-    (): PerSession<boolean | Default<false>> => canActIn(messages, myProfile),
+    (): PerSession<boolean> => canActIn(messages, myProfile),
   );
   const addMember = AddMember({
     room: messages,
@@ -1608,8 +1618,10 @@ export const FabriChatRoomCore = pattern<
   });
   // Display rights use the selected profile's owner. Handlers check
   // the authenticated actor, whose identity is available only in a handler.
+  // It has no default: an empty list is the answer for a room with no
+  // messages, so until this session has derived it, a reader reads it absent.
   const messageRightsForSession = computed(
-    (): PerSession<ChatMessageRights[] | Default<[]>> => {
+    (): PerSession<ChatMessageRights[]> => {
       const profile = viewerProfileOf(myProfile);
       const reader = profile === undefined
         ? undefined
@@ -1640,7 +1652,8 @@ export const FabriChatRoomCore = pattern<
       const editing = composer.get()?.editing;
       const editingKey = editing === undefined ? undefined : viewKeyOf(editing);
       const byKey: Record<string, RowFacts> = {};
-      for (const rights of messageRightsForSession) {
+      // Until the session's rights are derived, no row offers a control.
+      for (const rights of messageRightsForSession ?? []) {
         const key = viewKeyOf(rights.message);
         if (key === undefined) continue;
         byKey[key] = {

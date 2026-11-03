@@ -1,4 +1,5 @@
 import { createSession, Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   applyPieceSourceTransition,
   getPieceSourceRevisions,
@@ -121,7 +122,7 @@ try {
   };
 } catch (error) {
   outcome = {
-    error: error instanceof Error ? error.message : String(error),
+    error: describeFailure(error),
   };
 }
 await runtime.dispose();

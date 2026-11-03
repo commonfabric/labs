@@ -24,6 +24,7 @@ import {
   sendEvent,
   transactionFailureMessage,
 } from "@commonfabric/runner";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { loadPiecePattern } from "./ops/piece-controller.ts";
 import { nearestName } from "./refusal.ts";
@@ -357,9 +358,7 @@ export async function callVerb(
   } catch (error) {
     return {
       status: "refused",
-      message: `could not read the piece's pattern: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `could not read the piece's pattern: ${describeFailure(error)}`,
     };
   }
   const verbs = resultVerbs(pattern);
@@ -405,7 +404,7 @@ export async function callVerb(
     return {
       status: "failed",
       message: `the event for "${verb}" could not be sent: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -437,7 +436,7 @@ export async function callVerb(
     return {
       ...settled,
       receipt: committed.receipt,
-      unread: error instanceof Error ? error.message : String(error),
+      unread: describeFailure(error),
     };
   }
   return {
