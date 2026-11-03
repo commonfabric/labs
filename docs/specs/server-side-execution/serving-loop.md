@@ -580,11 +580,13 @@ mid-wave belong to the NEXT wave — natural double-buffering, no timers):
   // settle that follows (anchor: facade.ts #processExecuteEventPhases):
   // the demanded derivations several events invalidate run once over
   // all of them, which is where a wave of several events coalesces;
-  // a head the preflight parks on its loads behind events the pass
-  // ran ends the pass without its settle, which the pass the park's
-  // end queues runs behind it (the park ends on its loads' release, on
-  // a failed load, or on a drop of the parked head; events.md §2 says
-  // what a deadline that comes first commits), and an event the
+  // a head waiting on loads behind events the pass ran, parked on its
+  // closure's by the preflight or held for its handler's input presync,
+  // ends the pass without its settle, which the pass the wait's end
+  // queues runs behind it (the wait ends on its loads' release, on a
+  // failed load, on the presync's settlement, or on a drop of the
+  // waiting head; events.md §2 says what a deadline that comes first
+  // commits), and an event the
   // preflight holds for an invalid input ends the run of handlers, so
   // the settle runs that input first.
   run scheduler to QUIESCENCE — scheduler.idle()

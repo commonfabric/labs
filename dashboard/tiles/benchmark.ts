@@ -124,6 +124,7 @@ import {
   performanceViewHref,
   performanceViewNav,
 } from "../performance-views.ts";
+import { VERSION_CLIENT } from "../version.ts";
 import {
   distinctTrendDays,
   trendPct,
@@ -2122,14 +2123,15 @@ ${DASHBOARD_THEME_HEAD}
     escapeHtml(stat.label)
   }"><input type="hidden" name="sort" value="${sort}"><label class="field" for="days">window <output id="daysv" for="days">${days} day${
     days === 1 ? "" : "s"
-  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
+  }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}" autocomplete="off"></label><nav class="choice-group" aria-label="Benchmark metric"><span class="lbl">metric</span>${statSel}</nav><nav class="choice-group" aria-label="Sort benchmarks"><span class="lbl">sort</span>${sortSel}</nav><label class="check trailing"><input type="checkbox" id="key-only" name="key" value="1"${options.keyOnly ? " checked" : ""}> key only</label><label class="check"><input type="checkbox" id="hg"> hide green</label></form>
   ${rangeContent}
 ${dashboardThemeToggle()}
 ${DASHBOARD_THEME_CLIENT}
 <script>
+  ${VERSION_CLIENT}
   const hg = document.getElementById("hg"), days = document.getElementById("days"), daysv = document.getElementById("daysv"), controls = days.form, KEY = "benchHideGreen", DEFAULT_DAYS = days.value;
   let rangeContent = document.getElementById("range-content"), fetchProgress = document.getElementById("fetch-progress"), title = document.getElementById("fetch-title"), total = document.getElementById("fetch-total"), detail = document.getElementById("fetch-detail"), bar = document.getElementById("fetch-bar"), pageVersion = fetchProgress.dataset.snapshotVersion, appliedDays = days.value;
-  let navigating = false, pendingRefresh = false, checking = false, eventStream = null, connectedProgressUrl = "", serverVersionChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
+  let navigating = false, pendingRefresh = false, checkRequest = null, eventStream = null, connectedProgressUrl = "", snapshotChanged = false, collectionFailed = false, transportFailed = false, rangeRequest = null, rangeRequestDays = "", rangeSequence = 0, viewRevision = 0;
   const apply = () => document.body.classList.toggle("hide-green", hg.checked);
   hg.checked = sessionStorage.getItem(KEY) === "1";
   apply();
@@ -2188,6 +2190,8 @@ ${DASHBOARD_THEME_CLIENT}
   window.addEventListener("pagehide", () => {
     navigating = true;
     rangeRequest?.abort();
+    checkRequest?.abort();
+    checkRequest = null;
     eventStream?.close();
   });
   const renderIdle = (lastRequestError = fetchProgress.dataset.lastRequestError || "") => {
@@ -2267,7 +2271,7 @@ ${DASHBOARD_THEME_CLIENT}
       eventStream?.close();
       eventStream = null;
       connectedProgressUrl = "";
-      if (state.needsReload || serverVersionChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
+      if (state.needsReload || snapshotChanged || fetchProgress.dataset.refreshOnComplete === "1") refreshRangeWhenIdle();
       else renderIdle();
     }
   };
@@ -2301,29 +2305,39 @@ ${DASHBOARD_THEME_CLIENT}
     };
   };
   const checkForUpdates = async () => {
-    if (checking || navigating || document.visibilityState === "hidden") return;
-    checking = true;
+    if (checkRequest || navigating || document.visibilityState === "hidden") return;
+    const controller = new AbortController();
+    checkRequest = controller;
     const revision = viewRevision;
     try {
-      const response = await fetch(fetchProgress.dataset.checkUrl, { headers: { accept: "application/json" } });
+      const response = await fetch(fetchProgress.dataset.checkUrl, {
+        headers: { accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (servedByAnotherVersion(response)) {
+        refreshRangeWhenIdle();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const state = await response.json();
       if (revision !== viewRevision) return;
-      serverVersionChanged ||= state.version !== pageVersion;
+      snapshotChanged ||= state.version !== pageVersion;
       if (state.progress) {
         connectProgress("/bench/runtime-progress?id=" + encodeURIComponent(state.progress.id));
         renderProgress(state.progress);
-      } else if (serverVersionChanged) refreshRangeWhenIdle();
+      } else if (snapshotChanged) refreshRangeWhenIdle();
       else if ("lastRequestError" in state) renderIdle(state.lastRequestError || "");
       else if (!collectionFailed) renderIdle();
     } catch {
+      if (controller.signal.aborted) return;
       if (!eventStream && !collectionFailed && !transportFailed) renderIdle();
     } finally {
-      checking = false;
+      if (checkRequest === controller) checkRequest = null;
     }
   };
   const bindRangeContent = () => {
     viewRevision++;
+    rangeContent.removeAttribute("aria-busy");
     fetchProgress = rangeContent.querySelector("#fetch-progress");
     title = rangeContent.querySelector("#fetch-title");
     total = rangeContent.querySelector("#fetch-total");
@@ -2331,7 +2345,7 @@ ${DASHBOARD_THEME_CLIENT}
     bar = rangeContent.querySelector("#fetch-bar");
     pageVersion = fetchProgress.dataset.snapshotVersion;
     document.body.dataset.snapshotVersion = pageVersion;
-    serverVersionChanged = false;
+    snapshotChanged = false;
     collectionFailed = false;
     transportFailed = false;
     connectedProgressUrl = "";
@@ -2372,6 +2386,13 @@ ${DASHBOARD_THEME_CLIENT}
         headers: { accept: "text/html" },
         signal: controller.signal,
       });
+      if (servedByAnotherVersion(response)) {
+        if (navigating) return;
+        navigating = true;
+        if (mode === "push") location.assign(url.pathname + url.search);
+        else location.reload();
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       const page = new DOMParser().parseFromString(await response.text(), "text/html");
       const replacement = page.getElementById("range-content");
@@ -2418,19 +2439,24 @@ ${DASHBOARD_THEME_CLIENT}
     if (!Number.isFinite(value)) return DEFAULT_DAYS;
     return String(Math.max(Number(days.min), Math.min(Number(days.max), Math.floor(value))));
   };
-  window.addEventListener("popstate", () => {
-    restoreKeyOnly();
+  const restoreDays = () => {
     days.value = daysFromLocation();
     daysv.value = days.value + (days.value === "1" ? " day" : " days");
     syncDayLinks();
+  };
+  window.addEventListener("popstate", () => {
+    restoreKeyOnly();
+    restoreDays();
     void loadRange("pop");
   });
   window.addEventListener("pageshow", (event) => {
     navigating = false;
     restoreKeyOnly();
     if (event.persisted) {
+      restoreDays();
       bindRangeContent();
-      void checkForUpdates();
+      if (days.value !== appliedDays) void loadRange("pop");
+      else void checkForUpdates();
     }
   });
   bindRangeContent();

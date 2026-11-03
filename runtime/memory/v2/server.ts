@@ -3962,6 +3962,16 @@ export class Server {
     return state === null ? null : `${state.seq}/${state.opIndex}`;
   }
 
+  /**
+   * The `seq` at which `space`'s ACL document is stored, or 0 when its store
+   * holds none: the `aclRevision` a refusal the ACL's state decided carries
+   * (`04-protocol.md` §4.5.1). It names the same revision for as long as the
+   * document stands, whatever else the space commits meanwhile.
+   */
+  #aclDocumentSeq(engine: Engine.Engine, space: string): number {
+    return Engine.readState(engine, { id: aclDocId(space) })?.seq ?? 0;
+  }
+
   /** Evaluate the ACL policy for a message. Returns `null` when the message
    *  may proceed and a typed error when it must be rejected. In `observe`, an
    *  ordinary capability shortfall is counted and logged; invalid ACL state
@@ -4006,7 +4016,10 @@ export class Server {
       return toError(
         "AuthorizationError",
         `Space ${space} has a malformed, ownerless, or retracted ACL`,
-        { permanentEvidence: true, aclRevision: Engine.serverSeq(engine) },
+        {
+          permanentEvidence: true,
+          aclRevision: this.#aclDocumentSeq(engine, space),
+        },
       );
     }
     // Observe mode relaxes ordinary shortfalls only. An OWNER requirement —
@@ -4025,7 +4038,10 @@ export class Server {
     return toError(
       "AuthorizationError",
       `Principal ${principalLabel} lacks ${requirement} on space ${space}`,
-      { permanentEvidence: true, aclRevision: Engine.serverSeq(engine) },
+      {
+        permanentEvidence: true,
+        aclRevision: this.#aclDocumentSeq(engine, space),
+      },
     );
   }
 

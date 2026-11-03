@@ -120,9 +120,10 @@ export default pattern<MailboxInput, MailboxOutput>(
       },
       (f) => ({
         // Row confidentiality = sender ∧ every recipient ∧ the mailbox owner.
-        // (Conjunctive `all()` — `any()` (one OR-clause) unlocks per-user
-        // views once the clause-aware label profile lands; it errors today
-        // rather than silently meaning the wrong thing.)
+        // (Conjunctive `all()`: every participant is an independent
+        // requirement, so a ceiling must list all of them, as the skim query
+        // below does. `any()` would make the row one OR-clause, readable by
+        // the sender, any recipient, or the owner.)
         confidentiality: all(
           principal("mailto", match(f.from_addr, ADDR, { min: 1 })),
           principal("mailto", match(f.to_addrs, ADDR)),

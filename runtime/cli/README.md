@@ -1978,7 +1978,8 @@ instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
 browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
-with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n` (narrowed to one
+caller's or one profile's jobs with `caller=` and `profile=`), stops one with
 `POST /jobs/<id>/cancel`, and watches one with
 `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
 after the job's terminal state. A request's `depth` (`quick`, `standard` or
@@ -1995,6 +1996,17 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+The listing also accepts `contextKey` and `contextValue` together: a simple
+identifier naming a top-level context field, and the string it equals or its
+array contains. The value may be empty and is limited to 4,096 UTF-16 code
+units; names and cursor ids are nonempty and limited to 200. Each filter and
+cursor parameter may occur only once. All filters apply before the limit. The
+response's `nextCursor` is the id of the last returned job when more match, and
+null at the end of retained history; otherwise pass it as `before`, keeping the
+same filters, to read the next page. Jobs added between pages do not shift the
+continuation. An unknown cursor is refused. These are read filters on the
+private socket, not grants of authority over a job.
 
 `interactive` is an optional boolean indicating that a person is waiting.
 Interactive queued jobs start ahead of every queued background job, oldest first

@@ -225,6 +225,7 @@ describe("read-accounting", () => {
       if (event instanceof RuntimeTelemetryEvent) markers.push(event.marker);
     });
     let presynced = false;
+    let selectionsAfterPresync = 0;
     let invoked = false;
     const failure = new Error("selection failed after presync");
     const handler: EventHandler = () => {
@@ -236,7 +237,9 @@ describe("read-accounting", () => {
         const value =
           runtime.getCell<{ value: number }>(space, "source", undefined, tx)
             .get().value;
-        if (presynced) throw failure;
+        // The preflight selects again over what the presync loaded; the
+        // selection after that one is the dispatch's.
+        if (presynced && ++selectionsAfterPresync > 1) throw failure;
         return value === 7;
       },
     };

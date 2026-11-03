@@ -1,6 +1,6 @@
 /**
- * What a FabriChat room's `messageRights` reads before and after a session
- * derives it, from a runtime that runs the room's core directly. A pattern
+ * What a FabriChat room's per-session `messageRights` and `canSend` read
+ * before and after a session derives them, from a runtime that runs the room's core directly. A pattern
  * test reads each value only once its computation has run, so it can't see
  * what a reader reads before then; this reads the room's result after the
  * room starts and before anything pulls its computations.
@@ -37,36 +37,42 @@ describe("room", () => {
     await storage.close();
   });
 
+  /** Runs the room's core over one stored message, and returns its result. */
+  const startRoom = async () => {
+    const space = storage.as.did();
+    const program = await resolveLocalProgram(
+      (resolver) => runtime.harness.resolve(resolver),
+      { main: ROOM_MAIN, root: PATTERNS_ROOT },
+    );
+    const compiled = await runtime.patternManager.compilePattern(
+      { ...program, mainExport: "FabriChatRoomCore" },
+      { space },
+    );
+    // The room's messages are written here as plain data, outside the
+    // room's schema, so its write policy for a stored message doesn't
+    // apply.
+    const tx = runtime.edit();
+    const messages = runtime.getCell(
+      space,
+      "fabrichat-room-message-rights-messages",
+      undefined,
+      tx,
+    );
+    messages.set([{ body: "Hello", sentAt: new FabricEpochNsec(1n) }]);
+    const room = runtime.run(
+      tx,
+      compiled,
+      { messages },
+      runtime.getCell(space, "fabrichat-room-message-rights", undefined, tx),
+    );
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    return room;
+  };
+
   describe("messageRights", () => {
     it("is absent until the session derives it, and then holds one entry per message", async () => {
-      const space = storage.as.did();
-      const program = await resolveLocalProgram(
-        (resolver) => runtime.harness.resolve(resolver),
-        { main: ROOM_MAIN, root: PATTERNS_ROOT },
-      );
-      const compiled = await runtime.patternManager.compilePattern(
-        { ...program, mainExport: "FabriChatRoomCore" },
-        { space },
-      );
-      // The room's messages are written here as plain data, outside the
-      // room's schema, so its write policy for a stored message doesn't
-      // apply.
-      const tx = runtime.edit();
-      const messages = runtime.getCell(
-        space,
-        "fabrichat-room-message-rights-messages",
-        undefined,
-        tx,
-      );
-      messages.set([{ body: "Hello", sentAt: new FabricEpochNsec(1n) }]);
-      const room = runtime.run(
-        tx,
-        compiled,
-        { messages },
-        runtime.getCell(space, "fabrichat-room-message-rights", undefined, tx),
-      );
-      runtime.prepareTxForCommit(tx);
-      expect((await tx.commit().settled).error).toBeUndefined();
+      const room = await startRoom();
 
       // Nothing has pulled the room's computations yet.
       const rights = room.key("messageRights");
@@ -82,6 +88,19 @@ describe("room", () => {
           canObliterate: false,
         }),
       ]);
+    });
+  });
+
+  describe("canSend", () => {
+    it("is absent until the session derives it, and then is `false` for a reader with no profile", async () => {
+      const room = await startRoom();
+
+      // Nothing has pulled the room's computations yet.
+      const canSend = room.key("canSend");
+      expect(canSend.get()).toBeUndefined();
+
+      await canSend.pull();
+      expect(canSend.get()).toBe(false);
     });
   });
 });
