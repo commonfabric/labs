@@ -4583,19 +4583,25 @@ describe("v2-server-acl", () => {
       });
     }
 
-    it("refuses an operator's direct write, in `off` mode too", async () => {
-      await withSpace("direct", "off", async ({ server, store, space }) => {
-        const seq = await deleteElsewhere(store, space, ALICE);
-        const refused = await server.writeDocument(space, "of:doc:direct", {
-          direct: true,
-        }).then(() => undefined, (error: unknown) => error);
-        expect(refused).toBeInstanceOf(Engine.SpaceDeletedError);
-        expect(refused).toMatchObject({
-          message: `Space ${space} is deleted`,
-          aclRevision: seq,
-        });
+    for (const mode of ["off", "enforce"] as const) {
+      it(`refuses an operator's direct write, in \`${mode}\` mode`, async () => {
+        await withSpace(
+          `direct-${mode}`,
+          mode,
+          async ({ server, store, space }) => {
+            const seq = await deleteElsewhere(store, space, ALICE);
+            const refused = await server.writeDocument(space, "of:doc:direct", {
+              direct: true,
+            }).then(() => undefined, (error: unknown) => error);
+            expect(refused).toBeInstanceOf(Engine.SpaceDeletedError);
+            expect(refused).toMatchObject({
+              message: `Space ${space} is deleted`,
+              aclRevision: seq,
+            });
+          },
+        );
       });
-    });
+    }
 
     it("refuses an invitation operation with `space-deleted`", async () => {
       await withSpace("invite", "enforce", async ({ server, store, space }) => {

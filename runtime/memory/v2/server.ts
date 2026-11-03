@@ -5035,12 +5035,6 @@ export class Server {
   ): Promise<Engine.AppliedCommit> {
     return await this.#withSpacePublicationLock(space, async () => {
       const engine = await this.#openEngine(space);
-      // No write path admits a commit to a deleted space, in any mode
-      // (INV-15).
-      const deleted = this.#aclState(engine, space);
-      if (deleted.kind === "deleted") {
-        throw new Engine.SpaceDeletedError(space, deleted.seq);
-      }
       if (this.#aclMode() !== "off") {
         if (id === aclDocId(space)) {
           throw new Engine.ProtocolError(
