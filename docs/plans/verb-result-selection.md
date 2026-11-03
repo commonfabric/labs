@@ -86,9 +86,7 @@ minted later for it, so the sharing is address-level, not object-level: the
 receipt-only branch writes it, the
 `deferForNavigate` branch is the **sole** caller of
 `setupDeferredHandlerResultPattern` (the navigateTo case, not the reactive one),
-and ordinary reactive results go through `runWithStartOwnership`. Other
-`{ resultFor: … }` cells in the same file take a resolved output-redirect spot
-as cause and are **not** receipts — do not pattern-match on `resultFor` alone.
+and ordinary reactive results go through `runWithStartOwnership`.
 
 Tools take a different path — `runtime.run` into a fresh result cell, surfaced
 as `resultRef` — and produce no receipt.
@@ -145,23 +143,22 @@ This is result readback, not invocation history.
 Any scheme for re-deriving a receipt's address has to reproduce this exactly.
 
 ```text
-receipt address = getCell(patternResultCell.space, { resultFor: cause })
-cause           = { ...inputs, $event: tx.dispatchedEventId ?? <random uuid> }
+receipt id = "receipt:" + hashOf({ event: <event id>, stream: <stream link> })
 ```
 
-`inputs` is the handler node's bound closure. The receipt lives in the **pattern
-result cell's space**, not necessarily the caller's, and is created with **no
-scope argument**, so receipts are space-scoped today.
+`handlingReceiptId()` (`runtime/runner/src/scheduler/event-identity.ts`) computes
+it, for a client that handles the event, a serving runtime, and a sender that
+runs nothing. The receipt lives in the **pattern result cell's space**, not
+necessarily the caller's, and receipts are space-scoped.
 
-**`$event` is not the caller's id.** A caller-supplied id is bound to the
+**The event id is not the caller's id.** A caller-supplied id is bound to the
 session that chose it and to the stream it was sent to before it becomes an
 event id: `scopeCallerEventId`
 (`runtime/runner/src/scheduler/event-identity.ts`) hashes
 `{caller, id, path, scope, session, space}` — the id string, the session, and
 the whole stream link — into `evt:caller:<hash>`, and `Cell.send` routes every
-supplied id through it. That binding is deliberate: two verbs sharing input
-bindings must not collide on one receipt, and neither must two callers that
-picked the same word for their own invocation. The hash is deterministic
+supplied id through it. That binding is deliberate: two callers that picked the same word for their own
+invocation must not collide on one receipt. The hash is deterministic
 across processes, so a retry from a fresh CLI invocation derives the same id —
 which is what makes any re-derivation scheme possible at all.
 

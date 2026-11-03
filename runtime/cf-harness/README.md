@@ -1472,7 +1472,7 @@ another.
 The table supports swapping in both directions:
 
 - Outbound, positively-marked address forms become tokens: LLM-friendly link
-  strings, standalone `of:`/`computed:`-schemed entity URIs (any tagged hash
+  strings, standalone `of:`/`computed:`/`receipt:`-schemed entity URIs (any tagged hash
   after the scheme, `fid1:` among them), and whole single-key
   `{"@link": "<address>"}` objects. A bare tagged hash without a scheme is never
   treated as an address — schema hashes, blob ids, and slugs share that

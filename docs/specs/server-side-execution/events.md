@@ -347,9 +347,12 @@ ambient-state one.
   witness stands — in the handler run's own transaction, so the write
   seals into the run's wave with the entry's `consequenced` mark (§4's
   mark/effects atomicity) and rides the same carriage as every other
-  served event-handler write. The cell identity derives from the durable
-  event id alone (`servedReceiptCause`: same event ⇒ same minted cell id),
-  so a sender names the receipt without running the handler. A flag-ON
+  served event-handler write. The cell's id is the `receipt:` scheme over
+  a hash of the durable event id and the stream (`handlingReceiptId()`,
+  RULED 2026-11-03): one event on one stream names one cell, whichever
+  runtime handled it and whoever sent it, so a sender names the receipt
+  without running the handler. A flag-OFF client that handles an event
+  writes the same cell, create-only. A flag-ON
   client's diverted echo publishes that address on its transaction, and
   so does a send with `echo: false`, which queues no echo and starts no
   piece, and the durable-ack coupling settles the sender's callback only
@@ -377,6 +380,15 @@ ambient-state one.
   semantics — never a second write, never an error that fails the wave.
   No create-only mark rides the wave (the invariant above holds); the
   client's own write stays disabled.
+- **The `receipt:` scheme is reserved for these cells, and nothing
+  enforces that yet (RULED 2026-11-03).** It says what a document is, and
+  it is where a later check can refuse authored writes under the flag. Until
+  then a client holding write authority can author a `receipt:` document,
+  and the served handling that finds it takes the no-op above. What stands in
+  is that an event id cannot be predicted before the send; after the append
+  anyone who can read the stream can see it. The stream in the hash is what
+  keeps an id replayed onto another stream from reaching this receipt, a case
+  a write check alone would not stop, since the server writes both.
 - **The drain's own re-scan (stage C tuning, 2026-08-18):** the drain
   queues a pending entry into the serving scheduler AT MOST ONCE until
   the store has spoken for it — a re-drain skips an entry whose earlier

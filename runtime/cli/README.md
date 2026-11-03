@@ -1353,8 +1353,8 @@ still served.
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
 the directory's neighbors are the authority on where a space's file is.
-`--documents` names the instances by id prefix (`of:`, `computed:` or `cid:`),
-and may repeat; the ACL document is never selected. `--scope` restricts the
+`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:` or
+`cid:`), and may repeat; the ACL document is never selected. `--scope` restricts the
 selection to `space`, `user` or `session` instances; repeated or nested prefixes
 count as one selection. The cut is the head of every selected instance unless
 `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the store's own format

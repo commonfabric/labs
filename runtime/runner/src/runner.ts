@@ -205,7 +205,7 @@ import {
 } from "./scheduler.ts";
 import {
   deriveEventKey,
-  servedReceiptCause,
+  handlingReceiptId,
 } from "./scheduler/event-identity.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { CooperativeYield } from "./scheduler/cooperative-yield.ts";
@@ -13319,33 +13319,20 @@ export class Runner {
   }
 
   /**
-   * Helper for the handler paths, which returns the result cell of the
-   * handling caused by `cause`: its receipt, in the space of the handler's
-   * own result cell `patternResultCell`.
+   * Helper for the handler paths, which returns the result cell of a handling:
+   * its receipt, `receiptId` in `space`, which is the space of the handler's
+   * own result cell.
    */
   #handlingReceiptCell(
-    patternResultCell: Cell<any>,
-    cause: Record<string, any>,
+    space: MemorySpace,
+    receiptId: URI,
     tx: IExtendedStorageTransaction,
   ): Cell<unknown> {
-    return this.#runtime.getCell(
-      patternResultCell.space,
-      this.#handlingReceiptCause(cause),
+    return this.#runtime.getCellFromLink(
+      { id: receiptId, path: [], space, scope: "space" },
       undefined,
       tx,
     );
-  }
-
-  /**
-   * Helper for the handler paths, which returns the cause a handling's result
-   * cell derives from, given the cause of the handling itself. Under server
-   * execution that is the event alone, so that the sender of an event can name
-   * the receipt without running the handler (`servedReceiptCause()`).
-   */
-  #handlingReceiptCause(cause: Record<string, any>): Record<string, any> {
-    return this.#runtime.experimental.serverExecution === true
-      ? servedReceiptCause(cause.$event)
-      : { resultFor: cause };
   }
 
   async #handleJavaScriptHandlerResult(
@@ -13356,9 +13343,13 @@ export class Runner {
     frame: Frame,
     patternResultCell: Cell<any>,
     addCancel: AddCancel,
-    cause: Record<string, any>,
+    receiptId: URI,
   ): Promise<any> {
-    const receiptCell = this.#handlingReceiptCell(patternResultCell, cause, tx);
+    const receiptCell = this.#handlingReceiptCell(
+      patternResultCell.space,
+      receiptId,
+      tx,
+    );
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
@@ -13397,8 +13388,8 @@ export class Runner {
     // the same fail-closed stance cfc/grants.ts takes when its gate is off.
     //
     // Under EXPERIMENTAL_SERVER_EXECUTION the receipt IS being written — by the
-    // SERVING side (see the write above). The address is
-    // cause-derived, so the client's diverted ECHO of the same event mints the
+    // SERVING side (see the write above). The address derives from the event
+    // and its stream, so the client's diverted ECHO of the event mints the
     // same address the serving run writes; publishing it on the echo's
     // transaction is what hands an unchanged caller (the CLI verb dispatch) a
     // readable handle on the served outcome. The durable-ack coupling (cell.ts)
@@ -13589,7 +13580,7 @@ export class Runner {
           tx,
           resultPattern,
           patternResultCell.space,
-          cause,
+          receiptId,
           true,
           speculativeConsequence,
           patternResultCell.getAsNormalizedFullLink().id,
@@ -13799,17 +13790,12 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     resultPattern: Pattern,
     resultSpace: MemorySpace,
-    cause: Record<string, any>,
+    receiptId: URI,
     markCreateOnlyResult = false,
     speculativeConsequence?: { eventId: string },
     parentPieceRootId?: string,
   ): DeferredStartResult<any> {
-    const resultCell = this.#runtime.getCell(
-      resultSpace,
-      this.#handlingReceiptCause(cause),
-      undefined,
-      tx,
-    );
+    const resultCell = this.#handlingReceiptCell(resultSpace, receiptId, tx);
     // Recorded before the setup instantiates the result's children: a child
     // asks the chain for the piece its handler belongs to
     // (`#ancestorSystemOrigin`), and the deferred start comes too late for it.
@@ -14087,6 +14073,7 @@ export class Runner {
       // from this same id, so it is as stable across retries as the cause is.
       const eventId = tx.dispatchedEventId ?? crypto.randomUUID();
       const cause = { ...causalInputs, $event: eventId };
+      const receiptId = handlingReceiptId(eventId, streamLink);
       const policyFacingIdentity = resolvePolicyFacingImplementationIdentity(
         module,
         { implementation: fn },
@@ -14186,7 +14173,7 @@ export class Runner {
               return this.#resolvePendingSpaceNamesAndRetry(
                 frame,
                 tx,
-                this.#handlingReceiptCell(resultCell, cause, tx),
+                this.#handlingReceiptCell(resultCell.space, receiptId, tx),
               );
             }
             if ((frame.pendingSpaceAnswers?.size ?? 0) > 0) {
@@ -14202,7 +14189,7 @@ export class Runner {
                 frame,
                 resultCell,
                 addCancel,
-                cause,
+                receiptId,
               );
             };
             // Access-list changes commit on their own, ahead of the handler's
@@ -14252,7 +14239,7 @@ export class Runner {
           return this.#resolvePendingSpaceNamesAndRetry(
             frame,
             tx,
-            this.#handlingReceiptCell(resultCell, cause, tx),
+            this.#handlingReceiptCell(resultCell.space, receiptId, tx),
           ).finally(() => popFrame(frame));
         }
         // The body may also throw on the `undefined` a `spaceDeleted()` call

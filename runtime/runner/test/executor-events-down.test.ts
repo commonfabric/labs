@@ -61,8 +61,8 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import {
   deriveEventKey,
+  handlingReceiptId,
   scopeCallerEventId,
-  servedReceiptCause,
 } from "../src/scheduler/event-identity.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
 import { sourceDocKey } from "../src/compilation-cache/cell-cache.ts";
@@ -3301,12 +3301,19 @@ describe("Phase 3 events-down (serving side)", () => {
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
+    const streamLink = result.key("probe").resolveAsCell()
+      .getAsNormalizedFullLink();
     const durableId = scopeCallerEventId(
       "cas-loss-1",
       "receipt-pin-session",
-      result.key("probe").resolveAsCell().getAsNormalizedFullLink(),
+      streamLink,
     );
-    const taken = probeRuntime.getCell(space, servedReceiptCause(durableId));
+    const taken = probeRuntime.getCellFromLink({
+      id: handlingReceiptId(durableId, streamLink),
+      path: [],
+      space,
+      scope: "space",
+    });
     await probeRuntime.editWithRetry((tx) =>
       taken.withTx(tx).set({ token: "tok-99" })
     );
@@ -3340,7 +3347,7 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(fired.entries[0].status).not.toBe("error");
 
     // The echo published the address the serving run wrote to, which derives
-    // from the event alone.
+    // from the event and its stream.
     const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
     expect(link!.id).toBe(takenId);
