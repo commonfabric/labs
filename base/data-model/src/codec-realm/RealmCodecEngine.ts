@@ -26,7 +26,7 @@ import { type RealmCodecValue, type RealmEncodedValue } from "./interface.ts";
  * refuses one it does not implement.
  *
  * **Cycles are refused and a shared reference survives exactly where nothing
- * beneath it needed encoding**, per Section 1.6 of the formal spec, which
+ * beneath it needed encoding**, per Section 1.6 of `1-fabric-values.md`, which
  * requires an engine to say which of these it does. Section 4 of the realm spec
  * gives both, and the encode and decode sides of the ownership contract are
  * Section 5 -- the half a caller is likeliest to get wrong being that an

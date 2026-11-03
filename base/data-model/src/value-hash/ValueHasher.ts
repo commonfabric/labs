@@ -181,8 +181,8 @@ function getStringRep(value: string) {
  * digest.
  *
  * What it feeds is a value's type-tagged bytes, in the format of the byte-level
- * spec, into a single SHA-256 context; Section 6 of the formal spec has the
- * whole algorithm.
+ * spec, into a single SHA-256 context; Section 6 of `1-fabric-values.md` has
+ * the whole algorithm.
  */
 export class ValueHasher {
   /** Hasher which receives the value's bytes. */

@@ -57,3 +57,9 @@ system, schemas.
   contract each direction carries -- an encoded tree sharing structure with
   the value it came from, and a decoded one carrying no guarantee of being
   usable again.
+
+## Citing these documents
+
+Cite a section by the file name of its document, as in "`1-fabric-values.md`
+Section 2.4". "The formal spec" names the whole series, so it does not say
+which document a section number belongs to.
