@@ -170,9 +170,10 @@ function hashToken(s: string): string {
 }
 
 /**
- * The start every cell database file name of `space` shares, which no other
- * space's begins with: the space's cell databases are the files beside its
- * store whose names start with it.
+ * The start every cell database file name of `space` shares: the space's cell
+ * databases are among the files beside its store whose names start with it.
+ * It is a 32-bit hash of the DID, so another space's can share it, rarely,
+ * and a file named with it is not proof of whose it is.
  */
 export const cellDatabaseFilePrefix = (space: string): string =>
   `cell-${hashToken(space)}-`;
@@ -182,7 +183,8 @@ export const cellDatabaseFilePrefix = (space: string): string =>
  * the resolved scope key: `space` for the default scope, which is left out of
  * the name, or `user:<did>` / `session:<did>:<sid>` for a scoped one, hashed
  * in so each user or session has its own file. The space and id are hashed in
- * so distinct pairs never collide.
+ * too, each to 32 bits and its length, so two distinct pairs share a name
+ * only when both hashes collide.
  */
 export const cellDatabaseFileName = (
   space: string,

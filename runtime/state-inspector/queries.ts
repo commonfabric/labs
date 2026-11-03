@@ -3,7 +3,7 @@
 // required, since those tables are usually absent).
 
 import type { CommitRow, SpaceDb } from "./db.ts";
-import { hasSchedulerBasisTable } from "./db.ts";
+import { hasSchedulerBasisTable, tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 import { isDeletionTombstone } from "@commonfabric/memory/acl";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
@@ -73,18 +73,27 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     }
   }
 
-  const acl = db.prepare(
-    `SELECT h.seq, r.data FROM head h
-     JOIN revision r ON r.branch = h.branch AND r.id = h.id
-       AND r.scope_key = h.scope_key AND r.seq = h.seq
-       AND r.op_index = h.op_index
-     WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE 'of:did:%'
-       AND h.op = 'set'`,
-  ).all<{ seq: number; data: string | null }>();
+  // The op is the revision's, which every store's has: a store from before
+  // the current-op migration has a `head` without one, or none at all.
+  const acl = tableNames(db).includes("head")
+    ? db.prepare(
+      `SELECT h.seq, r.data FROM head h
+       JOIN revision r ON r.branch = h.branch AND r.id = h.id
+         AND r.scope_key = h.scope_key AND r.seq = h.seq
+         AND r.op_index = h.op_index
+       WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE 'of:did:%'
+         AND r.op = 'set'`,
+    ).all<{ seq: number; data: string | null }>()
+    : [];
   let deletion: SpaceSummary["deletion"];
   if (acl.length === 1 && acl[0].data !== null) {
-    const value = (decodeStored(acl[0].data) as { value?: unknown } | null)
-      ?.value;
+    let value: unknown;
+    try {
+      value = (decodeStored(acl[0].data) as { value?: unknown } | null)?.value;
+    } catch {
+      // An ACL document that does not decode holds no tombstone, and the
+      // summary goes on to report the rest of the store.
+    }
     if (isDeletionTombstone(value)) {
       deletion = { by: value.deleted.by, seq: acl[0].seq };
     }

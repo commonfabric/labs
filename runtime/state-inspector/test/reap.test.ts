@@ -40,7 +40,8 @@ describe("reap", () => {
       apply([{ op: "set", id: ACL, value: { value: { [ALICE]: "OWNER" } } }]);
       apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
       engine.database.exec(
-        `CREATE TABLE private_rows (x TEXT); INSERT INTO private_rows VALUES ('a')`,
+        `CREATE TABLE private_rows (x TEXT); INSERT INTO private_rows VALUES ('a');
+         CREATE TABLE "constructor" (x TEXT); INSERT INTO "constructor" VALUES ('a')`,
       );
       apply([{
         op: "set",
@@ -103,6 +104,16 @@ describe("reap", () => {
           check.name
         ),
       ).toContain("private_rows: only the kept rows, unchanged");
+    });
+
+    it("fails a result holding a table the backup lacks", () => {
+      tamper(`CREATE TABLE added (x TEXT); INSERT INTO added VALUES ('a')`);
+      const verification = verifyReap({ result: out, against: store });
+      expect(
+        verification.checks.filter((check) => !check.passed).map((check) =>
+          check.name
+        ),
+      ).toEqual(["every table of the result is in the backup"]);
     });
 
     it("fails a result whose deletion commit was changed", () => {

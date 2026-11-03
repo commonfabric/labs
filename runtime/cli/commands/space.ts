@@ -44,6 +44,7 @@ import {
   planReap,
   ReapRefused,
   reapStore,
+  refuseUnmigratedStore,
 } from "@commonfabric/memory/v2/reap";
 import type { CellScope } from "@commonfabric/memory/v2";
 import {
@@ -822,6 +823,9 @@ export const space = new Command()
       try {
         let plan;
         try {
+          // The plan reads columns a store from before a migration lacks,
+          // so the refusal a run would give comes first.
+          await refuseUnmigratedStore(space.db);
           plan = planReap(space.db);
         } catch (error) {
           if (error instanceof ReapRefused) {
@@ -829,13 +833,11 @@ export const space = new Command()
           }
           throw error;
         }
-        const schema = await storeSchemaRefusals(space.db);
-        const schemaLine = schema.length === 0
-          ? "schema     current; a run would read this store as it is"
-          : `schema     REFUSED: ${schema.join("; ")}`;
-        out(!!options.json, { ...plan, schema }, () => {
+        out(!!options.json, plan, () => {
           console.log(formatReapPlan(plan));
-          console.log(schemaLine);
+          console.log(
+            "schema     current; a run would read this store as it is",
+          );
         });
       } finally {
         space.close();
@@ -856,7 +858,9 @@ export const space = new Command()
     }
     const verification = verifyReap({ result: run.out, against: store });
     out(!!options.json, { ...run, verification }, () => {
-      console.log(formatReapRun(run));
+      // A result that failed its check is removed below, so only one that
+      // passed is reported as a result.
+      console.log(verification.ok ? formatReapRun(run) : formatReapPlan(run));
       console.log("");
       console.log(formatCompactionVerification(verification));
     });

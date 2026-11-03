@@ -125,7 +125,19 @@ export class ACLManager {
    */
   async delete(by: DID): Promise<void> {
     await this.get();
-    await this.#commit((tx) => writeDeletionTombstone(tx, this.#spaceDid, by));
+    try {
+      await this.#commit((tx) =>
+        writeDeletionTombstone(tx, this.#spaceDid, by)
+      );
+    } catch (error) {
+      // `editWithRetry` reports what the write throws as the reason of the
+      // abort it wraps it in, so the refusal is rethrown as itself, for a
+      // caller to tell apart.
+      const reason =
+        ((error as Error).cause as { reason?: unknown } | undefined)
+          ?.reason;
+      throw reason instanceof SpaceMembersRemainError ? reason : error;
+    }
   }
 
   async #write(mutate: (current: ACL | null) => ACL): Promise<ACL> {

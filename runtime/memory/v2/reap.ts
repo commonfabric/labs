@@ -47,7 +47,8 @@ export type ReapPlan = {
    * files beside the live store rather than rows in it, so a reap of a copy
    * cannot reach them: the install that puts the result in place of the live
    * store moves them out of the live directory, beside the live store it
-   * moves aside.
+   * moves aside. It is a hash, which another space's cell databases can
+   * share, rarely (`cellDatabaseFilePrefix()`).
    */
   cellDatabaseFilePrefix: string;
 };
@@ -68,16 +69,21 @@ const ACL_ID_PATTERN = "of:did:%";
  * Each table whose rows a reap may keep, with the condition a kept row meets,
  * over the named parameters `:acl` (the ACL document's id), `:seq` (the
  * deletion commit's) and the deletion commit's `:invocation` and
- * `:authorization` refs. Every other table is emptied.
+ * `:authorization` refs. Every other table is emptied. A ref compares with
+ * `IS`, so a commit that references none keeps no row: `=` against `NULL` is
+ * unknown, and `NOT` of unknown would keep every row.
  */
-const KEPT: Readonly<Record<string, string>> = {
-  "commit": `seq = :seq`,
-  invocation: `ref = :invocation`,
-  authorization: `ref = :authorization`,
-  revision: `branch = '' AND id = :acl AND scope_key = 'space' AND seq = :seq`,
-  head: `branch = '' AND id = :acl AND scope_key = 'space'`,
-  branch: `name = ''`,
-};
+const KEPT: ReadonlyMap<string, string> = new Map([
+  ["commit", `seq = :seq`],
+  ["invocation", `ref IS :invocation`],
+  ["authorization", `ref IS :authorization`],
+  [
+    "revision",
+    `branch = '' AND id = :acl AND scope_key = 'space' AND seq = :seq`,
+  ],
+  ["head", `branch = '' AND id = :acl AND scope_key = 'space'`],
+  ["branch", `name = ''`],
+]);
 
 /** The quoted name of `table`, for SQL. */
 const quoted = (table: string): string => `"${table.replaceAll('"', '""')}"`;
@@ -110,7 +116,26 @@ type KeptParameters = {
 };
 
 /**
- * Plans the reap of the store `db` holds, read-only: what it keeps, and how
+ * Refuses the store `db` holds when it predates a migration the server runs
+ * on opening it: a reap takes only a store the server has opened, and plans
+ * over the columns that store has.
+ *
+ * @throws ReapRefused naming each migration the store predates.
+ */
+export const refuseUnmigratedStore = async (db: Database): Promise<void> => {
+  const migrations = await storeSchemaRefusals(db);
+  if (migrations.length > 0) {
+    throw new ReapRefused(
+      `${
+        migrations.join("; ")
+      }: the store predates a migration the server runs on opening it, and a reap takes only a store the server has opened`,
+    );
+  }
+};
+
+/**
+ * Plans the reap of the store `db` holds, read-only, once
+ * {@link refuseUnmigratedStore} has passed it: what it keeps, and how
  * many rows of each table it removes.
  *
  * @throws ReapRefused when the store is not a deleted space's: its ACL
@@ -152,22 +177,23 @@ const planWithParameters = (
       `${acl.id} holds no deletion tombstone: only a deleted space's store is reaped`,
     );
   }
-  const latest = db.prepare(`SELECT MAX(seq) AS seq FROM "commit"`).get<
-    { seq: number | null }
-  >()?.seq ?? 0;
-  if (latest !== acl.seq) {
-    throw new ReapRefused(
-      `commit ${latest} follows the deletion commit ${acl.seq}; no server admits a commit to a deleted space, so this store is not one a server wrote`,
-    );
-  }
+  // The deletion commit is the newest: no server admits one after it.
   const deletion = db.prepare(
-    `SELECT invocation_ref, authorization_ref FROM "commit" WHERE seq = ?`,
-  ).get<{ invocation_ref: string | null; authorization_ref: string | null }>(
-    acl.seq,
-  );
-  if (deletion === undefined) {
+    `SELECT seq, invocation_ref, authorization_ref FROM "commit"
+     ORDER BY seq DESC LIMIT 1`,
+  ).get<{
+    seq: number;
+    invocation_ref: string | null;
+    authorization_ref: string | null;
+  }>();
+  if (deletion === undefined || deletion.seq < acl.seq) {
     throw new ReapRefused(
       `the deletion commit ${acl.seq} is not in the commit log`,
+    );
+  }
+  if (deletion.seq !== acl.seq) {
+    throw new ReapRefused(
+      `commit ${deletion.seq} follows the deletion commit ${acl.seq}; no server admits a commit to a deleted space, so this store is not one a server wrote`,
     );
   }
   const parameters: KeptParameters = {
@@ -178,7 +204,7 @@ const planWithParameters = (
   };
   const removed: Record<string, number> = {};
   for (const table of tablesOf(db)) {
-    const kept = KEPT[table];
+    const kept = KEPT.get(table);
     const count = db.prepare(
       kept === undefined
         ? `SELECT COUNT(*) AS n FROM ${quoted(table)}`
@@ -229,14 +255,7 @@ export const reapStore = async (
   let planned: { plan: ReapPlan; parameters: KeptParameters };
   const source = new Database(store, { readonly: true });
   try {
-    const migrations = await storeSchemaRefusals(source);
-    if (migrations.length > 0) {
-      throw new ReapRefused(
-        `${
-          migrations.join("; ")
-        }: the store predates a migration the server runs on opening it, and a reap takes only a store the server has opened`,
-      );
-    }
+    await refuseUnmigratedStore(source);
     planned = planWithParameters(source);
     source.prepare(`VACUUM main INTO ?`).run(out);
   } finally {
@@ -249,7 +268,7 @@ export const reapStore = async (
     result.exec("PRAGMA foreign_keys = OFF");
     result.transaction(() => {
       for (const table of tablesOf(result)) {
-        const kept = KEPT[table];
+        const kept = KEPT.get(table);
         if (kept === undefined) {
           result.exec(`DELETE FROM ${quoted(table)}`);
         } else {
@@ -279,9 +298,10 @@ export const formatReapPlan = (plan: ReapPlan): string => {
         removed.map(([table, n]) => `${table} ${n.toLocaleString("en-US")}`)
           .join(", ")
       }`,
-    `cells      the space's cell databases are the files beside the live ` +
-    `store named ${plan.cellDatabaseFilePrefix}*.sqlite; the install moves ` +
-    "them out of the live directory, beside the live store it moves aside",
+    `cells      the space's cell databases are among the files beside the ` +
+    `live store named ${plan.cellDatabaseFilePrefix}*.sqlite, a hash ` +
+    "another space's can share; the install moves them out of the live " +
+    "directory, beside the live store it moves aside",
   ].join("\n");
 };
 

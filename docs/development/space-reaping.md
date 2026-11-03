@@ -45,18 +45,28 @@ sha256sum '/data/replaced/<did>.pre-reap-<date>.sqlite'
 
 # 3. Reap a COPY of the backup into a fresh result. The command checks the
 #    result against the copy and exits nonzero, leaving no result, when a
-#    check fails.
-cp '/data/replaced/<did>.pre-reap-<date>.sqlite' /data/replaced/<did>.work.sqlite
-cf space reap /data/replaced/<did>.work.sqlite \
-  --out '/data/replaced/<did>.reaped.sqlite'
-rm /data/replaced/<did>.work.sqlite
+#    check fails. Go on to the swap only when it exits 0: the swap moves the
+#    live store aside before installing the result, and a server finding no
+#    store gives the DID a fresh space.
+cp '/data/replaced/<did>.pre-reap-<date>.sqlite' '/data/replaced/<did>.work.sqlite'
+if cf space reap '/data/replaced/<did>.work.sqlite' \
+  --out '/data/replaced/<did>.reaped.sqlite'; then
+  echo 'reaped; go on to step 4'
+else
+  echo 'the reap failed; stop here, with every instance stopped'
+fi
+rm '/data/replaced/<did>.work.sqlite'
 
 # 4. Swap, as the compaction procedure's step 6 does, and move the space's
 #    cell databases aside too: the report names their prefix,
-#    cell-<hash>-, and a reap of a copy cannot reach them. (sudo.)
+#    cell-<hash>-, and a reap of a copy cannot reach them. (sudo.) The
+#    prefix is a 32-bit hash of the DID, which another space's cell
+#    databases can share, rarely; the mv moves such a file aside with the
+#    rest, never deletes it, and moving it back restores it. When the ls
+#    finds no cell database, leave the pattern out of the mv.
 cd /data/memory/engine-v3/engine-v3/
-ls -la '<did>.sqlite'* cell-<hash>-*.sqlite
-sudo mv '<did>.sqlite'* cell-<hash>-*.sqlite /data/replaced/
+ls -la '<did>.sqlite'* 'cell-<hash>-'*.sqlite
+sudo mv '<did>.sqlite'* 'cell-<hash>-'*.sqlite /data/replaced/
 sudo install -o deploy -g deploy -m 644 '/data/replaced/<did>.reaped.sqlite' '<did>.sqlite'
 
 # 5. Start them all, and confirm the space reads as deleted. (sudo.)

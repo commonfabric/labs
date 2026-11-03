@@ -29,16 +29,23 @@ export type ReapVerification = StoreVerification & {
  * (`:seq`), the ACL document's id (`:acl`) and the commit's invocation and
  * authorization refs. A table not named here keeps none.
  */
-const KEPT: Readonly<Record<string, string>> = {
-  "commit": `seq = :seq`,
-  invocation:
+const KEPT: ReadonlyMap<string, string> = new Map([
+  ["commit", `seq = :seq`],
+  [
+    "invocation",
     `ref IN (SELECT invocation_ref FROM against."commit" WHERE seq = :seq)`,
-  authorization:
+  ],
+  [
+    "authorization",
     `ref IN (SELECT authorization_ref FROM against."commit" WHERE seq = :seq)`,
-  revision: `branch = '' AND id = :acl AND scope_key = 'space' AND seq = :seq`,
-  head: `branch = '' AND id = :acl AND scope_key = 'space'`,
-  branch: `name = ''`,
-};
+  ],
+  [
+    "revision",
+    `branch = '' AND id = :acl AND scope_key = 'space' AND seq = :seq`,
+  ],
+  ["head", `branch = '' AND id = :acl AND scope_key = 'space'`],
+  ["branch", `name = ''`],
+]);
 
 /** The members of `parameters` that `sql` names, which is all SQLite accepts
  * for its statement. */
@@ -58,7 +65,8 @@ const quoted = (table: string): string => `"${table.replaceAll('"', '""')}"`;
  * store it was reaped from: the result passes its integrity and foreign-key
  * checks, the backup's ACL document holds a deletion tombstone at the server
  * sequence, every row the reap keeps is in the result exactly as in the
- * backup, and the result holds no other row of any table.
+ * backup, and the result holds no other row of any table, nor any table the
+ * backup lacks.
  */
 export function verifyReap(
   options: { result: string; against: string },
@@ -152,8 +160,14 @@ export function verifyReap(
       lost.length === 0,
       lost.length === 0 ? "all present" : `missing: ${lost.join(", ")}`,
     );
+    const added = [...resultTables].filter((table) => !backupTables.has(table));
+    check(
+      "every table of the result is in the backup",
+      added.length === 0,
+      added.length === 0 ? "none added" : `added: ${added.join(", ")}`,
+    );
     for (const table of [...resultTables].filter((t) => backupTables.has(t))) {
-      const kept = KEPT[table] ?? "0";
+      const kept = KEPT.get(table) ?? "0";
       const named = parametersOf(kept, parameters);
       const extra = main.get<{ n: number }>(
         `SELECT COUNT(*) AS n FROM (

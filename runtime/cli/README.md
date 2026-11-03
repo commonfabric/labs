@@ -1340,15 +1340,15 @@ print.
 
 `cf space compact <store.sqlite> --documents <prefix> [--out <path>]` compacts a
 space store's revision history and writes the result as a fresh file. It is
-[the compaction plan](../../docs/plans/compact-space.md)'s tool, the one
-`cf space` command that rewrites a store's rows rather than copying or restoring
-a file. The write path runs offline against a copy of a backup, never against a
-file a server has open: the operator stops the owning instance, takes the
-backup, compacts a copy of it, verifies the result against the backup, and
-installs it, in the order that plan's §4 gives. `--dry-run` prints the report
-below and writes nothing; `--verify` checks a result against its backup; both
-open their files read-only and may be run on a snapshot taken while the space is
-still served.
+[the compaction plan](../../docs/plans/compact-space.md)'s tool, and with
+`cf space reap` one of the two `cf space` commands that rewrite a store's rows
+rather than copying or restoring a file. The write path runs offline against a
+copy of a backup, never against a file a server has open: the operator stops the
+owning instance, takes the backup, compacts a copy of it, verifies the result
+against the backup, and installs it, in the order that plan's §4 gives.
+`--dry-run` prints the report below and writes nothing; `--verify` checks a
+result against its backup; both open their files read-only and may be run on a
+snapshot taken while the space is still served.
 
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
@@ -1432,15 +1432,18 @@ part of the plan. `--json` emits the same report as JSON.
 `cf space reap <store.sqlite> [--out <path>]` reclaims a deleted space's storage
 ([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
 It takes only a store whose access-control document holds a deletion tombstone,
-and refuses any other, a store with a commit after the deletion, a store held
-open, one the server would migrate on opening it, and a result path that exists
-or sits in a served directory. It reads the store, a copy of the space's backup,
-without writing it, and writes the result fresh, `<store>.reaped.sqlite` beside
-it by default. The result keeps the deletion commit's row, the invocation and
-authorization rows it references, the deletion tombstone's revision and head
-rows, and the default branch's row; every other row of every table goes. So the
-space goes on refusing every principal as deleted, under the same `aclRevision`,
-and its server sequence stays the deletion commit's.
+and refuses any other, a store with a commit after the deletion, a store with a
+log beside it that is not empty (which a process holding it open in WAL mode
+leaves, though not every open store has one), one the server would migrate on
+opening it, and a result path that exists or sits in a served directory. That
+the store is a copy nothing has open is the procedure's to ensure. It reads the
+store, a copy of the space's backup, without writing it, and writes the result
+fresh, `<store>.reaped.sqlite` beside it by default. The result keeps the
+deletion commit's row, the invocation and authorization rows it references, the
+deletion tombstone's revision and head rows, and the default branch's row; every
+other row of every table goes. So the space goes on refusing every principal as
+deleted, under the same `aclRevision`, and its server sequence stays the
+deletion commit's.
 
 Before it reports, the command checks the result against the store it was reaped
 from, read-only on both: integrity and foreign keys; the store's access-control
@@ -1448,10 +1451,11 @@ document a deletion tombstone at the server sequence; and, for every table, the
 kept rows byte-identical and no other row. A result that fails a check is
 removed and the command exits nonzero. `--dry-run` reports what would be kept
 and removed, and writes nothing. The space's cell databases are files beside the
-live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, and the
-install that puts the result in place of the live store moves them out of the
-live directory, beside the live store it moves aside. `cf inspect summary` reads
-a reaped store as the deleted space it is.
+live store, not in it, so the report names them, `cell-<hash>-*.sqlite`, a
+32-bit hash of the DID that another space's can share, rarely, and the install
+that puts the result in place of the live store moves them out of the live
+directory, beside the live store it moves aside. `cf inspect summary` reads a
+reaped store as the deleted space it is.
 
 ## Creating a space
 

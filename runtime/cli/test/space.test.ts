@@ -419,6 +419,87 @@ INSERT INTO head (branch, id, seq, op_index) VALUES ('', 'computed:x', 3, 0);
   });
 });
 
+describe("cf space reap", () => {
+  const space = "did:key:z6MkCliReapSpace";
+  const alice = "did:key:z6MkCliReapAlice";
+
+  /** A store the engine wrote for a space alice owns alone, with a document,
+   * and then, with `deleted`, deleted. */
+  async function spaceStore(path: string, deleted: boolean): Promise<void> {
+    const engine = await open({ url: toFileUrl(path) });
+    let local = 1;
+    const apply = (operations: unknown[]) =>
+      applyCommit(engine, {
+        sessionId: "s:alice",
+        space,
+        principal: alice,
+        commit: {
+          localSeq: local++,
+          reads: { confirmed: [], pending: [] },
+          operations,
+        },
+      } as never);
+    const acl = `of:${space}`;
+    apply([{ op: "set", id: acl, value: { value: { [alice]: "OWNER" } } }]);
+    apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
+    if (deleted) {
+      apply([{
+        op: "set",
+        id: acl,
+        value: { value: { deleted: { by: alice } } },
+      }]);
+    }
+    close(engine);
+  }
+
+  it("reaps a deleted space's store and reports the checked result, and refuses a space that is not deleted", async () => {
+    const root = await Deno.makeTempDir({ prefix: "cf-space-reap-" });
+    try {
+      const store = `${root}/space.sqlite`;
+      const result = `${root}/space.reaped.sqlite`;
+      await spaceStore(store, true);
+
+      const planned = await cf(argv`space reap ${store} --dry-run --json`);
+      expect(planned.code).toBe(0);
+      expect(JSON.parse(planned.stdout.join("\n")).deletionSeq).toBe(3);
+
+      const ran = await cf(argv`space reap ${store} --out ${result}`);
+      expect(ran.code).toBe(0);
+      expect(text(ran.stdout)).toContain(`result     ${result} (`);
+      expect(text(ran.stdout)).not.toContain("FAIL");
+
+      const live = `${root}/live.sqlite`;
+      await spaceStore(live, false);
+      const refused = await cf(argv`space reap ${live} --dry-run`);
+      expect(refused.code).not.toBe(0);
+      expect(text(refused.stderr)).toContain("holds no deletion tombstone");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("refuses, on a dry run, a store from before a migration the server runs, naming it", async () => {
+    // The plan reads a column such a store lacks, so the refusal a run
+    // would give comes first.
+    const root = await Deno.makeTempDir({ prefix: "cf-space-reap-legacy-" });
+    try {
+      const store = `${root}/space.sqlite`;
+      await spaceStore(store, true);
+      const db = new Database(store);
+      db.exec(`CREATE TABLE scheduler_observation (x INTEGER)`);
+      db.close();
+
+      const refused = await cf(argv`space reap ${store} --dry-run`);
+      expect(refused.code).not.toBe(0);
+      expect(text(refused.stderr)).toContain(
+        "predates a migration the server runs on opening it",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("cf space", () => {
   it("runs the rehearsal loop: clone, attempt, verify, reset", async () => {
     await withFixture(async ({ snapshot, clone }) => {

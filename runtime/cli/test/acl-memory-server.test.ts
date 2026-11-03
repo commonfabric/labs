@@ -250,7 +250,8 @@ describe("acl, against an `enforce` memory server", () => {
       });
 
       await expect(deleteAs(alice, space, space)).rejects.toThrow(
-        `names ${bob.did()}`,
+        `names ${bob.did()}. Remove each with \`cf acl remove <did>\` first; ` +
+          "nothing was deleted.",
       );
 
       expect((await server.readDocument(space, `of:${space}`))?.value)
