@@ -1490,10 +1490,21 @@ function finalizeReactiveActionCommit(
     owner.pendingWaveRun = token;
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
-    const canRunAgain = () =>
-      node.registrationToken === registrationToken &&
-      (state.nodes.isEffect(args.action) ||
-        state.nodes.isComputation(args.action));
+    const canRunAgain = () => {
+      if (
+        node.registrationToken !== registrationToken ||
+        (!state.nodes.isEffect(args.action) &&
+          !state.nodes.isComputation(args.action))
+      ) return false;
+      const record = state.nodes.get(args.action);
+      return fanOutRun === undefined
+        ? record === node
+        : record?.fanOut === fanOutRun.state &&
+          fanOutRun.state.instances.get(
+              keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+                fanOutRun.instance.key,
+            ) === instanceRecord;
+    };
     const superseded = outcome.error?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
       outcome.error?.readDependencyWithdrawn === true &&
@@ -1507,16 +1518,8 @@ function finalizeReactiveActionCommit(
       if (owner.pendingWaveRun !== token) return;
     }
     delete owner.pendingWaveRun;
-    if (!owed || !canRunAgain()) return;
     const record = state.nodes.get(args.action);
-    const current = fanOutRun === undefined
-      ? record === node
-      : record?.fanOut === fanOutRun.state &&
-        fanOutRun.state.instances.get(
-            keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
-              fanOutRun.instance.key,
-          ) === instanceRecord;
-    if (!current || record === undefined) return;
+    if (!owed || record === undefined || !canRunAgain()) return;
     for (const cause of args.invalidCauses ?? []) {
       addInvalidCause(record, cause);
     }
