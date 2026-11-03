@@ -126,15 +126,16 @@ describes.
 [Deleting a space](../specs/random-space-identities.md#deleting-a-space) lands
 in this order, each step a change of its own:
 
-1. **Every client handles the deletion before any server sends it.** The Memory
-   server sends the `deleted` marker and the `deleted` revocation reason to
-   every client whatever it advertises, so each client in use has to handle
-   both first: this repository's Memory client, runtime, renderer and shell,
-   and every client outside this repository, including one that runs against a
-   pinned tag of it, whose tag then has to be one that handles them. That
-   includes reading an invitation operation's `space-deleted` as final rather
-   than retrying it, and an `AuthorizationError` marked `deleted` as a refusal
-   no later grant heals.
+1. **Every client fails safely on a deletion before any server sends it.** The
+   Memory server sends the `deleted` marker and the `deleted` revocation
+   reason to every client whatever it advertises, so a deleted space must
+   crash no client in use, and must stop none from handling the spaces still
+   live. This repository's Memory client, runtime, renderer and shell handle
+   both outright: they read an invitation operation's `space-deleted` as final
+   rather than retrying it, and an `AuthorizationError` marked `deleted` as a
+   refusal no later grant heals. A client outside this repository, including
+   one that runs against a pinned tag of this one, may instead treat a deleted
+   space as any space it is refused, so long as it fails safely.
 2. **`aclRevision` names the access-control document's `seq`.** Done: every
    ACL refusal's `aclRevision` is the `seq` at which the space's
    access-control document is stored, or 0 where it has none, rather than the
@@ -158,13 +159,15 @@ in this order, each step a change of its own:
    space whose access-control document holds a deletion tombstone, in every
    mode. So is the serving loop's: it starts no tenure for a deleted space,
    ends one on the deletion, and starts no further outbox row.
-6. **The server admits the deletion commit.** Compaction's refusal of a
-   deletion tombstone names reaping in the same change. Once a deletion has
-   been committed, rolling a server back to a release from before step 5 is not
-   available: such a release reads the deletion tombstone as a malformed list,
-   which a service identity may repair, and a repair would write an access list
-   over it and so undo the deletion. Nor does an operator repair an
-   access-control document whose value is a deletion tombstone.
+6. **The server admits the deletion commit.** Done: the Memory server admits a
+   sole member's deletion and revokes the space's sessions with the reason
+   `deleted`. Compaction's refusal of a deletion tombstone names reaping in the
+   same change. Once a deletion has been committed, rolling a server back to a
+   release from before step 5 is not available: such a release reads the
+   deletion tombstone as a malformed list, which a service identity may repair,
+   and a repair would write an access list over it and so undo the deletion. Nor
+   does an operator repair an access-control document whose value is a deletion
+   tombstone.
 7. **`cf space delete` and `cf space reap`.**
 
 ### In other repositories
