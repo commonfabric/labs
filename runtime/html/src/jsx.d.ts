@@ -4550,6 +4550,8 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   "direction"?: "horizontal" | "vertical" | CellLike<"horizontal" | "vertical">;
+  /** A width in pixels: while the group is narrower, its panels stack. */
+  "stackBelow"?: number | CellLike<number>;
 }
 
 interface CFResizableHandleAttributes<T> extends CFHTMLAttributes<T> {

@@ -589,7 +589,9 @@ Default slot for cf-tab elements
 **Purpose**: Container for resizable panels **Tag**:
 `<cf-resizable-panel-group>` **Attributes**:
 
-- `direction` - "horizontal" | "vertical" **Events**:
+- `direction` - "horizontal" | "vertical"
+- `stack-below` - number (pixels): while the group itself is narrower, its
+  panels stack vertically whatever `direction` says **Events**:
 - `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
   slot for panels and handles
 

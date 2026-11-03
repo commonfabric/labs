@@ -120,3 +120,89 @@ Deno.test("a direction change during a drag ends the drag, and a stationary poin
   expect(page.first.style.height).toBe("36%");
   expect(page.second.style.height).toBe("64%");
 });
+
+/**
+ * Resolves after the browser has drawn two more frames, by which time a
+ * `ResizeObserver` has reported the group's width and the group has updated.
+ */
+async function laidOut(group: CFResizablePanelGroup): Promise<void> {
+  await new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  );
+  await group.updateComplete;
+}
+
+Deno.test("a group narrower than its stackBelow stacks its panels, and one as wide or wider keeps its direction", async () => {
+  using narrow = built("horizontal");
+  narrow.group.stackBelow = 401;
+  document.body.append(narrow.group);
+  await laidOut(narrow.group);
+  expect(narrow.group.orientation).toBe("vertical");
+  expect(narrow.handle.dataset.orientation).toBe("vertical");
+  expect(narrow.first.style.height).toBe("36%");
+  expect(narrow.first.style.width).toBe("");
+  expect(narrow.first.getBoundingClientRect().width).toBe(400);
+
+  using wide = built("horizontal");
+  wide.group.stackBelow = 400;
+  document.body.append(wide.group);
+  await laidOut(wide.group);
+  expect(wide.group.orientation).toBe("horizontal");
+  expect(wide.handle.dataset.orientation).toBe("horizontal");
+  expect(wide.first.style.width).toBe("36%");
+  expect(wide.first.getBoundingClientRect().height).toBe(400);
+});
+
+Deno.test("a group with no stackBelow keeps its direction however narrow it is", async () => {
+  using page = built("horizontal");
+  page.group.style.width = "100px";
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.group.orientation).toBe("horizontal");
+  expect(page.first.style.width).toBe("36%");
+});
+
+Deno.test("a group that narrows past its stackBelow stacks its panels, keeping their split, and turns back when it widens", async () => {
+  using page = await mounted("horizontal");
+  page.group.stackBelow = 300;
+  await laidOut(page.group);
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.width).toBe("37%");
+
+  page.group.style.width = "200px";
+  await laidOut(page.group);
+  expect(page.handle.dataset.orientation).toBe("vertical");
+  expect(page.first.style.height).toBe("37%");
+  expect(page.first.style.width).toBe("");
+  // The handle's arrow keys turn with it.
+  page.handle.focus();
+  await pressKey("ArrowRight");
+  expect(page.first.style.height).toBe("37%");
+  await pressKey("ArrowDown");
+  expect(page.first.style.height).toBe("38%");
+
+  page.group.style.width = "400px";
+  await laidOut(page.group);
+  expect(page.handle.dataset.orientation).toBe("horizontal");
+  expect(page.first.style.width).toBe("38%");
+  expect(page.first.style.height).toBe("");
+});
+
+Deno.test("a width change that crosses no stackBelow leaves a drag in progress alone", async () => {
+  using page = await mounted("horizontal");
+  page.group.stackBelow = 300;
+  await laidOut(page.group);
+  page.handle.dispatchEvent(
+    new MouseEvent("mousedown", { bubbles: true, clientX: 100, clientY: 160 }),
+  );
+
+  page.group.style.width = "350px";
+  await laidOut(page.group);
+  expect(page.group.classList.contains("resizing")).toBe(true);
+  document.dispatchEvent(
+    new MouseEvent("mousemove", { clientX: 135, clientY: 160 }),
+  );
+  expect(page.first.style.width).toBe("46%");
+  document.dispatchEvent(new MouseEvent("mouseup"));
+});
