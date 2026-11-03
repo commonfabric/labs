@@ -800,9 +800,11 @@ The current package provides:
 - shared parent and opening-research guidance that distinguishes given inputs,
   discovery within the granted scope, and unavailable actions. Private research
   can identify space-search patterns for the parent to execute under tool and
-  release rules. The agent offers the closest achievable outcome, checks a send
-  path before asking for a recipient, and never asks for a nonexistent release
-  permission. Targeted research answers keep their focused question guidance;
+  release rules. The agent states capability limits and offers useful achievable
+  work without silently substituting a source or claiming the original goal is
+  complete. It checks a send path before asking for a recipient and never asks
+  for a nonexistent release permission. Targeted research answers keep their
+  focused question guidance;
 - caller and profile return-schema definitions checked before child creation,
   with bounded argument errors for malformed contracts and unresolved
   references; valid child results remain schema-validated and sanitized, with
