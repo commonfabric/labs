@@ -1689,6 +1689,7 @@ export class RemoteSessionFactory implements SessionFactory {
         transport,
         signal,
         client: this.#clientInfo,
+        instanceNames: this.#instanceNames,
       });
       return client.serverFlags;
     } finally {
