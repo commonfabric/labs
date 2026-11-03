@@ -149,7 +149,7 @@ export class SESRuntime extends EventTarget {
   /**
    * Materialize + source-map a thrown error's stack (once — see
    * `SESInternals.mapThrownError`). Used by the engine for errors that escape
-   * module evaluation outside an {@link exec} call (e.g. `loadModuleGraph`).
+   * module evaluation outside an {@link exec} call (e.g. a graph's `importNow`).
    */
   mapThrownError(error: unknown): unknown {
     return this.#internals.mapThrownError(error);
