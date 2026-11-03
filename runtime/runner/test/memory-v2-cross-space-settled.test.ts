@@ -72,6 +72,32 @@ describe("memory-v2-cross-space-settled", () => {
       expect(loggedRejections()).toBe(rejectionsBefore + 1);
     });
 
+    it("waits for work that a reaction to settling work tracks a few microtask turns later", async () => {
+      const first = Promise.withResolvers<void>();
+      const followUp = Promise.withResolvers<void>();
+      storage.trackUntilSettled(first.promise);
+
+      // The reaction tracks its follow-up three turns after the first work
+      // settles, as a reaction that awaits along the way does.
+      const followUpTracked = first.promise
+        .then(() => undefined)
+        .then(() => undefined)
+        .then(() => storage.trackUntilSettled(followUp.promise));
+      let settled = false;
+      const waiting = storage.crossSpaceSettled().then(() => {
+        settled = true;
+      });
+
+      first.resolve();
+      await followUpTracked;
+      expect(settled).toBe(false);
+      expect(storage.pendingCrossSpacePromiseCount()).toBe(1);
+
+      followUp.resolve();
+      await waiting;
+      expect(settled).toBe(true);
+    });
+
     it("resolves when nothing is tracked", async () => {
       expect(storage.pendingCrossSpacePromiseCount()).toBe(0);
       await storage.crossSpaceSettled();

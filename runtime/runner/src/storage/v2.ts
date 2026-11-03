@@ -1647,6 +1647,14 @@ function unwrapOuterHandle(schema: JSONSchemaObj): JSONSchemaObj {
   return values.length > 1 ? { ...inner, asCell: values.slice(1) } : inner;
 }
 
+/**
+ * How many microtask turns `crossSpaceSettled()` and `synced()` wait, once
+ * the cross-space promises are all settled, before taking the set as empty:
+ * follow-up work that a reaction to a settling promise tracks within that many
+ * turns of it keeps them waiting.
+ */
+const CROSS_SPACE_SETTLE_TURNS = 8;
+
 export class StorageManager implements IStorageManager {
   readonly id: string;
   readonly as: Signer;
@@ -1693,6 +1701,13 @@ export class StorageManager implements IStorageManager {
    * releases together.
    */
   #crossSpaceWaiters: (() => void)[] = [];
+
+  /**
+   * How many promises have joined `#crossSpacePromises`, so that a check
+   * that the set has stayed empty can tell an emptying it began after from
+   * one that came later.
+   */
+  #crossSpaceAdditions = 0;
 
   /** The store read-throughs installed per space (see
    * IStorageManager.installStoreReadThrough); a provider resolves its
@@ -3504,6 +3519,7 @@ export class StorageManager implements IStorageManager {
   }
 
   addCrossSpacePromise(promise: Promise<void>): void {
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(promise);
   }
 
@@ -3737,6 +3753,7 @@ export class StorageManager implements IStorageManager {
       ]);
       settle();
     });
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(tracked);
   }
 
@@ -4084,9 +4101,10 @@ export class StorageManager implements IStorageManager {
   }
 
   /**
-   * Releases every waiter of `#resolveCrossSpace()` if `#crossSpacePromises`
-   * is empty. The set is asked again on a microtask, so that work which a
-   * settling promise's own reactions register keeps the waiters waiting.
+   * Releases every waiter of `#resolveCrossSpace()` once `#crossSpacePromises`
+   * has been empty for {@link CROSS_SPACE_SETTLE_TURNS} microtask turns with
+   * nothing joining it, so that follow-up work which a settling promise's
+   * reactions track within those turns keeps the waiters waiting.
    */
   #releaseCrossSpaceWaiters(): void {
     if (
@@ -4095,12 +4113,21 @@ export class StorageManager implements IStorageManager {
     ) {
       return;
     }
-    queueMicrotask(() => {
-      if (this.#crossSpacePromises.size !== 0) return;
+    const additions = this.#crossSpaceAdditions;
+    let turns = CROSS_SPACE_SETTLE_TURNS;
+    const check = () => {
+      // Work that joined since this check began has its own emptying, which
+      // starts a check of its own.
+      if (this.#crossSpaceAdditions !== additions) return;
+      if (--turns > 0) {
+        queueMicrotask(check);
+        return;
+      }
       const waiters = this.#crossSpaceWaiters;
       this.#crossSpaceWaiters = [];
       for (const resolve of waiters) resolve();
-    });
+    };
+    queueMicrotask(check);
   }
 
   async #syncImmutableCell<T>(
