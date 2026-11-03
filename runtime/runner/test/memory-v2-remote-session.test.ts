@@ -2885,6 +2885,10 @@ describe("WebSocketTransport failure signaling", () => {
         signer,
         createNativeMemorySocket,
       );
+      // Positional, so the signed open this case reads as a text frame stays
+      // under the size the transport compresses from, which a naming
+      // declaration takes it over.
+      factory.setInstanceNames(false);
       let opened:
         | Awaited<ReturnType<RemoteSessionFactory["create"]>>
         | undefined;
@@ -2999,6 +3003,10 @@ describe("WebSocketTransport failure signaling", () => {
           signer,
           createNativeMemorySocket,
         );
+        // Positional, so the signed open this case reads as a text frame
+        // stays under the size the transport compresses from, which a naming
+        // declaration takes it over.
+        factory.setInstanceNames(false);
         const opening = factory.create(
           signer.did(),
           signer,

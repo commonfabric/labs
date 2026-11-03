@@ -45,6 +45,7 @@ import {
 } from "@commonfabric/memory/v2/router-protocol";
 import { getLogger } from "@commonfabric/logger";
 import { utf8ByteLength } from "@commonfabric/text/utf8";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import { AsyncSemaphoreQueue } from "../queue.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import { DelegationStore } from "./delegation-store.ts";
@@ -230,7 +231,8 @@ export interface SessionFactory {
   /**
    * Chooses whether the sessions created from here on declare that their
    * runtime names instances (`ConnectOptions.instanceNames` of the memory
-   * client). A factory without the method declares nothing, so its sessions
+   * client). Until it is called, a factory's sessions run this build's
+   * default. A factory without the method declares nothing, so its sessions
    * are positional whatever their runtime's mode.
    */
   setInstanceNames?(enabled: boolean): void;
@@ -1355,8 +1357,12 @@ export class RemoteSessionFactory implements SessionFactory {
   #transports = new Set<WebSocketTransport>();
   #sharedConnections = false;
 
-  /** What `setInstanceNames()` last chose. */
-  #instanceNames = false;
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
 
   /** Transports closed so far. */
   #closedTransports = 0;

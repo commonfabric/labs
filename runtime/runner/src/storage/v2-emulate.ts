@@ -103,8 +103,12 @@ class EmulatedSessionFactory implements SessionFactory {
   /** The chains held here, one of which a session's open presents. */
   readonly #delegations = new DelegationStore();
 
-  /** What `setInstanceNames()` last chose. */
-  #instanceNames = false;
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
 
   constructor(
     getServer: () => MemoryV2Server.Server,

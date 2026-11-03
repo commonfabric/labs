@@ -20,6 +20,7 @@ import {
   type ClientInfo,
   createClientInfo,
 } from "@commonfabric/memory/v2/client-info";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { LoopbackMemoryServer } from "./host-memory-server.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import {
@@ -122,8 +123,12 @@ class LoopbackSessionFactory implements SessionFactory {
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
-  /** What `setInstanceNames()` last chose. */
-  #instanceNames = false;
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
 
   constructor(
     plane: LoopbackPlane,

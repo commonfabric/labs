@@ -103,6 +103,7 @@ import {
   PatchApplyError,
 } from "../../../memory/v2/patch.ts";
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
 import type { Cancel } from "../cancel.ts";
 import {
@@ -1793,7 +1794,7 @@ export class StorageManager implements IStorageManager {
 
   /**
    * The naming mode `setInstanceNames()` declared, or `undefined` while none
-   * is, when the manager's sessions are positional.
+   * is, when the manager's sessions run this build's default.
    */
   #instanceNames: boolean | undefined;
 
@@ -2414,10 +2415,11 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Whether the sessions this manager opens declare that their runtime names
-   * instances, as `setInstanceNames()` declared; `false` while nothing has.
+   * instances: as `setInstanceNames()` declared, and while nothing has, as a
+   * runtime of this build does by default (`namesInstancesByDefault()`).
    */
   get namesInstances(): boolean {
-    return this.#instanceNames === true;
+    return this.#instanceNames ?? namesInstancesByDefault();
   }
 
   /** The serving manager's HOME space (Options.servingHomeSpace) —
