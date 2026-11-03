@@ -8401,6 +8401,7 @@ export class SpaceServer implements TransactionSealDestination {
       !(offerRuntime && detached && wave === undefined && effectsSettled &&
         inFlight === undefined && this.#offerRuntime())
     ) {
+      this.#refuseWritesWhileDisposing();
       try {
         await this.#disposeRuntimeTimeboxed(reason, inFlight);
       } catch (error) {
@@ -8460,6 +8461,32 @@ export class SpaceServer implements TransactionSealDestination {
       return false;
     }
     return this.#retainedAs !== undefined;
+  }
+
+  /**
+   * Helper for `#parkResources()`, which has the runtime it is about to
+   * dispose close its transactions into this tenure's own destination, whose
+   * `seal()` refuses each one now that the tenure has parked. The dispose runs
+   * the runtime's scheduler to idle, and a transaction opened with no
+   * destination installed would commit straight to the store, outside any wave
+   * and under no lease (serving-loop.md §2's stop-committing MUST). A runtime
+   * that still has a destination installed already refuses: this tenure's,
+   * where the park could not detach it, or the fence of a kept instance whose
+   * keeping then failed.
+   */
+  #refuseWritesWhileDisposing(): void {
+    const runtime = this.#runtime;
+    if (runtime === undefined || runtime.sealDestinationInstalled) return;
+    try {
+      runtime.installSealDestination(this);
+    } catch (error) {
+      logger.warn("park-refusal-install-failed", () => [
+        `space ${this.#options.space}: installing the refusing seal ` +
+        "destination for the park's dispose failed; the runtime is disposed " +
+        "without it",
+        error,
+      ]);
+    }
   }
 
   /**

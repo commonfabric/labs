@@ -365,6 +365,71 @@ describe("parked-runtime", () => {
     });
   });
 
+  describe("a park that disposes the runtime", () => {
+    // The dispose runs the runtime's scheduler to idle, so served work still
+    // queued when the tenure parks runs inside it. The serving runtime's
+    // dispose stands in for that work here: it closes a transaction of its
+    // own before the runtime is disposed.
+
+    /**
+     * Makes the next serving runtime the host disposes close a write to
+     * `argument-2` before it is disposed. Resolves to that commit's error, if
+     * any, and whether the space's store head moved across it.
+     */
+    const writeWhileDisposing = (): Promise<
+      { error: unknown; moved: boolean }
+    > => {
+      const written = Promise.withResolvers<
+        { error: unknown; moved: boolean }
+      >();
+      disposeServing = async (runtime) => {
+        const engine = await server.engineForSpace(space);
+        const head = Engine.serverSeq(engine);
+        const tx = runtime.edit();
+        runtime.getCell<{ value: number }>(space, "argument-2").withTx(tx)
+          .set({ value: 100 });
+        const { error } = await tx.commit().settled;
+        written.resolve({ error, moved: Engine.serverSeq(engine) !== head });
+        await runtime.dispose();
+      };
+      return written.promise;
+    };
+
+    it("refuses a transaction the runtime closes while the host's close disposes it, and commits nothing", async () => {
+      host = newHost({});
+      await startPieces();
+      const reader = await openReader();
+      await readAll(reader, (index) => (index + 1) * 2);
+      const written = writeWhileDisposing();
+
+      await host.close();
+      await closeClient(reader);
+
+      expect(await written).toMatchObject({
+        error: {
+          name: "StorageTransactionAborted",
+          reason: { message: SEAL_AFTER_PARK_REFUSED },
+        },
+        moved: false,
+      });
+    });
+
+    it("refuses a transaction the runtime closes while an idle park with retention off disposes it, and commits nothing", async () => {
+      host = newHost({ parkedRuntimeRetentionMs: 0 });
+      const written = writeWhileDisposing();
+
+      await serveThenPark();
+
+      expect(await written).toMatchObject({
+        error: {
+          name: "StorageTransactionAborted",
+          reason: { message: SEAL_AFTER_PARK_REFUSED },
+        },
+        moved: false,
+      });
+    });
+  });
+
   describe("retention", () => {
     it("disposes a kept runtime once `parkedRuntimeRetentionMs` has passed", async () => {
       host = newHost({ parkedRuntimeRetentionMs: 60_000 });
