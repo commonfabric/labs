@@ -8,6 +8,8 @@ import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
 import type { RuntimeProgram } from "@commonfabric/runner";
 
+import { shellQuote } from "./shell-quote.ts";
+
 /**
  * The data files a later `setsrc` would have to be told about.
  *
@@ -43,5 +45,7 @@ export function undeclaredDataFileWarning(
   return `\nThis pattern carries ${undeclared.length} data file(s) its ` +
     `source does not name.\nPass them on the next setsrc, or they are ` +
     `dropped from that revision:\n` +
-    undeclared.map((name) => `  --datafile .${name}`).join("\n");
+    undeclared.map((name) => `  --datafile ${shellQuote(`.${name}`)}`).join(
+      "\n",
+    );
 }

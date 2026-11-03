@@ -101,7 +101,7 @@ describe("undeclaredDataFileWarning", () => {
       ]),
     );
     expect(warning).toContain("1 data file(s)");
-    expect(warning).toContain("--datafile ./extra.txt");
+    expect(warning).toContain("--datafile './extra.txt'");
     expect(warning).toContain("setsrc");
   });
 
@@ -114,8 +114,18 @@ describe("undeclaredDataFileWarning", () => {
       }, ["/a.txt", "/b.txt"]),
     );
     expect(warning).toContain("2 data file(s)");
-    expect(warning).toContain("--datafile ./a.txt");
-    expect(warning).toContain("--datafile ./b.txt");
+    expect(warning).toContain("--datafile './a.txt'");
+    expect(warning).toContain("--datafile './b.txt'");
+  });
+
+  it("quotes each path, so that the pasted line stays one argument per file", () => {
+    const warning = undeclaredDataFileWarning(
+      program({
+        "/main.tsx": "export default 1;\n",
+        "/my team's notes.txt": "a",
+      }, ["/my team's notes.txt"]),
+    );
+    expect(warning).toContain(`--datafile './my team'\\''s notes.txt'`);
   });
 });
 

@@ -83,7 +83,7 @@ today; one that ends up there takes a `deno-lint-ignore` saying so.
 `deno run` reads every module a program can reach before it runs any of them,
 and on a program of this size that is most of what starting it costs. Evaluating
 the modules is the smaller part. Three things decide what it reads, and none of
-them shows up in a type check or a test:
+them shows up in a type check or a functional test:
 
 - It follows a value statement whether or not TypeScript goes on to erase it. A
   module imported only for its types, as `import { Runtime } from "./runtime.ts"`
