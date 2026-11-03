@@ -4,13 +4,12 @@
  * Deno tests reach it.
  */
 
+import { internSchema } from "@commonfabric/data-model-schema";
 import {
   type CellHandle,
   type CellRef,
   isCellHandle,
 } from "@commonfabric/runtime-client";
-
-import { internSchema } from "@commonfabric/data-model-schema";
 
 import { sameCellDoc } from "../../core/cell-controller.ts";
 
