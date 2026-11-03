@@ -69,8 +69,11 @@ const HIGHLIGHT_QUERY = `
  * The grammar reads a comment to the end of its line. A comment inside a
  * backtick command substitution ends at the backtick that closes the
  * substitution, as it does in the shell, and the code after it is colored as
- * code. Inside `$(…)` that is not itself inside backticks, a comment runs to
- * the end of its line.
+ * code, where the parse pairs the backticks before the comment as the shell
+ * does. Where it does not, as when the grammar reads two substitutions on one
+ * line as one, the comment runs to the end of its line. Inside `$(…)` that is
+ * not itself inside backticks, a comment runs to the end of its line, as it
+ * does in the shell.
  *
  * The grammar package supplies the compiled parser. Its own highlight query is
  * not used, because its capture names are not the pager's token classes.

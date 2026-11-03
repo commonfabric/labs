@@ -478,7 +478,10 @@ export function parseDocument(
 /**
  * An incremental highlighter, or a plain one while the grammar loads. Each
  * update edits the warm tree and re-parses from it, so the parse costs the
- * size of the edit, and then colors the whole document from that parse.
+ * size of the edit, and then colors the whole document from that parse. A
+ * grammar with a {@link ShortComments} rule parses afresh instead after an
+ * edit to a source with errors or short comments, as
+ * {@link ShortComments} describes.
  *
  * The coloring is not narrowed to the lines the edit touched. An edit can move
  * a token's class anywhere in the document — closing a bracket completes an
