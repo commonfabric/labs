@@ -928,6 +928,43 @@ describe("local-jobs/api", () => {
       }
     });
 
+    for (const length of [0, 201, 4096]) {
+      it(`matches a context string of length ${length} exactly`, async () => {
+        const { post, call, store } = apiWith();
+        const value = "v".repeat(length);
+        try {
+          for (
+            const [key, refs] of [
+              ["scalar", value],
+              ["array", [value]],
+              ["different", `${value}x`],
+            ] as const
+          ) {
+            expect(
+              (await post("/jobs", {
+                ...BODY,
+                idempotencyKey: key,
+                context: { refs },
+              })).status,
+            ).toBe(201);
+          }
+          const response = await call(
+            `/jobs?contextKey=refs&contextValue=${encodeURIComponent(value)}`,
+          );
+          expect(response.status).toBe(200);
+          const result = await response.json();
+          expect(
+            result.jobs.map((job: { idempotencyKey: string }) =>
+              job.idempotencyKey
+            ),
+          ).toEqual(["array", "scalar"]);
+          expect(result.nextCursor).toBeNull();
+        } finally {
+          store.close();
+        }
+      });
+    }
+
     it("refuses incomplete context filters and unknown history cursors", async () => {
       const { call, store } = apiWith();
       try {
@@ -936,6 +973,9 @@ describe("local-jobs/api", () => {
             "contextKey=refs",
             "contextValue=target",
             "contextKey=x.y&contextValue=z",
+            "contextKey=&contextValue=z",
+            "contextKey=refs&contextValue=a&contextValue=b",
+            `contextKey=refs&contextValue=${"v".repeat(4097)}`,
             "before=unknown",
           ]
         ) {

@@ -24,9 +24,12 @@
  *   name or writable access to a readonly grant is `400 beyond_profile`.
  * - `GET /jobs?limit=n` — the newest matching jobs, with optional `caller`
  *   and `profile` filters. `contextKey` and `contextValue` together match a
- *   top-level context string or a string member of its array. `nextCursor`
- *   is the last returned job when more match, otherwise null; pass it as
+ *   top-level context string or a string member of its array. Values may be
+ *   empty and have at most 4,096 UTF-16 code units; names and cursor ids
+ *   are nonempty and have at most 200. `nextCursor` is the id of the last
+ *   returned job when more match, otherwise null; pass it as
  *   `before` with the same filters to continue. New jobs do not shift pages.
+ *   These are read filters on the private socket, not authority grants.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
  *   instructions?, imageAttachments?, inputs?, foreignSpaces?}` on the
@@ -83,6 +86,9 @@ import {
 
 /** Longest idempotency key, caller or profile name a request may carry. */
 const MAX_NAME_LENGTH = 200;
+
+/** Largest context value accepted by a listing query, in UTF-16 code units. */
+const MAX_CONTEXT_VALUE_LENGTH = 4096;
 
 /** Largest JSON enqueue or message body accepted by the private socket. */
 const MAX_ENQUEUE_BYTES = 1024 * 1024;
@@ -775,14 +781,18 @@ async (request: Request): Promise<Response> => {
       ) {
         const named = url.searchParams.getAll(field);
         if (named.length === 0) continue;
+        const minLength = field === "contextValue" ? 0 : 1;
+        const maxLength = field === "contextValue"
+          ? MAX_CONTEXT_VALUE_LENGTH
+          : MAX_NAME_LENGTH;
         if (
-          named.length > 1 || named[0].length === 0 ||
-          named[0].length > MAX_NAME_LENGTH
+          named.length > 1 || named[0].length < minLength ||
+          named[0].length > maxLength
         ) {
           return refuse(
             400,
             "invalid_request",
-            `\`${field}\`, when named, must be named once, as a nonempty name of at most ${MAX_NAME_LENGTH} characters.`,
+            `\`${field}\`, when named, must occur once and contain ${minLength} to ${maxLength} UTF-16 code units.`,
           );
         }
         of[field] = named[0];
