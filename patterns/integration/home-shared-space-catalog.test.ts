@@ -522,6 +522,9 @@ interface ChatManagerCase {
 
   /** Has Home's catalog mark each of `spaces` deleted. */
   markDeleted(spaces: string[]): Promise<void>;
+
+  /** Has the memory server refuse each of `spaces`, which go on existing. */
+  refuseSpaces(spaces: string[]): void;
 }
 
 /**
@@ -610,6 +613,9 @@ async function withChatManager(
             );
           }
           for (const space of spaces) refuse!(space, "deleted");
+        },
+        refuseSpaces(spaces) {
+          for (const space of spaces) refuse!(space, "unauthorized");
         },
         async markDeleted(spaces) {
           const { entries } = await home.key("sharedSpaceCatalog").pull();
@@ -2362,6 +2368,46 @@ describe("Home chat manager and a deleted room", () => {
         expect(await manager.key("deletedRooms").pull()).toEqual([
           expect.objectContaining({ kind: "direct", counterpart: BOB }),
         ]);
+      });
+    });
+  }
+
+  for (const serving of [false, true]) {
+    it(`takes a room the memory server merely refuses for no deleted room, with serving ${serving}`, async () => {
+      await withChatManager(serving, async (chats) => {
+        const { runtime, manager, home } = chats;
+        const refused = await chats.start("createGroup", "g-refused", {
+          title: "Refused",
+          members: [],
+        });
+        const deleted = await chats.start("createGroup", "g-deleted", {
+          title: "Deleted",
+          members: [],
+        });
+        await waitForCellValue<unknown[]>(
+          runtime,
+          manager.key("rooms"),
+          (value) => value?.length === 2,
+          { stuckLabel: "both rooms listed" },
+        );
+
+        chats.refuseSpaces([refused.space]);
+        // The deleted room is the control: `deletedRooms` is read once it has
+        // taken this room in, so it has had its chance to take in the other.
+        await chats.deleteSpaces([deleted.space]);
+        const gone = await waitForCellValue<{ room: unknown }[]>(
+          runtime,
+          manager.key("deletedRooms"),
+          (value) => (value?.length ?? 0) > 0,
+          { stuckLabel: "the deleted room listed as deleted" },
+        );
+        await runtime.idle();
+        await runtime.storageManager.synced();
+
+        expect(gone.length).toBe(1);
+        expect((await manager.key("deletedRooms").pull()).length).toBe(1);
+        const { entries } = await home.key("sharedSpaceCatalog").pull();
+        expect(entries[refused.space].state).toBe("saved");
       });
     });
   }
