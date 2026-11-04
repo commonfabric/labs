@@ -59,7 +59,9 @@ export default pattern(() => {
   const capture = action(() => saved.set({ start: startOf(second[UI]) }));
   const start = action(() => clickButton(first[UI], "Start conversation"));
   const repeat = action(() => saved.get().start!.send({}));
-  const hold = action(() => held.set({ room: loom.chatRoom }));
+  const hold = action(() => {
+    if (loom.chatRoom !== undefined) held.set({ room: loom.chatRoom });
+  });
   return {
     [TESTS]: [
       { render: first[UI] },

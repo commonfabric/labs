@@ -307,19 +307,19 @@ export type ProfileLists = {
   profiles: Cell<BackwardsCompatibleProfile[]>;
 
   /** Home's default profile slot, `DefaultProfileSlot`, if bound. */
-  defaultProfile?: Cell<DefaultProfileSlot>;
+  defaultProfile?: Cell<DefaultProfileSlot> | undefined;
 
   /**
    * The space of a default a home chose before `defaultProfile`, Home's
    * `legacyDefaultProfileSpace`, if bound.
    */
-  legacyDefaultProfileSpace?: Cell<string | undefined>;
+  legacyDefaultProfileSpace?: Cell<string | undefined> | undefined;
 
   /** Home's `mru` list. */
   mru: Cell<unknown[]>;
 
   /** Home's `retiredProfiles` list, if bound. */
-  retiredProfiles?: Cell<unknown[]>;
+  retiredProfiles?: Cell<unknown[]> | undefined;
 };
 
 /**
