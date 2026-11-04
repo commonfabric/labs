@@ -50,8 +50,9 @@ Mounted through FUSE, the note is a single `index.md`: its title in the
 frontmatter, then the body. Saving the file writes both back. A save replaces
 the whole body, which the body accepts only until an editor has changed it;
 after that, a save that changes the body is refused, while one that changes only
-the title still lands. Change the body then through the verbs below, which the
-mount exposes as callable files beside `index.md`.
+the title still lands. A save that changes both lands the title and not the
+body, because the two are written separately. Change the body then through the
+verbs below, which the mount exposes as callable files beside `index.md`.
 
 ## Editing from a handler or an agent
 
