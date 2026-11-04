@@ -835,6 +835,11 @@ function scanUnavailableInputs(
     // preflight applies the same boundary after checking the root marker.
     const valueType = getJsonType(value);
     const narrowedSchema = narrowSchemaForValue(schemaAtPath, value);
+    // A link is transport, not the value which selects an optional handle.
+    // Narrow only at the reached value, as ordinary materialization does.
+    if (
+      !isCellLink(value) && SchemaObjectTraverser.hasAsCell(narrowedSchema)
+    ) return;
     if (
       !isCellLink(value) && narrowedSchema !== undefined &&
       narrowedSchema !== false && valueType !== null &&

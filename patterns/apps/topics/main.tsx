@@ -14,11 +14,13 @@ import {
   type ReadonlyCell,
   resultOf,
   Stream,
+  toSchema,
   UI,
   type VNode,
   wish,
   Writable,
 } from "commonfabric";
+import type {} from "commonfabric/schema";
 
 import {
   mentionableIndex,
@@ -347,20 +349,22 @@ export function mentionedBy<T extends object>(
 export function distinctByIdentity<T extends object>(
   list: readonly (T | undefined)[],
 ): T[] {
-  return distinctEntriesByIdentity(list).map(({ value }) => value);
-}
-
-/** Keeps each distinct reference with its original position in the input. */
-function distinctEntriesByIdentity<T extends object>(
-  list: readonly (T | undefined)[],
-): { value: T; index: number }[] {
-  const distinct: { value: T; index: number }[] = [];
-  for (const [index, value] of list.entries()) {
-    if (value && !distinct.some((kept) => equals(kept.value, value))) {
-      distinct.push({ value, index });
+  const distinct: T[] = [];
+  for (const value of list) {
+    if (value && !distinct.some((kept) => equals(kept, value))) {
+      distinct.push(value);
     }
   }
   return distinct;
+}
+
+/** Two projections of the same topic list, for identity and readiness. */
+interface TopicCrossrefInput {
+  /** Stable reference handles used to address rows and read mention lists. */
+  sources: (ReadonlyCell<TopicMentionSource> | undefined)[] | Default<[]>;
+
+  /** The same list as `sources`, selected for unavailable-input preflight. */
+  values: Default<TopicMentionSource, { mentions: [] }>[] | Default<[]>;
 }
 
 /**
@@ -392,23 +396,18 @@ function distinctEntriesByIdentity<T extends object>(
  * any board change and still write nothing: an unchanged row recomputes to the
  * same links at the same address.
  *
- * `sources` supplies stable identity handles, and `values` reads only the
- * mention lists from those same input positions. Normal unavailable-input
- * preflight checks the value projection before this callback runs. Pending,
- * syncing, or error data propagates through the pivot without replacing
- * durable backlinks with an empty graph.
+ * `sources` supplies stable identity handles, and `values` declares the narrow
+ * readiness projection of that same list. The explicit input contract keeps
+ * unavailable-input preflight before the callback's handle reads. Pending,
+ * syncing, obsolete, or error data propagates without replacing durable backlinks
+ * with an empty graph. The explicit output contract keeps the rows' topic
+ * references opaque to readers which select no fields below them.
  * Ordinary absent entries have no source identity and are omitted; the value
  * default for those unused slots does not apply to native unavailable markers.
  */
 export const crossrefTable = lift(
   (
-    { sources, values }: {
-      // Reference handles keep row causes and backlinks identity-stable.
-      // The separate narrow value projection lets unavailable-input preflight
-      // stop this entire join before it writes any durable rows.
-      sources: (ReadonlyCell<TopicMentionSource> | undefined)[] | Default<[]>;
-      values: Default<TopicMentionSource, { mentions: [] }>[] | Default<[]>;
-    },
+    { sources }: TopicCrossrefInput,
   ): TopicCrossrefRow[] => {
     const rows: unknown[] = [];
     // Every pass below reads this plain array: an element read through the
@@ -419,14 +418,11 @@ export const crossrefTable = lift(
     // `Writable.for(undefined)` is not a cause, so `distinctByIdentity` leaves
     // it out. It gets no row rather than a junk one — the lookup is by
     // identity, not by position, so a shorter table costs nothing.
-    const entries = distinctEntriesByIdentity(Array.from(sources));
-    const list = entries.map(({ value }) => value);
-    // Deduplication retains input positions so every mention list stays paired
-    // with its original reference, including duplicate or absent sources.
-    const mentions = entries.map(({ index }) =>
-      values[index] === undefined
-        ? undefined
-        : Array.from(values[index].mentions)
+    const list = distinctByIdentity(Array.from(sources));
+    // Read each distinct source once after preflight has admitted the same
+    // list, and scan plain mention arrays throughout the join.
+    const mentions = mentionListsOf(list).map((refs) =>
+      refs === undefined ? undefined : Array.from(refs)
     );
     list.forEach((topic) => {
       const inbound = mentionedBy(topic, list, mentions);
@@ -444,6 +440,8 @@ export const crossrefTable = lift(
     });
     return rows as TopicCrossrefRow[];
   },
+  toSchema<TopicCrossrefInput>(),
+  toSchema<TopicCrossrefRow[]>(),
 );
 
 /**

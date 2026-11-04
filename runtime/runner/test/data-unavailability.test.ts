@@ -705,6 +705,138 @@ describe("JavaScript-node data unavailability", () => {
     expect(output).toBe(true);
   });
 
+  for (const union of ["anyOf", "oneOf"] as const) {
+    for (const referenced of [false, true]) {
+      it(`executes with an optional ${union} handle declared by ${referenced ? "a reference" : "an inline schema"}`, async () => {
+        const target = runtime.getCell(
+          space,
+          `optional opaque handle ${nextResultId++}`,
+        );
+        const tx = runtime.edit();
+        target.withTx(tx).setRaw({ nested: UNAVAILABLE_PENDING });
+        await tx.commit().settled;
+
+        const targetSchema = {
+          type: "object",
+          properties: { nested: { type: "unknown" } },
+        } as const;
+        let calls = 0;
+        let selected: unknown;
+        const output = await runValueNode({
+          argument: { value: [target.getAsLink()] },
+          argumentSchema: {
+            $defs: { Target: targetSchema },
+            type: "array",
+            items: {
+              [union]: [
+                { type: "undefined" },
+                {
+                  ...(referenced ? { $ref: "#/$defs/Target" } : targetSchema),
+                  asCell: ["readonly"],
+                },
+              ],
+            },
+          },
+          implementation: (handles: Cell<unknown>[]) => {
+            calls++;
+            return handles[0].equals(target);
+          },
+          captureSelectedInput: (value) => selected = value,
+        });
+
+        expect(calls).toBe(1);
+        expect(output).toBe(true);
+        expect(selected).toBeUndefined();
+      });
+    }
+
+    it(`preflights a marker at an optional handle's argument position in ${union}`, async () => {
+      let calls = 0;
+      const output = await runValueNode({
+        argument: {},
+        nodeInputs: UNAVAILABLE_PENDING,
+        argumentSchema: {
+          [union]: [
+            { type: "undefined" },
+            { type: "object", asCell: ["readonly"] },
+          ],
+        },
+        implementation: () => {
+          calls++;
+          return true;
+        },
+      });
+
+      expect(calls).toBe(0);
+      expectUnavailable(output, "pending");
+    });
+
+    it(`selects an optional ${union} handle from the reached value rather than its link`, async () => {
+      const target = runtime.getCell(
+        space,
+        `unavailable optional handle ${nextResultId++}`,
+      );
+      let calls = 0;
+      for (
+        const marker of [
+          UNAVAILABLE_PENDING,
+          UNAVAILABLE_SYNCING,
+          unavailableObsolete("Use the replacement profile"),
+        ]
+      ) {
+        const tx = runtime.edit();
+        target.withTx(tx).setRaw(marker);
+        await tx.commit().settled;
+        const output = await runValueNode({
+          argument: { value: target.getAsLink() },
+          argumentSchema: {
+            [union]: [
+              { type: "undefined" },
+              { type: "object", asCell: ["readonly"] },
+            ],
+          },
+          implementation: () => {
+            calls++;
+            return true;
+          },
+        });
+
+        expect(calls).toBe(0);
+        const unavailable = expectUnavailable(output, marker.reason);
+        expect(unavailable.obsoleteMessage).toBe(marker.obsoleteMessage);
+      }
+    });
+
+    it(`preflights value branches when ${union} cannot select an opaque handle`, async () => {
+      const target = runtime.getCell(
+        space,
+        `ambiguous opaque handle ${nextResultId++}`,
+      );
+      const tx = runtime.edit();
+      target.withTx(tx).setRaw({ nested: UNAVAILABLE_PENDING });
+      await tx.commit().settled;
+
+      let calls = 0;
+      const valueSchema = {
+        type: "object",
+        properties: { nested: { type: "unknown" } },
+      } as const;
+      const output = await runValueNode({
+        argument: { value: target.getAsLink() },
+        argumentSchema: {
+          [union]: [valueSchema, { ...valueSchema, asCell: ["readonly"] }],
+        },
+        implementation: () => {
+          calls++;
+          return true;
+        },
+      });
+
+      expect(calls).toBe(0);
+      expectUnavailable(output, "pending");
+    });
+  }
+
   it("does not preflight excluded children of typeless array items", async () => {
     let calls = 0;
     const output = await runValueNode({

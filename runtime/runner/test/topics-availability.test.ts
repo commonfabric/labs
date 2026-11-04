@@ -8,6 +8,7 @@ import {
   UNAVAILABLE_PENDING,
   UNAVAILABLE_SYNCING,
   unavailableError,
+  unavailableObsolete,
 } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -156,6 +157,7 @@ export default pattern<{
             UNAVAILABLE_PENDING,
             UNAVAILABLE_SYNCING,
             unavailableError("mentions refused", "provider"),
+            unavailableObsolete("Use the replacement topic's mention list"),
           ]
         ) {
           const tx = runtime.edit();
@@ -174,6 +176,7 @@ export default pattern<{
             throw new Error("Expected native source state");
           }
           expect(current.reason).toBe(marker.reason);
+          expect(current.obsoleteMessage).toBe(marker.obsoleteMessage);
           if (current.reason === "error") {
             expect(current.errorKind).toBe(marker.errorKind);
             expect(current.errorMessage).toBe(marker.errorMessage);
@@ -186,6 +189,7 @@ export default pattern<{
           expect(unavailableRows.reason).toBe(marker.reason);
           expect(unavailableRows.errorKind).toBe(marker.errorKind);
           expect(unavailableRows.errorMessage).toBe(marker.errorMessage);
+          expect(unavailableRows.obsoleteMessage).toBe(marker.obsoleteMessage);
         }
 
         const empty = runtime.edit();
