@@ -80,18 +80,32 @@ provided. Reports are optional: a short run may finish without one.
 
 Read `request.progress?.message` reactively. The latest report contains
 `message`, a `sequence` starting at 1 for each execution attempt, and an ISO
-`updatedAt` timestamp. Each report replaces the current progress link while `pending`
-remains true; `result` still appears only after completion. The latest report
-remains available after the run finishes. If a lost runner's run is reclaimed,
-progress is cleared and numbering restarts for that attempt. A different
-request starts without progress, and opting in changes the request hash. Explicit false and omission
-identify the same request.
+`updatedAt` timestamp. Each report replaces the current progress link while
+`pending` remains true; `result` still appears only after completion. The latest
+report remains available after the run finishes. If a lost runner's run is
+reclaimed, progress is cleared and numbering restarts for that attempt. A
+different request starts without progress, and opting in changes the request
+hash. Explicit false and omission identify the same request.
 
 Progress is a labeled model output. Its document goes through the same writer
 as the final result, carrying the run's observed-input labels and the
 `LlmDerived` stamp when enforcement is enabled. A pattern's ordinary display
 policy governs whether it can render the report. Raw tool output, reasoning,
 and child transcripts are not published as progress.
+
+The harness declares the run's observation ceiling as the store policy for
+every report. A generic message therefore does not make a report less
+confidential, and reports from one harness run share that declared ceiling.
+Replacing a progress link does not carry the previous report's label into the
+new one: a reader can recover when a later independently labeled report fits
+its ceiling. That return-channel property does not make the harness produce
+lower-confidentiality reports after observing confidential input.
+
+For a `cf-iframe` guest, pass `request.progress` in `$context` with the resource
+kind `readonly`, alongside `pending`, `error`, and `result`. The guest subscribes
+to that resource and renders its `message`, with a fallback before the first
+report. The [iframe guide's example](../ai/iframe-pattern-guide.md#optional-streams)
+shows the wrapper and the user-triggered request.
 
 The runner advertises support in its registration's `progress` field. A request
 opting in fails with `INVALID_INPUT` when the registered runner does not
