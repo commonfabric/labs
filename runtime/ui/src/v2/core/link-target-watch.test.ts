@@ -99,6 +99,69 @@ describe("LinkTargetWatch", () => {
         expect(retargets).toEqual([undefined]);
         watch.cancel();
       });
+
+      it("answers a second watch of a cell from the setup still in flight", async () => {
+        const target = pieceCell("of:fid1:piece");
+        const { link, counts } = linkTo(target);
+        const watch = new LinkTargetWatch({ onRetarget: () => {} });
+
+        const [first, second] = await Promise.all([
+          watch.watch(link, target),
+          watch.watch(link, target),
+        ]);
+
+        expect([first, second]).toEqual([target, target]);
+        expect(counts.subscribed).toBe(1);
+        watch.cancel();
+      });
+
+      it("rethrows a failed synchronization and follows nothing", async () => {
+        const target = pieceCell("of:fid1:piece");
+        const failure = new Error("unreadable");
+        const { link } = linkTo(target, () => {
+          throw failure;
+        });
+        const watch = new LinkTargetWatch({ onRetarget: () => {} });
+
+        await expect(watch.watch(link, target)).rejects.toBe(failure);
+        expect(watch.accessForTestingOnly.unsubscribe).toBeUndefined();
+      });
+    });
+
+    describe("follow()", () => {
+      it("returns `undefined` once superseded while resolving the moved link again", async () => {
+        const first = pieceCell("of:fid1:first");
+        const moved = pieceCell("of:fid1:moved");
+        const { link } = linkTo(moved);
+        let resolutions = 0;
+        let superseded = false;
+        Object.defineProperty(link, "resolveAsCell", {
+          value: () => {
+            resolutions++;
+            if (resolutions === 2) superseded = true;
+            return Promise.resolve(resolutions === 1 ? first : moved);
+          },
+        });
+        const watch = new LinkTargetWatch({ onRetarget: () => {} });
+
+        expect(await watch.follow(link, () => superseded)).toBeUndefined();
+        expect(resolutions).toBe(2);
+        watch.cancel();
+      });
+    });
+
+    describe("cancel()", () => {
+      it("drops the subscription a watch took", async () => {
+        const target = pieceCell("of:fid1:piece");
+        const { link } = linkTo(target);
+        const watch = new LinkTargetWatch({ onRetarget: () => {} });
+        await watch.watch(link, target);
+        expect(watch.accessForTestingOnly.unsubscribe).toBeDefined();
+
+        watch.cancel();
+
+        expect(watch.accessForTestingOnly.unsubscribe).toBeUndefined();
+      });
     });
   });
 });
