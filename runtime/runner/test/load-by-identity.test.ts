@@ -254,6 +254,59 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     });
   });
 
+  it("emits the same bytes for a shared module whichever stored program includes it", async () => {
+    // `/helper.ts` emits a different result schema checked with
+    // `exactOptionalPropertyTypes` than without it. Its importer in `legacy`
+    // writes `undefined` into an optional property, which only the check
+    // without the flag admits. The helper's identity hashes its own source,
+    // so whichever program compiles it has to emit the same bytes.
+
+    const helper = {
+      name: "/helper.ts",
+      contents: [
+        "import { lift } from 'commonfabric';",
+        "export const helper = lift(",
+        "  (value: { name?: string }) =>",
+        "    'name' in value ? value.name : 'missing',",
+        ");",
+      ].join("\n"),
+    };
+    const entry = (extra: string[]): Source[] => [
+      helper,
+      {
+        name: "/main.tsx",
+        contents: [
+          "import { pattern } from 'commonfabric';",
+          "import { helper } from './helper.ts';",
+          ...extra,
+          "export default pattern<{ value: { name?: string } }>(({ value }) => ({",
+          "  result: helper(value),",
+          "}));",
+        ].join("\n"),
+      },
+    ];
+    const clean = entry([]);
+    const legacy = entry([
+      "const old: { x?: string } = { x: undefined };",
+      "export { old };",
+    ]);
+
+    await expect(
+      engine.compileToRecordGraph({ main: "/main.tsx", files: legacy }),
+    ).rejects.toThrow("exactOptionalPropertyTypes");
+
+    const helperOf = (modules: CacheableModule[]) =>
+      modules.find((m) => m.filename === "/helper.ts")!;
+    const fromClean = helperOf(
+      (await engine.compileResolvedToRecordGraph(clean, "/main.tsx")).modules,
+    );
+    const fromLegacy = helperOf(
+      (await engine.compileResolvedToRecordGraph(legacy, "/main.tsx")).modules,
+    );
+    expect(fromLegacy.identity).toBe(fromClean.identity);
+    expect(fromLegacy.js).toBe(fromClean.js);
+  });
+
   it("cold-loads an exact attached source-root package", async () => {
     const program: RuntimeProgram = {
       main: "/main.tsx",

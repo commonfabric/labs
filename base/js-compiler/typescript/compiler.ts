@@ -452,7 +452,7 @@ export class TypeScriptCompiler {
       inputOptions.specifierAliases,
     );
     const createStart = performance.now();
-    let tsProgram = ts.createProgram(sourceNames, tsOptions, host);
+    const tsProgram = ts.createProgram(sourceNames, tsOptions, host);
     compileTimingLogger.time(createStart, "phase", "createProgram");
     yield;
 
@@ -462,7 +462,7 @@ export class TypeScriptCompiler {
         storedSource,
         authoredSource: inputOptions.authoredSource,
       });
-    let checker = checkerFor(tsProgram);
+    const checker = checkerFor(tsProgram);
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
     // only semantic hygiene codes. On stored-source compiles this gate
@@ -496,25 +496,28 @@ export class TypeScriptCompiler {
       const errors = yield* semanticErrors(checker);
       // Stored source admitted before `exactOptionalPropertyTypes` was the
       // rule may hold an `undefined` written into an optional property, which
-      // the flag refuses. Those bytes cannot be re-authored, so a stored
-      // program that fails under the flag is checked again without it, and
-      // loads if that check is clean. Neither rule's language contains the
-      // other (an index signature beside an optional property type-checks
-      // only under the flag), so neither check alone admits every stored
-      // program.
+      // the flag refuses, and those bytes cannot be re-authored. Such a
+      // program is admitted if it checks clean without the flag. Neither
+      // rule's language contains the other (an index signature beside an
+      // optional property type-checks only under the flag), so neither check
+      // alone admits every stored program.
+      //
+      // The check without the flag only admits. The program is still emitted
+      // under the flag, so a module compiles to the same output whichever
+      // program includes it, as its identity, a hash of its own source and
+      // what it imports, assumes.
       if (
         errors.length > 0 && storedSource &&
         tsOptions.exactOptionalPropertyTypes === true
       ) {
-        const inexactProgram = ts.createProgram(
-          sourceNames,
-          { ...tsOptions, exactOptionalPropertyTypes: false },
-          host,
+        const inexactChecker = checkerFor(
+          ts.createProgram(
+            sourceNames,
+            { ...tsOptions, exactOptionalPropertyTypes: false },
+            host,
+          ),
         );
-        const inexactChecker = checkerFor(inexactProgram);
         if ((yield* semanticErrors(inexactChecker)).length === 0) {
-          tsProgram = inexactProgram;
-          checker = inexactChecker;
           errors.length = 0;
         }
       }
