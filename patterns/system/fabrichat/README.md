@@ -21,15 +21,18 @@ room. Repeated requests keep the same room, including a request from a starter
 whose Start control was rendered before another starter created it. Creation
 adds no panel or piece-registry entry.
 
-The starter renders the registered room and offers the profile-setup surface
-when the viewer has no selected profile. Its `room` output retains the
-registered cell's identity, and `VIEWS.room` exposes that room's data face. Both
-outputs are absent while no room is registered.
+Before a room is registered, the starter offers profile setup when the viewer
+has no selected profile. Once registered, the room supplies its own rendering
+and profile setup. The starter's `room` output retains the registered cell's
+identity, and `VIEWS.room` exposes that room's data face. Both outputs are
+absent while no room is registered.
 
 ## Validation
 
 `deno task cf test patterns/system/fabrichat/main.test.tsx` exercises the
 starter against Loom's real registry: missing capability, an empty conversation
 cell, reviewed creation, shared room identity, and a delayed second Start
-gesture. The root's access enforcement and concurrent creation are covered by
-`patterns/integration/loom-chat-room-multi-runtime.test.ts`.
+gesture. `patterns/integration/fabrichat-starter-profile-multi-runtime.test.ts`
+checks setup visibility with missing, selected, and empty profiles, with server
+execution on and off. The root's access enforcement and concurrent creation are
+covered by `patterns/integration/loom-chat-room-multi-runtime.test.ts`.
