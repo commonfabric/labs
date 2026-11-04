@@ -2,7 +2,8 @@
  * A person's chat manager in a browser after a room they started is really
  * deleted, as `cf space delete` deletes it: the room's notice is gone from the
  * page, and the notice of a live room stays, on the page that was open at the
- * deletion and on one opened after it.
+ * deletion and on one opened after it. Home's catalog records the deletion,
+ * through Home's own handler, and leaves the live room's entry as it was.
  */
 
 import { Identity } from "@commonfabric/identity";
@@ -10,6 +11,7 @@ import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ACLManager, type Cell } from "@commonfabric/runner";
+import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
@@ -112,6 +114,14 @@ describe("fabrichat-deleted-room", () => {
       );
       const space = manager.key("direct").key(goner).key("room")
         .resolveAsCell().getAsNormalizedFullLink().space;
+      await waitForCellValue(
+        controller.runtime,
+        manager.key("direct").key(friend),
+        (value) => value !== undefined,
+        { stuckLabel: "the second room held in `direct`" },
+      );
+      const liveSpace = manager.key("direct").key(friend).key("room")
+        .resolveAsCell().getAsNormalizedFullLink().space;
 
       // Its sole member deletes it, once the other is removed.
       const deleter = await initializePiecesController({
@@ -128,6 +138,21 @@ describe("fabrichat-deleted-room", () => {
       }
 
       await waitForNotices(page, friend, goner);
+
+      // The runtime that heard of the deletion has Home's own handler record
+      // it, which asks the memory server itself, and the live room is left.
+      const catalog = home.key(
+        "sharedSpaceCatalog" as never,
+      ) as unknown as Cell<
+        { entries: Record<string, { state: string }> }
+      >;
+      const entries = await waitForCellValue<Record<string, { state: string }>>(
+        controller.runtime,
+        catalog.key("entries"),
+        (value) => value?.[space]?.state === "deleted",
+        { stuckLabel: "the deleted room's catalog entry marked deleted" },
+      );
+      expect(entries[liveSpace]?.state).toBe("saved");
 
       await shell.goto({
         frontendUrl: FRONTEND_URL,
