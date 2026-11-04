@@ -18,6 +18,14 @@ export interface WeightedCacheOptions<K, V> extends CacheOptions {
 
   /** Maximum total weight to hold, in the unit `weigh` reports. */
   maxWeight?: number;
+
+  /**
+   * Called once per entry the cache drops to stay within its capacity or
+   * weight bound, after the entry is removed. Never called for the caller's
+   * own removals (`delete`, `clear`) or for a `put` that replaces a key's
+   * value.
+   */
+  onEvict?: (key: K, value: V) => void;
 }
 
 /** Options for a {@link BoundedKeyMap}. */
@@ -178,6 +186,7 @@ export class LRUCache<K, V> {
   // assigning the caller's optional `weigh` stays legal for the packages that
   // compile with exactOptionalPropertyTypes.
   #weigh: ((key: K, value: V) => number) | undefined;
+  #onEvict: ((key: K, value: V) => void) | undefined;
   #maxWeight: number;
   #weight = 0;
 
@@ -189,6 +198,7 @@ export class LRUCache<K, V> {
   constructor(options: WeightedCacheOptions<K, V> = {}) {
     this.#capacity = Math.max(options.capacity ?? 1000, 1);
     this.#weigh = options.weigh;
+    this.#onEvict = options.onEvict;
     this.#maxWeight = options.maxWeight ?? Infinity;
   }
 
@@ -328,5 +338,6 @@ export class LRUCache<K, V> {
     this.#map.delete(node.key);
     this.#removeNode(node);
     this.#weight -= node.weight;
+    this.#onEvict?.(node.key, node.value);
   }
 }

@@ -278,6 +278,33 @@ describe("node-binding-memo", () => {
       expect(bindings.bindingFor(stopped, () => ({ n: 5 }))).toEqual({ n: 5 });
     });
 
+    it("drops a document's bindings given a link to a path within it", () => {
+      const bindings = memo();
+      bindings.bindingFor(subject({ resultLink: linkTo("stopped") }), () => ({
+        n: 1,
+      }));
+
+      bindings.release(linkTo("stopped", { path: ["internal", "x"] }));
+
+      expect(bindings.size).toBe(0);
+    });
+
+    it("keeps no key of a binding the cache has dropped", () => {
+      const bindings = new NodeBindingMemo<{ n: number }>({
+        capacity: 1,
+        maxWeight: 1_000_000,
+      });
+      bindings.bindingFor(subject({ resultLink: linkTo("first") }), () => ({
+        n: 1,
+      }));
+      bindings.bindingFor(subject({ resultLink: linkTo("second") }), () => ({
+        n: 2,
+      }));
+
+      expect(bindings.size).toBe(1);
+      expect(bindings.accessForTestingOnly.indexedKeys).toBe(1);
+    });
+
     it("does nothing for a result document it holds no binding for", () => {
       const bindings = memo();
       bindings.bindingFor(subject(), () => ({ n: 1 }));
