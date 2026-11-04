@@ -1181,6 +1181,31 @@ const handlers: Record<
   },
 
   /**
+   * Stores `value` whole as the document at an explicit storage address, in a
+   * commit nothing prepares, which holds what no pattern here writes. `value`
+   * is the document as `rawRead` returns it.
+   */
+  async rawWrite({ id, space, scope, value }) {
+    const tx = controller().runtime.edit().tx;
+    const { error } = tx.write({
+      space: space as never,
+      id: id as never,
+      type: "application/json",
+      path: [],
+      ...(scope !== undefined ? { scope: scope as never } : {}),
+    } as never, value as never) as { error?: { message?: string } };
+    if (error !== undefined) {
+      throw new Error(`rawWrite failed: ${error.message}`);
+    }
+    const committed = await tx.commit().settled;
+    if (committed.error !== undefined) {
+      throw new Error(`rawWrite failed: ${committed.error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
    * Has the host give the Home stand-in reached from the piece result by
    * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
    * the identity's Home its own, and answers what the host found, naming an
