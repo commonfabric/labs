@@ -168,7 +168,9 @@ runs on the strength of one that did not finish, and it checks the copy's
 checksum before it stops anything. Set the names at its top first: the space's
 DID, the file step 3 copied up, step 1's digest, the directory step 4 listed,
 a date for the file names, and the directory that receives what the install
-replaces, which has to be on the store's file system for the copy to be quick.
+replaces, which has to be on the store's file system for the copy to be quick. The store's file name is derived from the DID and the directory, as the
+memory server derives it, rather than typed. The run prints an id, the date
+and a random suffix, which names what it keeps; the way back takes it.
 
 ```bash
 set -euo pipefail
@@ -179,6 +181,41 @@ LIVE='<store>/engine-v3/engine-v3'
 DATE='<date>'
 REPLACED=/data/replaced
 cd "$LIVE"
+
+# The store's file name is the memory server's for the DID
+# (`resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`), and the
+# directory's own name says which: in directory mode, whose directory is
+# .../engine-v3/engine-v3, the DID itself; in single-file mode, whose
+# directory is <stem>.engine-v3, the DID as `encodeURIComponent` encodes it.
+# A store under the other spelling means the names above are wrong.
+uri_component() {
+  local LC_ALL=C s=$1 i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9_.!~*\'\(\)-]) printf '%s' "$c" ;;
+      *) printf '%%%02X' $(($(printf '%d' "'$c") & 255)) ;;
+    esac
+  done
+}
+encoded="$(uri_component "$DID").sqlite"
+case "$(basename "$LIVE")" in
+  engine-v3) STORE="$DID.sqlite" OTHER=$encoded ;;
+  *.engine-v3) STORE=$encoded OTHER="$DID.sqlite" ;;
+  *)
+    echo "$LIVE is not a store directory: stop here" >&2
+    exit 1
+    ;;
+esac
+if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
+  echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
+  exit 1
+fi
+# The run's id names what it keeps in $REPLACED: the date and a random
+# suffix, so a second run on the same day keeps its own. Note it down; the
+# way back needs it.
+RUN="$DATE-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+echo "run id: $RUN"
 
 # The copy that arrived is the one step 1 made, or nothing else runs.
 if [ "$(sha256sum "$COPY" | cut -d' ' -f1)" != "$DIGEST" ]; then
@@ -205,21 +242,25 @@ done
 #    stays in place until the install renames the copy over it, so the
 #    directory never lacks a store for the DID.
 for log in -wal -journal; do
-  if [ -s "$DID.sqlite$log" ]; then
-    echo "$DID.sqlite$log is not empty: stop here" >&2
+  if [ -s "$STORE$log" ]; then
+    echo "$STORE$log is not empty: stop here" >&2
     exit 1
   fi
 done
-sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
+sudo rm -f "$STORE-wal" "$STORE-shm" "$STORE-journal"
 sudo install -d -o deploy -g deploy "$REPLACED"
-if [ -e "$DID.sqlite" ]; then
-  sudo cp -p "$DID.sqlite" "$REPLACED/$DID.staging-$DATE.sqlite"
+if [ -e "$STORE" ]; then
+  if [ -e "$REPLACED/$DID.staging-$RUN.sqlite" ]; then
+    echo "$REPLACED/$DID.staging-$RUN.sqlite exists: stop here" >&2
+    exit 1
+  fi
+  sudo cp -p "$STORE" "$REPLACED/$DID.staging-$RUN.sqlite"
 fi
 
 # 7. Install the copy, owned by the user the services run as, under a
 #    temporary name, and rename it over the store.
-sudo install -o deploy -g deploy -m 644 "$COPY" "$DID.sqlite.copy"
-sudo mv -f "$DID.sqlite.copy" "$DID.sqlite"
+sudo install -o deploy -g deploy -m 644 "$COPY" "$STORE.copy"
+sudo mv -f "$STORE.copy" "$STORE"
 
 # 8. Start the servers, and confirm they came up.
 for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
@@ -280,11 +321,43 @@ onto the store put back. The store step 6 set aside, if there was one, is
 copied back and renamed over the copy, so the directory never lacks a store
 for the DID. If nothing was set aside, leaving the space absent is the correct
 end state — the server will create an empty one if anyone asks for it again.
-Write these commands down before step 5, not after. With the same names set:
+Write these commands down before step 5, not after. With the same names set,
+and the run id the window printed:
 
 ```bash
 set -euo pipefail
+RUN='<the run id the run printed>'
 cd "$LIVE"
+
+# The store's file name is the memory server's for the DID
+# (`resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`), and the
+# directory's own name says which: in directory mode, whose directory is
+# .../engine-v3/engine-v3, the DID itself; in single-file mode, whose
+# directory is <stem>.engine-v3, the DID as `encodeURIComponent` encodes it.
+# A store under the other spelling means the names above are wrong.
+uri_component() {
+  local LC_ALL=C s=$1 i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9_.!~*\'\(\)-]) printf '%s' "$c" ;;
+      *) printf '%%%02X' $(($(printf '%d' "'$c") & 255)) ;;
+    esac
+  done
+}
+encoded="$(uri_component "$DID").sqlite"
+case "$(basename "$LIVE")" in
+  engine-v3) STORE="$DID.sqlite" OTHER=$encoded ;;
+  *.engine-v3) STORE=$encoded OTHER="$DID.sqlite" ;;
+  *)
+    echo "$LIVE is not a store directory: stop here" >&2
+    exit 1
+    ;;
+esac
+if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
+  echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
+  exit 1
+fi
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
 for p in $(seq 8001 8021); do
   state=$(systemctl is-active "toolshed-binary@$p" || true)
@@ -295,18 +368,18 @@ for p in $(seq 8001 8021); do
 done
 
 # Keep the copy, with the companions it grew, out of the store directory.
-sudo install -d -o deploy -g deploy "$REPLACED/removed-copy-$DATE"
+sudo install -d -o deploy -g deploy "$REPLACED/removed-copy-$RUN"
 for companion in -wal -shm -journal; do
-  if [ -e "$DID.sqlite$companion" ]; then
-    sudo mv "$DID.sqlite$companion" "$REPLACED/removed-copy-$DATE/"
+  if [ -e "$STORE$companion" ]; then
+    sudo mv "$STORE$companion" "$REPLACED/removed-copy-$RUN/"
   fi
 done
-if [ -e "$REPLACED/$DID.staging-$DATE.sqlite" ]; then
-  sudo cp -p "$DID.sqlite" "$REPLACED/removed-copy-$DATE/$DID.sqlite"
-  sudo cp -p "$REPLACED/$DID.staging-$DATE.sqlite" "$DID.sqlite.restored"
-  sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
+if [ -e "$REPLACED/$DID.staging-$RUN.sqlite" ]; then
+  sudo cp -p "$STORE" "$REPLACED/removed-copy-$RUN/$STORE"
+  sudo cp -p "$REPLACED/$DID.staging-$RUN.sqlite" "$STORE.restored"
+  sudo mv -f "$STORE.restored" "$STORE"
 else
-  sudo mv "$DID.sqlite" "$REPLACED/removed-copy-$DATE/"
+  sudo mv "$STORE" "$REPLACED/removed-copy-$RUN/"
 fi
 
 for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
