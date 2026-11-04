@@ -2793,6 +2793,70 @@ export default pattern<
     });
   });
 
+  /**
+   * A pattern whose `offer` handler sends to the `receive` stream of an inbox
+   * its holder links to, through a cell that carries no stream schema, as
+   * FabriChat's offers reach a profile's inbox.
+   */
+  const OFFERING_HANDLER_PATTERN = `
+import { type Cell, handler, pattern, type Stream } from "commonfabric";
+type Inbox = { receive: Stream<{ title: string }> };
+type Holder = { inbox?: Cell<unknown> };
+function inboxOf(link: unknown): Cell<Inbox>;
+function inboxOf(link: unknown): unknown {
+  return link;
+}
+const offer = handler<{ title: string }, { holder: Holder }>(
+  (event, { holder }) => {
+    inboxOf(holder.inbox!.resolveAsCell()).key("receive").send({
+      title: event.title,
+    });
+  },
+);
+export default pattern<{ holder: Holder }, { offer: Stream<{ title: string }> }>(
+  ({ holder }) => ({ offer: offer({ holder }) }),
+);`;
+
+  it("delivers a served handler's send to a foreign stream, through a link to a document the serving runtime has not loaded", async () => {
+    // Read without a stream schema, the target's stream marker is what tells
+    // a send from a write, and on a document the replica has not loaded it is
+    // unknowable. The run is withdrawn and runs again once the load lands,
+    // rather than writing into the foreign space and losing the event.
+    let inbox: Cell<unknown> | undefined;
+    const { result, entries } = await standUpServed(
+      "send-unloaded-stream",
+      OFFERING_HANDLER_PATTERN,
+      async (client) => {
+        inbox = await foreignDocument(
+          client,
+          "send-unloaded-stream-inbox",
+          "space",
+          { receive: { $stream: true } },
+        );
+        return { holder: { inbox } };
+      },
+    );
+
+    result.key("offer").send({ title: "hello" });
+    await clientManager.synced();
+    await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+
+    expect(entries()[0].status).toBeUndefined();
+    const foreign = await server.engineForSpace(foreignSpace);
+    const sidecarId = streamEntriesDocId({
+      id: inbox!.getAsNormalizedFullLink().id,
+      path: ["receive"],
+    });
+    const delivered = () =>
+      (readDoc(foreign, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? [];
+    await awaitAdmitted(server, () => delivered().length > 0);
+    expect(delivered().map((entry) => entry.payload)).toEqual([
+      { title: "hello" },
+    ]);
+  });
+
   it("runs a served event whose declared value is a foreign space-scope document", async () => {
     let target: Cell<unknown> | undefined;
     const { result, entries, stored } = await standUpServed(

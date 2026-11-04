@@ -3039,6 +3039,28 @@ export class CellImpl<T extends FabricValue>
         );
       }
 
+      // A handler's write into another space, at a link-hop target whose
+      // document has not arrived (`pendingHopDoc`), cannot tell a send to a
+      // stream from a write: the stream marker is unknowable there, not
+      // absent. Written as a value, it would open a writer in a second space,
+      // which the transaction refuses, and lose the event. So the run records
+      // that it did not run, and the dispatch withdraws it and runs it again
+      // once the load lands (events.md §5), as it does for a cold argument;
+      // the resolution above kicked that load. A same-space target, or one
+      // outside a handler, writes as before.
+      const frame = getTopFrame();
+      if (
+        resolvedToValueLink.pendingHopDoc === true &&
+        frame?.frameKind === "handler" &&
+        frame.space !== undefined &&
+        resolvedToValueLink.space !== frame.space
+      ) {
+        this.#tx.dispatchedHandlerNotRun ??= {
+          reason: "a write's target in another space has not loaded",
+        };
+        return this as unknown as Cell<T>;
+      }
+
       // No await for the sync, just kicking this off, so we have the data to
       // retry on conflict.
       if (!this.#synced) this.#startLoad();
