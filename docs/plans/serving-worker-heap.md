@@ -68,37 +68,46 @@ the main thread under the worker arm and so are not on the worker.
   transaction that sealed into a wave to that wave, so a node that kept its run's
   transaction kept the whole wave with it: 690 KB of the 1,551 KB a demanded
   board's create left on the worker.
+- The served release of a handler's result asks for the release pass a stop
+  asks for (`Runtime.releaseUnreadDocuments()`, `document-release.md`), so the
+  watches of the documents only the stopped pieces read go. On the worker rig
+  the replica's watch bookkeeping per create roughly halves: the selector
+  tracker 37 KB to 18, root watches 31 to 15, the session's watch specs 18 to
+  9, the provider's sync requests 28 to 13, replica documents 22 to 15. Two
+  runs on one machine, one each side of the change, left 1,055 and 915 KB per
+  create; the per-run spread is wide, so the holder table is the measure.
 
 ## What is left
 
 Per create on the worker rig, a demanded board, removing holders cumulatively in
 this order. The total is 862 KB.
 
-- The replica's watch bookkeeping, about 310 KB together, the largest and the
-  next to take. The worker's runtime watches every document a create writes and
-  nothing withdraws a watch when the piece that wrote it stops: the entities of
-  `SpaceReplica.#subscribedWatchView` keep each Topic's `result`, `internal` and
-  `$UI` documents, about 140 KB, and around them `#watchSelectorTracker` 36 KB,
-  `#rootWatches` 31 KB, the session's `#watchSpecs` and `#watchSpecPositions`
-  35 KB, `watchIds` 24 KB, `#docs` 22 KB, `#watchedIds` 11 KB and `#delivered`
-  11 KB. Start from what registers a watch for a served piece's documents, in
-  `storage/v2.ts`, and ask whether a stopped piece's documents need one at all.
+- Each Topic's documents, about 135 KB per create in `SpaceReplica.#docs` and
+  shared with the session's watch view, and the watch bookkeeping that remains
+  around them, about 80 KB. The board's own derivations read every Topic, so
+  `Scheduler.readsEntity()` holds the documents, the release pass keeps their
+  watches, and the trigger index grows by about 50 KB per create. That is the
+  cost of a demanded board whose computations stay registered after they ran.
+  Letting a computation that has run keep only its basis rows, loading its
+  inputs again when a change dirties it, is the design in the introduction
+  applied to a demanded piece's computations; it is the largest item left and
+  a change to what the scheduler keeps, not to storage.
+- `deepFrozenCache` charges about 314 KB per create in a snapshot and holds
+  nothing: those are objects awaiting finalization that a snapshot taken right
+  after a collection still contains. Subtract them before reading a total.
 - The transaction of the run that started the piece, 55 KB. A node a run starts
   binds its result cell to the run's transaction in `#instantiateNode`
   (`runner.ts`), and the map builtin's element instances of a demanded board are
   such nodes. `map.ts` already strips the transaction from the element cells it
   stores; the result cell wants the same, and since it reaches every node, the
   change needs the executor suites.
-- The scheduler's trigger index, about 50 KB, reached through
-  `#eventPreflightDependencyState`, and the read logs of the active computations,
-  about 30 KB. The index grows because the board's own derivations read every
-  Topic.
-- Weak and bounded caches: `deepFrozenCache` 105 KB, `DerivedInternalCellIds`
-  44 KB, a bounded cache still filling, `externalRefHashCache` 12 KB,
-  `stringRepCache` 10 KB, and the engine's `documentCache` 8 KB, bounded. The
-  weak ones should fall as the holders above do; check them again after.
-- The provider's `#syncRequests`, 27 KB, and `#documentHolds`, 18 KB: sync
-  requests and holds for the documents of a piece that has stopped.
+- The read logs of the active computations, about 42 KB, which grow with the
+  index for the same reason.
+- Bounded caches still filling: `watchIds` 30 KB, `DerivedInternalCellIds`
+  35 KB, `sortedKeyCache` 13 KB, `externalRefHashCache` 12 KB,
+  `stringRepCache` 10 KB. Each stops growing at its bound.
+- The provider's `#syncRequests`, 17 KB, and `#documentHolds`, 7 KB, for the
+  documents the board holds.
 
 Beyond these:
 
