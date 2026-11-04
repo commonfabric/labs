@@ -129,7 +129,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with highlighting, `[[`-mention completion, and marks on a collaborative field's anchors | `$value`, `$mentionable`, `$mentioned`, `highlights` |
+| `cf-code-editor` | Code/prose editor with highlighting, `[[`-mention completion, and marks on a collaborative field's anchors (`highlights` attribute) | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |

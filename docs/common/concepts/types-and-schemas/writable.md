@@ -140,7 +140,8 @@ to the new range, and `.removeAnchor(id)` removes it. Positions count UTF-16
 code units, as string indexes do.
 
 `anchorsOf(field)` returns the field's anchors, `{ epoch, version, anchors }`
-with `anchors` sorted by id, or `undefined` while the field has none:
+with `anchors` sorted by id, or `undefined` until the field first holds one;
+removing the last anchor leaves an empty list:
 
 ```typescript
 // Shown at module scope.
@@ -149,11 +150,19 @@ interface Comment {
   text: string;
 }
 
+// `from`, `to` and `base` are an editor's selection, as `cf-selection-change`
+// reports it.
 const addComment = handler<
-  { anchorId: string; text: string; from: number; to: number },
+  {
+    anchorId: string;
+    text: string;
+    from: number;
+    to: number;
+    base: OpCursor | null;
+  },
   { content: Writable<string>; comments: Writable<Comment[]> }
->(({ anchorId, text, from, to }, { content, comments }) => {
-  content.addAnchor(anchorId, { from, to });
+>(({ anchorId, text, from, to, base }, { content, comments }) => {
+  content.addAnchor(anchorId, { from, to }, base === null ? {} : { base });
   comments.push({ anchorId, text });
 });
 
@@ -189,12 +198,14 @@ Pass the version that text was at as `base`, `{ epoch, version }`, and the
 range refers to the field's text at that version; the runtime maps it over
 the edits made since, and the handler does not run again because the field
 moved. All the anchors one handler adds to one field with a `base` name the
-same version. The base must be a version the field still has: one in an epoch
-that has ended, because the field was released, or one older than the history
-the store keeps, which reaches back at least one operation checkpoint
-interval, refuses the commit, and the handler fails rather than running
-again. An editor restates a selection it holds against each newer version it
-confirms, so the base it reports stays within that history.
+same version.
+
+The base must be a version the field still holds. A base in an epoch that has
+ended, because the field was released, or older than the history the store
+keeps, which reaches back at least one operation checkpoint interval, refuses
+the commit, and the handler fails rather than running again. `cf-code-editor`
+reports a selection it holds again once the selection's base falls 32 versions
+behind, so the base it reports stays within that history.
 
 An anchor whose text an edit deletes becomes a point, `from === to`, where the
 text was; show it as a comment on text no longer in the field. Text inserted at

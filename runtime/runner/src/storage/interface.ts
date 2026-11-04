@@ -29,6 +29,7 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  FieldAnchor,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
@@ -4301,14 +4302,27 @@ export interface NativeStorageCommit {
 /**
  * An `apply-op` as a transaction's native commit carries it in
  * {@link NativeStorageCommit.applyOps}: no base and a hash of the text it
- * applies to; a base, an empty payload, and anchors stated at that version;
+ * applies to; a base, an empty payload, and anchors added as of that version;
  * or neither, an empty payload, and anchors removed.
  */
 export type NativeTextEdit =
-  & Omit<ApplyOpOperation, "base" | "baselineHash">
+  & Omit<ApplyOpOperation, "base" | "baselineHash" | "anchors">
   & (
-    | { base?: never; baselineHash?: string }
-    | { base: OpCursor; baselineHash?: never }
+    | {
+      base?: never;
+      baselineHash: string;
+      anchors?: ApplyOpOperation["anchors"];
+    }
+    | {
+      base: OpCursor;
+      baselineHash?: never;
+      anchors: { add: FieldAnchor[]; remove?: never };
+    }
+    | {
+      base?: never;
+      baselineHash?: never;
+      anchors: { add?: never; remove: string[] };
+    }
   );
 
 /**

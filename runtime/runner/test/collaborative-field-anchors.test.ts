@@ -745,6 +745,26 @@ describe("collaborative-field-anchors", () => {
       tx.abort();
     });
 
+    it("commits only the later add when one id is added against two versions", async () => {
+      const note = await seed();
+      await openAsEditor(note);
+
+      const tx = rt.edit();
+      const body = note.withTx(tx).key("body");
+      body.addAnchor("a", { from: 0, to: 1 }, {
+        base: { epoch: 1, version: 0 },
+      });
+      body.addAnchor("a", { from: 1, to: 2 }, {
+        base: { epoch: 1, version: 1 },
+      });
+
+      const ops = applyOpsOf(getDirectTransactionNativeCommit(tx, space));
+      expect(ops).toHaveLength(1);
+      expect(ops[0].base).toEqual({ epoch: 1, version: 1 });
+      expect(ops[0].anchors).toEqual({ add: [{ id: "a", from: 1, to: 2 }] });
+      tx.abort();
+    });
+
     it("throws when building a commit whose field was written after its anchors", async () => {
       const note = await seed();
 

@@ -2133,6 +2133,7 @@ export class CFCodeEditor extends BaseElement {
     const generation = ++this._collaborationGeneration;
     this._collaborationSyncUnsub?.();
     this._collaborationSyncUnsub = undefined;
+    this._clearAnchors();
     this._cleanupPresence();
     const previous = this._collaboration;
     this._collaborationFailed = false;
@@ -2275,8 +2276,7 @@ export class CFCodeEditor extends BaseElement {
   ): void {
     if (snapshot === null) {
       this._cleanupPresence();
-      this._shownAnchors = undefined;
-      this._editorView?.dispatch({ effects: setHighlightRangesEffect.of([]) });
+      this._clearAnchors();
       // The selection stays; with no confirmed version it is stated against
       // the editor's own text.
       this._reportSelection();
@@ -2314,6 +2314,15 @@ export class CFCodeEditor extends BaseElement {
       }),
     });
     this._publishPresence();
+  }
+
+  /**
+   * Forgets the anchors of a collaboration that has ended or is being
+   * replaced, so no mark is drawn until the next one states its own.
+   */
+  private _clearAnchors(): void {
+    this._shownAnchors = undefined;
+    this._editorView?.dispatch({ effects: setHighlightRangesEffect.of([]) });
   }
 
   /**
