@@ -7321,7 +7321,9 @@ export class SpaceReplica
     ) {
       await this.#quarantineHeal;
     }
-    return this.#quarantined.get(key)?.status === "unhealed"
+    // A replica that applied an earlier copy still has that to give.
+    return this.#quarantined.get(key)?.status === "unhealed" &&
+        !this.#delivered.has(key)
       ? new DocumentQuarantinedError(id)
       : undefined;
   }

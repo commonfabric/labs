@@ -58,6 +58,9 @@ class CidDroppingFactory implements SessionFactory {
   /** Whether the server appears not to take declared holdings. */
   hidesHoldings = false;
 
+  /** Resolves when the client first sends a `session.watch.set`. */
+  readonly firstWatchSet = Promise.withResolvers<void>();
+
   readonly #server: MemoryV2Server.Server;
 
   /** Constructs an instance over `server` that drops from `drops` frames. */
@@ -98,6 +101,7 @@ class CidDroppingFactory implements SessionFactory {
         const sent = decodeMemoryBoundary(payload) as { type?: string };
         if (sent.type === "session.watch.set") {
           this.watchSets += 1;
+          this.firstWatchSet.resolve();
           if (this.watchSets >= LOOP_BOUND) this.dropsLeft = 0;
         }
         return inner.send(payload);
@@ -170,14 +174,14 @@ describe("schema-doc-quarantine-redelivery", () => {
   let writer: Runtime;
   const cleanups: (() => Promise<void>)[] = [];
 
-  const naming = (revision: number): FabricValue => ({
+  const naming = (revision: number, hash = leafHash): FabricValue => ({
     revision,
     linked: {
       "/": {
         [LINK_V1_TAG]: {
           id: "of:quarantine-redelivery-target",
           path: [],
-          schema: { $ref: `cid:${leafHash}` },
+          schema: { $ref: `cid:${hash}` },
         },
       },
     },
@@ -383,6 +387,31 @@ describe("schema-doc-quarantine-redelivery", () => {
 
       expect(await replica.quarantineFailure(DOCUMENT_ID as URI, "space"))
         .toBeUndefined();
+    });
+  });
+
+  describe("a newer copy no re-delivery can apply", () => {
+    it("leaves the copy already applied to read, and loads as present", async () => {
+      const before = unhealedErrors();
+      const { factory, replica, runtime, cellOf, revision } = readerDropping(0);
+      expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
+      const otherSchema = {
+        type: "number",
+        title: "redelivery-other",
+      } as const;
+      const otherHash = internSchemaAsTaggedHashString(otherSchema);
+      factory.dropsLeft = Infinity;
+
+      await write({
+        [`cid:${otherHash}`]: otherSchema as unknown as FabricValue,
+        [DOCUMENT_ID]: naming(2, otherHash),
+      });
+      await factory.firstWatchSet.promise;
+      await replica.quarantineFailure(DOCUMENT_ID as URI, "space");
+
+      expect(unhealedErrors()).toBe(before + 1);
+      expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
+      expect(revision()).toBe(1);
     });
   });
 
