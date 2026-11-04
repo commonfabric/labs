@@ -5789,11 +5789,15 @@ export class Runner {
       givenPattern?: Pattern;
     },
   ): ScopedPieceRegistration {
+    // Taken out of `options` here, as `#startCore` does: the registration's
+    // closures live as long as the piece, and one that named `options` would
+    // keep its `tx`, the start's transaction, for that long.
+    const { tx: startTx, givenPattern, parentPieceRootId } = options;
     const pieceKey = this.#getDocKey(resultCell);
     const existing = this.#scopedPieces.get(pieceKey);
     if (existing !== undefined) {
-      if (options.tx && options.givenPattern) {
-        existing.ensure(options.tx, options.givenPattern);
+      if (startTx && givenPattern) {
+        existing.ensure(startTx, givenPattern);
       }
       return existing;
     }
@@ -5907,7 +5911,7 @@ export class Runner {
         tx,
         givenPattern: pattern,
         doNotUpdateOnPatternChange: true,
-        parentPieceRootId: options.parentPieceRootId,
+        parentPieceRootId,
         variantRegistration: { registrations: variants, selection },
       });
     };
@@ -5959,11 +5963,11 @@ export class Runner {
       this.#schedulerRehydrationOptions(
         resultCell,
         false,
-        options.parentPieceRootId,
+        parentPieceRootId,
       ),
     ));
-    if (options.tx && options.givenPattern) {
-      cancel.ensure(options.tx, options.givenPattern);
+    if (startTx && givenPattern) {
+      cancel.ensure(startTx, givenPattern);
     }
     return cancel;
   }

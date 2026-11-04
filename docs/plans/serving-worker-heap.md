@@ -81,7 +81,10 @@ the main thread under the worker arm and so are not on the worker.
   runs on one machine, one each side of the change, left 1,055 and 915 KB per
   create; the per-run spread is wide, so the holder table is the measure.
 - A piece that keeps running no longer keeps the transaction that started it
-  (`start-transaction-release.test.ts`). V8 gives every closure of one function
+  through the start's own closures, a node's closures, or the identity its
+  result cell's siblings share (`start-transaction-release.test.ts`; the
+  paths a raw node's builtin and a bound result cell still keep are under
+  "What is left"). V8 gives every closure of one function
   scope one context, so a closure that lives as long as the piece, the start's
   `cancel` or a node's `action` or `handler`, kept every variable any closure of
   that scope had captured, and a function whose parameters are destructured or
@@ -119,15 +122,19 @@ the holders the two entries at the end of this list describe; the total is
   a change to what the scheduler keeps, not to storage.
 - One settled transaction per create, 54 KB, of which 38 KB is its CFC state
   (`#cfcState` in `extended-storage-transaction.ts`: the prepare state, the
-  dereference traces, the write policy inputs). It is reached three ways: the
-  map builtin's action keeps the `inputsCell` the raw node hands it, which the
-  node's plan binds to the start's transaction (`inputsCell.withTx(tx)` in
-  `#buildRawNodeInputs`), and most builtins read through that cell by `.key()` or
-  `.withTx(tx)` rather than through its own transaction; the start's own
+  dereference traces, the write policy inputs). It is the transaction of the
+  start of a map element, which the change above does not reach on three
+  paths: the map builtin's action keeps the `inputsCell` the raw node hands
+  it, which the node's plan binds to the start's transaction
+  (`inputsCell.withTx(tx)` in `#buildRawNodeInputs`), and builtins read
+  through that cell by `.key()` or `.withTx(tx)` rather than through its own
+  transaction, though several read it directly during their setup, so each
+  needs reading before the node hands them a cell without one; the element's
   `resultCell` reaches `#startCore` bound to the transaction from
-  `#startWithTx`'s callers, and the start's closures capture it; and the
-  immutable cell store's snapshots keep a query-result proxy made under the
-  transaction. A settled transaction already drops its read memos
+  `#startWithTx`'s callers, and the start's closures capture it, where the
+  nodes' `cellTx(resultCell)` checks decide local-read behavior from that
+  binding; and the immutable cell store's snapshots keep a query-result proxy
+  made under the transaction. A settled transaction already drops its read memos
   (`#runCommitCallbacks`); dropping the parts of its CFC state that nothing
   reads after settlement would free this under every path at once, where
   cutting the paths one by one has each next one take the charge over. That
