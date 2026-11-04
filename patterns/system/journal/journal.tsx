@@ -11,6 +11,7 @@ import {
   hasError,
   hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   latestComplete,
@@ -120,6 +121,21 @@ export const journalAvailability = lift(
         availability: "error",
         error: nowMs.errorMessage,
         errorKind: nowMs.errorKind,
+      };
+    }
+    if (isObsolete(journal)) {
+      return {
+        availability: "obsolete",
+        error: journal.obsoleteMessage || "This journal is no longer served.",
+        errorKind: "",
+      };
+    }
+    if (isObsolete(nowMs)) {
+      return {
+        availability: "obsolete",
+        error: nowMs.obsoleteMessage ||
+          "The journal clock is no longer served.",
+        errorKind: "",
       };
     }
     if (isPending(journal) || isPending(nowMs)) {

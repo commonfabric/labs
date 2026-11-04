@@ -107,6 +107,21 @@ export default pattern(() => {
           !textContent(subject[UI]).includes("Analyzing...")
         ),
       },
+      {
+        action: action(() =>
+          request.set(
+            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "This response is no longer served." &&
+          textContent(subject[UI]).includes(
+            "This response is no longer served.",
+          )
+        ),
+      },
       { action: action(() => request.set("Recovered description")) },
       {
         assertion: assert(() =>

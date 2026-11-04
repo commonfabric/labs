@@ -79,6 +79,20 @@ export default pattern(() => {
           presentation.error === "Use overview.summary instead."
         ),
       },
+      {
+        action: action(() =>
+          request.set(
+            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          !presentation.pending && presentation.availability === "obsolete" &&
+          presentation.response === "" &&
+          presentation.error === "This summary is no longer served."
+        ),
+      },
       { action: action(() => request.set("Recovered summary")) },
       {
         assertion: assert(() =>

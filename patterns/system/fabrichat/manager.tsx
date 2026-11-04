@@ -1923,7 +1923,7 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       }
       if (isObsolete(root.result)) {
         return {
-          message: root.result.obsoleteMessage ??
+          message: root.result.obsoleteMessage ||
             "This catalog root is no longer served.",
           kind: "obsolete",
         };

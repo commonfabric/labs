@@ -77,6 +77,19 @@ export default pattern(() => {
       },
       {
         action: action(() =>
+          request.set(
+            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          !presentation.pending && presentation.response.question === "" &&
+          presentation.error === "This question is no longer served."
+        ),
+      },
+      {
+        action: action(() =>
           request.set({ question: "Recovered question", options: [] })
         ),
       },

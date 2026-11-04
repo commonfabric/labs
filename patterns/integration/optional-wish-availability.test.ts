@@ -331,6 +331,47 @@ describe("optional-wish-availability", () => {
     expect(textOf(subject.key("$UI"))).toContain("Add glaze");
   });
 
+  it("shows journal retirement guidance beside the retained snapshot and clears it on recovery", async () => {
+    const journal = runtime.getCell(space, "journal result");
+    const now = runtime.getCell(space, "journal clock result");
+    await runtime.editWithRetry((tx) => {
+      journal.withTx(tx).set([{
+        timestamp: 1,
+        narrative: "Kept journal entry",
+      }]);
+      now.withTx(tx).set(60_000);
+    });
+    controlled.set("#journal", journal);
+    controlled.set("#now/60", now);
+    const subject = await instantiate("system/journal/journal.tsx");
+    expect(textOf(subject.key("$UI"))).toContain("Kept journal entry");
+    await runtime.editWithRetry((tx) =>
+      journal.withTx(tx).setRaw(unavailableObsolete("Use the new journal."))
+    );
+    await runtime.idle();
+    expect(textOf(subject.key("$UI"))).toContain("Use the new journal.");
+    expect(textOf(subject.key("$UI"))).toContain("Kept journal entry");
+    await runtime.editWithRetry((tx) => {
+      journal.withTx(tx).set([]);
+      now.withTx(tx).setRaw(unavailableObsolete("Use the new clock."));
+    });
+    await runtime.idle();
+    expect(textOf(subject.key("$UI"))).toContain("Use the new clock.");
+    expect(textOf(subject.key("$UI"))).toContain("Kept journal entry");
+    await runtime.editWithRetry((tx) =>
+      now.withTx(tx).setRaw(unavailableObsolete(""))
+    );
+    await runtime.idle();
+    expect(textOf(subject.key("$UI"))).toContain(
+      "The journal clock is no longer served.",
+    );
+    expect(textOf(subject.key("$UI"))).toContain("Kept journal entry");
+    await runtime.editWithRetry((tx) => now.withTx(tx).set(120_000));
+    await runtime.idle();
+    expect(textOf(subject.key("$UI"))).not.toContain("Use the new clock.");
+    expect(textOf(subject.key("$UI"))).not.toContain("Kept journal entry");
+  });
+
   it("reports failed catalog roots separately without hiding healthy rooms and clears the diagnostic on recovery", async () => {
     const healthySpace = (await Identity.fromPassphrase("healthy catalog root"))
       .did();
@@ -405,6 +446,15 @@ describe("optional-wish-availability", () => {
     expect(manager.key("discoveryErrors").get()).toEqual([{
       space: failedSpace,
       message: "Use the new catalog root.",
+      kind: "obsolete",
+    }]);
+    await runtime.editWithRetry((tx) =>
+      failedRoot.withTx(tx).setRaw(unavailableObsolete(""))
+    );
+    await runtime.idle();
+    expect(manager.key("discoveryErrors").get()).toEqual([{
+      space: failedSpace,
+      message: "This catalog root is no longer served.",
       kind: "obsolete",
     }]);
     await runtime.editWithRetry((tx) =>

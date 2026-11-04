@@ -87,7 +87,7 @@ export const summaryResponseState = lift(
         response: "",
         pending: false,
         availability: "obsolete",
-        error: responseRequest.obsoleteMessage ??
+        error: responseRequest.obsoleteMessage ||
           "This summary is no longer served.",
       };
     }

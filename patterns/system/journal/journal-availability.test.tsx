@@ -5,6 +5,7 @@ import {
   type AsyncResult,
   FabricUnavailable,
   type HasError,
+  type IsObsolete,
   type IsPending,
   type IsSyncing,
   pattern,
@@ -100,10 +101,71 @@ export default pattern(() => {
           subject.availability === "pending" && subject.error === ""
         ),
       },
+      {
+        action: action(() =>
+          journal.set(
+            new FabricUnavailable(
+              "obsolete",
+              null,
+              null,
+              "Use the replacement journal.",
+            ) as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.availability === "obsolete" &&
+          subject.errorKind === "" &&
+          subject.error === "Use the replacement journal."
+        ),
+      },
+      {
+        action: action(() => {
+          journal.set([]);
+          nowMs.set(new FabricUnavailable("obsolete") as IsObsolete);
+        }),
+      },
+      {
+        assertion: assert(() =>
+          subject.availability === "obsolete" &&
+          subject.errorKind === "" &&
+          subject.error === "The journal clock is no longer served."
+        ),
+      },
+      {
+        action: action(() => {
+          journal.set(
+            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+          );
+          nowMs.set(2);
+        }),
+      },
+      {
+        assertion: assert(() =>
+          subject.availability === "obsolete" && subject.errorKind === "" &&
+          subject.error === "This journal is no longer served."
+        ),
+      },
+      {
+        action: action(() => {
+          journal.set([]);
+          nowMs.set(
+            new FabricUnavailable("obsolete", null, null, "") as IsObsolete,
+          );
+        }),
+      },
+      {
+        assertion: assert(() =>
+          subject.availability === "obsolete" && subject.errorKind === "" &&
+          subject.error === "The journal clock is no longer served."
+        ),
+      },
       { action: action(() => nowMs.set(2)) },
       {
         assertion: assert(() =>
-          subject.availability === "ready" && subject.error === ""
+          subject.availability === "ready" && subject.error === "" &&
+          subject.errorKind === ""
         ),
       },
     ],

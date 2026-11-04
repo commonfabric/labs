@@ -67,7 +67,7 @@ export const ImageAnalysisPresentation = pattern<
       return {
         response: undefined,
         pending: false,
-        error: observedResponse.obsoleteMessage ??
+        error: observedResponse.obsoleteMessage ||
           "This response is no longer served.",
       };
     }

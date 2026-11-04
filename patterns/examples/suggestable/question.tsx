@@ -63,7 +63,7 @@ export const questionResponseState = lift(
       return {
         response: { question: "", options: [] },
         pending: false,
-        error: responseRequest.obsoleteMessage ??
+        error: responseRequest.obsoleteMessage ||
           "This question is no longer served.",
       };
     }

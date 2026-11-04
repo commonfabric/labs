@@ -41,6 +41,7 @@ export {
   toCompactDebugString,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
+export { isObsolete } from "@commonfabric/data-model/availability";
 
 //
 // Stubs
