@@ -54,14 +54,14 @@ export interface RealPushIoOptions {
  * and opens the pull request page when the server offers one. The branch
  * `origin` names as its default is never pushed, so the push refuses when
  * `origin` names none. When the server offers a page, calls `onOffered` with
- * the branch's name before the page opens. Returns one line saying how it
- * ended, which says the push was aborted when it failed after `signal` aborted;
- * git's own output has been shown by then.
+ * the branch's name, and opens the page once what it returns has settled.
+ * Returns one line saying how it ended, which says the push was aborted when
+ * it failed after `signal` aborted; git's own output has been shown by then.
  */
 export async function pushBranch(
   io: PushIo,
   signal?: AbortSignal,
-  onOffered?: (branch: string) => void,
+  onOffered?: (branch: string) => Promise<void> | void,
 ): Promise<string> {
   const gitDir = io.query(["rev-parse", "--absolute-git-dir"])?.trim();
   if (!gitDir) return "This is not a git repository.";
@@ -106,7 +106,7 @@ export async function pushBranch(
   }
   const url = offeredPullRequestUrl(push.output);
   if (url === null) return `${pushed}.`;
-  onOffered?.(branch);
+  await onOffered?.(branch);
   return io.open(url)
     ? `${pushed} and opened ${url}`
     : `${pushed}. Create a pull request at ${url}`;

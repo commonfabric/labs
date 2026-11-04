@@ -513,9 +513,11 @@ export class Session {
   /** Pending C-x prefix (Emacs chord), reset by the next key. */
   #chord: "ctrl-x" | null = null;
 
-  /** Which button the active prompt's Tab focus rests on — an index into its
-   * button row. Space and Enter activate it; it is reset to the default button
-   * each time a prompt opens. */
+  /** Which control the active prompt's Tab focus rests on — an index into its
+   * fields and then its buttons, or -1 for none. Space and Enter activate a
+   * focused button, and Enter the default button while a field is focused;
+   * each time a prompt opens, this is reset to its first field, or to its
+   * default button when it has no fields. */
   #dialogFocus = 0;
 
   /**

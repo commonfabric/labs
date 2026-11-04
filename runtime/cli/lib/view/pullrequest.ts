@@ -2,8 +2,8 @@
  * Noticing, through the GitHub webhook relay, that the pull request for a
  * branch `P` pushed has been opened. The relay passes on each delivery of the
  * organization's webhook the moment GitHub makes it, and keeps none for a
- * subscriber that was not connected, so the viewer starts connecting before it
- * opens the page for creating the pull request.
+ * subscriber that was not connected, so the viewer opens the page for creating
+ * the pull request once it has connected.
  */
 
 import {

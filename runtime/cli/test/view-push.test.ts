@@ -1329,11 +1329,18 @@ describe("view-push", () => {
         expect(harness.writes.join("")).not.toContain("pull request opens");
       });
 
-      it("says it is connecting until the connection opens", async () => {
+      it("says it is connecting, and opens the page only once the connection is open", async () => {
         const relay = fakeRelay();
         const connecting = Promise.withResolvers<void>();
+        const opened: boolean[] = [];
         const harness = pagerHarness(
-          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          () => ({
+            ...fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            open: () => {
+              opened.push(relay.connections === 1);
+              return true;
+            },
+          }),
           {
             git: viewerGit(),
             relay: () => async () => {
@@ -1348,18 +1355,87 @@ describe("view-push", () => {
         const watching = harness.frame((text) =>
           text.includes("Quitting when the pull request opens.")
         );
+        let openedWhileConnecting: number | undefined;
 
         await harness.run([
           "P",
           async () => {
             await waiting;
+            openedWhileConnecting = opened.length;
             connecting.resolve();
             await watching;
           },
           "c",
         ]);
 
-        expect(relay.connections).toBe(1);
+        expect(openedWhileConnecting).toBe(0);
+        expect(opened).toEqual([true]);
+      });
+
+      it("gives up on the connection and opens the page when Abort is pressed while it connects", async () => {
+        const opened: string[] = [];
+        let abandoned: AbortSignal | undefined;
+        const harness = pagerHarness(
+          () => ({
+            ...fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            open: (url) => {
+              opened.push(url);
+              return true;
+            },
+          }),
+          {
+            git: viewerGit(),
+            relay: () => (signal) => {
+              abandoned = signal;
+              return new Promise((_, reject) =>
+                signal?.addEventListener("abort", () => reject(signal.reason))
+              );
+            },
+          },
+        );
+        const waiting = harness.frame((text) =>
+          text.includes("Connecting to the webhook relay.")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => waiting, "a", () => closable, "c"]);
+
+        expect(abandoned?.aborted).toBe(true);
+        expect(opened).toEqual([
+          "https://github.com/fork/repo/pull/new/feature",
+        ]);
+        const shown = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(shown).toContain(
+          "Not watching for the pull request: the watch was aborted.",
+        );
+        expect(shown).toContain("Pushed feature to origin and opened");
+      });
+
+      it("connects to nothing when Abort was pressed during a push that succeeded anyway", async () => {
+        const relay = fakeRelay();
+        const harness = pagerHarness(
+          (signal) => ({
+            ...fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            run: () =>
+              new Promise((resolve) =>
+                signal.addEventListener(
+                  "abort",
+                  () => resolve({ success: true, output: GITHUB_OFFER }),
+                )
+              ),
+          }),
+          { git: viewerGit(), relay: () => relay.connect },
+        );
+        const running = harness.frame((text) => text.includes(" Abort "));
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => running, "a", () => closable, "c"]);
+
+        expect(relay.connections).toBe(0);
+        expect(harness.writes.find((text) => text.includes(" Close ")))
+          .toContain(
+            "the watch was aborted.",
+          );
       });
 
       it("says why it is not watching when git fails as the watch starts, and reports the push as it went", async () => {

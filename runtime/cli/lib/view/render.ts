@@ -347,10 +347,11 @@ function layout(
 }
 
 /**
- * 1-based terminal (row, col) for the text cursor, or null when there is no
- * cursor, it is scrolled off screen, or an overlay or dialog covers the content.
- * Mirrors the layout `renderFrame` uses, including a wrapped continuation's
- * screen row and display-column offset.
+ * 1-based terminal (row, col) for the text cursor: the one in a dialog's
+ * focused input line while a dialog is up, and otherwise the one in the
+ * content. Null when there is no cursor, it is scrolled off screen, or an
+ * overlay covers the content. Mirrors the layout `renderFrame` uses, including
+ * a wrapped continuation's screen row and display-column offset.
  */
 export function cursorScreenPos(
   doc: Document,

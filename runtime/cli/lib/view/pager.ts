@@ -399,8 +399,11 @@ export async function runPager(
     );
 
   // A watch that cannot start says why in the push dialog, and leaves the
-  // push it follows to be reported as it went.
-  const startWatching = (branch: string) => {
+  // push it follows to be reported as it went. The relay keeps nothing for a
+  // subscriber that is not connected, so the page for creating the pull
+  // request opens once the connection is open or has failed, or once `push`,
+  // the push's own signal, aborts, which abandons the connection.
+  const startWatching = async (branch: string, push: AbortSignal) => {
     stopWatching();
     try {
       const settings = readSettings(deps.git);
@@ -417,19 +420,37 @@ export async function runPager(
       }
       const controller = new AbortController();
       watchController = controller;
+      const ready = Promise.withResolvers<void>();
+      const abandon = () => {
+        if (watchController === controller) stopWatching();
+        notWatching("the watch was aborted");
+        draw();
+        ready.resolve();
+      };
+      if (push.aborted) {
+        abandon();
+        return;
+      }
+      push.addEventListener("abort", abandon, { once: true });
       session.setPullRequestWatch("Connecting to the webhook relay.");
+      draw();
       watchForPullRequest(connect, head, controller.signal, () => {
+        push.removeEventListener("abort", abandon);
         session.setPullRequestWatch("Quitting when the pull request opens.");
         draw();
+        ready.resolve();
       }).then((url) => {
         if (controller.signal.aborted) return;
         session.quitForPullRequest(url);
         drawOrQuit();
       }, (error) => {
+        push.removeEventListener("abort", abandon);
+        ready.resolve();
         if (controller.signal.aborted) return;
         notWatching(describeFailure(error));
         draw();
       });
+      await ready.promise;
     } catch (error) {
       notWatching(describeFailure(error));
     }
@@ -470,9 +491,11 @@ export async function runPager(
         session.appendPushOutput(text);
         draw();
       }, controller.signal);
-      // The relay keeps nothing for a subscriber that is not connected, so the
-      // watch starts before the page for creating the pull request opens.
-      summary = await pushBranch(io, controller.signal, startWatching);
+      summary = await pushBranch(
+        io,
+        controller.signal,
+        (branch) => startWatching(branch, controller.signal),
+      );
     } catch (error) {
       summary = `Push failed: ${describeFailure(error)}`;
     }
