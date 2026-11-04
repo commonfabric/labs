@@ -304,7 +304,10 @@ reads a reaped store as a deleted space, not as a corrupt one.
   server derives from the space's DID, so a reap, which runs against a copy of
   the backup, cannot reach them. Its report names them by that pattern, and
   the install that puts the result in place of the live store moves them out
-  of the live directory, beside the live store it moves aside.
+  of the live directory, beside the live store it moves aside. The token is a
+  32-bit hash, so the install moves the files under the space's prefix only
+  when no other store in the live directory shares that prefix; when one
+  does, it moves none and reports which store shares it.
 
 ### Deleting a space from the command line
 
