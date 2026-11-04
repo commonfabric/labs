@@ -2675,13 +2675,19 @@ A server that returns 404, 405 or 410, as one without the route does, has said
 it publishes nothing: there is no posture and no memory URL to adopt, and it is
 not asked again. Any other failure leaves the document unread, and the posture
 then falls back to the environment and Memory to the API URL, with a warning
-that names it. A transient failure (the server is unreachable, or it returns
-408, 429, 502, 503 or 504) is asked again first: three attempts in all, a
-quarter of a second and then a second apart. One that would come out the same,
-such as a 401, a 403, a 500 or a body that is not a JSON object, is not, and
-neither is an attempt that takes more than five seconds, since the health check
-a client runs next would wait on that server too. The bound covers the read
-alone: the health check has no timeout. A redirect that leaves the API URL's
+that names it. The posture's fallback is also logged at error level (logger
+`deployment-meta`, key `posture-unread`), naming why the read failed and what
+the client runs on instead, because such a client can sit on the other
+server-execution arm from its server while its real work goes on succeeding.
+`CF_ADOPT_SERVER_FLAGS=false` omits that error, since such a client does not
+take the posture anyway. A transient failure (the server is unreachable, an
+attempt takes more than five seconds, or it returns 408, 429, 502, 503 or 504)
+is asked again first: three attempts in all, a quarter of a second and then a
+second apart, so a server that stalls costs 16.25 seconds. A document read after
+a retry logs a warning (key `read-after-retry`) naming the failures. A failure
+that would come out the same, such as a 401, a 403, a 500 or a body that is not
+a JSON object, is not asked again. The bound covers the read alone: the health
+check has no timeout. A redirect that leaves the API URL's
 deployment (anything but its own origin, or the same host on https where the
 API URL names http) still gives the posture, as before, but no memory URL; a
 warning names where the redirect ended.
