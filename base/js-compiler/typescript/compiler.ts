@@ -452,15 +452,17 @@ export class TypeScriptCompiler {
       inputOptions.specifierAliases,
     );
     const createStart = performance.now();
-    const tsProgram = ts.createProgram(sourceNames, tsOptions, host);
+    let tsProgram = ts.createProgram(sourceNames, tsOptions, host);
     compileTimingLogger.time(createStart, "phase", "createProgram");
     yield;
 
-    const checker = new Checker(tsProgram, {
-      messageTransformer: inputOptions.diagnosticMessageTransformer,
-      storedSource,
-      authoredSource: inputOptions.authoredSource,
-    });
+    const checkerFor = (target: ts.Program) =>
+      new Checker(target, {
+        messageTransformer: inputOptions.diagnosticMessageTransformer,
+        storedSource,
+        authoredSource: inputOptions.authoredSource,
+      });
+    let checker = checkerFor(tsProgram);
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
     // only semantic hygiene codes. On stored-source compiles this gate
@@ -477,14 +479,44 @@ export class TypeScriptCompiler {
       yield;
     }
     if (!noCheck) {
-      const errors = [];
-      for (const sourceFile of checker.checkableSources()) {
-        const typeCheckStart = performance.now();
-        for (const error of checker.collectSemanticErrors(sourceFile)) {
-          errors.push(error);
+      const semanticErrors = function* (
+        of: Checker,
+      ): Generator<void, ReturnType<Checker["collectSemanticErrors"]>, void> {
+        const errors: ReturnType<Checker["collectSemanticErrors"]> = [];
+        for (const sourceFile of of.checkableSources()) {
+          const typeCheckStart = performance.now();
+          for (const error of of.collectSemanticErrors(sourceFile)) {
+            errors.push(error);
+          }
+          compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
+          yield;
         }
-        compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
-        yield;
+        return errors;
+      };
+      const errors = yield* semanticErrors(checker);
+      // Stored source admitted before `exactOptionalPropertyTypes` was the
+      // rule may hold an `undefined` written into an optional property, which
+      // the flag refuses. Those bytes cannot be re-authored, so a stored
+      // program that fails under the flag is checked again without it, and
+      // loads if that check is clean. Neither rule's language contains the
+      // other (an index signature beside an optional property type-checks
+      // only under the flag), so neither check alone admits every stored
+      // program.
+      if (
+        errors.length > 0 && storedSource &&
+        tsOptions.exactOptionalPropertyTypes === true
+      ) {
+        const inexactProgram = ts.createProgram(
+          sourceNames,
+          { ...tsOptions, exactOptionalPropertyTypes: false },
+          host,
+        );
+        const inexactChecker = checkerFor(inexactProgram);
+        if ((yield* semanticErrors(inexactChecker)).length === 0) {
+          tsProgram = inexactProgram;
+          checker = inexactChecker;
+          errors.length = 0;
+        }
       }
       checker.throwIfErrors(errors);
     }

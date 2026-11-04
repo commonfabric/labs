@@ -14,6 +14,11 @@ export const getCompilerOptions = (): CompilerOptions => {
     strict: true,
     strictNullChecks: true,
     strictFunctionTypes: true,
+    // An optional property is one that may be absent, not one that may hold
+    // `undefined`: the data model keeps the two apart, and the schema
+    // generator reads `?:` the same way. Stored source admitted before this
+    // was the rule is checked again without it (see compileToModulesSteps).
+    exactOptionalPropertyTypes: true,
 
     //
     // Module
