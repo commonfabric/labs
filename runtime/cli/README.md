@@ -1340,15 +1340,15 @@ print.
 
 `cf space compact <store.sqlite> --documents <prefix> [--out <path>]` compacts a
 space store's revision history and writes the result as a fresh file. It is
-[the compaction plan](../../docs/plans/compact-space.md)'s tool, the one
-`cf space` command that rewrites a store's rows rather than copying or restoring
-a file. The write path runs offline against a copy of a backup, never against a
-file a server has open: the operator stops the owning instance, takes the
-backup, compacts a copy of it, verifies the result against the backup, and
-installs it, in the order that plan's §4 gives. `--dry-run` prints the report
-below and writes nothing; `--verify` checks a result against its backup; both
-open their files read-only and may be run on a snapshot taken while the space is
-still served.
+[the compaction plan](../../docs/plans/compact-space.md)'s tool, and with
+`cf space reap` one of the two `cf space` commands that rewrite a store's rows
+rather than copying or restoring a file. The write path runs offline against a
+copy of a backup, never against a file a server has open: the operator stops the
+owning instance, takes the backup, compacts a copy of it, verifies the result
+against the backup, and installs it, in the order that plan's §4 gives.
+`--dry-run` prints the report below and writes nothing; `--verify` checks a
+result against its backup; both open their files read-only and may be run on a
+snapshot taken while the space is still served.
 
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
@@ -1374,26 +1374,26 @@ would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
 a second branch, one with no commit 1, one with foreign-key violations, one
 holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, or a store or result path
-under a directory a local server serves; then opens the store through the engine
-with an exclusive lock and, in order: inserts the compaction commit at the next
-seq, a `system` commit under the `compaction:<run id>` session with the plan as
-its payload; compacts each selected instance in its own transaction — the oldest
-row the cut keeps becomes the base, rewritten as a `set` holding the engine's
-reconstruction at exactly that row if it was a patch, and attributed to the
-compaction commit whatever its op, with the rows and snapshots behind it
-deleted; hollows the payloads outside the window in seq-ranged batches; writes
-the audit revision on the space's ACL document, a whole-document `set` of the
-document as it stands with a `compaction` member beside `value`, when the store
-has a live one (a space with no ACL document gets none, and a tombstoned one is
-left as it is, since a `set` would recreate it); checks the foreign keys and the
-file's integrity; and writes the result with `VACUUM
-INTO` to `--out`,
-`<store>.compacted.sqlite` beside the source by default, never overwriting. A
-run interrupted anywhere leaves a store every reader can use, and running it
-again resumes it under a second compaction commit. The run's own summary follows
-the plan on stdout; progress goes to stderr; `--json` emits the summary as one
-document.
+one with a non-empty `-wal` or `-journal` beside it, one another connection
+holds, or a store or result path under a directory a local server serves; then
+opens the store through the engine with an exclusive lock and, in order: inserts
+the compaction commit at the next seq, a `system` commit under the
+`compaction:<run id>` session with the plan as its payload; compacts each
+selected instance in its own transaction — the oldest row the cut keeps becomes
+the base, rewritten as a `set` holding the engine's reconstruction at exactly
+that row if it was a patch, and attributed to the compaction commit whatever its
+op, with the rows and snapshots behind it deleted; hollows the payloads outside
+the window in seq-ranged batches; writes the audit revision on the space's ACL
+document, a whole-document `set` of the document as it stands with a
+`compaction` member beside `value`, when the store has a live one (a space with
+no ACL document gets none, and a tombstoned one is left as it is, since a `set`
+would recreate it); checks the foreign keys and the file's integrity; and writes
+the result with `VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the
+source by default, never overwriting. A run interrupted anywhere leaves a store
+every reader can use, and running it again resumes it under a second compaction
+commit. The run's own summary follows the plan on stdout; progress goes to
+stderr; `--json` emits the summary as one document.
 
 `cf space compact <result.sqlite> --verify --against <backup.sqlite>` checks a
 result against the store it was compacted from, read-only on both, and exits
@@ -1427,6 +1427,43 @@ commit would take, and the preconditions a run checks, foreign-key integrity
 among them. The payload accounting reads every commit's payload and is the slow
 part of the plan. `--json` emits the same report as JSON.
 
+## Reaping a deleted space's store
+
+`cf space reap <store.sqlite> [--out <path>]` reclaims a deleted space's storage
+([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
+It takes only a store whose access-control document holds a deletion tombstone,
+and refuses any other, a store with a commit after the deletion, a store with a
+log beside it that is not empty, a store another connection holds, one the
+server would migrate on opening it, and a result path that exists or sits in a
+served directory. Whether a connection holds the store is asked of SQLite, by
+taking the file's exclusive lock: any connection to a WAL-mode store prevents
+that, as does one to a rollback-mode store inside a transaction, but an idle
+connection to a rollback-mode store holds no lock to see, so that the store is a
+copy nothing has open is still the procedure's to ensure. It reads the store, a
+copy of the space's backup, without writing it, and writes the result fresh,
+`<store>.reaped.sqlite` beside it by default. The result keeps the deletion
+commit's row, the invocation and authorization rows it references, the deletion
+tombstone's revision and head rows, and the default branch's row; every other
+row of every table goes. So the space goes on refusing every principal as
+deleted, under the same `aclRevision`, and its server sequence stays the
+deletion commit's.
+
+Before it reports, the command checks the result against the store it was reaped
+from, read-only on both: integrity and foreign keys; the store's access-control
+document a deletion tombstone at the server sequence; and, for every table, the
+kept rows byte-identical and no other row, and no table the store lacks. A
+result that fails a check is removed and the command exits nonzero. `--dry-run`
+reports what would be kept and removed, and writes nothing. The space's cell
+databases are files beside the live store, not in it, so the report names them,
+`cell-<hash>-*.sqlite`, and `--dry-run --live <live.sqlite>` lists the files
+under that prefix beside the space's live store, which the install moves. The
+prefix is a 32-bit hash of the DID, so when another store sits there whose
+prefix is the same, the files under it cannot be told apart by name: the list is
+empty, and the report names that store. The install that puts the result in
+place of the live store moves the listed files out of the live directory, beside
+the copy of the live store it keeps. `cf inspect summary` reads a reaped store
+as the deleted space it is.
+
 ## Creating a space
 
 `cf space create [--label <label>]` creates a space and prints its DID. The DID
@@ -1450,6 +1487,19 @@ A Home's source is changed in place, with
 installs or replaces a Home root.
 [Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern)
 walks through it.
+
+## Deleting a space
+
+`cf space delete --space <space> --confirm <space-DID>` deletes a space as its
+sole member, for everyone and for good
+([deleting a space](../../docs/specs/random-space-identities.md#deleting-a-space)).
+It refuses while the access list names any principal besides the identity the
+command connects as, `"*"` included, and names those principals, so that each
+one's removal is a `cf acl remove` of its own. It runs only when `--confirm` is
+the space's own DID, which a mistyped `--space` never resolves to. The memory
+server decides the deletion again, refusing a Home and a list that changed
+since, and revokes every session on the space. Deleting a self-owned space
+through a delegation chain is not part of this command.
 
 ## Where a piece is created
 
@@ -2283,6 +2333,25 @@ A job the runner was running when it stopped or crashed ends `interrupted`
 have changed things. Its recorded checkpoint can seed a new follow-up, whether
 the message waited through the restart or arrived afterward. The new run retains
 completed work and marks the prior request as interrupted.
+
+## What a run loads
+
+A run of `cf` loads only the command it addresses. `commands/root.ts` names
+every top-level command with its description and a function that loads it, so
+`cf --help` loads no command and `cf piece call` loads `piece` alone. The root's
+help prints those descriptions, and a test holds them equal to what each command
+declares, so a change to a top-level command's description or positionals is
+made in both places. A new top-level command is a new entry in that table.
+`commands/main.ts` is the whole tree, loaded, for the tools that walk it.
+
+Most of what starting `cf` costs is Deno reading the modules a run can reach
+([`docs/development/imports.md`](../../docs/development/imports.md#what-starting-a-program-reads)),
+so a command that only talks to a running piece reads neither the compiler nor
+the memory engine. `test/start-graph.test.ts` holds those limits. A path in
+`piece` or `cell` that needs the compiler loads it where it needs it, with
+`await import(...)`. The launcher starts `cf` with
+`--unstable-lazy-dynamic-imports`, without which Deno reads what those imports
+name anyway. A compiled binary embeds them all and loads the same subset.
 
 ## One deployment per process
 

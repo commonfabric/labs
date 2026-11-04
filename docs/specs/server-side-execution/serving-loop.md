@@ -441,7 +441,11 @@ it holds through two things: each space's owner, and the lease.
   wave aborts at its commit step. A wave aborted this way parks the tenure. §1's
   re-evaluation after a park then starts a new tenure for a space that still has
   demand, and that tenure's fresh runtime recomputes the withdrawn derivations
-  (§6 step 2).
+  (§6 step 2). A park that disposes its runtime rather than keeping it first
+  installs the parked tenure's own seal destination on it. The dispose runs the
+  runtime's scheduler to idle, and that destination refuses every transaction
+  the work closes, which would otherwise commit straight to the store. Pinned:
+  `test/executor/parked-runtime.test.ts`.
 - The memory server rejects a derived-class commit whose `holder` is not the one
   its map names for the space. This is one equality check, not admission
   machinery. It binds fresh commits: an exact replay of an already-accepted

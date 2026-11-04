@@ -315,7 +315,7 @@ import {
   normalizeCellScope,
   scopeRank,
 } from "./scope.ts";
-import { SigilLink } from "./sigil-types.ts";
+import type { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
   asPatternIdentityRef,
@@ -11976,6 +11976,9 @@ export class Runner {
 
   #stopResult<T>(resultCell: Cell<T>): void {
     this.#runtime.sourceReconciler.unwatch(resultCell);
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    this.#nodeIOBindings.release(resultLink);
+    this.#patternNodeBindings.release(resultLink);
     const key = this.#getDocKey(resultCell);
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
@@ -15544,8 +15547,13 @@ export class Runner {
     };
     // The child bound here is the pattern object the child's own nodes are
     // held under, so a plan that finds this binding hands its instantiation
-    // the child the first plan bound, and the child's nodes find theirs.
-    const binding = isStandInArgument(argumentCellLink)
+    // the child the first plan bound, and the child's nodes find theirs. A
+    // binding against a stand-in argument, or against none because the
+    // instance's argument is not readable yet, is not held: a later plan of
+    // the node binds against the argument the instance has by then, under
+    // another key, so nothing would find the held one again.
+    const binding = argumentCellLink === undefined ||
+        isStandInArgument(argumentCellLink)
       ? bind()
       : this.#patternNodeBindings.bindingFor({
         ...this.#bindingSubjectMembers(node, pattern),

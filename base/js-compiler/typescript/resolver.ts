@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { Program, ProgramResolver, Source } from "../interface.ts";
+import type { Program, ProgramResolver, Source } from "../interface.ts";
 
 export type UnresolvedModuleHandling =
   | { type: "allow"; identifiers: string[] }

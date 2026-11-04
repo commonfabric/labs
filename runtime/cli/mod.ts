@@ -1,36 +1,22 @@
 import { ValidationError } from "@cliffy/command";
-import { CompilerError, TransformerError } from "@commonfabric/js-compiler";
-import { SlugAssignedError } from "@commonfabric/piece";
-import { SlugResolutionError } from "@commonfabric/runner";
 
-import { main as rootCommand } from "./commands/main.ts";
 import { parse } from "./commands/mod.ts";
-import { VerbInputValidationError } from "./lib/callable.ts";
 import { cliName } from "./lib/cli-name.ts";
 import { applyColorMode } from "./lib/color-mode.ts";
-import { IdentityKeyfileError } from "./lib/identity.ts";
 import { reservesStdoutForCommandOutput } from "./lib/json-output.ts";
 import { applyLogLevel } from "./lib/log-level.ts";
 
 /**
- * The value to print for a top-level CLI failure. Validation, transformer,
- * compiler, verb-input, slug, and identity-keyfile errors carry user-facing
- * messages, so print those without a stack trace. Other Errors print their
- * stack, falling back to the message. Anything else prints as-is.
+ * What a failure prints. Which error classes print how spans the modules of
+ * every command, and a run loads only its own, so the classes load once one
+ * fails. A `ValidationError` needs none of them: it is how a mistyped command
+ * line ends.
  */
-export function renderCliError(e: unknown): unknown {
-  if (
-    e instanceof ValidationError || e instanceof TransformerError ||
-    e instanceof CompilerError || e instanceof VerbInputValidationError ||
-    e instanceof SlugResolutionError || e instanceof SlugAssignedError ||
-    e instanceof IdentityKeyfileError
-  ) {
-    return e.message;
-  }
-  if (e instanceof Error) {
-    return e.stack || e.message;
-  }
-  return e;
+async function failureText(e: unknown): Promise<unknown> {
+  if (e instanceof ValidationError) return e.message;
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { renderCliError } = await import("./lib/cli-error.ts");
+  return renderCliError(e);
 }
 
 /** Injectable effects for testing how `main` ends the process. */
@@ -48,18 +34,12 @@ export async function main(args: string[], deps: MainDependencies = {}) {
     applyLogLevel(args),
   );
   const reservedStdout = reservesStdoutForCommandOutput(cleanArgs);
-  // Cliffy's help generator ignores the global color flag (it force-sets its
-  // own `colors` option while rendering), so mirror the decision here. The
-  // .reset() re-targets the builder chain at the root command (without it,
-  // .help() lands on the last-registered subcommand); help settings inherit,
-  // so the root covers every subcommand.
-  rootCommand.reset().help({ colors: colorsEnabled });
   Deno.env.set("CF_CLI_NAME", cliName());
   const profileDoneMarker = Deno.env.get("CF_PROFILE_DONE_MARKER");
 
   const exit = deps.exit ?? Deno.exit;
   try {
-    await (deps.parse ?? parse)(cleanArgs);
+    await (deps.parse ?? ((args) => parse(args, colorsEnabled)))(cleanArgs);
     if (profileDoneMarker) {
       (reservedStdout ? console.error : console.log)(profileDoneMarker);
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -71,7 +51,7 @@ export async function main(args: string[], deps: MainDependencies = {}) {
     // code, so end with whatever the command left.
     exit((deps.exitCode ?? (() => Deno.exitCode))());
   } catch (e) {
-    console.error(renderCliError(e));
+    console.error(await failureText(e));
     if (profileDoneMarker) {
       (reservedStdout ? console.error : console.log)(profileDoneMarker);
       await new Promise((resolve) => setTimeout(resolve, 50));

@@ -85,6 +85,9 @@ mapped in [`../README.md`](../README.md).
   revision history on a host: the clone rehearsal, the verification that
   stands between the result and the install, and the Estuary recipe with its
   rollback
+- [`space-reaping.md`](space-reaping.md) — reaping a deleted space's store on
+  a host: the copy it runs against, the check before the install, and the cell
+  databases the install moves aside
 - [`CI_PERFORMANCE.md`](CI_PERFORMANCE.md) — how continuous-integration wall
   time is tracked, the dials that govern the lanes, and when to move them
 - [`COVERAGE.md`](COVERAGE.md) — the two coverage mechanisms, which suite

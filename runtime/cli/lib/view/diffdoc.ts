@@ -24,7 +24,8 @@ import { spawnSync } from "@node/child_process";
 import { spliceAll } from "@commonfabric/collections/splice";
 
 import { cpLen } from "./ansi.ts";
-import { type DiffFile, type DiffHunk, type DiffModel } from "./diff.ts";
+import type { DiffFile, DiffHunk, DiffModel } from "./diff.ts";
+import type { DeclaredTests } from "./fold.ts";
 import type { Language } from "./languages/language.ts";
 import {
   canRenderDiffLines,
@@ -76,6 +77,11 @@ export interface DiffWorkspace {
   readBlobs?(
     objects: readonly string[],
   ): ReadonlyMap<string, string>;
+
+  /** The repository's `test` Git attribute for diff paths: a path where the
+   * attribute is set is a test, one where it is unset is not, and one where it
+   * is unspecified is absent from the result. */
+  declaredTests?: DeclaredTests;
 }
 
 /**
@@ -105,6 +111,7 @@ export function realWorkspace(cwd: string): DiffWorkspace {
   const blobBomCache = new Map<string, boolean>();
   const encoders = new Map<string, (text: string) => Uint8Array>();
   const fileBomCache = new Map<string, boolean>();
+  const testAttributes = new Map<string, boolean | undefined>();
   const readBlobs = (
     objects: readonly string[],
   ): ReadonlyMap<string, string> => {
@@ -126,18 +133,19 @@ export function realWorkspace(cwd: string): DiffWorkspace {
     }
     return found;
   };
+  const resolve = (path: string): string | null => {
+    if (isAbsolute(path)) return null; // diff paths are repo-relative
+    for (const base of bases) {
+      const abs = join(base, path);
+      if (!bounded(abs)) continue; // `..` escapes and symlinks out: blocked
+      // bounded() canonicalized abs via realPathSync, so statSync resolves;
+      // only the file-vs-directory check remains. read() guards the contents.
+      if (Deno.statSync(abs).isFile) return abs;
+    }
+    return null;
+  };
   return {
-    resolve(path) {
-      if (isAbsolute(path)) return null; // diff paths are repo-relative
-      for (const base of bases) {
-        const abs = join(base, path);
-        if (!bounded(abs)) continue; // `..` escapes and symlinks out: blocked
-        // bounded() canonicalized abs via realPathSync, so statSync resolves;
-        // only the file-vs-directory check remains. read() guards the contents.
-        if (Deno.statSync(abs).isFile) return abs;
-      }
-      return null;
-    },
+    resolve,
     read(absPath) {
       if (!bounded(absPath)) return null;
       if (readOnlyReasonFor(languageForFile(absPath)) !== undefined) {
@@ -191,7 +199,95 @@ export function realWorkspace(cwd: string): DiffWorkspace {
       return blobBomCache.get(object);
     },
     readBlobs,
+    declaredTests(paths) {
+      if (repoRoot === null) return new Map();
+      // Git is asked about the file resolve() finds for a path, by its
+      // repository-relative path, so a diff relative to the invocation
+      // directory is asked about the right files; a path naming no file is
+      // taken as relative to the repository. A path that lies outside the
+      // repository declares nothing.
+      const unread: string[] = [];
+      const repoPaths: string[] = [];
+      for (const path of new Set(paths)) {
+        if (testAttributes.has(path)) continue;
+        testAttributes.set(path, undefined);
+        const abs: string | null = resolve(path) ??
+          (isAbsolute(path) ? null : join(repoRoot, path));
+        if (abs !== null && abs !== repoRoot && within(abs, repoRoot)) {
+          unread.push(path);
+          repoPaths.push(relative(repoRoot, abs));
+        }
+      }
+      readTestAttributes(repoRoot, repoPaths).forEach((isTest, i) =>
+        testAttributes.set(unread[i], isTest)
+      );
+      const declared = new Map<string, boolean>();
+      for (const path of paths) {
+        const isTest = testAttributes.get(path);
+        if (isTest !== undefined) declared.set(path, isTest);
+      }
+      return declared;
+    },
   };
+}
+
+// Paths go to `git check-attr` as arguments, which, unlike a request written to
+// its input, cannot fill a pipe before its output is read. They go a batch at a
+// time, so that a diff naming many files stays within every operating system's
+// command-line limit, the smallest of which is Windows's 32,767 characters.
+const MAX_CHECK_ATTR_ARGUMENTS_LENGTH = 16 * 1024;
+
+/** The `test` attribute of each path inside the repository, relative to its
+ * root, in order: true where it is set, false where it is unset, and
+ * undefined where it is unspecified or where Git fails on the path's batch. */
+function readTestAttributes(
+  repoRoot: string,
+  paths: readonly string[],
+): (boolean | undefined)[] {
+  const declared: (boolean | undefined)[] = [];
+  for (const batch of batches(paths, MAX_CHECK_ATTR_ARGUMENTS_LENGTH)) {
+    const result = tryOrNull(() =>
+      new Deno.Command("git", {
+        args: ["check-attr", "-z", "test", "--", ...batch],
+        cwd: repoRoot,
+        stdout: "piped",
+        stderr: "null",
+      }).outputSync()
+    );
+    // Git writes one record per path, in order, each three fields: the path,
+    // the attribute's name, and its state.
+    const fields = result?.success
+      ? new TextDecoder().decode(result.stdout).split("\0")
+      : [];
+    for (let i = 0; i < batch.length; i++) {
+      const state = fields[i * 3 + 2];
+      declared.push(
+        state === "set" ? true : state === "unset" ? false : undefined,
+      );
+    }
+  }
+  return declared;
+}
+
+/** Splits strings into consecutive batches whose lengths, counting one more
+ * for each string's separator, stay within `limit`. A string longer than the
+ * limit is a batch of its own. */
+function* batches(
+  items: readonly string[],
+  limit: number,
+): Generator<string[]> {
+  let batch: string[] = [];
+  let length = 0;
+  for (const item of items) {
+    if (batch.length > 0 && length + item.length + 1 > limit) {
+      yield batch;
+      batch = [];
+      length = 0;
+    }
+    batch.push(item);
+    length += item.length + 1;
+  }
+  if (batch.length > 0) yield batch;
 }
 
 function validGitObject(object: string): boolean {
@@ -236,25 +332,11 @@ function readGitBlobs(
   if (objects.length === 0) return blobs;
   return tryOrNull(() => {
     const loadedBomStates = new Map<string, boolean>();
-    let batch: string[] = [];
-    let inputBytes = 0;
-    for (const object of objects) {
-      const objectBytes = object.length + 1;
-      if (
-        batch.length > 0 &&
-        inputBytes + objectBytes > MAX_GIT_BATCH_REQUEST_BYTES
-      ) {
-        if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
-          return new Map<string, string>();
-        }
-        batch = [];
-        inputBytes = 0;
+    // Object names are ASCII, so their lengths are their sizes in bytes.
+    for (const batch of batches(objects, MAX_GIT_BATCH_REQUEST_BYTES)) {
+      if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
+        return new Map<string, string>();
       }
-      batch.push(object);
-      inputBytes += objectBytes;
-    }
-    if (!readGitBlobBatch(repoRoot, batch, blobs, run, loadedBomStates)) {
-      return new Map<string, string>();
     }
     for (const [object, hasBom] of loadedBomStates) {
       bomStates?.set(object, hasBom);

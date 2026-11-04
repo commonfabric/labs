@@ -63,7 +63,7 @@
  * - clear() - Clear the selection
  */
 
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 

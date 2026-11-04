@@ -10,13 +10,13 @@
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { exportCell, isCell } from "../cell.ts";
-import { applyLocalExperimentalDefaults } from "../experimental-defaults.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
 } from "../query-result-proxy.ts";
-import type { ExperimentalOptions } from "../runtime.ts";
 import type { JSONObject, OpaqueCell } from "./types.ts";
+
+export { namesInstances, namesInstancesByDefault } from "./instance-naming.ts";
 
 /** The name each instance root was given, keyed by its root cell. */
 const instanceNames = new WeakMap<OpaqueCell<unknown>, string>();
@@ -37,34 +37,6 @@ export function nameInstance<T>(value: T, name: string): T {
     instanceNames.set(exportCell(cell).cell, name);
   }
   return value;
-}
-
-/**
- * Whether a runtime whose experimental options are `experimental` compiles a
- * pattern factory call bound to a `const` as a named instance. It is the one
- * read of the `instanceNames` flag: the compile and the key its compiled code
- * is cached under both take it from here, so that the two cannot disagree.
- */
-export function namesInstances(
-  experimental: { readonly instanceNames?: boolean | undefined },
-): boolean {
-  return experimental.instanceNames === true;
-}
-
-/**
- * Whether a runtime of this build given the experimental options
- * `experimental` names instances, once its local defaults fill in what
- * `experimental` leaves unset, as `namesInstances()` reads the flag. With no
- * argument, whether a runtime given no option names them.
- */
-export function namesInstancesByDefault(
-  experimental: { readonly instanceNames?: boolean | undefined } = {},
-): boolean {
-  const resolved: ExperimentalOptions = {
-    instanceNames: experimental.instanceNames,
-  };
-  applyLocalExperimentalDefaults(resolved);
-  return namesInstances(resolved);
 }
 
 /** The instance name given to the root cell `root`, if any. */

@@ -1,4 +1,4 @@
-import { type RuntimeClient } from "@commonfabric/runtime-client";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
 
 import type { ShellApp } from "./lib/app-state.ts";
 

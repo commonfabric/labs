@@ -29,11 +29,11 @@ import {
 
 import { BaseFabricInstance } from "@/fabric-bases/BaseFabricInstance.ts";
 import { BaseFabricPrimitive } from "@/fabric-bases/BaseFabricPrimitive.ts";
-import {
-  type FabricConvertibleJsObject,
-  type FabricPlainObject,
-  type FabricValue,
-  type FabricValueLayer,
+import type {
+  FabricConvertibleJsObject,
+  FabricPlainObject,
+  FabricValue,
+  FabricValueLayer,
 } from "@/interface.ts";
 import { isFabricPlainObject, isFabricSpecialObject } from "./narrowing.ts";
 import { tagOfConvertibleJsValueElseNull } from "./tag-of.ts";

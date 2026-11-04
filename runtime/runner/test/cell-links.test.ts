@@ -10,10 +10,10 @@ import { toCompactDebugString } from "@commonfabric/data-model";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { isSigilLink } from "../src/link-utils.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
-import { type SigilLink } from "../src/sigil-types.ts";
+import type { SigilLink } from "../src/sigil-types.ts";
 import { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

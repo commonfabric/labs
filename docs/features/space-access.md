@@ -324,9 +324,8 @@ A consumer that keeps a list of spaces, Home's shared-space catalog among
 them, uses `spaceDeleted(target)` to put away an entry whose space is gone
 ([`shared-space-catalog.md`](shared-space-catalog.md#deleted-spaces)).
 
-The memory server admits a space's deletion by its sole member, and from then
-on refuses the space marked `deleted`. Nothing in this repository sends the
-deletion commit yet, which `cf space delete` will.
+The memory server admits a space's deletion by its sole member, which
+`cf space delete` sends, and from then on refuses the space marked `deleted`.
 
 ## Changing the level
 

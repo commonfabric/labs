@@ -19,8 +19,8 @@ import {
   markRendererTrustedEvent,
 } from "../src/cfc/ui-contract.ts";
 import { MAX_EVENT_BACKLOG_PER_STREAM } from "../src/scheduler/constants.ts";
-import { type NormalizedFullLink } from "../src/link-utils.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { NormalizedFullLink } from "../src/link-utils.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import type { EventHandler } from "../src/scheduler/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 

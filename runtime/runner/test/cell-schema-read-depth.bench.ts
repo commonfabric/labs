@@ -31,7 +31,7 @@
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("bench schema read depth");

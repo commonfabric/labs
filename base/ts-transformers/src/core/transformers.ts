@@ -1,6 +1,6 @@
-import ts from "typescript";
+import type ts from "typescript";
 import { TransformationContext } from "./mod.ts";
-import { CrossStageState } from "./cross-stage-state.ts";
+import type { CrossStageState } from "./cross-stage-state.ts";
 import type { BuilderSourceSite } from "./runtime-contract.ts";
 
 /**

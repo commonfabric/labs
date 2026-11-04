@@ -37,6 +37,7 @@ import {
 import { decode } from "@commonfabric/text/utf8";
 import { maxOf } from "@commonfabric/collections/math";
 
+import { deleteSpace } from "../lib/acl.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import {
   type PhaseRetarget,
@@ -78,7 +79,6 @@ import {
   normalizeLLMFriendlyRef,
   splitArgumentSuffix,
 } from "../lib/llm-friendly-ref.ts";
-import { renderPiece } from "../lib/piece-render.ts";
 import type {
   PieceDescription,
   PieceFieldDescription,
@@ -2041,6 +2041,7 @@ function refuseJsonOutput(spelling: string, options: { json?: boolean }): void {
 interface SpaceCommandCLIOptions extends PieceCLIOptions {
   quiet?: boolean;
   label?: string;
+  confirm?: string;
 }
 
 /**
@@ -2118,6 +2119,51 @@ export function buildCreateSpaceCommand(spelling: string): Command<any> {
       "What the space is called in the Home space list.",
     );
   return targetOptions(command.action(act), { global: false, space: false });
+}
+
+/**
+ * `space delete`, which deletes a space as its sole member
+ * (`docs/specs/random-space-identities.md`, "Deleting a space from the command
+ * line"). It runs only with `--confirm` naming the space's own DID.
+ *
+ * `spelling` carries the meaning it has in {@link buildRecreateRootCommand}.
+ */
+// deno-lint-ignore no-explicit-any
+export function buildDeleteSpaceCommand(spelling: string): Command<any> {
+  const act = async (options: SpaceCommandCLIOptions) => {
+    refuseJsonOutput(spelling, options);
+    setQuietMode(!!options.quiet);
+    if (options.confirm === undefined) {
+      throw new ValidationError(
+        "Deleting a space cannot be undone: --confirm <space-DID> has to " +
+          "name the space's own DID.",
+        { exitCode: 1 },
+      );
+    }
+    const config = parseSpaceOptions(options);
+    await deleteSpace(config, options.confirm);
+    render(`Deleted ${options.confirm}.`);
+  };
+  // deno-lint-ignore no-explicit-any
+  const command: Command<any> = new Command()
+    .description(
+      "Delete a space, for everyone and for good, as its sole member: the " +
+        "one principal its access list names. Each other member is removed " +
+        "first with `acl remove`. Runs only with --confirm naming the " +
+        "space's own DID.",
+    )
+    .example(
+      cliText(
+        `cf ${spelling} ${EX_ID} -a http://localhost:${ports.toolshed} ` +
+          "--space did:key:z6Mk... --confirm did:key:z6Mk...",
+      ),
+      "Delete a space whose access list names only the identity.",
+    )
+    .option(
+      "--confirm <space-did:string>",
+      "The space's own DID, which a mistyped --space never resolves to.",
+    );
+  return targetOptions(command.action(act), { global: false });
 }
 
 /**
@@ -2899,6 +2945,10 @@ a piece that is off either pin is refused, writing nothing, with exit status 3.`
     const pieceConfig = parsePieceOptions(options);
 
     try {
+      // Rendering is the one thing here that needs the HTML renderer and its
+      // worker protocol, and every other `piece` command should not pay for them.
+      // deno-lint-ignore cf-imports/no-inline-module-import
+      const { renderPiece } = await import("../lib/piece-render.ts");
       if (options.watch) {
         writePieceRenderStatus(
           "Watching for changes... Press Ctrl+C to exit.\n",

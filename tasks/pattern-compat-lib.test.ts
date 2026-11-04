@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type JSONSchema } from "@commonfabric/runner";
+import type { JSONSchema } from "@commonfabric/runner";
 import {
   acceptedBreakKey,
   type Baseline,

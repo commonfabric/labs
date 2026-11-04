@@ -162,7 +162,7 @@ import {
   parseLink,
   toMemorySpaceAddress,
 } from "./link-utils.ts";
-import { type MetaField, type RawMetaWriteAuthorization } from "./meta-seam.ts";
+import type { MetaField, RawMetaWriteAuthorization } from "./meta-seam.ts";
 import {
   type CellResult,
   createQueryResultProxy,
@@ -176,6 +176,7 @@ import { isRuntime } from "./runtime-brand.ts";
 import {
   type Action,
   ignoreReadForScheduling,
+  type ReactivityLog,
   txToReactivityLog,
 } from "./scheduler.ts";
 import {
@@ -194,11 +195,7 @@ import {
   validateAndTransform,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
-import {
-  type SigilLink,
-  type SigilWriteRedirectLink,
-  type URI,
-} from "./sigil-types.ts";
+import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
 import { speculationRunContextOf } from "./speculation/overlay-destination.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import {
@@ -5456,18 +5453,7 @@ function sinkHelper(
   });
   (sink.action as Action & { src?: string }).src = sinkName;
 
-  // Call action once immediately, which also defines what docs need to be
-  // subscribed to. Wrap with withExecutingAction so that any child sinks
-  // created during the callback see this action as their parent.
-  const tx = runtime.edit();
-  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
-  const log = txToReactivityLog(tx);
-
-  // Technically unnecessary since we don't expect/allow callbacks to sink to
-  // write to other cells, and we retry by design anyway below when read data
-  // changed. But ideally we enforce read-only as well.
-  runtime.prepareTxForCommit(tx);
-  tx.commit();
+  const log = runSinkOnce(sink, runtime);
 
   // Mark as effect since sink() is a side-effectful consumer (FRP effect/sink)
   // Use resubscribe because we've already run it once above
@@ -5484,6 +5470,28 @@ function sinkHelper(
     if (isCancel(sink.cleanup)) sink.cleanup();
     sink.cleanup = undefined;
   };
+}
+
+/**
+ * Runs `sink`'s action once, in a transaction of its own, and returns what it
+ * read, which defines the documents it subscribes to. Any child sink the
+ * callback creates sees this action as its parent.
+ *
+ * The transaction is confined to this function: a closure here sharing scope
+ * with the cancel function `sinkHelper()` returns would keep it, and all it
+ * read, reachable for as long as the sink is live.
+ */
+function runSinkOnce(sink: SinkAction, runtime: Runtime): ReactivityLog {
+  const tx = runtime.edit();
+  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
+  const log = txToReactivityLog(tx);
+
+  // Technically unnecessary since we don't expect/allow callbacks to sink to
+  // write to other cells, and we retry by design anyway below when read data
+  // changed. But ideally we enforce read-only as well.
+  runtime.prepareTxForCommit(tx);
+  tx.commit();
+  return log;
 }
 
 /**

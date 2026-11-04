@@ -348,6 +348,7 @@ Deno.test("buildCfLauncherCommand builds the child deno invocation", () => {
       args: [
         "run",
         "--quiet",
+        "--unstable-lazy-dynamic-imports",
         "--config",
         "/workspace/labs/deno.json",
         "--allow-net",

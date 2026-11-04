@@ -42,7 +42,7 @@ import {
 } from "../src/pattern-binding.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type {

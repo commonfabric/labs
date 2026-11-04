@@ -5,7 +5,7 @@ import * as htmlparser2 from "htmlparser2";
 import * as domhandler from "domhandler";
 import * as domserializer from "dom-serializer";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { RenderOptions } from "./render.ts";
+import type { RenderOptions } from "./render.ts";
 import { styleObjectToCssString } from "./render-utils.ts";
 
 const eventListeners = new WeakMap<

@@ -110,6 +110,9 @@ export class CFResizablePanel extends BaseElement {
       changedProperties.has("maxSize")
     ) {
       this.validateSizes();
+      // A renderer assigns these as properties, possibly after the group
+      // read its panels, so the group reads them again.
+      this.emit("cf-panel-sizes", undefined, { composed: false });
     }
   }
 

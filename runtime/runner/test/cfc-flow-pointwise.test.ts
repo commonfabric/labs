@@ -10,7 +10,7 @@ import {
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
-import { type FactoryInput } from "../src/builder/types.ts";
+import type { FactoryInput } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-flow-pointwise");
 const space = signer.did();

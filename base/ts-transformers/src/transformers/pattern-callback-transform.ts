@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { preserveSourceMapRange } from "../ast/mod.ts";
-import {
-  type CapabilityParamDefault,
+import type {
+  CapabilityParamDefault,
   TransformationContext,
 } from "../core/mod.ts";
 import { analyzeFunctionCapabilities } from "../policy/mod.ts";

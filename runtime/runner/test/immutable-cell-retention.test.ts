@@ -36,6 +36,12 @@ describe("immutable-cell-retention", () => {
       parsed: { held: "parsed" },
       relative: { held: "relative" },
       failedSchemaRetained: false,
+      immutableCell: {
+        dropped: true,
+        droppedPrimitive: true,
+        held: { owned: "held" },
+        portable: { owned: "portable" },
+      },
     });
   });
 });
