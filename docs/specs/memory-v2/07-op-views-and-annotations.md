@@ -141,6 +141,7 @@ encode canonical operations and the new materialized value
 map anchors through canonical operations
 map the anchors a submission carries, from the submitting client's
   document to the integrated result
+say whether a submitted payload holds no change, whatever value it meets
 ```
 
 Anchor mapping is codec-defined because an anchor's positions are: a text
@@ -355,6 +356,8 @@ allows any write to.
   original resolution without integrating it again
 - reusing the id with a different codec, base, payload, or anchors is a
   protocol error
+- a remove with an empty payload at an inactive field (§7.7.4) records no
+  submission, so its id names no result
 - normal `(sessionId, localSeq)` replay remains the idempotency boundary for the
   complete commit, and is the only one for an `apply-op` without a base: its
   base is stated when it lands, so its id in any later commit names a
@@ -414,7 +417,22 @@ payload inserts included. Within the apply steps of §7.7.1:
 
 1. `base` and `baselineHash` resolve as for the edit, and the same operation
    activates an inactive field, so the ranges of a first write are stated
-   against the activating value with the payload applied.
+   against the activating value with the payload applied. The exception is an
+   operation whose payload the codec says holds no change at all, whatever
+   value it applies to, and whose `anchors` only removes: an inactive field
+   holds no anchors, so at one it changes nothing, activates nothing, and is
+   not refused, whatever base or hash it states and whatever the field holds,
+   a value the codec cannot edit included. Its resolution integrates nothing
+   and removes nothing, at the field's last cursor, or
+   `{ epoch: 0, version: 0 }` for a field never active; an operation that
+   also edits takes the ordinary base and hash checks instead. A client
+   can therefore send a remove without knowing whether the field is
+   collaborative, and a remove committed after an add of the same id that is
+   still in flight, which may yet activate the field, need not wait for it.
+   No submission is recorded for such an operation, so its id holds no result
+   (§7.7.2): submitted again after the field activates, the same id applies
+   on its own terms, and removes the id if the field then holds it. Its
+   commit's `(sessionId, localSeq)` replay still returns the no-op.
 2. The codec maps every range in `add` to the integrated result (§7.5): across
    the operations integrated since the base, rebased over the payload, and
    across whatever the payload itself was rebased into. A range outside the
@@ -799,6 +817,18 @@ provenance (§7.14) can reference the same history.
 ## 7.17 Deferred Decisions
 
 - The representation and algebra for range-level CFC side-data.
+- The CFC label of a field's anchors document. The engine writes it with no
+  `cfc` member, although an anchor says as much about the field as its text
+  does: a range discloses where text is, how long it is and what an edit
+  deleted, and an id is whatever its writer chose. So the runtime carries the
+  field's label instead of the document: an anchor change is a write of the
+  field, judged by the field's write policy and ceiling, and the runtime's
+  read of a field's anchors reads the field too, so that a reader of the
+  anchors is tainted as a reader of the field is
+  (`docs/features/collaborative-fields.md`, "Anchors"). A reader that reads
+  the document directly bypasses that, and the space ACL is all that gates
+  it. §7.14's label mapper is where a field-level label would be copied onto
+  the document.
 - Collaborative branch merge semantics.
 - Retention durations for submitted audit payloads.
 - Whether mature deployments move codec execution into a more isolated

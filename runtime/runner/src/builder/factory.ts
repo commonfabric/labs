@@ -47,6 +47,7 @@ import {
 import { nameBlob } from "./blob-name.ts";
 import {
   agent,
+  anchorsOf,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -289,6 +290,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
       constant: rowLabelConstant,
     },
     navigateTo,
+    anchorsOf,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
     currentPrincipal,

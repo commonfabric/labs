@@ -15,9 +15,12 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 
 import {
+  clickCfButton,
   clickTrustedAction,
   fillCfInput,
+  fillCfTextarea,
   waitForActiveSpaceRoot,
+  waitForDisabled,
   waitForRuntimeIdle,
 } from "./cfc-browser-helpers.ts";
 import {
@@ -115,6 +118,48 @@ async function createProfile(page: Page, name: string): Promise<void> {
   await waitForRuntimeIdle(page);
   await waitForCondition(page, profileResolved, { args: [name] });
 }
+
+/**
+ * Gives the viewer the Fabric profile `name`, unless an earlier test already
+ * did.
+ */
+async function ensureProfile(page: Page, name: string): Promise<void> {
+  const state = await waitForCondition(
+    page,
+    (probe, name) => {
+      const editor = probe.collect("cf-code-editor")[0] as
+        | { participantName?: string }
+        | undefined;
+      if (
+        editor?.participantName === name &&
+        probe.collect("cf-profile-badge").some((badge) =>
+          probe.deepText(badge).includes(name)
+        )
+      ) {
+        return "resolved";
+      }
+      return probe.collect("#wish-profile-name-input").some((element) =>
+          probe.isRendered(element)
+        )
+        ? "missing"
+        : false;
+    },
+    { args: [name] },
+  );
+  if (state === "missing") await createProfile(page, name);
+}
+
+/** Whether the editor draws exactly one comment mark, over `text`. */
+const marksOnly = (probe: ProbeApi, text: string): boolean => {
+  const marks = probe.collect(".cm-highlight");
+  return marks.length === 1 && marks[0].textContent === text;
+};
+
+/** Whether the comments panel shows `text`. */
+const commentShown = (probe: ProbeApi, text: string): boolean =>
+  probe.collect("#shared-note-comments").some((panel) =>
+    probe.deepText(panel).includes(text)
+  );
 
 async function expectNoteFits(page: Page, width: number): Promise<void> {
   const layout = await page.evaluate(() => {
@@ -336,6 +381,94 @@ describe("shared-note", () => {
       result,
       (value) => value?.content === settled.content,
       { stuckLabel: "shared note undo materializes" },
+    );
+  });
+
+  it("keeps a comment on its text while both viewers type ahead of it", async () => {
+    const adaPage = adaShell.page();
+    const gracePage = graceShell.page();
+    const pages = [adaPage, gracePage];
+    const view = { spaceDid, pieceId: piece.id };
+    await Promise.all([
+      adaShell.goto({ frontendUrl: FRONTEND_URL, view, identity: ada }),
+      graceShell.goto({ frontendUrl: FRONTEND_URL, view, identity: grace }),
+    ]);
+    await Promise.all(pages.map(async (page) => {
+      await waitForActiveSpaceRoot(page, spaceDid);
+      await waitForRuntimeIdle(page);
+      await waitForCondition(page, editorReady);
+    }));
+    await Promise.all([
+      ensureProfile(adaPage, "Ada Lovelace"),
+      ensureProfile(gracePage, "Grace Hopper"),
+    ]);
+
+    // Ada selects "Café" and comments on it.
+    const before = await editorState(adaPage);
+    const cafe = before.indexOf("Café");
+    expect(cafe).toBeGreaterThan(-1);
+    await editorState(adaPage, { anchor: cafe, head: cafe + "Café".length });
+    await waitForDisabled(adaPage, "#shared-note-comment-button", false);
+    await clickCfButton(adaPage, "#shared-note-comment-button");
+    await fillCfTextarea(
+      adaPage,
+      "#shared-note-comment-draft",
+      "Which café?",
+    );
+
+    // Grace types ahead of "Café" while Ada's composer is open, so Ada's
+    // selection was reported against a version the note has since left.
+    await editorState(gracePage, { anchor: 0, head: 0 });
+    await gracePage.keyboard.type("G0 ");
+    await waitForCondition(
+      adaPage,
+      (probe) =>
+        (probe.collect("cf-code-editor")[0] as EditorHost | undefined)
+          ?._editorView?.state.doc.toString().startsWith("G0 ") === true,
+    );
+    await clickCfButton(adaPage, "#shared-note-post-button");
+    await Promise.all(
+      pages.map(async (page) => {
+        await waitForCondition(page, marksOnly, { args: ["Café"] });
+        await waitForCondition(page, commentShown, { args: ["Which café?"] });
+      }),
+    );
+
+    // Both type ahead of it at once; the mark stays on "Café" in both
+    // editors, and Memory's anchor covers it in the stored text.
+    await Promise.all(
+      pages.map((page) => editorState(page, { anchor: 0, head: 0 })),
+    );
+    await Promise.all([
+      adaPage.keyboard.type("①"),
+      gracePage.keyboard.type("②"),
+    ]);
+    const result = controller.getResult(piece.getCell());
+    const settled = await waitForCellValue<{
+      content: string;
+      commentRanges?: { anchors: { from: number; to: number }[] };
+    }>(
+      controller.runtime,
+      result,
+      (value) => {
+        const anchor = value?.commentRanges?.anchors[0];
+        return value?.content.includes("①") === true &&
+          value.content.includes("②") &&
+          value.content.includes("G0 ") && anchor !== undefined &&
+          value.content.slice(anchor.from, anchor.to) === "Café";
+      },
+      { stuckLabel: "the comment's anchor follows both edits" },
+    );
+    expect(settled.commentRanges?.anchors).toHaveLength(1);
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, editorEquals, { args: [settled.content] })
+      ),
+    );
+    await Promise.all(
+      pages.map((page) =>
+        waitForCondition(page, marksOnly, { args: ["Café"] })
+      ),
     );
   });
 });

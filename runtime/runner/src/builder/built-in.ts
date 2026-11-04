@@ -16,6 +16,7 @@ import type {
   ConfLabelQuery,
   FetchBinaryResult,
   FetchOptions,
+  FieldAnchors,
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
@@ -27,6 +28,7 @@ import type {
   WishState,
 } from "commonfabric";
 
+import { ANCHORS_OF_ARGUMENT_SCHEMA } from "../builtins/anchors-of.ts";
 import { wishStateSchemaForResult } from "../builtins/wish-schema.ts";
 import { LLMDialogResultSchema } from "../builtins/llm-schemas.ts";
 import { sqliteQueryNodeFactory } from "../builtins/sqlite/query-node.ts";
@@ -390,6 +392,24 @@ export const navigateTo = createNodeFactory({
   type: "ref",
   implementation: "navigateTo",
 }) as (cell: Reactive<unknown>) => Reactive<boolean>;
+
+/**
+ * anchorsOf(field) — the anchors of the collaborative string field `field`
+ * names, or `undefined` while it has none. See the api-level
+ * `AnchorsOfFunction` docs for semantics.
+ */
+export function anchorsOf(
+  field: FactoryInput<string>,
+): Reactive<FieldAnchors | undefined> {
+  anchorsOfFactory ||= createNodeFactory({
+    type: "ref",
+    implementation: "anchorsOf",
+    argumentSchema: ANCHORS_OF_ARGUMENT_SCHEMA,
+  });
+  return anchorsOfFactory({ field }) as Reactive<FieldAnchors | undefined>;
+}
+
+let anchorsOfFactory: NodeFactory<{ field: unknown }, any> | undefined;
 
 // inv-12 Stage 2 (spec §4.6.4.1): the bounded label-introspection surface.
 // `target` rides the node input `asCell` so the builtin receives the

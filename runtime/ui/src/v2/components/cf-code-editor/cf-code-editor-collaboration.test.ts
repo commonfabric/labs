@@ -19,6 +19,7 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { CFCodeEditor } from "./cf-code-editor.ts";
+import { RESTATE_AFTER_VERSIONS } from "./features/highlights.ts";
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
 import { codeMirrorPresenceState } from "./codemirror-presence.ts";
 import { backlinkField } from "./features/backlinks.ts";
@@ -184,6 +185,63 @@ const synchronizedField = {
 } as const;
 
 describe("CFCodeEditor collaboration", () => {
+  it("reports a held selection again only once its base falls far behind", () => {
+    const events: unknown[] = [];
+    const element = new CFCodeEditor();
+    const view = statefulView();
+    view.dispatch({ selection: { anchor: 0, head: 2 } } as never);
+    const snapshotAt = (version: number) => ({
+      confirmedCursor: { epoch: 1, version },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: [],
+    });
+    const collaboration = {
+      active: true,
+      synchronizationSnapshot: snapshotAt(4),
+    };
+    (element as any)._editorView = view;
+    (element as any)._collaboration = collaboration;
+    (element as any).emit = (name: string, detail: unknown) => {
+      if (name === "cf-selection-change") events.push(detail);
+    };
+    const advanceTo = (version: number) => {
+      collaboration.synchronizationSnapshot = snapshotAt(version);
+      (element as any)._handleCollaborationSynchronization(
+        collaboration.synchronizationSnapshot,
+      );
+    };
+
+    (element as any)._reportSelection();
+    advanceTo(4 + RESTATE_AFTER_VERSIONS - 1);
+    advanceTo(4 + RESTATE_AFTER_VERSIONS);
+    advanceTo(4 + RESTATE_AFTER_VERSIONS + 1);
+    advanceTo(4 + RESTATE_AFTER_VERSIONS + 1);
+
+    expect(events).toEqual([
+      {
+        from: 0,
+        to: 2,
+        text: "ab",
+        base: { epoch: 1, version: 4 },
+      },
+      {
+        from: 0,
+        to: 2,
+        text: "ab",
+        base: { epoch: 1, version: 4 + RESTATE_AFTER_VERSIONS },
+      },
+    ]);
+
+    // Collaboration ending reports the selection once more, against the
+    // editor's own text.
+    collaboration.synchronizationSnapshot = null as never;
+    (element as any)._handleCollaborationSynchronization(null);
+    (element as any)._handleCollaborationSynchronization(null);
+    expect(events.at(-1)).toEqual({ from: 0, to: 2, text: "ab", base: null });
+    expect(events).toHaveLength(3);
+  });
+
   it("routes local, remote, and cell-originated editor updates correctly", () => {
     const calls: string[] = [];
     const collaboration = {
@@ -195,6 +253,7 @@ describe("CFCodeEditor collaboration", () => {
       language: "text/markdown",
       _collaboration: collaboration,
       _publishPresence: () => calls.push("presence"),
+      _reportSelection: () => calls.push("selection"),
       emit: () => calls.push("change"),
       setValue: () => calls.push("value"),
       _updateMentionedFromContent: () => calls.push("mentioned"),
@@ -239,7 +298,7 @@ describe("CFCodeEditor collaboration", () => {
     expect(calls).toEqual([]);
 
     invoke(undefined, false, true);
-    expect(calls).toEqual(["presence"]);
+    expect(calls).toEqual(["presence", "selection"]);
 
     calls.length = 0;
     self._collaboration = undefined as never;
@@ -517,6 +576,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: [],
         },
       };
       (element as any)._collaboration = collaboration;
@@ -544,6 +604,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 3, version: 0 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: [],
       };
       (element as any)._handleCollaborationSynchronization(
         collaboration.synchronizationSnapshot,
@@ -581,6 +642,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: [],
         },
       };
       element.collaborative = true;
@@ -650,6 +712,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: [],
         },
       };
       element.collaborative = true;
@@ -715,6 +778,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 2, version: 4 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: [],
         },
       };
       (element as any)._collaboration = collaboration;
@@ -732,6 +796,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 2, version: 7 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: [],
       };
       (element as any)._handleCollaborationSynchronization(
         collaboration.synchronizationSnapshot,
@@ -798,6 +863,7 @@ describe("CFCodeEditor collaboration", () => {
           confirmedCursor: { epoch: 1, version: 0 },
           pendingChanges: [],
           field: synchronizedField,
+          anchors: [],
         },
       };
       (element as any).emit = (name: string, detail: unknown) =>
@@ -839,6 +905,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 2, version: 4 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: [],
       };
       (element as any)._collaboration = {
         active: true,
@@ -900,7 +967,11 @@ describe("CFCodeEditor collaboration", () => {
       expect(
         [...codeMirrorPresenceState(view.state)!.participants.keys()],
       ).toEqual(["peer:3"]);
-      expect(events).toHaveLength(3);
+      expect(events.map(([name]) => name)).toEqual([
+        "cf-presence-join",
+        "cf-presence-error",
+        "cf-presence-join",
+      ]);
     } finally {
       (element as any)._cleanupPresence();
     }
@@ -1152,6 +1223,7 @@ describe("CFCodeEditor collaboration", () => {
         confirmedCursor: { epoch: 1, version: 3 },
         pendingChanges: [],
         field: synchronizedField,
+        anchors: [],
       };
       let observerRegistrations = 0;
       const collaboration = {

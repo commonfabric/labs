@@ -19,7 +19,9 @@ import {
   type ApplyOpResolution,
   type CellHandle,
   CODEMIRROR_CHANGESET_CODEC,
+  type FieldAnchor,
   type JSONValue,
+  mapAnchorRange,
   type OpCursor,
   type OperationFieldSnapshot,
   type RuntimeClient,
@@ -53,7 +55,20 @@ export type CodeMirrorSynchronizationSnapshot = {
   confirmedCursor: OpCursor;
   pendingChanges: readonly ChangeDesc[];
   field: CodeMirrorCollaborationFieldIdentity;
+
+  /** The field's anchors, stated against the document at `confirmedCursor`. */
+  anchors: readonly FieldAnchor[];
 };
+
+const sameAnchors = (
+  a: readonly FieldAnchor[],
+  b: readonly FieldAnchor[],
+): boolean =>
+  a.length === b.length &&
+  a.every((anchor, index) =>
+    anchor.id === b[index].id && anchor.from === b[index].from &&
+    anchor.to === b[index].to
+  );
 
 /** Preserves both values when a new epoch cannot absorb unconfirmed edits. */
 export class CodeMirrorReconciliationError extends Error {
@@ -260,6 +275,7 @@ export class CodeMirrorCollaborationController {
     (snapshot: CodeMirrorSynchronizationSnapshot | null) => void
   >();
   #cursor: OpCursor | null = null;
+  #anchors: readonly FieldAnchor[] = [];
   #field: CodeMirrorCollaborationFieldIdentity | null = null;
   #baselineHash = "";
   #unsubscribe: (() => void) | undefined;
@@ -299,6 +315,7 @@ export class CodeMirrorCollaborationController {
         update.changes
       ),
       field: { ...this.#field, path: [...this.#field.path] },
+      anchors: this.#anchors,
     };
   }
 
@@ -508,6 +525,7 @@ export class CodeMirrorCollaborationController {
       annotations: Transaction.remote.of(true),
     });
     this.#cursor = snapshot.cursor;
+    this.#anchors = snapshot.anchors;
     this.#baselineHash = snapshot.baselineHash;
     this.#ready = true;
     this.#notifySynchronization();
@@ -594,7 +612,11 @@ export class CodeMirrorCollaborationController {
             "CodeMirror snapshot disagrees at the current operation cursor",
           );
         }
-        if (becameActive) this.#notifySynchronization();
+        // An operation that changes anchors alone advances no version, so a
+        // snapshot at the current cursor can still carry a new set.
+        const anchorsChanged = !sameAnchors(this.#anchors, snapshot.anchors);
+        this.#anchors = snapshot.anchors;
+        if (becameActive || anchorsChanged) this.#notifySynchronization();
         return;
       }
       const updates = codeMirrorIntegratedUpdates(snapshot, current);
@@ -612,6 +634,7 @@ export class CodeMirrorCollaborationController {
         epoch: snapshot.cursor.epoch,
         version: getSyncedVersion(this.#view.state),
       };
+      this.#anchors = snapshot.anchors;
       this.#baselineHash = snapshot.baselineHash;
       this.#notifySynchronization();
       if (
@@ -780,6 +803,14 @@ export class CodeMirrorCollaborationController {
         ),
       ));
     }
+    // A resolution carries operations and not the anchors they moved, so the
+    // anchors follow those operations by Memory's own rule until a snapshot
+    // restates them.
+    let anchors = this.#anchors;
+    for (const update of updates) {
+      anchors = anchors.map((anchor) => mapAnchorRange(anchor, update.changes));
+    }
+    this.#anchors = anchors;
     this.#cursor = {
       epoch: resolution.to.epoch,
       version: getSyncedVersion(this.#view.state),

@@ -58,6 +58,7 @@ import {
   type GraphQueryResult,
   type HelloMessage,
   identityOfScopeKey,
+  isOperationAnchorsDocId,
   isScopeKey,
   MAX_ENTITY_ID_PAGE_SIZE,
   MAX_UNTRUSTED_MESSAGE_SLOTS,
@@ -1117,8 +1118,9 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents. */
-type DirtyOp = "set" | "patch" | "delete";
+ * full post-apply documents, and `derived` heads, which the engine wrote from
+ * the commit rather than the writer supplying them, always ride it. */
+type DirtyOp = "set" | "patch" | "delete" | "derived";
 
 type DirtyOrigin = {
   sessionId: string;
@@ -7872,9 +7874,11 @@ export class Server {
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            // A field's anchors document is the engine's write, never the
+            // committing session's, which holds nothing of it to promote.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
-              revision.op,
+              isOperationAnchorsDocId(revision.id) ? "derived" : revision.op,
             );
           }
           if (dirtyOps.size > 0) {
@@ -10744,6 +10748,7 @@ export class Server {
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
+                      origin.op !== "derived" &&
                       (origin.op !== "patch" || !getOwnWriteEchoConfig());
                     if (!held) {
                       upserts.push(entry);

@@ -174,6 +174,42 @@ release or its entity, and a client cannot write it.
 An annotation on the field, a comment, a highlight or a bookmark, is an
 ordinary entity that names an anchor id and stores no position of its own.
 
+Pattern code writes anchors with `addAnchor(id, { from, to }, { base? })` and
+`removeAnchor(id)` on a string cell, and reads them with `anchorsOf(field)`,
+which returns the anchors document
+([`../common/concepts/types-and-schemas/writable.md`](../common/concepts/types-and-schemas/writable.md),
+"Anchoring a range of text"). The transaction records the calls and the commit
+carries them on `apply-op`s of the field after every other operation, the last
+call naming an id being the one that counts. A range without a base is stated
+against the value the transaction holds, so it rides an operation without a
+base that carries the hash of the text it applies to, as `applyChanges()`'s
+edits do: the anchors recorded after a run of text changes ride the operation
+carrying those changes, and the anchors recorded before any change ride one
+with an empty payload ahead of them, so that Memory moves them through the
+changes. A range with a base rides one operation naming that base, with an
+empty payload and no hash, after the text edits. Removes ride one operation
+with neither a base nor a hash, since a remove depends on nothing the field
+holds; Memory takes one at a field that is not collaborative as a no-op that
+leaves it so, which is what lets a remove go out before the add it undoes has
+landed. For both, the commit leaves the field's incidental reads, those
+beneath it and a non-recursive one at it, out of its conflict set, since
+Memory resolves them whatever the field holds. A commit built ahead of its
+seal refuses anchors, and the client speculation overlay's whole-document
+seal leaves them out, as both do text edits.
+
+An anchor says as much about the field as its text does: a range discloses
+where text is, how long it is and what an edit deleted, and an id is
+whatever its writer chose. Contextual Flow Control treats anchors that way.
+Every anchor change reads the field as an attempted write of it, so the
+field's write policy judges the change as it would a `set()`: its writers,
+its ceiling against what the transaction read, and the rest of what the
+field's schema declares. And `anchorsOf()` reads the field's value as well
+as the anchors document, so the result it writes is a derivation of the field
+and carries the field's label, and a reader of it is tainted as a reader of
+the field is. The anchors document itself carries no label (the spec's
+deferred decisions, §7.17), so a reader that reads it directly gets no such
+taint, and pattern code reads anchors through `anchorsOf()`.
+
 ## Checkpoints, reconnect, and reset
 
 The operation cursor is `{ epoch, version }`. Memory creates storage-owned

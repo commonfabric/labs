@@ -4081,6 +4081,7 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "collaborative"?: boolean;
   "presenceRoom"?: string;
   "participantName"?: string;
+  "highlights"?: { id: string; kind?: string }[];
   "placeholder"?: string;
   "timingStrategy"?: string;
   "timingDelay"?: number;
@@ -4109,6 +4110,8 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "oncf-collaboration-reconcile"?: any;
   "oncf-presence-error"?: any;
   "oncf-presence-join"?: any;
+  "oncf-selection-change"?: any;
+  "oncf-highlight-click"?: any;
   "onbacklink-click"?: any;
   "onbacklink-create"?: any;
   "onmention-ref-label-changed"?: any;

@@ -128,6 +128,18 @@ import {
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
+import {
+  type EditorHighlight,
+  highlights as highlightsExtension,
+  localAnchorRanges,
+  needsRestating,
+  NOTHING_SELECTED,
+  sameSelection,
+  type SelectionReport,
+  selectionReport,
+  setHighlightRangesEffect,
+  setHighlightsEffect,
+} from "./features/highlights.ts";
 import { styles } from "./styles.ts";
 import {
   CodeMirrorCollaborationController,
@@ -301,6 +313,10 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   publishes its caret there with `focused` reporting whether it owns focus.
  *   Presence travels over the runtime's memory connection; no endpoint is
  *   configured.
+ * @attr {Array<{id: string, kind?: string}>} highlights - Anchors of the
+ *   collaborative field to mark, by id. Memory maps each anchor through every
+ *   edit and the editor draws it where Memory says it is; `kind` adds the
+ *   class `cm-highlight-<kind>`. See `docs/highlights.md`.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -311,6 +327,15 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   of document collaboration. Detail contains a safe failure category.
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
+ * @fires cf-selection-change - Fired when the person changes the main
+ *   selection, with detail `{ from, to, text, base }`: the range as Memory's
+ *   confirmed text at `base` states it, ready for `addAnchor()`. An empty
+ *   selection, or one over an edit not yet confirmed, reports `from === to`;
+ *   the second is reported again once Memory confirms the edit. A selection
+ *   held while `base` falls 32 versions behind is reported again against the
+ *   newer version.
+ * @fires cf-highlight-click - Fired when a highlight is clicked, with detail
+ *   `{ id }`. The caret still lands where the click was.
  * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
  * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
  *   or confirmed with Enter during autocomplete with no matches. Detail:
@@ -361,6 +386,7 @@ export class CFCodeEditor extends BaseElement {
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
+    highlights: { type: Array },
   };
 
   declare value: CellHandle<string> | string;
@@ -404,6 +430,13 @@ export class CFCodeEditor extends BaseElement {
   declare collaborative: boolean;
   declare presenceRoom: string;
   declare participantName: string;
+
+  /**
+   * The anchors of the collaborative field to draw, by anchor id. Memory says
+   * where each anchor is; an id the field holds no anchor for, or whose text
+   * an edit deleted, draws nothing.
+   */
+  declare highlights: EditorHighlight[];
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -450,6 +483,12 @@ export class CFCodeEditor extends BaseElement {
   private _refusedShown = false;
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
+  private _lastSelectionReport: SelectionReport = NOTHING_SELECTED;
+  private _shownAnchors:
+    | Pick<CodeMirrorSynchronizationSnapshot, "anchors"> & {
+      cursor: CodeMirrorSynchronizationSnapshot["confirmedCursor"];
+    }
+    | undefined;
   private _presence: PresenceRoomHandle | undefined;
   private _presenceUnsubscribe: (() => void) | undefined;
   private _presenceJoining = false;
@@ -613,6 +652,7 @@ export class CFCodeEditor extends BaseElement {
     this.collaborative = false;
     this.presenceRoom = "";
     this.participantName = "";
+    this.highlights = [];
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
@@ -2000,6 +2040,7 @@ export class CFCodeEditor extends BaseElement {
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
     }
+    if (update.selectionSet) this._reportSelection();
     if (!update.docChanged || isCellSync) return;
 
     const value = update.state.doc.toString();
@@ -2234,7 +2275,24 @@ export class CFCodeEditor extends BaseElement {
   ): void {
     if (snapshot === null) {
       this._cleanupPresence();
+      this._shownAnchors = undefined;
+      this._editorView?.dispatch({ effects: setHighlightRangesEffect.of([]) });
+      // The selection stays; with no confirmed version it is stated against
+      // the editor's own text.
+      this._reportSelection();
       return;
+    }
+    this._showAnchors(snapshot);
+    // A selection over an edit Memory had not confirmed reported nothing; once
+    // Memory confirms the edit it has a range to report. A selection already
+    // reported keeps its `base`, which Memory maps forward when it is used,
+    // until the base falls far enough behind to risk leaving the history
+    // Memory keeps.
+    const last = this._lastSelectionReport;
+    if (
+      last.from === last.to || needsRestating(last, snapshot.confirmedCursor)
+    ) {
+      this._reportSelection();
     }
     if (
       this._presenceEpoch !== undefined &&
@@ -2256,6 +2314,54 @@ export class CFCodeEditor extends BaseElement {
       }),
     });
     this._publishPresence();
+  }
+
+  /**
+   * Restates the highlighted ranges from Memory's anchors when the anchors or
+   * the version they are stated at have changed. Between restatements the
+   * highlight field moves the ranges through each edit by the same rule.
+   */
+  private _showAnchors(snapshot: CodeMirrorSynchronizationSnapshot): void {
+    const view = this._editorView;
+    if (!view) return;
+    const shown = this._shownAnchors;
+    if (
+      shown !== undefined && shown.anchors === snapshot.anchors &&
+      shown.cursor.epoch === snapshot.confirmedCursor.epoch &&
+      shown.cursor.version === snapshot.confirmedCursor.version
+    ) {
+      return;
+    }
+    const ranges = localAnchorRanges(view.state, snapshot);
+    if (ranges === undefined) return;
+    this._shownAnchors = {
+      anchors: snapshot.anchors,
+      cursor: snapshot.confirmedCursor,
+    };
+    view.dispatch({ effects: setHighlightRangesEffect.of(ranges) });
+  }
+
+  /** Reports the main selection, stated against the text Memory has confirmed. */
+  private _reportSelection(): void {
+    const view = this._editorView;
+    if (!view) return;
+    this._emitSelection(
+      selectionReport(
+        view.state,
+        this._collaboration?.synchronizationSnapshot ?? null,
+      ),
+    );
+  }
+
+  /**
+   * Emits `cf-selection-change` with `report` when it differs from the last
+   * one reported. Every empty selection reports the same way, so moving the
+   * caret reports nothing.
+   */
+  private _emitSelection(report: SelectionReport): void {
+    if (sameSelection(report, this._lastSelectionReport)) return;
+    this._lastSelectionReport = report;
+    this.emit("cf-selection-change", report);
   }
 
   /**
@@ -2697,6 +2803,12 @@ export class CFCodeEditor extends BaseElement {
       this._setupPresence();
     }
 
+    if (changedProperties.has("highlights") && this._editorView) {
+      this._editorView.dispatch({
+        effects: setHighlightsEffect.of(this.highlights ?? []),
+      });
+    }
+
     // Update language
     if (changedProperties.has("language") && this._editorView) {
       const lang = getLangExtFromMimeType(this.language);
@@ -3109,6 +3221,7 @@ export class CFCodeEditor extends BaseElement {
       ),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
+      highlightsExtension((id) => this.emit("cf-highlight-click", { id })),
       this._refusalGate(),
       EditorView.updateListener.of((update) =>
         this._handleEditorUpdate(update)
@@ -3236,6 +3349,9 @@ export class CFCodeEditor extends BaseElement {
     this._editorView = new EditorView({
       state,
       parent: editorElement,
+    });
+    this._editorView.dispatch({
+      effects: setHighlightsEffect.of(this.highlights ?? []),
     });
     this._refusedShown = this._readsWithheld;
   }
