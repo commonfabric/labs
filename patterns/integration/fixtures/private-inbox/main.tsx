@@ -85,6 +85,7 @@ export interface OfferRequest {
  * event.
  */
 function envelopeOf(request: OfferRequest): OfferEvent {
+  const from = currentPrincipal();
   return {
     kind: "fabrichat-room",
     id: request.id,
@@ -92,7 +93,7 @@ function envelopeOf(request: OfferRequest): OfferEvent {
     host: OFFER_HOST,
     ownerOrigin: OFFER_HOST,
     title: request.title,
-    from: currentPrincipal(),
+    ...(from !== undefined && { from }),
     sharedAt: Date.now(),
   };
 }
@@ -253,8 +254,9 @@ const pointProfileAt = handler<
     inbox: Writable<PrivateInboxHolder>;
   }
 >((event, { profiles, inbox }) => {
+  const piece = inbox.get().piece?.resolveAsCell();
   profiles.key(event.index).resolveAsCell().key("setInbox").send({
-    inbox: inbox.get().piece?.resolveAsCell(),
+    ...(piece !== undefined && { inbox: piece }),
   });
 });
 
@@ -269,8 +271,10 @@ const pointProfileAtIfUnset = handler<
     inbox: Writable<PrivateInboxHolder>;
   }
 >((event, { profiles, inbox }) => {
+  const piece = inbox.get().piece?.resolveAsCell();
+  // `replacing: undefined` is the conditional send: write only while unset.
   profiles.key(event.index).resolveAsCell().key("setInbox").send({
-    inbox: inbox.get().piece?.resolveAsCell(),
+    ...(piece !== undefined && { inbox: piece }),
     replacing: undefined,
   });
 });
