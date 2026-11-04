@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 
-import type { JSONSchemaObj } from "@commonfabric/api";
+import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   decomposeSchema,
@@ -13,6 +13,7 @@ import {
   schemaRelaxedForComparison,
   strandedKeys,
 } from "../runtime/piece/test/state-continuity-harness.ts";
+import { registerSchemaDocument } from "../runtime/runner/src/schema-registry.ts";
 import {
   companionFileName,
   companionSpace,
@@ -825,29 +826,90 @@ describe("stranded-state comparison", () => {
     }
   });
 
-  it("grades a schema now written as a reference to other content as changed", () => {
-    const schemaWith = (comment: string): JSONSchemaObj => ({
+  describe("a schema held inline and then as a reference", () => {
+    const rowsWith = (
+      row: Record<string, JSONSchema>,
+      comment?: string,
+    ): JSONSchemaObj => ({
       type: "array",
       items: { $ref: "#/$defs/Row" },
-      $defs: { Row: { type: "string", $comment: comment } },
+      $defs: {
+        Row: {
+          type: "object",
+          properties: row,
+          ...(comment === undefined ? {} : { $comment: comment }),
+        },
+      },
     });
-    const refTo = (schema: JSONSchemaObj) => ({
-      $ref: decomposeSchema(schema).rootRef,
+
+    /** A reference to `schema`, whose documents the registry holds. */
+    const refTo = (schema: JSONSchemaObj) => {
+      const { rootRef, documents } = decomposeSchema(schema);
+      for (const [hash, document] of documents) {
+        registerSchemaDocument(hash, document);
+      }
+      return { $ref: rootRef };
+    };
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const note = `${NOTE} for: { summary?: string | undefined; }.`;
+    const row = { name: { type: "string" }, note: { type: "string" } } as const;
+
+    it("reports nothing for the same content", () => {
+      const schema = rowsWith(row, note);
+      expect(strandedKeys({ schema }, { schema: refTo(schema) })).toEqual([]);
     });
-    const before = schemaWith("captured");
 
-    expect(strandedKeys({ schema: before }, { schema: refTo(before) }))
-      .toEqual([]);
-
-    const findings = strandedKeys({ schema: before }, {
-      schema: refTo(schemaWith("rebuilt")),
+    it("reports nothing when only the generator's inherited-docs note differs", () => {
+      const before = rowsWith(row, note);
+      const after = refTo(rowsWith(row, `${NOTE} for: { summary?: string; }.`));
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
     });
-    expect(findings.map((finding) => [finding.key, finding.lost])).toEqual([
-      ["schema", false],
-    ]);
 
-    // Nothing in the place of a reference is still a loss.
-    expect(strandedKeys({ schema: refTo(before) }, {})[0].lost).toBe(true);
+    it("grades a dropped field as lost, with the note differing as well", () => {
+      const { note: _note, ...fewer } = row;
+      const after = refTo(
+        rowsWith(fewer, `${NOTE} for: { summary?: string; }.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades any other `$comment` difference as lost", () => {
+      const after = refTo(rowsWith(row, "rejectedProperty"));
+      const findings = strandedKeys({
+        schema: rowsWith(row, "missingProperty"),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades a reference the registry cannot read as lost", () => {
+      const { rootRef } = decomposeSchema(
+        rowsWith(row, `${NOTE} unregistered.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: { $ref: rootRef },
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades nothing in the place of a reference as lost", () => {
+      const findings = strandedKeys({ schema: refTo(rowsWith(row)) }, {});
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
   });
 
   it("grades PARTIAL loss as lost, not merely changed", () => {

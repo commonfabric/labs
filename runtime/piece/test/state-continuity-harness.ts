@@ -58,8 +58,11 @@ import {
   getPatternSetupIdentityRef,
   isCell,
   isStream,
+  lookupSchemaDocument,
+  mapSubschemas,
   parseExternalSchemaRef,
   readResultSchemaMeta,
+  recomposeSchema,
   Runtime,
   TILE_UI,
   UI,
@@ -968,6 +971,31 @@ export function isReduction(value: unknown): boolean {
  *   the two must not be allowed to collapse again.
  */
 
+/** How the schema generator's note on inherited docs opens. */
+const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
+
+/**
+ * `schema` without the schema generator's note on inherited docs, at any
+ * depth. The note prints a TypeScript type the way the checker's options have
+ * it print, and constrains no value. Every other `$comment` stays, because a
+ * reader of a schema can act on one: `rejectedProperty` is one such.
+ */
+function withoutInheritedDocsNotes(schema: JSONSchemaObj): JSONSchemaObj {
+  const { $comment, ...rest } = schema;
+  const kept = typeof $comment === "string" &&
+      $comment.startsWith(INHERITED_DOCS_NOTE)
+    ? rest
+    : schema;
+  return mapSubschemas(
+    kept,
+    (child) =>
+      isObjectNotArray(child)
+        ? withoutInheritedDocsNotes(child as JSONSchemaObj)
+        : child,
+    { includeDefs: true, includeUnused: true },
+  );
+}
+
 /**
  * Whether one side is a schema written as a content-addressed reference and
  * the other the same schema written out. Representation is not state: a
@@ -976,7 +1004,10 @@ export function isReduction(value: unknown): boolean {
  * comparing structurally does not settle this — recomposition derives `$defs`
  * names from content hashes where the inline side carries the author's — so
  * the INLINE side is decomposed instead, and the two canonical root
- * references either match or they do not. `undefined` means neither side is
+ * references either match or they do not. A difference in the schema
+ * generator's note on inherited docs is not a difference in content, so when
+ * the two do not match they are compared again without it, which reads the
+ * reference's documents from the registry. `undefined` means neither side is
  * a bare reference and the ordinary walk decides; a bare reference paired
  * with anything that does not decompose to it is a change.
  */
@@ -1013,7 +1044,20 @@ function externalSchemaRefEquivalent(
   const beforeRef = canonicalRefOf(before);
   const afterRef = canonicalRefOf(after);
   if (beforeRef === undefined || afterRef === undefined) return false;
-  return beforeRef === afterRef;
+  if (beforeRef === afterRef) return true;
+  const refWithoutNotesOf = (value: unknown): string => {
+    const own = bareRefOf(value);
+    const schema = own === undefined
+      ? value
+      : recomposeSchema(own, lookupSchemaDocument);
+    return decomposeSchema(withoutInheritedDocsNotes(schema as JSONSchemaObj))
+      .rootRef;
+  };
+  try {
+    return refWithoutNotesOf(before) === refWithoutNotesOf(after);
+  } catch {
+    return false;
+  }
 }
 
 function isPreserved(before: unknown, after: unknown): boolean {
@@ -1194,10 +1238,8 @@ function lostAnything(before: unknown, after: unknown): boolean {
   if (isEmptyValue(before)) return false;
   // Held something, holds nothing now.
   if (isEmptyValue(after)) return true;
-  // A schema written as a reference is either the same schema, which carries
-  // everything it did, or another one, which is a change. Walking the two as
-  // containers would report the inline side's keys as gone, whichever it is.
-  if (externalSchemaRefEquivalent(before, after) !== undefined) return false;
+  // A schema whose representation changed still carries everything it did.
+  if (externalSchemaRefEquivalent(before, after) === true) return false;
   if (isReduction(before) || isReduction(after)) return false;
   // A CONTAINER that stopped being one took everything under it with it,
   // whichever direction the flip went. Guarding only the array side let
