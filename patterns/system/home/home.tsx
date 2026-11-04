@@ -35,12 +35,15 @@ import {
 } from "../shared-space/shared-space-interface.ts";
 import {
   changeSharedSpaceMembership,
+  markSharedSpaceDeleted,
   readSharedSpaceCatalog,
   registerSharedSpace,
   removeSharedSpace,
   retitleSharedSpace,
   type SharedSpaceCatalog,
   type SharedSpaceCatalogStorage,
+  type SharedSpaceDeletionMark,
+  type SharedSpaceDeletionResult,
   type SharedSpaceMembershipChange,
   type SharedSpaceMembershipResult,
   type SharedSpaceRegistration,
@@ -227,6 +230,14 @@ export type HomeOutput = {
   // Sets an entry's display title and nothing else, for an application with no
   // handler in Home that knows the space's current title.
   retitleSharedSpace: Stream<SharedSpaceRetitle, SharedSpaceRetitleResult>;
+  // Records that a listed space is deleted, at the revision the caller
+  // observed, once the memory server says so to the handler itself (see
+  // `markSharedSpaceDeletedIn`). The runtime that hears of the deletion sends
+  // it, the shell on a `spaceaccesslost` marked `deleted` among them.
+  markSharedSpaceDeleted: Stream<
+    SharedSpaceDeletionMark,
+    SharedSpaceDeletionResult
+  >;
   createProfile: Stream<CreateProfileEvent>;
   // Retires the profile the event links, as the picker's Remove does, unless
   // it is the one `#profile` returns (see `setProfileRetired`).
@@ -572,6 +583,7 @@ const Home = pattern(
         register: home.registerSharedSpace,
         changeMembership: home.changeSharedSpaceMembership,
         retitle: home.retitleSharedSpace,
+        markDeleted: home.markSharedSpaceDeleted,
       },
       imports: { remove: home.removeSharedSpace },
     };
@@ -788,6 +800,7 @@ const Home = pattern(
       changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
       removeSharedSpace: removeSharedSpace({ catalog }),
       retitleSharedSpace: retitleSharedSpace({ catalog }),
+      markSharedSpaceDeleted: markSharedSpaceDeleted({ catalog }),
       addFavorite: addFavorite({ favorites }),
       removeFavorite: removeFavorite({ favorites }),
       addJournalEntry: addJournalEntry({ journal }),

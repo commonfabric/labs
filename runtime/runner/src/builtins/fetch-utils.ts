@@ -16,7 +16,7 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { stripUndefinedProps } from "@commonfabric/js-values/strip-undefined-props";
 
 import type { Schema } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import type {
   CommitError,

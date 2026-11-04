@@ -9,7 +9,7 @@ import { hashOf } from "@commonfabric/data-model";
 import type { JSONSchema } from "@commonfabric/api";
 
 import type { CellScope } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { validateSchemaValue } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
@@ -17,9 +17,9 @@ import { effectTargetKey } from "../executor/effect-completion.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { setResultCell } from "../result-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { selectUnavailableInput } from "../data-unavailability.ts";
 

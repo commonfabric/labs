@@ -1,7 +1,7 @@
 import { ensureDir } from "@std/fs";
 
-import { type BuiltInLLMMessage } from "@commonfabric/api";
-import { type LLMRequest } from "@commonfabric/llm/types";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
+import type { LLMRequest } from "@commonfabric/llm/types";
 
 import { colors, timestamp } from "./cli.ts";
 import env from "@/env.ts";

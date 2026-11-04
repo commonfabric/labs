@@ -62,14 +62,14 @@ import {
 } from "./cfc/label-view-state.ts";
 
 import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
-import { type Runtime } from "./runtime.ts";
+import type { Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
   narrowUnionByValueType,
   processDefaultValue,
   validateAndTransform,
 } from "./schema.ts";
-import { type IExtendedStorageTransaction } from "./storage/interface.ts";
+import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";
 import {
   arrayItemFallbackType,

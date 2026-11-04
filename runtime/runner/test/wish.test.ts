@@ -3842,7 +3842,15 @@ describe("wish built-in", () => {
         tx = runtime.edit();
         await result.pull();
         const state = result.key("profileName").get();
-        answers.push(state?.result ?? String(state?.error));
+        if (preferred === adaSpace && !retireAda) {
+          answers.push(state?.result);
+        } else {
+          expectUnavailableReason(
+            result.key("profileName").key("result").resolveAsCell().getRaw(),
+            "error",
+          );
+          answers.push(String(state?.error));
+        }
       }
 
       expect(answers[0]).toBe("Ada");
@@ -4665,7 +4673,10 @@ describe("wish built-in", () => {
           absentIndices: [0],
         });
         const state = result.key("profile").get();
-        expect(state?.result).toBeUndefined();
+        expectUnavailableReason(
+          result.key("profile").key("result").resolveAsCell().getRaw(),
+          "error",
+        );
         expect(String(state?.error)).not.toContain("unavailable");
         expect(uiProp(result, "data-profile-create-ui")).toBe("wish");
       });

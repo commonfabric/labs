@@ -16,13 +16,9 @@ import {
   type DependencyUpdateState,
   setSchedulerDependencies,
 } from "./dependency-updates.ts";
-import {
-  type NodeKind,
-  NodeRegistry,
-  type SchedulerNode,
-} from "./node-record.ts";
+import type { NodeKind, NodeRegistry, SchedulerNode } from "./node-record.ts";
 import { filterIgnoredAddresses } from "./reactivity.ts";
-import { type WriterIndexState } from "./scheduling-writes.ts";
+import type { WriterIndexState } from "./scheduling-writes.ts";
 import {
   applyActionReadDelta,
   ensureCancelForActionTriggers,

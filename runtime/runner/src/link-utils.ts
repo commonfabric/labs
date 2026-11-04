@@ -3,7 +3,7 @@ import {
   deepFreeze,
   type FabricValue,
   isDeepFrozen,
-  isKeyableObjectOrArray,
+  isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import {
@@ -31,7 +31,11 @@ import {
   registerSchemaDocument,
 } from "./schema-registry.ts";
 import type { MetaLinkField } from "./meta-seam.ts";
-import type { IReadOptions } from "./storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  IReadOptions,
+} from "./storage/interface.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
 import {
   isObjectNotArray,
@@ -39,11 +43,11 @@ import {
 } from "@commonfabric/js-values/types";
 import { getLogger } from "@commonfabric/logger";
 
-import {
-  type AnyCell,
-  type DerivedInternalCellDescriptor,
-  type JSONSchema,
-  type JSONValue,
+import type {
+  AnyCell,
+  DerivedInternalCellDescriptor,
+  JSONSchema,
+  JSONValue,
 } from "./builder/types.ts";
 import {
   type Cell,
@@ -77,11 +81,7 @@ import {
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { type CellLinkRefPayload, type SigilLink } from "./sigil-types.ts";
-import {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "./storage/interface.ts";
+import type { CellLinkRefPayload, SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 
 export * from "./link-types.ts";
@@ -916,7 +916,7 @@ function recursiveStripAsCellFromSchema(
     // property name and would return `{}`, so a fabric-valued default (which
     // `Cell.of()` embeds into schemas) would be lost from the sanitized
     // schema that rides on links.
-    if (isKeyableObjectOrArray(value)) {
+    if (isWalkableObjectOrArray(value)) {
       if (key === "$defs") {
         // Process each definition in $defs (they contain schemas that may have asCell/asStream)
         const processedDefs: Record<string, any> = {};
@@ -925,7 +925,7 @@ function recursiveStripAsCellFromSchema(
             value as Record<string, any>,
           )
         ) {
-          if (isKeyableObjectOrArray(defSchema)) {
+          if (isWalkableObjectOrArray(defSchema)) {
             processedDefs[defName] = recursiveStripAsCellFromSchema(
               defSchema,
               context,
@@ -939,7 +939,7 @@ function recursiveStripAsCellFromSchema(
       } else if (Array.isArray(value)) {
         // Handle arrays
         (result as Record<string, unknown>)[key] = value.map((item) =>
-          isKeyableObjectOrArray(item)
+          isWalkableObjectOrArray(item)
             ? recursiveStripAsCellFromSchema(
               item,
               context,

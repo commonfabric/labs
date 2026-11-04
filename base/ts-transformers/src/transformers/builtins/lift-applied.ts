@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { CFHelpers } from "../../core/cf-helpers.ts";
+import type { CFHelpers } from "../../core/cf-helpers.ts";
 import {
   detectCallKind,
   getExpressionText,

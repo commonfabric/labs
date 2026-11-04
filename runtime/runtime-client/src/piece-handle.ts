@@ -1,8 +1,8 @@
 import { NAME, UI } from "@commonfabric/runner/shared";
 import { $conn, type RuntimeClient } from "./runtime-client.ts";
 import { PieceRef, RequestType } from "./protocol/mod.ts";
-import { InitializedRuntimeConnection } from "./client/connection.ts";
-import { VNode } from "./vnode-types.ts";
+import type { InitializedRuntimeConnection } from "./client/connection.ts";
+import type { VNode } from "./vnode-types.ts";
 import { CellHandle } from "./cell-handle.ts";
 
 export type PieceType = {

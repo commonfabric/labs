@@ -15,7 +15,7 @@ import {
 } from "../src/builder/module.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { reactive } from "../src/builder/reactive.ts";
-import { type Frame, type JSONSchema } from "../src/builder/types.ts";
+import type { Frame, JSONSchema } from "../src/builder/types.ts";
 import { registerBuiltins } from "../src/builtins/index.ts";
 import { createRef } from "../src/create-ref.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";

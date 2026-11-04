@@ -336,6 +336,11 @@ describe("well-known-grants", () => {
       }]);
       expect(message).toContain("cfh:a:abcdefgh");
       expect(message).toContain("piece registry");
+      expect(message).toContain("pieces and patterns, for tasks about pieces");
+      expect(message).toContain(
+        "Find owner data (messages, mail, documents, calendar) with search and `source.read`, not the registry",
+      );
+      expect(message).not.toContain("Wire it into run_pattern");
       expect(message).toContain("a refused name read leaves the name unknown");
       expect(message).toContain(
         "A pattern can return entry references without reading values",

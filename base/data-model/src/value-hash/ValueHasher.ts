@@ -26,7 +26,7 @@ import type {
 } from "@/interface.ts";
 import { tagOfFabricValueElseNull, VALUE_TAGS } from "@/types";
 import { debugStr } from "@/value-debug";
-import { BaseFabricInstance } from "@/fabric-bases";
+import type { BaseFabricInstance } from "@/fabric-bases";
 import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import {
   FabricBytes,

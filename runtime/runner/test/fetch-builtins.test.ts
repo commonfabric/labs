@@ -19,7 +19,7 @@ import { schemaWithOpenObjects } from "../src/builtins/fetch.ts";
 import { setPatternEnvironment } from "../src/env.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test fetch builtins");

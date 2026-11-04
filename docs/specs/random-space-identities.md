@@ -295,9 +295,15 @@ reads a reaped store as a deleted space, not as a corrupt one.
 - It removes everything else the store holds for the space: every earlier
   commit, every other document and its history, the earlier revisions of the
   access-control document, the genesis receipt, the private tables such as an
-  invitation's admission records and receipts, the outbox, and the cell
-  databases beside the store. Rows the engine's schema itself needs to open a
-  store, such as the default branch's, stay.
+  invitation's admission records and receipts, and the outbox. Rows the
+  engine's schema itself needs to open a store, such as the default branch's,
+  stay.
+- The space's cell databases are not in the store. They are files beside the
+  live store, `cell-<hash>-*.sqlite`, where `<hash>` is the token the Memory
+  server derives from the space's DID, so a reap, which runs against a copy of
+  the backup, cannot reach them. Its report names them by that pattern, and
+  the install that puts the result in place of the live store moves them out
+  of the live directory, beside the live store it moves aside.
 
 Reaping is not implemented yet.
 

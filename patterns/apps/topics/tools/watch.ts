@@ -9,7 +9,7 @@
 import { CSI, type Rgb, term } from "@commonfabric/cli/view/ansi";
 import { palette } from "@commonfabric/cli/view/theme";
 import { appViewToUrlPath, spaceViewRef } from "@commonfabric/navigation";
-import { defaultDisplayFit } from "@commonfabric/html/worker";
+import { defaultDisplayFit } from "@commonfabric/html/display-fit-atoms";
 
 import { changes, history, type TopicEvent } from "./events.ts";
 import { redact } from "./labels.ts";

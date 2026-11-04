@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type JSONSchema, type Pattern } from "@commonfabric/runner";
+import type { JSONSchema, Pattern } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
 import type {
   FabricPrimitiveSchemaType,

@@ -1,10 +1,10 @@
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { createNodeFactory } from "./builder/module.ts";
-import {
-  type CellScope,
-  type JSONSchema,
+import type {
+  CellScope,
+  JSONSchema,
   Module,
-  type ModuleFactory,
+  ModuleFactory,
 } from "./builder/types.ts";
 import type { Cell } from "./cell.ts";
 import type { Action, ReactivityLog } from "./scheduler.ts";

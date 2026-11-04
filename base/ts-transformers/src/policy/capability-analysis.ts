@@ -2,7 +2,7 @@ import {
   MERGEABLE_OP_METHODS,
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
-import { type CellBrand } from "@commonfabric/schema-generator/cell-brand";
+import type { CellBrand } from "@commonfabric/schema-generator/cell-brand";
 import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
@@ -16,11 +16,11 @@ import {
   isWildcardTraversalCall,
   unwrapCellLikeType,
 } from "../ast/mod.ts";
-import {
-  type CapabilityParamSummary,
-  type FunctionCapabilitySummary,
-  type ReactiveCapability,
-  type UnreadableCellArgument,
+import type {
+  CapabilityParamSummary,
+  FunctionCapabilitySummary,
+  ReactiveCapability,
+  UnreadableCellArgument,
 } from "../core/mod.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";
 import { isPatternFactoryCalleeExpression } from "../transformers/structural-reactive-factory.ts";

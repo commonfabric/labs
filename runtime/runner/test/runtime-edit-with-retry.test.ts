@@ -4,7 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { setCell } from "../src/cell.ts";
 import { DEFAULT_MAX_RETRIES, Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

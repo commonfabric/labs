@@ -6,7 +6,7 @@ import {
   type UnavailableVariant,
 } from "@commonfabric/data-model/availability";
 
-import {
+import type {
   BuiltInGenerateObjectParams,
   BuiltInGenerateTextParams,
   BuiltInLLMMessage,
@@ -61,9 +61,9 @@ import {
   isCellResultForDereferencing,
   snapshotQueryResult,
 } from "../query-result-proxy.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { selectUnavailableInput } from "../data-unavailability.ts";
 import { llmToolExecutionHelpers } from "./llm-dialog.ts";

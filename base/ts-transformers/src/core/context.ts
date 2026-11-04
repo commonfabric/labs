@@ -11,10 +11,10 @@ import {
   type ReactiveContextInfo,
 } from "../ast/reactive-context.ts";
 import { getRelevantDataFlows } from "../ast/normalize.ts";
-import {
+import type {
   DiagnosticInput,
-  type FunctionCapabilitySummary,
-  type SchemaHint,
+  FunctionCapabilitySummary,
+  SchemaHint,
   TransformationDiagnostic,
   TransformationOptions,
 } from "./transformers.ts";

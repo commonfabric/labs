@@ -2733,4 +2733,16 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the module defining the policy moved, and a module's identity includes its path, so the reference names the same policy by a different identity",
     record: "docs/history/package-layout-module-identity-break.md",
   },
+  {
+    // The collection view's ready branch gains the `deleted` lists, optional
+    // since a Home older than them produces none. The proof does not apply
+    // the open-object evolution allowance inside a union branch, so the
+    // branch reads as narrowed, as the Loom root's optional `addedBy` did.
+    pattern: "system/shared-space/shared-space-collection.tsx",
+    baselines: ["20261013T060316Z-c-EAbZTKJzYV9I3w"],
+    paths: ["argument.view"],
+    reason:
+      "the collection view's ready branch gains optional `deleted` lists, which the proof reads as a narrowed union branch under a baseline that never had the property",
+    record: "docs/history/shared-space-collection-deleted-lists-break.md",
+  },
 ];

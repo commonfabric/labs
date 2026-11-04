@@ -32,7 +32,7 @@ import {
   isCellResult,
   isFabricInstanceOrView,
 } from "./query-result-proxy.ts";
-import { type SigilLink, type URI } from "./sigil-types.ts";
+import type { SigilLink, URI } from "./sigil-types.ts";
 import {
   cfcSchemaResolvedRoot,
   resolveCfcSchemaRefRoot,

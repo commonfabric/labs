@@ -5011,7 +5011,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       expect(firstResult.ok).toBeDefined();
 
       const persistedId = parseLink(firstCell.getAsLink()).id!;
-      await runtime1.dispose();
+      await runtime1.dispose({ closeStorage: false });
 
       const runtime2 = new Runtime({
         apiUrl: new URL("https://example.com"),
@@ -5019,6 +5019,20 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         ...characterizationCfcPosture,
       });
       try {
+        const replica = storageManager.open(signer.did())
+          .replica as unknown as {
+            getDocument(id: string): {
+              value?: unknown;
+              cfc?: { schemaHash: string };
+            } | undefined;
+          };
+        const original = replica.getDocument(persistedId);
+        expect(original?.value).toEqual({ secret: "hello" });
+        expect(original?.cfc?.schemaHash).toBeDefined();
+        expect(
+          replica.getDocument(`cid:${original!.cfc!.schemaHash}`)?.value,
+        ).toMatchObject({ type: "object", required: ["secret"] });
+
         const secondTx = runtime2.edit();
         secondTx.setCfcEnforcementMode("enforce-explicit");
         const secondCell = runtime2.getCell(
@@ -5045,13 +5059,6 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         const secondResult = await secondTx.commit().settled;
         expect(secondResult.ok).toBeDefined();
 
-        const replica = storageManager.open(signer.did())
-          .replica as unknown as {
-            getDocument(id: string): {
-              value?: unknown;
-              cfc?: { schemaHash: string };
-            } | undefined;
-          };
         const persisted = replica.getDocument(persistedId);
         const schemaDoc = replica.getDocument(
           `cid:${persisted!.cfc!.schemaHash}`,

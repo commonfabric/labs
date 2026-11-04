@@ -667,10 +667,12 @@ describe("JavaScript-node data unavailability", () => {
       !isReadIgnoredForCommit(read.meta) &&
       !isInternalVerifierRead(read.meta)
     );
+    // Typed materialization reads this scalar shallowly. A schemaless root
+    // view would add a recursive read and broaden the action's dependencies.
     expect(
       ordinaryReads.filter((read) => read.nonRecursive !== true),
-    ).toHaveLength(1);
-    expect(ordinaryReads).toHaveLength(3);
+    ).toHaveLength(0);
+    expect(ordinaryReads).toHaveLength(1);
 
     const verifierReads = contentReads.filter((read) =>
       isReadIgnoredForScheduling(read.meta) &&

@@ -15,9 +15,7 @@ import {
   tryExplicitParameterType,
 } from "../../ast/type-inference.ts";
 import { isOptionalMemberSymbol } from "../../ast/mod.ts";
-import {
-  type AvailabilityCaptureOverride,
-} from "../../availability/captures.ts";
+import type { AvailabilityCaptureOverride } from "../../availability/captures.ts";
 
 /**
  * Build a TypeNode for an array method callback parameter.

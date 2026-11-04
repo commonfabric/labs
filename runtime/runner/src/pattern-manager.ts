@@ -19,7 +19,7 @@ import {
   setPatternSourcePath,
 } from "./builder/pattern-metadata.ts";
 import { namesInstances } from "./builder/instance-name.ts";
-import { Module, Pattern } from "./builder/types.ts";
+import type { Module, Pattern } from "./builder/types.ts";
 import { readStoredCfcMetadata } from "./cfc/metadata.ts";
 import type { CfcMetadata } from "./cfc/types.ts";
 import { ColdLoadNegativeMemo } from "./cold-load-negative-memo.ts";
@@ -59,9 +59,9 @@ import type {
   CompiledModuleArtifact,
   EvaluateResult,
   Exports,
+  RuntimeProgram,
   TypeScriptHarnessProcessOptions,
 } from "./harness/types.ts";
-import { RuntimeProgram } from "./harness/types.ts";
 import type { PatternCoverageCollector } from "./pattern-coverage.ts";
 import { snapshotQueryResult } from "./query-result-proxy.ts";
 import type { MemorySpace, Runtime, ServerRunInfo } from "./runtime.ts";
@@ -2381,11 +2381,7 @@ export class PatternManager {
         },
       );
     cacheCtx?.onEntryIdentity?.(entryIdentity);
-    // evaluateRecordGraph is a single synchronous SES stretch; where compiles
-    // interleave, yield first so event-loop work queued behind the compile runs
-    // before it, not after. A no-op in a Deno batch compile.
-    await this.#runtime.harness.yieldBetweenCompileSteps();
-    const result = this.#runtime.harness.evaluateRecordGraph(
+    const result = await this.#runtime.harness.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -2493,9 +2489,7 @@ export class PatternManager {
       endCompileTurn?.();
     }
     const { id, graph, mainSpecifier, entryIdentity, modules } = compiled;
-    // Yield ahead of the synchronous SES evaluation (see compilePattern).
-    await this.#runtime.harness.yieldBetweenCompileSteps();
-    const result = this.#runtime.harness.evaluateRecordGraph(
+    const result = await this.#runtime.harness.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -2574,9 +2568,7 @@ export class PatternManager {
         cacheCtx.persist === false,
       );
       cacheCtx.onEntryIdentity?.(entryIdentity);
-      // Yield ahead of the synchronous SES evaluation (see compilePattern).
-      await harness.yieldBetweenCompileSteps();
-      const result = harness.evaluateRecordGraph(
+      const result = await harness.evaluateRecordGraph(
         id,
         graph,
         mainSpecifier,
@@ -2746,10 +2738,10 @@ export class PatternManager {
     const { id, graph, mainSpecifier, entryIdentity, modules } = compiled;
     cacheCtx.onEntryIdentity?.(entryIdentity);
 
-    // Yield ahead of the synchronous SES evaluation (see compilePattern).
-    await harness.yieldBetweenCompileSteps();
+    // Timed end to end, with the turns other work takes between modules.
+    // `engine/evaluate-module` times what each module holds the thread for.
     const evalStart = performance.now();
-    const result = harness.evaluateRecordGraph(
+    const result = await harness.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -2774,8 +2766,8 @@ export class PatternManager {
       // cache may be empty (e.g. a fresh space), and the by-identity reload
       // path needs the closure here. A failed write fails the compile:
       // persisted refs-only pattern JSON would otherwise point at a closure
-      // that is not durable in `space`. The evaluation above and this write
-      // each hold the thread for seconds under load, so yield between them.
+      // that is not durable in `space`. This write holds the thread for seconds
+      // under load, so yield ahead of it.
       await harness.yieldBetweenCompileSteps();
       await this.#persistCompileCacheTracked(
         space,

@@ -10,12 +10,12 @@ import { isStreamValue } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { resolveLinkTracingDereferences } from "./link-resolution.ts";
-import { type NormalizedFullLink } from "./link-utils.ts";
+import type { NormalizedFullLink } from "./link-utils.ts";
 import { type Cell, createCell } from "./cell.ts";
-import { type Runtime } from "./runtime.ts";
-import {
-  type IExtendedStorageTransaction,
-  type IReadOptions,
+import type { Runtime } from "./runtime.ts";
+import type {
+  IExtendedStorageTransaction,
+  IReadOptions,
 } from "./storage/interface.ts";
 import { isSingleReadTx } from "./storage/extended-storage-transaction.ts";
 import { ignoreReadForScheduling } from "./storage/reactivity-log.ts";

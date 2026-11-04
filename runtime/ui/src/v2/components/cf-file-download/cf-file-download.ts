@@ -1,4 +1,4 @@
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
 

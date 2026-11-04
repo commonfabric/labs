@@ -11,7 +11,7 @@ import {
   linkPayloadAtProbe,
   linkProbeSubPath,
 } from "@commonfabric/data-model/cell-rep";
-import { type CellLinkRefPayload } from "./sigil-types.ts";
+import type { CellLinkRefPayload } from "./sigil-types.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
 import {
   type CellLink,

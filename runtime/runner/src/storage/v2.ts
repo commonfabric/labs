@@ -24,17 +24,18 @@ import {
 } from "@commonfabric/identity";
 import type { DIDKey } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
-import type { ACL, Entity } from "@commonfabric/memory/interface";
-import {
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type MemorySpace,
-  type MIME,
-  type Revision,
-  type Signer,
-  type TransactionError,
-  type URI,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  Entity,
+  MemorySpace,
+  MIME,
+  Revision,
+  Signer,
+  TransactionError,
+  URI,
 } from "@commonfabric/memory/interface";
 import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
@@ -1648,6 +1649,38 @@ function unwrapOuterHandle(schema: JSONSchemaObj): JSONSchemaObj {
   return values.length > 1 ? { ...inner, asCell: values.slice(1) } : inner;
 }
 
+/**
+ * How many microtask turns `crossSpaceSettled()` and `synced()` wait, once
+ * the cross-space promises are all settled, before taking the set as empty.
+ * Work that joins the set within those turns keeps them waiting.
+ *
+ * Nothing signals that no more follow-up work is coming. A reaction to settling
+ * work can track follow-up work a few promise hops later, and a waiter released
+ * the instant the set empties lets a caller that awaits `synced()` once read
+ * before that follow-up lands. Eight turns hold through a reaction that tracks
+ * its follow-up as late as six or seven hops after the work settles: a margin
+ * over the four or five hops that waiting on a `Promise.all()` over the set
+ * holds through, and over the `.then()` hops of a reaction that chains a step
+ * or two before it tracks.
+ *
+ * This is a partial fix. It covers only follow-up work that a promise reaction
+ * tracks within those turns. Follow-up work that goes through the scheduler is
+ * not covered: a load lands, the scheduler, which wakes and yields on
+ * macrotasks, runs an action later, and that action tracks new loads, past
+ * where any count of microtasks reaches. So a caller that awaits `synced()` or
+ * `crossSpaceSettled()` once can resume before the work a load set off has
+ * run. `Cell.pull()` covers that case by looping, the barrier then the
+ * scheduler's idle, until both stay quiet; the other callers do not. The call
+ * sites in this runtime that track follow-up work chain it into the work they
+ * track, so the count guards against a reaction that does not.
+ *
+ * TODO(danfuzz): Replace the count with a structural barrier: every
+ * `trackUntilSettled()` call tracks its whole follow-up chain, and the
+ * scheduler's pending work joins the barrier, so that waiters are released
+ * once both the set and the scheduler are quiet.
+ */
+const CROSS_SPACE_SETTLE_TURNS = 8;
+
 export class StorageManager implements IStorageManager {
   readonly id: string;
   readonly as: Signer;
@@ -1693,6 +1726,20 @@ export class StorageManager implements IStorageManager {
   #connectionRestoredObservers = new Set<() => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
+
+  /**
+   * The callers of `crossSpaceSettled()` and `synced()` waiting for
+   * `#crossSpacePromises` to empty, which `#releaseCrossSpaceWaiters()`
+   * releases together.
+   */
+  #crossSpaceWaiters: (() => void)[] = [];
+
+  /**
+   * How many promises have joined `#crossSpacePromises`, so that a check
+   * that the set has stayed empty can tell an emptying it began after from
+   * one that came later.
+   */
+  #crossSpaceAdditions = 0;
 
   /** The store read-throughs installed per space (see
    * IStorageManager.installStoreReadThrough); a provider resolves its
@@ -3588,11 +3635,13 @@ export class StorageManager implements IStorageManager {
   }
 
   addCrossSpacePromise(promise: Promise<void>): void {
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(promise);
   }
 
   removeCrossSpacePromise(promise: Promise<void>): void {
     this.#crossSpacePromises.delete(promise);
+    this.#releaseCrossSpaceWaiters();
   }
 
   /**
@@ -3806,9 +3855,21 @@ export class StorageManager implements IStorageManager {
   }
 
   trackUntilSettled(work: Promise<unknown>): void {
-    const tracked = work.finally(() =>
-      this.#crossSpacePromises.delete(tracked)
-    ) as Promise<void>;
+    // Settles either way and never rejects: no waiter attaches to it, so a
+    // rejection carried here would go unhandled. A rejection is logged, so
+    // work whose owner attaches no handler of its own still reports it.
+    const settle = () => {
+      this.#crossSpacePromises.delete(tracked);
+      this.#releaseCrossSpaceWaiters();
+    };
+    const tracked: Promise<void> = work.then(settle, (error: unknown) => {
+      logger.error("tracked-work-rejected", () => [
+        "work tracked until settled rejected:",
+        error,
+      ]);
+      settle();
+    });
+    this.#crossSpaceAdditions++;
     this.#crossSpacePromises.add(tracked);
   }
 
@@ -3818,7 +3879,7 @@ export class StorageManager implements IStorageManager {
 
   crossSpaceSettled(): Promise<void> {
     const { resolve, promise } = Promise.withResolvers<void>();
-    void this.#resolveCrossSpace(resolve);
+    this.#resolveCrossSpace(resolve);
     return promise;
   }
 
@@ -4143,21 +4204,49 @@ export class StorageManager implements IStorageManager {
     }, failLoad);
   }
 
-  #resolveCrossSpace(resolve: () => void): Promise<void> {
-    const promises = [...this.#crossSpacePromises.values()];
-    if (promises.length === 0) {
-      queueMicrotask(() => {
-        if (this.#crossSpacePromises.size === 0) {
-          resolve();
-          return;
-        }
-        void this.#resolveCrossSpace(resolve);
-      });
-      return Promise.resolve();
+  /**
+   * Calls `resolve` once `#crossSpacePromises` is empty. The caller joins the
+   * one list of waiters the set's emptying releases, and nothing is chained
+   * onto the pending promises themselves, so the cost of waiting is the
+   * number of waiters plus the number of pending promises rather than their
+   * product: a client starting many pieces at once has thousands of each.
+   */
+  #resolveCrossSpace(resolve: () => void): void {
+    this.#crossSpaceWaiters.push(resolve);
+    this.#releaseCrossSpaceWaiters();
+  }
+
+  /**
+   * Releases every waiter of `#resolveCrossSpace()` once `#crossSpacePromises`
+   * has been empty for {@link CROSS_SPACE_SETTLE_TURNS} microtask turns with
+   * nothing joining it, so that follow-up work which a settling promise's
+   * reactions track within those turns keeps the waiters waiting. The count of
+   * additions tells this emptying apart from a later one: a check that sees it
+   * change stops, and the later emptying starts its own. The constant's
+   * comment says what the count leaves uncovered.
+   */
+  #releaseCrossSpaceWaiters(): void {
+    if (
+      this.#crossSpacePromises.size !== 0 ||
+      this.#crossSpaceWaiters.length === 0
+    ) {
+      return;
     }
-    return Promise.all(promises)
-      .then(() => undefined)
-      .finally(() => this.#resolveCrossSpace(resolve));
+    const additions = this.#crossSpaceAdditions;
+    let turns = CROSS_SPACE_SETTLE_TURNS;
+    const check = () => {
+      // Work that joined since this check began has its own emptying, which
+      // starts a check of its own.
+      if (this.#crossSpaceAdditions !== additions) return;
+      if (--turns > 0) {
+        queueMicrotask(check);
+        return;
+      }
+      const waiters = this.#crossSpaceWaiters;
+      this.#crossSpaceWaiters = [];
+      for (const resolve of waiters) resolve();
+    };
+    queueMicrotask(check);
   }
 
   async #syncImmutableCell<T>(

@@ -349,7 +349,7 @@ import {
   normalizeCellScope,
   scopeRank,
 } from "./scope.ts";
-import { SigilLink } from "./sigil-types.ts";
+import type { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
   asPatternIdentityRef,
@@ -975,28 +975,31 @@ function scanUnavailableInputs(
 }
 
 /**
- * Authenticate unavailable inputs before schema materialization.
+ * Authenticates unavailable inputs before schema materialization.
  *
- * The first scan is a verifier probe: its link reads do not become scheduler,
- * conflict, or CFC inputs. If it finds a concrete marker, scan normally so a
- * skipped computation remains reactive to the marker and its link topology,
+ * The first scan is a verifier probe: reading the raw binding and following
+ * its links do not become scheduler, conflict, or CFC inputs. If it finds a
+ * concrete marker, scan normally so a skipped computation remains reactive
+ * to the marker and its link topology,
  * and so propagation retains the marker's CFC labels. Otherwise ordinary
  * argument materialization supplies the computation's sole normal target
  * reads. Both scans apply the same exact-path policy and precedence rules.
  */
 function preflightUnavailableInputs(
-  inputBindings: unknown,
   argumentSchema: JSONSchema | undefined,
   policy: readonly UnavailableInputPolicyEntry[] | undefined,
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
 ): AvailabilityPreflight {
+  // Verifier-internal reads (§18.6.2) stay inside this probe. Application
+  // inputs come from ordinary schema materialization; a selected marker is
+  // read again normally below so its labels and dependencies are retained.
   const probe = tx.runWithAmbientReadMeta(
     AVAILABILITY_PREFLIGHT_PROBE_READ,
     () =>
       scanUnavailableInputs(
-        inputBindings,
+        inputsCell.getRaw(),
         argumentSchema,
         policy,
         runtime,
@@ -1013,7 +1016,7 @@ function preflightUnavailableInputs(
     return probe;
   }
   return scanUnavailableInputs(
-    inputBindings,
+    inputsCell.getRaw(),
     argumentSchema,
     policy,
     runtime,
@@ -13839,7 +13842,6 @@ export class Runner {
     // schema can admit them without resolving links or fields the callback
     // cannot observe.
     const availability = preflightUnavailableInputs(
-      inputsCell.getRaw(),
       module.argumentSchema,
       module.unavailableInputPolicy,
       this.#runtime,
@@ -13855,12 +13857,8 @@ export class Runner {
       };
     }
 
-    const unresolvedArgument = inputsCell.getAsQueryResult(
-      [],
-      tx,
-    );
-
     if (module.argumentSchema === undefined) {
+      const unresolvedArgument = inputsCell.getAsQueryResult([], tx);
       return unresolvedArgument === undefined
         ? {
           argument: undefined,
@@ -13873,10 +13871,8 @@ export class Runner {
         };
     }
 
-    // Preserve the existing explicit-false behavior. Although traversal of a
-    // false schema fails, false is used by legacy modules as a validation
-    // bypass and has historically invoked the callback with undefined when no
-    // policy-authorized marker is present.
+    // An explicit false schema invokes the callback with undefined. Concrete
+    // unavailable markers are handled by preflight before this bypass.
     if (module.argumentSchema === false) {
       return {
         argument: undefined,
@@ -15070,7 +15066,6 @@ export class Runner {
       // Readiness classifies availability only. Dispatch owns ordinary schema
       // validation, so a probe never materializes the captured context.
       const availability = preflightUnavailableInputs(
-        inputsCell.getRaw(),
         capturedInputModule.argumentSchema,
         capturedInputModule.unavailableInputPolicy,
         this.#runtime,

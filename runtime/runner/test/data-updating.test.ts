@@ -36,7 +36,7 @@ import { resolveSchema } from "../src/schema.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";
 import { registerSchemaDocument } from "../src/schema-registry.ts";
 import type { URI } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   isLinkResolutionProbe,
   isWriteDestinationRead,

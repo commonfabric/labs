@@ -23,16 +23,16 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getPatternEnvironment } from "../builder/env.ts";
 import type { CellScope, Schema } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { validateAgainstSchema } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import {
   requireWaveAcceptance,
   waveRunContextOf,

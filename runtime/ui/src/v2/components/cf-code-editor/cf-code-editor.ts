@@ -79,7 +79,7 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
-import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
+import type { InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
   labelForToken,

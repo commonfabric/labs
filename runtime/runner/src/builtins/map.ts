@@ -3,14 +3,14 @@ import { isUnavailable } from "@commonfabric/data-model/availability";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
 
-import { type Pattern } from "../builder/types.ts";
-import { type AddCancel } from "../cancel.ts";
+import type { Pattern } from "../builder/types.ts";
+import type { AddCancel } from "../cancel.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   linkResolutionProbe,

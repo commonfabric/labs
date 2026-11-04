@@ -441,7 +441,11 @@ it holds through two things: each space's owner, and the lease.
   wave aborts at its commit step. A wave aborted this way parks the tenure. §1's
   re-evaluation after a park then starts a new tenure for a space that still has
   demand, and that tenure's fresh runtime recomputes the withdrawn derivations
-  (§6 step 2).
+  (§6 step 2). A park that disposes its runtime rather than keeping it first
+  installs the parked tenure's own seal destination on it. The dispose runs the
+  runtime's scheduler to idle, and that destination refuses every transaction
+  the work closes, which would otherwise commit straight to the store. Pinned:
+  `test/executor/parked-runtime.test.ts`.
 - The memory server rejects a derived-class commit whose `holder` is not the one
   its map names for the space. This is one equality check, not admission
   machinery. It binds fresh commits: an exact replay of an already-accepted
@@ -468,13 +472,14 @@ the lease:
   a worker has no timer to post from and no lease to release.
 - A long stretch of work on the worker's thread silences the heartbeat too, since
   the heartbeat is a timer on that thread. So a serving runtime compiles through
-  the interleaved driver and yields ahead of evaluating a module graph
+  the interleaved driver and yields between the modules of a graph it evaluates
   (`EngineOptions.interleaveCompile`), as its settle loop yields between actions.
   The longest stretch a pattern load holds the thread is then one module's compile
-  step or one graph's evaluation, and a thread that does that work is not silent
-  for the length of a whole program. The runtimes of one worker take turns at a
-  cold compile (`CompileTurns`), so one program compiles once per worker however
-  many of its spaces load it at the same time.
+  step, one module's evaluation, or one write of the compile cache, and a thread
+  that does that work is not silent for the length of a whole program. The
+  runtimes of one worker take turns at a cold compile (`CompileTurns`), so one
+  program compiles once per worker however many of its spaces load it at the same
+  time.
 - Nothing waits for a killed worker's teardown. `terminate()` takes effect when
   its thread next reaches its event loop, which a stalled thread may never do, and
   such a thread keeps whatever core it was spinning on until the process restarts.

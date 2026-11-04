@@ -12,7 +12,7 @@ import { isCellResult } from "../src/query-result-proxy.ts";
 import { toCell } from "../src/back-to-cell.ts";
 import { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

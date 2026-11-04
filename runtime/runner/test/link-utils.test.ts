@@ -2,6 +2,12 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
   FabricError,
@@ -9,6 +15,7 @@ import {
 } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -45,7 +52,7 @@ import {
   setContentAddressedSchemasConfig,
 } from "../src/schema-doc-config.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -948,24 +955,27 @@ describe("link-utils", () => {
   });
 
   describe("sanitizeSchemaForLinks through references", () => {
-    it("preserves Fabric instances inside array defaults and examples", () => {
+    it("refuses Fabric instances inside array defaults and examples", () => {
       const atomic = new FabricMap(new Map([["answer", 42]]));
-      const schema = {
-        type: "array",
-        items: { type: "object", asCell: ["cell"] },
-        default: [atomic],
-        examples: [[atomic]],
-      };
-
-      const sanitized = sanitizeSchemaForLinks(schema as unknown as JSONSchema);
-      expect(sanitized).toBeDefined();
-      if (sanitized === undefined || typeof sanitized === "boolean") {
-        throw new Error("Expected a sanitized object schema");
+      for (const value of [{ default: [atomic] }, { examples: [[atomic]] }]) {
+        const schema = {
+          type: "array",
+          items: { type: "object", asCell: ["cell"] },
+          ...value,
+        };
+        for (
+          const sanitize of [
+            sanitizeSchemaForLinks,
+            sanitizeAndFreezeSchemaForLinks,
+            sanitizeAndInternSchemaForLinks,
+          ]
+        ) {
+          expect(() => sanitize(schema as unknown as JSONSchema)).toThrow(
+            "FabricMap",
+          );
+          expect(Object.isFrozen(atomic)).toBe(false);
+        }
       }
-
-      expect((sanitized?.default as unknown[])[0]).toBe(atomic);
-      expect((sanitized?.examples?.[0] as unknown[])[0]).toBe(atomic);
-      expect(sanitized?.items).toEqual({ type: "object" });
     });
 
     for (const position of ["root", "nested"]) {
@@ -1188,6 +1198,52 @@ describe("link-utils", () => {
         expect(Object.isFrozen(held)).toBe(false);
         expect(Object.isFrozen(held.list)).toBe(false);
         expect(Object.isFrozen(held.list[0])).toBe(false);
+      });
+
+      it("preserves every unavailable primitive without changing its containing schema", () => {
+        for (
+          const marker of [
+            UNAVAILABLE_PENDING,
+            UNAVAILABLE_SYNCING,
+            unavailableError(new Error("missing input")),
+            unavailableObsolete("Use replacement instead"),
+          ]
+        ) {
+          const schema = {
+            type: "object",
+            properties: { value: { type: "string", asCell: ["cell"] } },
+            default: { value: marker },
+            examples: [marker],
+          };
+          for (
+            const sanitize of [
+              sanitizeSchemaForLinks,
+              sanitizeAndFreezeSchemaForLinks,
+              sanitizeAndInternSchemaForLinks,
+            ]
+          ) {
+            // Native defaults are runtime values beyond the JSON-only schema
+            // annotation type.
+            const sanitized = sanitize(schema as unknown as JSONSchema);
+            expect(sanitized).toMatchObject({
+              properties: { value: { type: "string" } },
+            });
+            if (typeof sanitized !== "object") {
+              throw new Error("object schema expected");
+            }
+            expect(sanitized.properties?.value).not.toHaveProperty("asCell");
+            const defaultValue = sanitized.default;
+            if (!isObjectNotArray(defaultValue)) {
+              throw new Error("object default expected");
+            }
+            expect(defaultValue.value).toBe(marker);
+            expect(sanitized.examples?.[0]).toBe(marker);
+            expect(schema.properties.value.asCell).toEqual(["cell"]);
+            expect(Object.isFrozen(schema)).toBe(false);
+            expect(Object.isFrozen(schema.default)).toBe(false);
+            expect(Object.isFrozen(schema.examples)).toBe(false);
+          }
+        }
       });
 
       it("throws for a mutable schema holding a `FabricInstance`, as `sanitizeSchemaForLinks()` does", () => {

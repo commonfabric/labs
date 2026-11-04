@@ -1,5 +1,5 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 

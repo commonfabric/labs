@@ -11,7 +11,7 @@ import {
   setParentPointers,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
-import { TransformationContext } from "../core/mod.ts";
+import type { TransformationContext } from "../core/mod.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 import {
   cloneKeyExpression,

@@ -6,7 +6,7 @@
  * including in LLM context/prompts.
  */
 
-import { AsCellType } from "@commonfabric/api";
+import type { AsCellType } from "@commonfabric/api";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { JSONSchema } from "commonfabric";
 

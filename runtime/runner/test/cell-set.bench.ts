@@ -14,8 +14,8 @@
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("bench operator");
 const space = signer.did();

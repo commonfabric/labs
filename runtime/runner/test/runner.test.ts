@@ -47,11 +47,11 @@ import {
   SEALING_RECEIPT_REFUSAL,
   SEALING_SOURCE_UPDATE_REFUSAL,
 } from "../src/runner.ts";
-import {
-  type ICommitNotification,
-  type IExtendedStorageTransaction,
-  type MediaType,
-  type URI,
+import type {
+  ICommitNotification,
+  IExtendedStorageTransaction,
+  MediaType,
+  URI,
 } from "../src/storage/interface.ts";
 import { trustExecutable } from "./support/trusted-builder.ts";
 import {

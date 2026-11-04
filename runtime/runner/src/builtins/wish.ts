@@ -5,12 +5,7 @@ import {
   type UnavailableVariant,
 } from "@commonfabric/data-model/availability";
 import { selectUnavailableInput } from "../data-unavailability.ts";
-import {
-  type VNode,
-  type WishParams,
-  type WishState,
-  type WishTag,
-} from "@commonfabric/api";
+import type { VNode, WishParams, WishState, WishTag } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   debugStr,
@@ -66,7 +61,7 @@ import {
 } from "../profile-order.ts";
 import { setRunnableName } from "../runner-utils.ts";
 import { type Runtime, spaceCellSchema } from "../runtime.ts";
-import { type Action, type ReactivityLog } from "../scheduler.ts";
+import type { Action, ReactivityLog } from "../scheduler.ts";
 import { RetryImmediately } from "../scheduler/retry-immediately.ts";
 import { isCellScope, narrowestScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";

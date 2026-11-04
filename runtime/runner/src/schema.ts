@@ -1,7 +1,7 @@
-import {
+import type {
   AnyCellWrapping,
-  type JSONSchemaObj,
-  type JSONValue,
+  JSONSchemaObj,
+  JSONValue,
 } from "@commonfabric/api";
 import {
   cloneIfNecessary,
@@ -32,7 +32,7 @@ import {
 import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { literalMemberMatches } from "./schema-literal-match.ts";
-import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
+import type { JSONSchema, SchemaScope } from "./builder/types.ts";
 import { createCell, isCell } from "./cell.ts";
 import {
   ContextualFlowControl,

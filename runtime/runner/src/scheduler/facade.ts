@@ -12,7 +12,7 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getTopFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
 import { waveRunContextOf, waveSettlementOf } from "../executor/wave.ts";
-import { ConsoleEvent } from "../harness/console.ts";
+import type { ConsoleEvent } from "../harness/console.ts";
 import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
