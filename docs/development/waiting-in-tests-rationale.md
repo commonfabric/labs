@@ -797,10 +797,12 @@ The measurement probed both routes in sequence, each request timed to its end,
 against a local toolshed from its process start, with its compile cache cleared,
 while four `cf piece new` runs deployed the largest patterns in the repository
 at once, and at background priority a second burst of up to eight, of which five
-to seven deployed. Each row is one run, against a toolshed on the same machine.
-The machine was a shared 18-core Mac, with a load average of about 8 to 14 from
-other work. "Background" runs the toolshed under `taskpolicy -b`. The slowest
-response, in milliseconds, for either route:
+to seven deployed. The toolshed ran on the same machine as the client, a shared
+18-core Mac with a load average of about 8 to 14 from other work. "Background"
+runs the toolshed under `taskpolicy -b`. Each normal-priority cell is one run,
+and each background cell the slowest of two: one at background priority from the
+toolshed's start, and one from after its first deploys. The slowest response, in
+milliseconds, for either route:
 
 | Toolshed                                    | Normal priority | Background |
 | ------------------------------------------- | --------------- | ---------- |
