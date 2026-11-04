@@ -260,7 +260,7 @@ describe("topics-browser-measurement", () => {
             lift.implementation?.split(" =>")[0],
           ]),
         ).toEqual([
-          ["crossrefTable", "({ sources })"],
+          ["crossrefTable", "({ sources, values })"],
           ["backlinksOf", "({ table, self })"],
         ]);
         expect(

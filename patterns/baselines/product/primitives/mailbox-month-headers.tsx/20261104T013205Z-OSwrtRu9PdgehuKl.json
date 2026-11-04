@@ -1,0 +1,116 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SqliteDatabase": {
+        "additionalProperties": true,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rev": {
+            "type": "number"
+          },
+          "tables": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "limit": {
+        "default": 200,
+        "description": "How many headers to return, newest first. Held between 1 and 500, so a\ncaller cannot widen the read past what the atom will answer for.",
+        "type": "number"
+      },
+      "mail": {
+        "$ref": "#/$defs/SqliteDatabase",
+        "asCell": [
+          "sqlite"
+        ],
+        "description": "The mail store to read. Whoever wired the input chose which."
+      },
+      "month": {
+        "default": "",
+        "description": "The month to read, as `YYYY-MM`. Empty means the current month.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "mail"
+    ],
+    "type": "object"
+  },
+  "pattern": "product/primitives/mailbox-month-headers.tsx",
+  "resultSchema": {
+    "$defs": {
+      "MailboxHeader": {
+        "properties": {
+          "id": {
+            "type": "number"
+          },
+          "received_at": {
+            "type": "string"
+          },
+          "sender": {
+            "type": "string"
+          },
+          "snippet": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "subject",
+          "snippet",
+          "sender",
+          "received_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "errorMessage": {
+        "description": "Why the read failed, empty while it has not.",
+        "type": "string"
+      },
+      "headerCount": {
+        "type": "number"
+      },
+      "headers": {
+        "items": {
+          "$ref": "#/$defs/MailboxHeader"
+        },
+        "type": "array"
+      },
+      "month": {
+        "description": "The month the headers were read from, as `YYYY-MM`.",
+        "type": "string"
+      },
+      "pending": {
+        "description": "Whether the headers are pending or awaiting replica synchronization.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "month",
+      "headers",
+      "headerCount",
+      "pending",
+      "errorMessage",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

@@ -365,9 +365,15 @@ describe("fabrichat-manager", () => {
     });
     expect(rooms()).toHaveLength(0);
     expect(manager.key("outgoingNotices").get()).toEqual([]);
-    const disabled = manager.key(UI).key("children").key(5)
-      .key("children").key(0).key("children").key(0)
-      .key("props").key("disabled").asSchema<boolean>({ type: "boolean" });
+    const control = manager.key(UI).key("children").key(3)
+      .key("children").key(0).key("children").key(0);
+    expect(control.key("name").get()).toBe("cf-submit-input");
+    expect(control.key("props").key("inputId").get()).toBe(
+      "fabrichat-start-direct",
+    );
+    const disabled = control.key("props").key("disabled").asSchema<boolean>({
+      type: "boolean",
+    });
     expect(disabled.get()).toBe(true);
 
     const profileTx = runtime.edit();

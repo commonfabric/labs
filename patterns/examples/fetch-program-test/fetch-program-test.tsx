@@ -21,7 +21,7 @@ import {
 type FetchProgramTestOutput = {
   [NAME]: string;
   [UI]: VNode;
-  url: unknown;
+  url: string;
   program: FetchProgramResult | undefined;
   result: unknown;
 };
