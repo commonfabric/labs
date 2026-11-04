@@ -21,9 +21,10 @@ export interface WeightedCacheOptions<K, V> extends CacheOptions {
 
   /**
    * Called once per entry the cache drops to stay within its capacity or
-   * weight bound, after the entry is removed. Never called for the caller's
-   * own removals (`delete`, `clear`) or for a `put` that replaces a key's
-   * value.
+   * weight bound, once the `put` that dropped it has finished, so the cache
+   * is within its bounds whatever the callback does to it. Never called for
+   * the caller's own removals (`delete`, `clear`) or for a `put` that
+   * replaces a key's value.
    */
   onEvict?: (key: K, value: V) => void;
 }
@@ -238,6 +239,7 @@ export class LRUCache<K, V> {
    * stay within the capacity and weight bounds.
    */
   put(key: K, value: V): void {
+    const evicted: LRUNode<K, V>[] = [];
     const weight = this.#weigh?.(key, value) ?? 0;
     const existingNode = this.#map.get(key);
     if (existingNode !== undefined) {
@@ -245,19 +247,27 @@ export class LRUCache<K, V> {
       existingNode.value = value;
       existingNode.weight = weight;
       this.#moveToTail(existingNode);
-      this.#evictToFit();
-      return;
+      this.#evictToFit(evicted);
+    } else {
+      if (this.#map.size >= this.#capacity) {
+        this.#evictHead(evicted);
+      }
+      const node: LRUNode<K, V> = {
+        key,
+        value,
+        weight,
+        prev: null,
+        next: null,
+      };
+      this.#map.set(key, node);
+      this.#addToTail(node);
+      this.#weight += weight;
+      this.#evictToFit(evicted);
     }
-
-    if (this.#map.size >= this.#capacity) {
-      this.#evictHead();
+    const onEvict = this.#onEvict;
+    if (onEvict !== undefined) {
+      for (const node of evicted) onEvict(node.key, node.value);
     }
-
-    const node: LRUNode<K, V> = { key, value, weight, prev: null, next: null };
-    this.#map.set(key, node);
-    this.#addToTail(node);
-    this.#weight += weight;
-    this.#evictToFit();
   }
 
   /** Removes the entry for `key`, returning whether there was one. */
@@ -286,9 +296,9 @@ export class LRUCache<K, V> {
    * the budget, so a single oversized value cannot leave the cache empty on
    * every `put()`.
    */
-  #evictToFit(): void {
+  #evictToFit(evicted: LRUNode<K, V>[]): void {
     while (this.#weight > this.#maxWeight && this.#map.size > 1) {
-      this.#evictHead();
+      this.#evictHead(evicted);
     }
   }
 
@@ -329,8 +339,11 @@ export class LRUCache<K, V> {
     this.#addToTail(node);
   }
 
-  /** Drops the entry at the oldest end, if there is one. */
-  #evictHead(): void {
+  /**
+   * Drops the entry at the oldest end, if there is one, and adds it to
+   * `evicted`, which `put()` reports once it has finished.
+   */
+  #evictHead(evicted: LRUNode<K, V>[]): void {
     if (this.#head === null) {
       return;
     }
@@ -338,6 +351,6 @@ export class LRUCache<K, V> {
     this.#map.delete(node.key);
     this.#removeNode(node);
     this.#weight -= node.weight;
-    this.#onEvict?.(node.key, node.value);
+    evicted.push(node);
   }
 }

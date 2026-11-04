@@ -135,6 +135,25 @@ describe("LRUCache", () => {
       cache.clear();
       expect(evicted).toEqual([["a", 1], ["b", 2], ["c", 3]]);
     });
+
+    it("stays within its capacity when `onEvict` puts into the cache", () => {
+      const sizes: number[] = [];
+      const cache: LRUCache<string, number> = new LRUCache({
+        capacity: 2,
+        onEvict: (key) => {
+          sizes.push(cache.size);
+          if (!key.startsWith("again-")) cache.put(`again-${key}`, 0);
+        },
+      });
+      cache.put("a", 1);
+      cache.put("b", 2);
+      cache.put("c", 3);
+      cache.put("d", 4);
+
+      expect(cache.size).toBe(2);
+      expect(sizes.every((size) => size <= 2)).toBe(true);
+      expect(sizes.length).toBeGreaterThan(0);
+    });
   });
 
   describe("edge cases", () => {
