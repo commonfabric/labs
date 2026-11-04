@@ -79,6 +79,8 @@ export interface ServingMemoryServer extends AsyncDisposable {
    * Resolves once the memory server has applied every commit it received and
    * sent the fan-out they produced. The serving loop's own waves are not part
    * of this: a served consequence of an event may still be in flight.
+   * With the loop on this thread, `host.host.whenQuiescent()` waits for those;
+   * a loop in a worker offers no such wait.
    */
   idle(): Promise<void>;
 

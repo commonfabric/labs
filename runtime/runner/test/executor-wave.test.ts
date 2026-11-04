@@ -867,13 +867,13 @@ describe("stage D seal-into-wave", () => {
       // A settlement that needed no wave would have resolved by the end of
       // this turn.
       await flushMicrotasks();
+      expect(settledBeforeCommit).toBe(false);
       const committed: string[] = [];
 
       const outcome = await wave.commitWave(
         accessSink(lease.holder, { admitted: true, seq: 7 }, committed),
       );
 
-      expect(settledBeforeCommit).toBe(false);
       expect(committed).toEqual(["event-consequence:e-change-only"]);
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },

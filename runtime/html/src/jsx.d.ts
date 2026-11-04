@@ -4546,12 +4546,16 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
   "defaultSize"?: number | CellLike<number>;
   "maxSize"?: number | CellLike<number>;
   "collapsible"?: boolean | CellLike<boolean>;
+  /** While the group is stacked (narrower than its `stackBelow`), this panel
+   * and the handles beside it are not drawn, and the other panels share its
+   * room. */
+  "hideWhenStacked"?: boolean | CellLike<boolean>;
 }
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   "direction"?: "horizontal" | "vertical" | CellLike<"horizontal" | "vertical">;
-  /** Below this width (px) of the group itself, its panels lie vertically
-   * whatever `direction` says. */
+  /** Below this width (px) of a horizontal group itself, its panels lie
+   * vertically (the group is stacked). A vertical group never stacks. */
   "stackBelow"?: number | CellLike<number>;
 }
 

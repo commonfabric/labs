@@ -75,6 +75,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { title: { type: "string" }, body: { type: "string" } },
+        required: ["title", "body"],
       }),
     ]);
 
@@ -105,6 +106,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { "foo: bar": { type: "string" } },
+        required: ["foo: bar"],
       }),
     ]);
 

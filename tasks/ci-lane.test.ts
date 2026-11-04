@@ -663,6 +663,29 @@ describe("turning a lane's selections into batches", () => {
     expect(batchRepeats(batches[0]!)).toBe(1);
     expect(unitsForRun(batches[0]!, 2)).toEqual([]);
   });
+
+  it("skips nothing in a later pass of a unit its suite declares whole", () => {
+    // Its runner reads no skip list and runs every test in it on every
+    // pass, so what its first pass registered changes nothing after it.
+
+    const member = suite({
+      id: "workspace-unit",
+      units: ["runtime/bakery"],
+      whole: ["runtime/bakery"],
+    });
+    const manifest = manifestOf([{ unit: "runtime/bakery" }]);
+    const batches = batchesOf([member], pricedFor([member], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 2,
+    }]);
+    const first = new Map([
+      ["runtime/bakery", new Set(["glaze > sets", "glaze > cools"])],
+    ]);
+    expect(unitsForRun(batches[0]!, 2, first)).toEqual([
+      { unit: "runtime/bakery", skip: [], cost: 1 },
+    ]);
+  });
 });
 
 /** Every unit each lane of a plan would run, in lane order. */
@@ -1733,6 +1756,60 @@ describe("running a lane's work", () => {
       {},
     );
     expect(failing.ok).toBe(false);
+    await Deno.remove(workDir, { recursive: true });
+  });
+
+  it("skips in every pass after the first each name the first pass registered and the manifest does not hold", async () => {
+    // The packer charges a repeated unit's passes for the identities the
+    // manifest holds in it, and has no cost for a test it has not seen. So
+    // such a test runs once, in the first pass, as a test that has never
+    // disagreed with itself does. A `describe` around a test the manifest
+    // holds is not new, and stays as the first pass had it.
+
+    const workDir = await Deno.makeTempDir({ prefix: "lane-repeats-" });
+    const file = "runtime/bakery/glaze.test.ts";
+    const registered = Object.fromEntries(
+      [
+        "glaze",
+        "glaze > sets",
+        "glaze > browns",
+        "glaze > cools",
+        "proof",
+        "proof > rises",
+      ].map((name) => [name, file]),
+    );
+    const handed: (readonly string[])[] = [];
+    const bakery = suite({
+      id: "workspace-unit",
+      units: [file],
+      command: (units, context) => {
+        for (const unit of units) handed.push(unit.skip);
+        return Promise.resolve([{
+          command: [
+            Deno.execPath(),
+            "eval",
+            `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+             Deno.writeTextFileSync(
+               \`\${dir}/names-\${crypto.randomUUID()}.json\`,
+               ${JSON.stringify(JSON.stringify({ names: registered }))},
+             );`,
+          ],
+          cwd: context.root,
+        }]);
+      },
+    });
+    const manifest = manifestOf([
+      {},
+      { test: { k: "unit", s: "bakery", n: "glaze > browns" } },
+    ]);
+    const [batch] = batchesOf([bakery], pricedFor([bakery], manifest), [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 3,
+    }]);
+    await runBatch(batch!, lane, workDir, undefined, {});
+    const later = ["glaze > browns", "glaze > cools", "proof", "proof > rises"];
+    expect(handed).toEqual([["glaze > browns"], later, later]);
     await Deno.remove(workDir, { recursive: true });
   });
 

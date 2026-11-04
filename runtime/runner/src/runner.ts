@@ -2895,6 +2895,9 @@ export class Runner {
    */
   #handlerResultPatterns = new WeakSet<Pattern>();
 
+  /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
+  #releasingServedResult = false;
+
   /**
    * Registrations a run installed in a transaction refused for a stale basis,
    * by result document. The run keeps such a registration, but its graph read
@@ -5444,15 +5447,49 @@ export class Runner {
    * Releases a child an enclosing pattern is done with. Stops only the exact
    * registration this invocation installed — a later attempt that replaced it
    * owns itself — and leaves a result that has a lifetime of its own running.
+   * Returns whether it stopped the result.
    */
   releaseChild<T>(
     resultCell: Cell<T>,
     installedCancel: Cancel | undefined,
-  ): void {
+  ): boolean {
     // Shared scoped registrations belong to all selecting instances. A
     // launch's registration token cannot authorize their collective teardown.
-    if (this.#usesScopedPrograms(resultCell)) return;
-    this.#releaseUnownedChild(resultCell, installedCancel);
+    if (this.#usesScopedPrograms(resultCell)) return false;
+    return this.#releaseUnownedChild(resultCell, installedCancel);
+  }
+
+  /**
+   * Helper for a handler's result on a serving runtime, which stops the pieces
+   * the result started once its transaction has committed, leaving what the store
+   * holds. A demand or an event starts one again, as either does after a restart.
+   * A piece keeps running where a client demands, at this moment, its document or
+   * anything its nodes write: that demand has already made its one attempt to load
+   * the piece, and nothing would make another. A stopped piece's index entry goes
+   * with it, since it holds the cells of the run that started it, and those hold its
+   * transaction; and the documents only the stopped pieces read are released, as
+   * a stop releases them.
+   */
+  #releaseServedHandlerResult<T>(
+    resultCell: Cell<T>,
+    installedCancel: Cancel | undefined,
+    resultPattern: Pattern,
+  ): void {
+    const pointer = this.#sessionPatternPointer(resultCell);
+    this.#releasingServedResult = true;
+    let stopped: boolean;
+    try {
+      stopped = this.releaseChild(resultCell, installedCancel);
+    } finally {
+      this.#releasingServedResult = false;
+    }
+    if (stopped) void this.#runtime.releaseUnreadDocuments();
+    if (pointer === undefined) return;
+    if (this.#cancels.has(this.#getDocKey(resultCell))) {
+      this.#runtime.patternManager.keepKeylessPattern(resultPattern);
+    } else {
+      this.#runtime.patternManager.forgetKeylessPattern(pointer.identity);
+    }
   }
 
   /** Holds a child for a parent node group's lifetime. */
@@ -5480,23 +5517,39 @@ export class Runner {
     };
   }
 
+  /** Releases a child no scoped owners share; see {@link releaseChild}. */
   #releaseUnownedChild<T>(
     resultCell: Cell<T>,
     installedCancel: Cancel | undefined,
-  ): void {
+  ): boolean {
     const key = this.#getDocKey(resultCell);
     const registration = this.#cancels.get(key);
     if (installedCancel !== undefined && registration !== installedCancel) {
-      return;
+      return false;
     }
-    if (this.#independentlyStartedResults.has(key)) return;
+    if (this.#independentlyStartedResults.has(key)) return false;
+    const link = this.#releasingServedResult
+      ? resultCell.getAsNormalizedFullLink()
+      : undefined;
+    if (
+      link !== undefined &&
+      (this.#runtime.scheduler.isDemandedEntity({
+        space: link.space,
+        id: link.id,
+        scope: link.scope,
+      }) ||
+        this.#runtime.scheduler.pieceHasDemandedWriter(link.space, link.id))
+    ) {
+      this.#independentlyStartedResults.add(key);
+      return false;
+    }
     // A start still resolving may be about to give this result a lifetime of
     // its own, and it cannot say so until it finishes. Declining here keeps a
     // page that is still opening from being closed by its parent. An attempt
     // that then fails leaves the result registered until the runtime stops it,
     // which is the same bound the scheduler already accepts for a start that
     // exhausts its retries.
-    if ((this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0) return;
+    if ((this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0) return false;
     if (registration === undefined) {
       // A commit-gated start installs nothing until its transaction commits,
       // so a launch whose child is still gated holds that child through the
@@ -5505,13 +5558,14 @@ export class Runner {
       // one the TODO in stopResult() describes: every pending start for the
       // result goes, not only the one this launch scheduled.
       this.#cancelPendingDeferredStarts(key);
-      return;
+      return false;
     }
     // A link start that has not yet followed its link is not indexed under
     // `key`, so the check above cannot see it. An explicit stop is
     // authoritative over such a start and tombstones it; a release is not, and
     // leaves it to resolve into a result of its own.
     this.#stopResult(resultCell);
+    return true;
   }
 
   /**
@@ -13717,7 +13771,21 @@ export class Runner {
         if (this.#cancels.get(key) !== installedCancel) return;
         this.stop(resultCell);
       });
-      addCancel(cancelOwnedStart);
+      // A serving runtime keeps no graph nothing demands (serving-loop.md §1),
+      // so the parent holds nothing past this transaction's commit.
+      if (waveRunContextOf(tx) === undefined || cancelDeferredStart) {
+        addCancel(cancelOwnedStart);
+      } else {
+        tx.addCommitCallback((_committedTx, commitResult) => {
+          if (!commitResult.error) {
+            this.#releaseServedHandlerResult(
+              resultCell,
+              installedCancel,
+              resultPattern,
+            );
+          }
+        });
+      }
       // Spec scheduler-v2 §7.6 rule 2: the launch is speculative; if this
       // handler's transaction ultimately fails, stop the piece (data writes
       // roll back with the transaction; registrations do not).

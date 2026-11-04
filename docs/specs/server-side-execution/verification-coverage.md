@@ -27,7 +27,7 @@ The status corrections in this register are bounded to the rows below:
 | OW28-createRef | Closed: the compile cache snapshots program content, separates compilation with and without a space, and persists shared compiles into each requested space when CFC is enforced. |
 | OW28-supersession-family / OW28-instance-family | Partial: shared fetch, `fetchProgram`, and direct LLM user/session isolation are covered. Caller-specific lifecycle, initialization, and remaining provider/tool read obligations are detailed below. |
 | OW30 | Stream sibling validation is fixed; the non-Stream counter/container observation remains unresolved. |
-| OW31 residual (vii) | Read-triggered remount is implemented; automatic replay of the entire watch set remains separate. |
+| OW31 residual (vii) | Closed: an ACL notice and authorization termination restore retained watches through fresh server admission, including when no reader pulls again. |
 | OW41 | Partial: a demand pass over unchanged demand, with no warm key captured since the last pass, does no per-row work — the memory server keeps each session's share of the demand set and the SpaceServer reconciles only the keys whose rows changed and the newly captured warm keys (serving-loop.md §7, `demandKeysReconciled`). A session whose demand changes is still rebuilt and compared whole, so a pass after a change costs that session's closure; the first pass of a tenure and the pass after one whose reconcile threw partway reconcile every key. |
 | OW55 | Closed: both runtimes' self-addressed requests are sent to `API_INTERNAL_URL` when set, else to `API_URL`, with every URL unchanged; a set origin must receive the server's own token-bearing probe before any runtime exists, or the server does not start. |
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
@@ -3174,18 +3174,21 @@ Delta 2026-08-15 — Phase 6 independent-review fixes (same PR):
   then refused forever by the sink's INV-13 mirror — a fail-closed
   livelock unreachable in sanctioned flows; its watcher signature is
   nonzero `foreignWriteRefusals` naming a HOME space (the review's F3).
-  (vii) CLOSED for read-triggered remount. An admitted ACL change latches
-  `Provider.noteAclChanged`; the next load discards a session terminated by
-  an ACL verdict and reopens through the server's full `session.open`
-  admission. A document load already in flight when the revocation lands
-  fails on the terminated session; that failure consumes the remount, and the
-  load is made once more on the new session. The watched-document tracker is
-  cleared so a previously watched document is fetched again on its next read.
-  `executor-session-remount.test.ts` pins the ACL-change/host path, owner
-  rebinding, denial without widened authority, the in-flight load in both
-  outcomes, and refetch after remount. Automatic replay of the entire dead
-  session's watch set remains a distinct follow-up; read-triggered refetch
-  does not establish that stronger guarantee.
+  (vii) CLOSED for ACL-triggered remount. An admitted ACL change and a
+  session's authorization termination, in either arrival order, discard that
+  session and restore retained watch selectors through the server's full
+  `session.open` admission. A load already in flight can consume the same
+  remount. The input barrier includes watch restoration, so a derivation that
+  read an absent document receives its later creation without another pull.
+  Each selector passes its own scoped-read gate: a refused actor's watch does
+  not block an admitted space-scoped watch. A refused reopen preserves its
+  loads for a later ACL notice and does not retry on its own.
+  `executor-session-remount.test.ts` pins both notice orders, absent-document
+  watches, mixed admitted/refused selectors, recovery after a denied reopen
+  (including a grant arriving before that denial is delivered), the host path,
+  owner rebinding, healthy-session stability, and in-flight loads. The invited-member case in
+  `fabrichat-spaces-multi-runtime.test.ts` opens a room before profile setup
+  and sends its first message after profile selection.
   Acceptance beyond the executor pins rides the PR's CI ON lanes and
   the flip train's live gates (the lunch/served-wish log criteria and
   the store dump), which stay the flip PR's bar; the
@@ -8141,11 +8144,11 @@ supply; OW29/OW32/OW34 closed):
     latching at the fail-closed refusal and consuming the latch when
     an admitted commit touches `of:<space>`
     (`#rootEnsureAwaitingOwner`). The session analog: `SpaceReplica`
-    latches an ACL-doc admission (`noteAclChanged`) and consumes it at
-    `#memoizedSessionHandle()` (`#consumeOwedSessionRemount`) — the one place
-    every read and commit reaches a session — dropping a mount that
-    `SessionRevokedError` or `AuthorizationError` terminated so the
-    next load re-opens. `ExecutorHost.#onCommitAdmitted` fans an
+    latches an ACL-doc admission (`noteAclChanged`) and consumes it once
+    `SessionRevokedError` or `AuthorizationError` has terminated the mount.
+    `#restoreWatchesAfterAclChange()` handles either arrival order and
+    restores standing watches; `#memoizedSessionHandle()` and `pull()`
+    consume the same latch for loads. `ExecutorHost.#onCommitAdmitted` fans an
     `of:<space>` write out to EVERY registered space server, because
     the starved session is a CROSS-SPACE replica: the ACL commit and
     the dead session are in different spaces.
@@ -8192,19 +8195,16 @@ supply; OW29/OW32/OW34 closed):
     (the measured ordering-independence proof); remove the tracker
     drop → stale-read only; remove `pull()`'s consume → stale-read
     only.
-    **Residual, FLAGGED not filled:** watches installed on the DEAD
-    session are not replayed on remount. The revocation had already
-    stopped their pushes (the server drops the session from its
-    registry and `terminateSession` clears `#watchSpecs`), and the
-    remount now DROPS the dead mount's selectors from the watch
-    tracker (the Cubic-P1 fix — the earlier claim that "each address
-    re-installs on its next pull" was FALSE for tracker-covered
-    selectors and is retracted), so post-remount reads re-install
-    coverage fresh instead of silently serving pre-revocation state —
-    but a general "replay the watch set on remount" still belongs
-    with the reconnect path's replay. **Also unchanged:** CLIENT runtimes get no host
-    notification, so a browser session revoked this way still stays
-    revoked; out of this seat's scope.
+    **Standing-watch recovery:** an ACL notice and the session's authorization
+    termination, in either order, restore retained root watches through fresh
+    admission, with the work included in the input barrier. Each selector
+    passes its own scoped-read gate, so one refused actor's watch does not
+    block admitted watches. A refused reopen keeps its loads for another ACL
+    notice. `executor-session-remount.test.ts` covers absent-document watches
+    in both notification orders, mixed scoped-read outcomes, and later grant
+    recovery even when an older admission refusal arrives after the grant. Client runtimes receive no executor-host notification; their
+    access retry is driven by the events described in
+    [`authorization-failure-surfacing.md`](../../features/authorization-failure-surfacing.md).
     **The persistent-failure posture is UNCHANGED and still OWED to
     OW54.** A load whose ACL never changes — or whose re-open is
     denied — defers indefinitely, exactly as recorded above. The
