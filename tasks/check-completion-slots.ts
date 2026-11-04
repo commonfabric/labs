@@ -157,6 +157,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ],
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["space compact:verify-sample", "an every-nth stride over the documents"],
+  [
+    "space delete:confirm",
+    "the space's DID, typed out on purpose: offering one would undo the check",
+  ],
   ["limit", "a row count"],
   ["depth", "a graph depth"],
   ["seq", "a revision sequence number"],

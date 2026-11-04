@@ -12519,6 +12519,9 @@ export class Runner {
 
   #stopResult<T>(resultCell: Cell<T>): void {
     this.#runtime.sourceReconciler.unwatch(resultCell);
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    this.#nodeIOBindings.release(resultLink);
+    this.#patternNodeBindings.release(resultLink);
     const key = this.#getDocKey(resultCell);
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);

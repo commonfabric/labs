@@ -4802,6 +4802,9 @@ export class Runtime {
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
    * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
+   * The snapshot lives as long as its frozen value, the returned cell, or a
+   * cell or link derived from it does; a bare id string taken from it does not
+   * keep it, and `portableSnapshotId()` makes one that does not need it.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4852,7 +4855,7 @@ export class Runtime {
     // immutable data.
     const store = immutableCellsFor(this);
     const readerSchema = internCellLinkSchema(schema);
-    const snapshot = store.create(
+    const snapshot = store.createOwned(
       fabricFromConvertibleJsValue(
         flattenBuilderArtifacts(data, {
           isLeaf: isRendererTrustedEvent,
