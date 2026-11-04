@@ -214,12 +214,13 @@ describe("AboutTarget", () => {
 
     describe("clear()", () => {
       it("drops `target` and ignores later moves of the link", async () => {
-        const { target } = aboutTarget();
+        const { target, counts } = aboutTarget();
         const { element, publish } = mapElementLinkingTo(here);
         target.resolve(element);
         await target.resolution;
         target.clear();
         expect(target.target).toBeUndefined();
+        expect(counts.changes).toBe(2);
         publish(elsewhere);
         await target.resolution;
         expect(target.target).toBeUndefined();

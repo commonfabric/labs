@@ -70,8 +70,11 @@ export class AboutTarget {
   /** Drops the target and stops following, as the owner disconnects. */
   clear(): void {
     this.#generation++;
-    this.#target = undefined;
     this.#watch.cancel();
+    if (this.#target !== undefined) {
+      this.#target = undefined;
+      this.#options.onChange();
+    }
   }
 
   /** Helper for `resolve()` and a retarget, which resolves `#about` again. */
