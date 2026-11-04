@@ -11,8 +11,8 @@ is the specification, and the tool is `cf space reap`, described in
 [the CLI README](../../runtime/cli/README.md#reaping-a-deleted-spaces-store).
 
 A reap keeps
-[the compaction procedure](space-compaction.md)'s rails, and this is that
-procedure's host run with the reap in place of the compaction:
+[the compaction procedure](space-compaction.md)'s rails, and its host run
+follows that procedure's, with the reap in place of the compaction:
 
 - it runs only once every instance has stopped, against a copy of the backup
   taken after the stop, never the backup and never a served file;

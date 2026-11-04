@@ -1374,26 +1374,26 @@ would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
 a second branch, one with no commit 1, one with foreign-key violations, one
 holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, or a store or result path
-under a directory a local server serves; then opens the store through the engine
-with an exclusive lock and, in order: inserts the compaction commit at the next
-seq, a `system` commit under the `compaction:<run id>` session with the plan as
-its payload; compacts each selected instance in its own transaction — the oldest
-row the cut keeps becomes the base, rewritten as a `set` holding the engine's
-reconstruction at exactly that row if it was a patch, and attributed to the
-compaction commit whatever its op, with the rows and snapshots behind it
-deleted; hollows the payloads outside the window in seq-ranged batches; writes
-the audit revision on the space's ACL document, a whole-document `set` of the
-document as it stands with a `compaction` member beside `value`, when the store
-has a live one (a space with no ACL document gets none, and a tombstoned one is
-left as it is, since a `set` would recreate it); checks the foreign keys and the
-file's integrity; and writes the result with `VACUUM
-INTO` to `--out`,
-`<store>.compacted.sqlite` beside the source by default, never overwriting. A
-run interrupted anywhere leaves a store every reader can use, and running it
-again resumes it under a second compaction commit. The run's own summary follows
-the plan on stdout; progress goes to stderr; `--json` emits the summary as one
-document.
+one with a non-empty `-wal` or `-journal` beside it, one another connection
+holds, or a store or result path under a directory a local server serves; then
+opens the store through the engine with an exclusive lock and, in order: inserts
+the compaction commit at the next seq, a `system` commit under the
+`compaction:<run id>` session with the plan as its payload; compacts each
+selected instance in its own transaction — the oldest row the cut keeps becomes
+the base, rewritten as a `set` holding the engine's reconstruction at exactly
+that row if it was a patch, and attributed to the compaction commit whatever its
+op, with the rows and snapshots behind it deleted; hollows the payloads outside
+the window in seq-ranged batches; writes the audit revision on the space's ACL
+document, a whole-document `set` of the document as it stands with a
+`compaction` member beside `value`, when the store has a live one (a space with
+no ACL document gets none, and a tombstoned one is left as it is, since a `set`
+would recreate it); checks the foreign keys and the file's integrity; and writes
+the result with `VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the
+source by default, never overwriting. A run interrupted anywhere leaves a store
+every reader can use, and running it again resumes it under a second compaction
+commit. The run's own summary follows the plan on stdout; progress goes to
+stderr; `--json` emits the summary as one document.
 
 `cf space compact <result.sqlite> --verify --against <backup.sqlite>` checks a
 result against the store it was compacted from, read-only on both, and exits
@@ -1433,15 +1433,18 @@ part of the plan. `--json` emits the same report as JSON.
 ([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
 It takes only a store whose access-control document holds a deletion tombstone,
 and refuses any other, a store with a commit after the deletion, a store with a
-log beside it that is not empty (which a process holding it open in WAL mode
-leaves, though not every open store has one), one the server would migrate on
-opening it, and a result path that exists or sits in a served directory. That
-the store is a copy nothing has open is the procedure's to ensure. It reads the
-store, a copy of the space's backup, without writing it, and writes the result
-fresh, `<store>.reaped.sqlite` beside it by default. The result keeps the
-deletion commit's row, the invocation and authorization rows it references, the
-deletion tombstone's revision and head rows, and the default branch's row; every
-other row of every table goes. So the space goes on refusing every principal as
+log beside it that is not empty, a store another connection holds, one the
+server would migrate on opening it, and a result path that exists or sits in a
+served directory. Whether a connection holds the store is asked of SQLite, by
+taking the file's exclusive lock: any connection to a WAL-mode store prevents
+that, as does one to a rollback-mode store inside a transaction, but an idle
+connection to a rollback-mode store holds no lock to see, so that the store is a
+copy nothing has open is still the procedure's to ensure. It reads the store, a
+copy of the space's backup, without writing it, and writes the result fresh,
+`<store>.reaped.sqlite` beside it by default. The result keeps the deletion
+commit's row, the invocation and authorization rows it references, the deletion
+tombstone's revision and head rows, and the default branch's row; every other
+row of every table goes. So the space goes on refusing every principal as
 deleted, under the same `aclRevision`, and its server sequence stays the
 deletion commit's.
 
