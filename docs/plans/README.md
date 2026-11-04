@@ -10,6 +10,22 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Upgrading pieces at scale](upgrading-pieces-at-scale.md) replaces the
+  serial, hand-ordered procedure that updating a Topics board takes today, and
+  holds at any scale because a release writes nothing to a piece nobody starts.
+  It keeps per-piece pinning and changes what a release costs: a piece follows
+  an origin, which Topics' pieces do not yet; the space records what it last
+  saw, an O(1) skip; a piece adopts on its next start, as following already
+  does, and an eager sweep is an option rather than a step; a same-contract
+  adoption is a pointer move; a stored-shape change is classified
+  before it ships into what the schema reinterprets, what a pure function
+  reinterprets, and what only a write can produce; two stored shapes are the
+  normal state under four rules; and an index backfill is a scan that starts
+  no piece. Origin-following becomes the upgrade path for every pattern
+  provider, with `system:` as the tier the deployment vouches for and a
+  provider-published compatibility record as the tier it proves at adoption.
+  It names the demand ruling a background sweep would need and is written to
+  work without it.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
