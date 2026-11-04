@@ -686,7 +686,6 @@ describe("v2 query evaluation cache", () => {
       crossedBy: new Map(),
       crossingsOf: new Map(),
       entities: new Map(),
-      memo: new Map(),
       manager: {
         loadedAddresses: () => [{
           id: "of:doc:meta",
