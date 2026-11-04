@@ -3609,7 +3609,10 @@ export class StorageManager implements IStorageManager {
    * does nothing: the read returns no data however long it is waited for, so
    * it is not a load in flight, and nothing parks on it. One whose actor's
    * grant is still being asked for registers as any load does: its pull
-   * settles it, with the data or with the refusal.
+   * settles it, with the data or with the refusal. A release given that
+   * refusal, or the refusal of a deleted space, records no failure: the
+   * document is absent for its reader, and a load cannot change that
+   * (events.md §5).
    *
    * With `prefetch`, the load is one no reader asked for. A waiter still
    * waits for it to settle, since its landing is what a cold read is waiting
@@ -3656,7 +3659,14 @@ export class StorageManager implements IStorageManager {
       // failure of the load: the document is absent for its reader, and
       // what a run reads decides it (`scopedReadStanding`), so a document
       // the preflight alone reaches does not fail the event (events.md §5).
-      const counted = isForeignScopedReadRefusal(failure) ? undefined : failure;
+      // A deleted space's refusal does too, from a refused open or from the
+      // `deleted` revocation of an open session alike: the document is absent
+      // for every reader for good, and a run that reads it can ask
+      // `spaceDeleted()` why.
+      const counted =
+        isForeignScopedReadRefusal(failure) || isDeletedSpaceRefusal(failure)
+          ? undefined
+          : failure;
       if (prefetch) entry.prefetchFailure ??= counted;
       else entry.failure ??= counted;
       entry.count--;
@@ -5440,6 +5450,18 @@ type LocalDocAddress = { id: URI; scope?: CellScope; scopeKey?: ScopeKey };
 const isForeignScopedReadRefusal = (failure: unknown): boolean =>
   typeof failure === "object" && failure !== null &&
   (failure as { name?: unknown }).name === "ForeignScopedReadRefusedError";
+
+/**
+ * Whether `failure`, as a pull reports it, is the memory server's refusal of a
+ * deleted space: an `AuthorizationError` marked `deleted`, from a refused open
+ * or from the revocation of a session open at the deletion (INV-15). A pull
+ * reports it as a plain object, so this reads it structurally where
+ * `MemoryV2Client.isDeletedSpaceError()` asks for an `Error`.
+ */
+const isDeletedSpaceRefusal = (failure: unknown): boolean =>
+  typeof failure === "object" && failure !== null &&
+  (failure as { name?: unknown }).name === "AuthorizationError" &&
+  (failure as { deleted?: unknown }).deleted === true;
 
 /**
  * One actor's grant verdict as a replica holds it (`#foreignScopedReadVerdict`):

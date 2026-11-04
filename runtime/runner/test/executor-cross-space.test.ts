@@ -69,6 +69,7 @@ import { parseLink } from "../src/link-utils.ts";
 import {
   newSharedServer,
   TEST_MEMORY_SERVER_AUTH,
+  writeDeletionTombstone,
 } from "./memory-v2-test-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -2814,6 +2815,119 @@ export default pattern<
 
     expect(entries()[0].status).toBeUndefined();
     expect(stored()?.counts).toEqual([5]);
+  });
+
+  describe("a served event whose dispatch load reaches a deleted space", () => {
+    /**
+     * A pattern whose `add` handler records what it reads of the piece its
+     * event links to: whether the piece's space is deleted, and its count.
+     */
+    const DELETED_SPACE_EVENT_PATTERN = `
+import { action, pattern, spaceDeleted, type Writable, type Stream } from "commonfabric";
+type Piece = { count?: number };
+export default pattern<
+  { answers: Writable<string[]> },
+  { add: Stream<{ piece: Writable<Piece> }> }
+>(({ answers }) => ({
+  add: action(({ piece }: { piece: Writable<Piece> }) => {
+    answers.push(\`deleted \${spaceDeleted(piece)}, count \${piece.get()?.count}\`);
+  }),
+}));`;
+
+    /**
+     * Stands up {@link DELETED_SPACE_EVENT_PATTERN} with two documents Alice
+     * writes in the foreign space, and returns them beside what
+     * `standUpServed()` returns.
+     */
+    const standUpDeletedSpaceEvents = async (label: string) => {
+      const pieces: Cell<unknown>[] = [];
+      const served = await standUpServed(
+        label,
+        DELETED_SPACE_EVENT_PATTERN,
+        async (client) => {
+          for (const [name, count] of [["first", 1], ["second", 2]] as const) {
+            pieces.push(
+              await foreignDocument(client, `${label}-${name}`, "space", {
+                count,
+              }),
+            );
+          }
+          return { answers: [] };
+        },
+      );
+      return { ...served, first: pieces[0], second: pieces[1] };
+    };
+
+    /** Deletes the foreign space, as Alice, and revokes its open sessions. */
+    const deleteForeignSpace = async () => {
+      writeDeletionTombstone(
+        await server.engineForSpace(foreignSpace),
+        foreignSpace,
+        aliceSigner.did(),
+      );
+      server.noticeDeletedSpace(foreignSpace);
+    };
+
+    it("runs the handler, which reads the document as absent and the space as deleted, when the deletion revokes the serving runtime's open session on the space", async () => {
+      // The first event opens the serving runtime's session on the foreign
+      // space, so the deletion reaches the runtime as that session's
+      // `deleted` revocation. The second event links to a document of that
+      // space the runtime has not loaded, so its run loads it after the
+      // revocation.
+
+      const revoked = Promise.withResolvers<void>();
+      onServingRuntime = (runtime) => {
+        runtime.storageManager.subscribeSpaceAccessLoss?.((space) => {
+          if (space === foreignSpace) revoked.resolve();
+        });
+        return Promise.resolve();
+      };
+      const { result, entries, stored, first, second } =
+        await standUpDeletedSpaceEvents("deleted-space-revoked");
+      result.key("add").send({ piece: first });
+      await clientManager.synced();
+      await awaitAdmitted(server, () => entries()[0]?.consequenced === true);
+      expect(stored()?.answers).toEqual(["deleted false, count 1"]);
+
+      await deleteForeignSpace();
+      await revoked.promise;
+      result.key("add").send({ piece: second });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries()[1]?.consequenced === true ||
+          entries()[1]?.deliveryDeferral !== undefined,
+      );
+
+      expect(entries()[1].deliveryDeferral).toBeUndefined();
+      expect(entries()[1].status).toBeUndefined();
+      expect(stored()?.answers).toEqual([
+        "deleted false, count 1",
+        "deleted true, count undefined",
+      ]);
+    });
+
+    it("runs the handler, which reads the document as absent and the space as deleted, when the memory server refuses the serving runtime's open of the space", async () => {
+      // The space is deleted before the serving runtime reads anything there,
+      // so its open is refused with the deleted space's permanent refusal.
+
+      const { result, entries, stored, second } =
+        await standUpDeletedSpaceEvents("deleted-space-refused");
+      await deleteForeignSpace();
+      result.key("add").send({ piece: second });
+      await clientManager.synced();
+      await awaitAdmitted(
+        server,
+        () =>
+          entries()[0]?.consequenced === true ||
+          entries()[0]?.deliveryDeferral !== undefined,
+      );
+
+      expect(entries()[0].deliveryDeferral).toBeUndefined();
+      expect(entries()[0].status).toBeUndefined();
+      expect(stored()?.answers).toEqual(["deleted true, count undefined"]);
+    });
   });
 
   it("seals a permanent dispatch-load failure for a served handler whose bound state is a foreign scoped document, and runs nothing", async () => {

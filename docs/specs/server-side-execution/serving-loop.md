@@ -520,7 +520,11 @@ successor tenure could have it admitted.
   whose commit the host does not see.
 - A tenure serving another space that holds a session on the deleted one, as a
   cross-space replica, learns of the deletion from that session's `deleted`
-  revocation. It goes on serving its own space.
+  revocation. It goes on serving its own space. From then on its loads of the
+  deleted space's documents settle as absences, as do those of a tenure whose
+  open of the space is refused, so an event of its own space whose run reaches
+  one dispatches and reads it as absent
+  ([events.md §5](events.md#5-failure-semantics)).
 - An outbox row whose target space is deleted is refused at delivery like any
   other deterministic admission refusal (§5), and is deleted with the
   source-side notice written first.
