@@ -36,7 +36,7 @@ import { type Cell, equals, handler, pattern, spaceOf, Writable } from "commonfa
 
 type Join = { room?: Cell<unknown>; container?: Cell<{ chatRoom: Cell<unknown> }>; requestId?: string };
 
-type Joined = { space?: string; named: boolean; container?: string; declared?: boolean };
+type Joined = { space?: string | undefined; named: boolean; container?: string | undefined; declared?: boolean };
 
 const joinRoom = handler<Join, { joined: Writable<Joined[]> }>(
   (event, { joined }) => {
