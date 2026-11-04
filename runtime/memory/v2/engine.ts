@@ -518,7 +518,8 @@ CREATE TABLE IF NOT EXISTS blob_store (
 -- most one row, which the memory server writes in the store transaction of
 -- the first commit it admits from a session declaring instanceNames: true,
 -- and which names that commit. Nothing updates or deletes it, except a reap
--- of a deleted space (memory/v2/reap.ts), which removes the commit it names.
+-- of a deleted space (memory/v2/reap.ts), which removes the mark, and the
+-- commit it names unless that commit is the deletion.
 CREATE TABLE IF NOT EXISTS instance_name_mark (
   singleton   INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
   commit_seq  INTEGER NOT NULL,

@@ -295,10 +295,9 @@ reads a reaped store as a deleted space, not as a corrupt one.
   commit, every other document and its history, the earlier revisions of the
   access-control document, the genesis receipt, the private tables such as an
   invitation's admission records and receipts, the outbox, and the
-  instance-naming mark (INV-16), which names a commit the reap removes. A
-  deleted space admits no session, so the mark has nothing left to decide. Rows the
-  engine's schema itself needs to open a store, such as the default branch's,
-  stay.
+  instance-naming mark (INV-16). A deleted space admits no session, so the
+  mark has nothing left to decide. Rows the engine's schema itself needs to
+  open a store, such as the default branch's, stay.
 - The space's cell databases are not in the store. They are files beside the
   live store, `cell-<hash>-*.sqlite`, where `<hash>` is the token the Memory
   server derives from the space's DID, so a reap, which runs against a copy of

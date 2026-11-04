@@ -963,7 +963,8 @@ the space opens that database, so a change of owner keeps the mark. The server
 reads the mark from the space's store when it admits an open and when it
 admits a commit, as it reads the kind the space's genesis commit declares.
 
-A reap of a deleted space removes the mark along with the commit it names
+A reap of a deleted space removes the mark, and the commit it names unless
+that commit is the deletion
 ([`random-space-identities.md`](../random-space-identities.md#reaping-a-deleted-space)).
 A deleted space admits no session (INV-15), so nothing is left for the mark to
 decide.
