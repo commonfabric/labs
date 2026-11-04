@@ -135,7 +135,7 @@ export function stripEntityUriScheme(id: string): string {
  * `docs/specs/computed-cell-identity.md`), so dropping the scheme would
  * silently address the sibling instead of reporting that the caller named
  * something this seam cannot resolve. Every scheme but `of:` is refused, so a
- * kind added to {@link ENTITY_URI_SCHEMES} is refused here without a further
+ * scheme added to {@link ENTITY_URI_SCHEMES} is refused here without a further
  * edit.
  *
  * A string carrying no entity scheme is returned unchanged, including one with

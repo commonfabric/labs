@@ -1353,20 +1353,20 @@ still served.
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
 the directory's neighbors are the authority on where a space's file is.
-`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:` or
-`cid:`), and may repeat; the ACL document is never selected. `--scope` restricts the
-selection to `space`, `user` or `session` instances; repeated or nested prefixes
-count as one selection. The cut is the head of every selected instance unless
-`--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the store's own format
-and no other) or `--keep-last <n>` bounds it, and a row survives if any bound
-keeps it. `--keep-payloads <duration>` (default `24h`) is the window, measured
-from the newest client commit, within which commits keep their payload; outside
-it a commit's payload is replaced by a marker carrying a hash of what it held,
-unless its seq is 1, an `op_*` row references it, or it is a compaction commit,
-whether or not a surviving revision still points at the commit. A hollowed
-commit is still a row in the log, told apart from an elided write by its marker;
-what is gone is its contents, which the backup keeps. A commit whose payload
-survives stays inspectable in full.
+`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:`
+or `cid:`), and may repeat; the ACL document is never selected. `--scope`
+restricts the selection to `space`, `user` or `session` instances; repeated or
+nested prefixes count as one selection. The cut is the head of every selected
+instance unless `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the
+store's own format and no other) or `--keep-last <n>` bounds it, and a row
+survives if any bound keeps it. `--keep-payloads <duration>` (default `24h`) is
+the window, measured from the newest client commit, within which commits keep
+their payload; outside it a commit's payload is replaced by a marker carrying a
+hash of what it held, unless its seq is 1, an `op_*` row references it, or it is
+a compaction commit, whether or not a surviving revision still points at the
+commit. A hollowed commit is still a row in the log, told apart from an elided
+write by its marker; what is gone is its contents, which the backup keeps. A
+commit whose payload survives stays inspectable in full.
 
 A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it

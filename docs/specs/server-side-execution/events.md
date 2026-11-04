@@ -375,7 +375,7 @@ ambient-state one.
   (even if the value is undefined), and the CAS for that is the
   write-once guarantee" — the owner's model): a lost CAS means a writer
   already landed this handling's receipt (a re-served replay converging
-  on the same cause-derived id, or a pre-created cell) and is a LOUD
+  on the same id, or a pre-created cell) and is a LOUD
   NO-OP — first-writer-wins, the OFF arm's receipt-collision
   semantics — never a second write, never an error that fails the wave.
   No create-only mark rides the wave (the invariant above holds); the

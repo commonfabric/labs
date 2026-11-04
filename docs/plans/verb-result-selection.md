@@ -148,8 +148,8 @@ receipt id = "receipt:" + hashOf({ event: <event id>, stream: <stream link> })
 
 `handlingReceiptId()` (`runtime/runner/src/scheduler/event-identity.ts`) computes
 it, for a client that handles the event, a serving runtime, and a sender that
-runs nothing. The receipt lives in the **pattern result cell's space**, not
-necessarily the caller's, and receipts are space-scoped.
+runs nothing. The receipt lives in the **stream's space**, not necessarily the
+caller's, and receipts are space-scoped.
 
 **The event id is not the caller's id.** A caller-supplied id is bound to the
 session that chose it and to the stream it was sent to before it becomes an
@@ -271,6 +271,7 @@ an address emitted by one command is accepted by the next without reshaping.
 | Bare hash | `fid1:…` | accepted | a hash — **not a complete identity** |
 | Entity URI | `of:fid1:…` | accepted | this entity, in its stored spelling |
 | Kinded URI | `computed:fid1:…` | **refused, by name** | a *different* entity from the `of:` one over the same hash |
+| Receipt URI | `receipt:fid1:…` | accepted | one handling's receipt, also a *different* entity from the `of:` one over the same hash |
 
 **Where the scheme is understood.** `entityIdFrom`
 (`runtime/runner/src/create-ref.ts`) is the entity-specific intake seam: it
@@ -278,7 +279,9 @@ accepts the `of:` scheme and **refuses `computed:` rather than stripping it**,
 because stripping would rename an id to its `of:` sibling, a different
 entity. Not one layer lower: `FabricHash.fromString` parses any tagged hash,
 whatever it names, and `of:` is a URI scheme, not a hash tag — the schemed
-form is not a parseable tagged hash.
+form is not a parseable tagged hash. A `receipt:` address never reaches it:
+`getPieceCell` reads one as the id it already is, since the envelope hands it to
+a caller to read back.
 
 **One seam reaches most callers.** The address-string paths that matter go
 through `entityIdFrom`: the CLI, the shell (`runtime-processor`), and slug
@@ -385,13 +388,12 @@ not have, and only the third is unserved:
 - *Lost the response, verb has effects outside its transaction.* Replay would
   re-send the mail or re-spend the model call. This is the case with no answer.
 
-**Option A — derive the address in the client.** Rebuild the cause from piece,
-verb, and a caller-chosen invocation id, per "How addresses are derived" above.
-The cost is coupling: addressing must be byte-identical across replicas, and a
-handler node's bound `inputs` are runner-internal, so the runner would have to
-export something like `receiptLinkFor(streamCell, eventId)` purely to serve this.
-Duplicating the cause-building in a client instead would create a two-place
-invariant that silently breaks addressing when either side drifts.
+**Option A — derive the address in the client.** Rebuild the address from the
+verb's stream and a caller-chosen invocation id, per "How addresses are derived"
+above. `handlingReceiptLink()` already computes it from those two, so the client
+derives nothing the runner has to export for it. What is left is the event id:
+`scopeCallerEventId` binds the session into it, so the caller has to hold on to
+the session that chose the id.
 
 **Option B — make replay safe instead.** If the harm is a re-executed effectful
 body, the fix may belong in the runner rather than the client: the receipt cell

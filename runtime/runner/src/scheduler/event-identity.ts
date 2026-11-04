@@ -52,6 +52,24 @@ export function handlingReceiptId(
 }
 
 /**
+ * The address of the receipt of the handling of the event `eventId`, sent to
+ * the stream `eventLink`: {@link handlingReceiptId} in the stream's space. A
+ * served handling's transaction writes the one space its stream lives in
+ * (protocol.md §2b), and a sender that runs nothing knows no other.
+ */
+export function handlingReceiptLink(
+  eventId: string,
+  eventLink: NormalizedFullLink,
+): NormalizedFullLink {
+  return {
+    id: handlingReceiptId(eventId, eventLink),
+    path: [],
+    space: eventLink.space,
+    scope: "space",
+  };
+}
+
+/**
  * Mints the durable id for an event at send time (spec §7.5). Ingress
  * callers that already own a durable delivery id pass it through
  * {@link scopeCallerEventId} instead.

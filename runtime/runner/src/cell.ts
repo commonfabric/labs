@@ -179,7 +179,7 @@ import {
   txToReactivityLog,
 } from "./scheduler.ts";
 import {
-  handlingReceiptId,
+  handlingReceiptLink,
   mintEventId,
   scopeCallerEventId,
 } from "./scheduler/event-identity.ts";
@@ -2992,15 +2992,10 @@ export class CellImpl<T extends FabricValue>
       if (firedEventId !== undefined && sendOptions?.echo === false) {
         if (settleCallback !== undefined) {
           const unechoed = this.#runtime.edit();
-          // In the stream's space: a served handling's transaction writes the
-          // one space its stream lives in, so a handling that settles wrote
-          // its receipt there (protocol.md §2b).
-          unechoed.handlingReceiptLink = {
-            id: handlingReceiptId(firedEventId, resolvedToValueLink),
-            path: [],
-            space: resolvedToValueLink.space,
-            scope: "space",
-          };
+          unechoed.handlingReceiptLink = handlingReceiptLink(
+            firedEventId,
+            resolvedToValueLink,
+          );
           void unechoed.commit().settled.then(() => settleCallback(unechoed));
         }
       } else {
