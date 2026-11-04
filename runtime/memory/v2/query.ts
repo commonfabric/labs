@@ -22,7 +22,6 @@ import {
   coveringSelector,
   createGraphQueryWalkStats,
   createSchemaMemo,
-  forgetSchemaMemoDocuments,
   GraphQueryWalk,
   type GraphQueryWalkStats,
   type IAttestation,
@@ -30,7 +29,6 @@ import {
   type ObjectStorageManager,
   parseCrossingDocKey,
   type SchemaMemo,
-  schemaMemoDocumentPrefix,
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
   schemaTrackerKey,
@@ -152,7 +150,6 @@ export type TrackedGraphState = {
    * `assembleSchemaDocClosures`). */
   entities: Map<QueryDocKey, EntitySnapshot>;
 
-  memo: SchemaMemo;
   manager: EngineObjectManager;
 
   /** Per-version scans of this state's delivered documents for embedded
@@ -928,12 +925,11 @@ const cloneWithRewrittenResidue = (
 /**
  * Clone for a cache hit: `cloneTrackedGraphState` rebound to the
  * requesting identity. Only scope-pure entries are ever cloned across
- * identities, so every key, entity, memo entry, and manager cache line in
+ * identities, so every key, entity, and manager cache line in
  * the source resolved identically to what this identity's own evaluation
  * would have produced; the rebind exists so the clone's LATER operations —
  * refreshes, extensions — resolve scoped reach against the session that
- * owns it. The cloned memo is a fresh Map, so the identity binding the
- * schema-memo tripwire tracks starts unbound and binds to the new owner.
+ * owns it.
  */
 const cloneTrackedGraphStateForIdentity = (
   engine: Engine.Engine,
@@ -1029,7 +1025,6 @@ export const cloneTrackedGraphState = (
     tracksOf,
     roots: new Map(state.roots),
     entities: new Map(state.entities),
-    memo: new Map(state.memo),
     manager,
     schemaRefs: new Map(state.schemaRefs),
   };
@@ -1063,7 +1058,6 @@ export const stageTrackedGraphState = (
   const tracksOf = new StagedMap(state.tracksOf, (keys) => new Set(keys));
   const roots = new StagedMap(state.roots);
   const entities = new StagedMap(state.entities);
-  const memo = new StagedMap(state.memo);
   const manager = state.manager.stage(engine);
   const schemaRefs = new StagedMap(state.schemaRefs);
   return {
@@ -1081,7 +1075,6 @@ export const stageTrackedGraphState = (
       tracksOf,
       roots,
       entities,
-      memo,
       manager: manager.value,
       schemaRefs,
     },
@@ -1098,7 +1091,6 @@ export const stageTrackedGraphState = (
       tracksOf.commit();
       roots.commit();
       entities.commit();
-      memo.commit();
       manager.commit();
       schemaRefs.commit();
     },
@@ -2036,37 +2028,6 @@ const forgetRetiredFromManager = (
 };
 
 /**
- * Drops what the graph's memo holds for the documents `retirement`
- * retired. A memo entry stands for a walk whose records are gone: a
- * traversal reaching the document would find the entry and record nothing
- * for it. The memo is scanned once for the pass, after its last
- * retirement; the walks of the pass itself answer from a memo of their
- * own, or walk their documents past the memo.
- */
-const forgetRetiredFromMemo = (
-  state: TrackedGraphState,
-  retirement: Retirement,
-): void => {
-  const forgotten = new Set<string>();
-  for (const docKey of retirement.retired) {
-    if (state.tracker.has(docKey)) continue;
-    const { space, id, scope } = fromDocKey(docKey);
-    forgotten.add(schemaMemoDocumentPrefix({ space, scope, id }));
-  }
-  if (forgotten.size > 0) forgetSchemaMemoDocuments(state.memo, forgotten);
-};
-
-/** What a retired document or miss left cached in `state`, forgotten. */
-const forgetRetired = (
-  state: TrackedGraphState,
-  retirement: Retirement,
-  changedMisses: ReadonlySet<string>,
-): void => {
-  forgetRetiredFromManager(state.manager, state, retirement, changedMisses);
-  forgetRetiredFromMemo(state, retirement);
-};
-
-/**
  * Walks `docKey` again under every selector the tracker holds for it, as
  * the refresh does a dirty document, and releases the attributions this
  * evaluation's walks did not make again (`GraphRecorders.fresh`). A
@@ -2327,7 +2288,7 @@ const settleRetirement = (
       retirement.reconcile.add(root.docKey);
     }
   }
-  forgetRetired(state, retirement, changedMisses);
+  forgetRetiredFromManager(state.manager, state, retirement, changedMisses);
   return touched;
 };
 
@@ -2458,8 +2419,6 @@ export const releaseTrackedRoots = (
     state.roots.delete(referrer);
     releaseTrackedReferrer(state, referrer, retirement);
   }
-  // A memo of this release's own, as a refresh takes: the graph's memo
-  // would answer a re-walk from a traversal that recorded nothing here.
   const sharedMemo = createSchemaMemo();
   const touched = settleRetirement(
     space,
@@ -2742,7 +2701,6 @@ export const trackGraph = (
     tracker: schemaTracker,
     ...missState,
     entities,
-    memo: sharedMemo,
     manager,
     schemaRefs,
   };
@@ -2781,6 +2739,7 @@ export const extendTrackedGraph = (
   stats: QueryTraversalStats;
 } => {
   const manager = state.manager;
+  const sharedMemo = createSchemaMemo();
   const stats = createQueryTraversalStats();
   const readCountBefore = manager.readCount;
   const touched = new Set<QueryDocKey>();
@@ -2812,7 +2771,7 @@ export const extendTrackedGraph = (
           state.tracker,
           recorders.miss,
           recorders.crossing,
-          state.memo,
+          sharedMemo,
           stats,
           undefined,
           recorders.tracked,
@@ -2836,7 +2795,7 @@ export const extendTrackedGraph = (
     touched,
     touched,
     recorders,
-    state.memo,
+    sharedMemo,
     stats,
     changedMisses,
   );

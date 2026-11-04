@@ -1,10 +1,4 @@
-import {
-  assert,
-  assertEquals,
-  assertExists,
-  assertStrictEquals,
-  assertThrows,
-} from "@std/assert";
+import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import type { JSONSchema } from "@commonfabric/api";
@@ -180,7 +174,7 @@ Deno.test("memory v2 queryGraph reads the declared scoped root instance", async 
   }
 });
 
-Deno.test("memory v2 query retains a persistent memo for incremental watch growth", async () => {
+Deno.test("memory v2 query delivers newly reached documents during incremental watch growth", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-watch-growth";
   const fixture = createGraphFixture(space);
@@ -211,10 +205,6 @@ Deno.test("memory v2 query retains a persistent memo for incremental watch growt
       }],
     });
 
-    assert(tracked.state.memo.size > 0);
-    const memo = tracked.state.memo;
-    const initialMemoSize = memo.size;
-
     const extended = extendTrackedGraph(space, engine, tracked.state, {
       roots: [{
         id: fixture.hiddenRootId,
@@ -225,8 +215,6 @@ Deno.test("memory v2 query retains a persistent memo for incremental watch growt
       }],
     });
 
-    assertStrictEquals(tracked.state.memo, memo);
-    assert(tracked.state.memo.size >= initialMemoSize);
     assert(
       [...extended.updates.values()].some((entity) =>
         entity.id === fixture.hiddenRootId
@@ -1013,9 +1001,6 @@ Deno.test("memory v2 query uses a fresh memo for write-triggered refreshes", asy
       }],
     });
 
-    const growthMemo = tracked.state.memo;
-    const growthMemoSize = growthMemo.size;
-
     applyCommit(engine, {
       sessionId: "session:writer",
       invocation: invocationFor(2),
@@ -1038,8 +1023,6 @@ Deno.test("memory v2 query uses a fresh memo for write-triggered refreshes", asy
       new Set([toDirtyKey(fixture.rootId)]),
     );
     assertExists(refreshed);
-    assertStrictEquals(tracked.state.memo, growthMemo);
-    assertEquals(tracked.state.memo.size, growthMemoSize);
 
     assertEquals(
       [...refreshed.updates.values()].map((entity) => entity.id).sort(),

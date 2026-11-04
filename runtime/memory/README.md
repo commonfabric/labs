@@ -32,6 +32,14 @@ to an array, adding to it by identity, removing from it by value, and
 incrementing a number — each resolved against durable state so that concurrent
 writers combine instead of overwriting each other.
 
+## Watch memory
+
+A tracked graph retains the documents and reachability records needed by its
+active watches. Schema traversal results are shared within one evaluation and
+released when it finishes, including an incremental watch addition or removal.
+[Schema graph queries](../../docs/features/schema-graph-queries.md) describes
+that lifetime and the tracker that preserves delivery between evaluations.
+
 ## Commit model
 
 A client ships a batch of operations as a **client commit**, which carries the
