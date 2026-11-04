@@ -47,9 +47,9 @@ creates each, at load 77-269.
 - Once a handler's transaction commits on a serving runtime, its result is released
   (`#releaseServedHandlerResult` in `runner.ts`, serving-loop.md §1). A demand for a
   value, or an event to a stream, starts the piece again.
-- The release drops the result pattern's keyless index entry and each stopped piece's
-  node bindings, which hold the cells of the run that started it, and through them
-  its transaction.
+- The release drops the result pattern's keyless index entry, and a stopped piece's
+  node bindings go too (`NodeBindingMemo.release()`). Both hold the cells of the run
+  that started it, and through them its transaction.
 
 ## What is left
 

@@ -5461,9 +5461,9 @@ export class Runner {
    * holds. A demand or an event starts one again, as either does after a restart.
    * A piece keeps running where a client demands, at this moment, its document or
    * anything its nodes write: that demand has already made its one attempt to load
-   * the piece, and nothing would make another. A stopped piece's node bindings and
-   * index entry go with it, since they hold the cells of the run that started it,
-   * and those hold its transaction.
+   * the piece, and nothing would make another. A stopped piece's index entry goes
+   * with it, since it holds the cells of the run that started it, and those hold its
+   * transaction.
    */
   #releaseServedHandlerResult<T>(
     resultCell: Cell<T>,
@@ -5557,10 +5557,6 @@ export class Runner {
     // authoritative over such a start and tombstones it; a release is not, and
     // leaves it to resolve into a result of its own.
     this.#stopResult(resultCell);
-    if (link !== undefined) {
-      this.#nodeIOBindings.forgetResult(link);
-      this.#patternNodeBindings.forgetResult(link);
-    }
   }
 
   /**
@@ -12028,6 +12024,9 @@ export class Runner {
 
   #stopResult<T>(resultCell: Cell<T>): void {
     this.#runtime.sourceReconciler.unwatch(resultCell);
+    const resultLink = resultCell.getAsNormalizedFullLink();
+    this.#nodeIOBindings.release(resultLink);
+    this.#patternNodeBindings.release(resultLink);
     const key = this.#getDocKey(resultCell);
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);

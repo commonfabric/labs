@@ -261,53 +261,57 @@ describe("node-binding-memo", () => {
     });
   });
 
-  describe("forgetResult()", () => {
-    it("binds again for a result it forgot", () => {
-      const memo = new NodeBindingMemo<string>({
-        capacity: 16,
-        maxWeight: 1024 * 1024,
-      });
-      const bound = subject({ resultLink: linkTo("forgotten") });
-      memo.bindingFor(bound, () => "first");
+  describe("release()", () => {
+    it("drops the bindings held for one result document and keeps the others", () => {
+      const bindings = memo();
+      const stopped = subject({ resultLink: linkTo("stopped") });
+      const alsoStopped = subject({ resultLink: linkTo("stopped") });
+      const running = subject({ resultLink: linkTo("running") });
+      bindings.bindingFor(stopped, () => ({ n: 1 }));
+      bindings.bindingFor(alsoStopped, () => ({ n: 2 }));
+      const held = bindings.bindingFor(running, () => ({ n: 3 }));
 
-      memo.forgetResult(linkTo("forgotten"));
+      bindings.release(linkTo("stopped"));
 
-      expect(memo.size).toBe(0);
-      expect(memo.bindingFor(bound, () => "second")).toBe("second");
+      expect(bindings.size).toBe(1);
+      expect(bindings.bindingFor(running, () => ({ n: 4 }))).toBe(held);
+      expect(bindings.bindingFor(stopped, () => ({ n: 5 }))).toEqual({ n: 5 });
     });
 
-    it("keeps a binding whose argument is the result it forgot", () => {
-      const memo = new NodeBindingMemo<string>({
-        capacity: 16,
-        maxWeight: 1024 * 1024,
-      });
-      const consumer = subject({
-        resultLink: linkTo("consumer"),
-        argumentLink: linkTo("forgotten"),
-      });
-      memo.bindingFor(consumer, () => "first");
+    it("drops a document's bindings given a link to a path within it", () => {
+      const bindings = memo();
+      bindings.bindingFor(subject({ resultLink: linkTo("stopped") }), () => ({
+        n: 1,
+      }));
 
-      memo.forgetResult(linkTo("forgotten"));
+      bindings.release(linkTo("stopped", { path: ["internal", "x"] }));
 
-      expect(memo.bindingFor(consumer, () => "second")).toBe("first");
+      expect(bindings.size).toBe(0);
     });
 
-    it("keeps what it holds for another result", () => {
-      const memo = new NodeBindingMemo<string>({
-        capacity: 16,
-        maxWeight: 1024 * 1024,
+    it("keeps no key of a binding the cache has dropped", () => {
+      const bindings = new NodeBindingMemo<{ n: number }>({
+        capacity: 1,
+        maxWeight: 1_000_000,
       });
-      const kept = subject({ resultLink: linkTo("kept") });
-      memo.bindingFor(kept, () => "first");
-      memo.bindingFor(
-        subject({ resultLink: linkTo("forgotten") }),
-        () => "other",
-      );
+      bindings.bindingFor(subject({ resultLink: linkTo("first") }), () => ({
+        n: 1,
+      }));
+      bindings.bindingFor(subject({ resultLink: linkTo("second") }), () => ({
+        n: 2,
+      }));
 
-      memo.forgetResult(linkTo("forgotten"));
+      expect(bindings.size).toBe(1);
+      expect(bindings.accessForTestingOnly.indexedKeys).toBe(1);
+    });
 
-      expect(memo.size).toBe(1);
-      expect(memo.bindingFor(kept, () => "second")).toBe("first");
+    it("does nothing for a result document it holds no binding for", () => {
+      const bindings = memo();
+      bindings.bindingFor(subject(), () => ({ n: 1 }));
+
+      bindings.release(linkTo("unbound"));
+
+      expect(bindings.size).toBe(1);
     });
   });
 
