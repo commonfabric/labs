@@ -22,8 +22,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   reinterprets, and what only a write can produce; two stored shapes are the
   normal state under four rules; and an index backfill is a scan that starts
   no piece. Origin-following becomes the upgrade path for every pattern
-  provider, with `system:` as the tier the deployment vouches for and a
-  provider-published compatibility record as the tier it proves at adoption.
+  provider, with `system:` as the tier the deployment vouches for and the
+  acceptable-replacement proof, run by the adopting runtime over the piece's own
+  contract, as the tier it proves at adoption.
   It names the demand ruling a background sweep would need and is written to
   work without it.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)

@@ -66,14 +66,17 @@ upgrade policy, and upgrades that run code.
   no revision, and no per-piece authorization step. At today's scale the budget
   turns a serial, hand-ordered procedure into one activation of the space; at
   the target scale it is what makes a release possible at all.
-- **The space is where a release is checked; the piece's next start is when it
-  is adopted.** One cell per space records the release it last saw; a space that
-  matches is an O(1) skip. A piece's own pointer moves when the piece next
-  starts, which is what following already does, so a release writes nothing to a
-  piece nobody starts. The per-piece write, when it comes, is a metadata write —
-  pointer, revision, reconciliation record — not a data write, and the two
-  differ by orders of magnitude (§1). An eager sweep that moves every follower's
-  pointer at once is an option, not a step of a release.
+- **The space resolves a release once; each piece adopts it when it next
+  starts.** One cell per space records what each followed origin last resolved
+  to and holds its compiled candidate, so a start in that space resolves and
+  compiles nothing. Each start still compares the piece's own pointer to that
+  resolution — a cold piece is still on the old identity, and the record cannot
+  say otherwise — and moves it when they differ, which is what following already
+  does, so a release writes nothing to a piece nobody starts. The per-piece
+  write, when it comes, is a metadata write — pointer, revision, reconciliation
+  record — not a data write, and the two differ by orders of magnitude (§1). An
+  eager sweep that moves every follower's pointer at once is an option, not a
+  step of a release.
 - **A piece can only follow a release if it follows an origin.** Topics' pieces
   follow none, which is the whole of today's procedure. Putting them on one is
   the first stage.
@@ -124,17 +127,13 @@ Everything below is checked against the tree as of `b38ab3d9b4` (2026-11-03).
   verified by re-asking the fixer and no derivable reverse
   ([piece-bulk-operations.md](../features/piece-bulk-operations.md)). Right for
   an operator's targeted repair; at 10^11 pieces, a millisecond each is years.
-- **Origin-following is built, and Topics is not on it.** System-pattern
-  auto-update shipped in July 2026 as an in-place roll-forward for the Home and
-  default-app roots (#4611 and its follow-ups; the executed plan is
-  [archived](../history/specs/pattern-imports/system-pattern-updates-implementation-plan.md))
-  and was generalized into the lifecycle: any piece that records a `system:`
-  origin follows it when it starts, and
-  `cf piece follow --cell <piece>
-  <origin>` puts a piece on one
-  ([pattern-updates.md](../specs/pattern-imports/pattern-updates.md);
-  `runtime/cli/README.md`). The patterns route serves the whole `patterns/`
-  directory, subdirectories included (`createPatternsRoute` in
+- **Origin-following is built, and Topics is not on it.** Any piece that records
+  a `system:` origin follows it when it starts — the Home and default-app roots
+  do — and `cf piece follow --cell <piece> <origin>` puts a piece on one
+  ([pattern-updates.md](../specs/pattern-imports/pattern-updates.md) is the
+  design of record; `runtime/cli/README.md` has the command). The patterns route
+  serves the whole `patterns/` directory, subdirectories included
+  (`createPatternsRoute` in
   `runtime/toolshed/routes/patterns/patterns-server.ts`), so a `system:` ref to
   Topics' source resolves today. A child a following piece instantiates claims
   the `system:` ref of its own module, so a board that follows makes topics that
@@ -183,16 +182,20 @@ keeps that moment. A release therefore writes nothing to a piece nobody starts,
 and the per-piece write it does make, when the piece starts, is the one the
 lifecycle makes today.
 
-What the space adds is the O(1) answer to "is there anything to do". Each space
-records, in one cell, the identity of each `system:` source it last saw (not a
-counter — see "Formats without version numbers" below). On tenure activation, or
-on a client's open of the space, the runtime compares what the deployment now
-serves against that record. A match means no piece in the space has a follow to
-run, so a start skips the origin check; a mismatch means the compile of the new
-identity happens once for the space, and each piece that starts finds it ready.
-A space nobody activates never pays, and when it wakes several releases late its
-pieces jump straight to the current one, which Tier 1's append-only baselines
-already prove safe.
+What the space adds is one resolution and one compile per release instead of one
+per piece. Each space records, in one cell, the identity each followed `system:`
+origin last resolved to (not a counter — see "Formats without version numbers"
+below) and holds that identity's compiled candidate. On tenure activation, or on
+a client's open of the space, the runtime asks the origin once and updates the
+record if the answer moved. A piece's start then compares its own pointer to the
+recorded resolution — a local hash compare, with no fetch and no compile — and
+runs its follow transition only when they differ. The record cannot stand in for
+that compare: a cold piece is still on the identity it last ran, and a record
+that matched the deployment would say nothing about it. What the record removes
+is the per-start resolution and compile, which is where a follow spends its time
+when the pointer does have to move. A space nobody activates never pays, and
+when it wakes several releases late its pieces jump straight to the current one,
+which Tier 1's append-only baselines already prove safe.
 
 **What the per-piece write costs, and what it does not.** The write a start
 makes on the same-contract path (§2) is three small metadata fields — the
@@ -428,23 +431,34 @@ This plan keeps that line and names the tiers on each side of it, so that
 `system:` is the tier the deployment vouches for rather than a mechanism of its
 own.
 
-| Origin                                                        | Who gated the release    | What adoption does                                                                                                                              |
-| ------------------------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `system:` ref                                                 | this deployment's CI     | adopts the candidate as it stands                                                                                                               |
-| Fabric origin whose provider publishes a compatibility record | the provider, verifiably | adopts when the runtime's own Tier 1 proof passes over the piece's contract — baselines are contract hashes, so the proof runs at adoption time |
-| Any other fabric origin                                       | nobody                   | adopts a candidate that does not move the contract; otherwise offers it to the owner, which the piece menu already does                         |
+| Origin            | Who gated the release     | What adoption does unattended                                                                                                                                                                                                                                                                                                              |
+| ----------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `system:` ref     | this deployment's CI      | adopts the candidate as it stands, with the writer delegation of invariant 7                                                                                                                                                                                                                                                               |
+| Fabric origin     | nobody the runtime trusts | adopts a candidate the runtime itself proves an acceptable replacement for what the piece runs — the Tier 1 relation, applied by the adopting runtime to the candidate's contract over the piece's own recorded contract — and only within the first class of §3; anything else is offered to the owner, which the piece menu already does |
+| Pinned fabric URL | —                         | never reports an update (invariant 14)                                                                                                                                                                                                                                                                                                     |
 
-The second row is new and is what opens the mechanism to a provider the
-deployment does not vouch for. It costs the provider nothing the repository does
-not already ask of itself: the compatibility record is the baseline Tier 1
-records, published beside the pattern, and the proof is the one CI runs here,
-run instead by the adopting runtime against the piece in front of it. A
-stored-shape change from such a provider is carried by the same classification
-(§3) and the same declared migrate step (§6), and a provider with many pieces in
-other people's spaces needs that step more than this repository does, since
-nobody will hand-rehearse their pieces. A candidate in the third class of §3,
-which the lazy path cannot carry, is refused for every tier but the first, and
-for the first it is refused unless the release names its sweep.
+The second row is the acceptable-replacement relation invariant 7 asks for and
+the lifecycle lists as required, and it is what opens the mechanism to a
+provider the deployment does not vouch for. Its trust anchor is on the adopting
+side: the proof runs over the piece's _own_ recorded contract, which the
+provider does not control, so nothing the provider publishes about its history
+is consulted or needed. What the proof establishes is bounded, and the bound is
+stated rather than papered over: Tier 1 is a statement about contracts, and only
+Tier 2 — a fixture of real data — speaks to stored state. So an unattended
+adoption from a fabric origin carries only a change the schema itself
+reinterprets (§3's first class), which is the class whose safety the contract
+relation does prove. A pure-function migrate step (§6) from such an origin runs
+only with the owner's consent, for a reason that is CFC's before it is trust's:
+an unattended update from an origin the deployment does not gate carries no
+writer delegation (invariant 7), so the successor cannot write what the
+predecessor's handlers protected until the owner's acceptance confers it. A
+candidate in the third class is refused from every origin but the first, and
+from the first unless the release names its sweep.
+
+A provider with many pieces in other people's spaces therefore ships
+same-contract and schema-expressible releases with no one in the loop, and a
+data migration as an offer each owner accepts once — which is a better position
+than this repository's own patterns are in today.
 
 What the tiers do not change: an origin becomes active only by the owner's
 explicit consent (invariant 10); a piece can detach, revert, or repoint at any
@@ -469,8 +483,9 @@ nothing added; the table is here to show that, not to schedule for it.
 ## What this plan does not change
 
 - Per-piece pinning, detach, revert, repoint, and the append-only revision log
-  stay as the lifecycle specifies them. The space record is a cache of what the
-  pieces already say, not an authority over them.
+  stay as the lifecycle specifies them. The space record caches what an origin
+  resolved to and its compile; it is not an authority over any piece's pointer,
+  and every start still compares its own.
 - Nothing runs for, and nothing is written to, a piece nobody starts. The moment
   a piece's pointer moves is the moment the lifecycle already moves it.
 - No sweep, global or per space, synchronous or otherwise, is a step of any
@@ -483,12 +498,12 @@ nothing added; the table is here to show that, not to schedule for it.
 [DEVELOPMENT.md](../development/DEVELOPMENT.md#general-principles) asks that a
 format be built so a reader handles older and newer writers alike, rather than
 marking each change with a version. This plan's markers are identities, not
-counters: the per-space release record names the source identity the space was
-reconciled against; a document's shape marker is the content-addressed schema
-that wrote it, which the runtime already stamps; a pattern's migration progress
-names the identifier of the last completed step, which is what Topics' ordered
-identifier list already encodes behind its integer. The reader-handles-every-
-writer half of the principle is exactly rule 4's reinterpretation chain.
+counters: the per-space record names the identity an origin last resolved to; a
+document's shape marker is the content-addressed schema that wrote it, which the
+runtime already stamps; a pattern's migration progress names the identifier of
+the last completed step, which is what Topics' ordered identifier list already
+encodes behind its integer. The reader-handles-every- writer half of the
+principle is exactly rule 4's reinterpretation chain.
 
 ## What needs a ruling
 
@@ -533,8 +548,10 @@ writer half of the principle is exactly rule 4's reinterpretation chain.
 
 ## Stages
 
-Each stage lands on its own and leaves the system better than it found it; none
-depends on a later one.
+Each stage lands on its own and leaves the system better than it found it. One
+dependency runs forward: Stage 1 puts Topics on an origin under an interim rule
+that Stage 3 lifts, so the operator leaves the loop for a contract-moving
+release only once the classification test exists.
 
 ### Stage 0 — Measure
 
@@ -552,26 +569,38 @@ confirmed or reordered by them.
 
 ### Stage 1 — Topics follows an origin; the space is checked once
 
-- [ ] Decision 5: the owner accepts the release gate as the gate for Topics, or
-      names the finding that should stop a release from being served. The origin
-      is a `system:` ref to Topics' source under the patterns route; the route
-      serves it today, and a board that follows makes topics that follow.
-- [ ] Put the deployed board and topics on that origin, once, with
-      `cf piece follow`, rehearsed on a clone per
-      [space-clone-rehearsal.md](../development/space-clone-rehearsal.md). This
-      is the last operator retarget of those pieces.
-- [ ] A per-space record of the source identity each followed origin was last
-      seen at, written by the reconciler when a follow completes, read on tenure
-      activation and on a client's open of the space; a start in a space whose
-      record matches skips the origin check.
-- [ ] One compile per space per moved identity, so the first piece to start pays
-      it and the rest find it.
+- [ ] The interim adoption rule: a `system:` follow for a piece whose pattern
+      declares no migration steps (Stage 3) adopts a candidate only when its
+      contract hashes equal the piece's, and otherwise records a refusal and
+      offers the candidate to the owner — the path a non-gated origin takes
+      today. Topics' own `upgradeTopicState` keeps carrying its stored-shape
+      changes meanwhile, as it does now. Stage 3 replaces this rule with the
+      classification test.
+- [ ] Put the deployed board and topics on a `system:` ref to Topics' source
+      under the patterns route, once, with `cf piece follow`, rehearsed on a
+      clone per
+      [space-clone-rehearsal.md](../development/space-clone-rehearsal.md). The
+      route serves that source today, and a board that follows makes topics that
+      follow. This is the last operator retarget of those pieces.
+- [ ] A per-space record of the identity each followed origin last resolved to,
+      holding its compiled candidate, written by the reconciler when it asks the
+      origin on tenure activation or a client's open of the space. A piece's
+      start compares its own pointer to the record and runs its follow only when
+      they differ; the record replaces the per-start resolution and compile, not
+      the compare.
 - [ ] An index of pieces by origin within a space, for the survey in Stage 6 and
       the optional sweep, so neither walks the registry.
+- [ ] Decision 5, taken when Stage 3 lands: the owner accepts the release gate
+      and the classification test as the gate for Topics, or names the finding
+      that should stop a release from being served. Until then the interim rule
+      holds, and a contract-moving Topics release is an offer the operator
+      accepts, not a procedure the operator runs.
 
-Success: a Topics release reaches the board on its next open and each topic on
-its next start, with no operator step after the merge; a space whose record
-matches costs one read and no piece in it is written.
+Success: a same-contract Topics release reaches the board on its next open and
+each topic on its next start, with no operator step after the merge; a
+contract-moving release is an offer, not an eight-step procedure; a space whose
+record matches resolves and compiles nothing, and no piece in it is written
+until it starts.
 
 ### Stage 2 — Same contract, pointer move
 
@@ -648,21 +677,23 @@ The fabric-origin work the lifecycle lists, in the order a provider needs it.
 - [ ] Creation from a fabric URL: `cf piece new` and the piece menu accept a
       `cf:` URL to a published pattern, and the piece records it as its origin
       with a create revision.
-- [ ] The compatibility record: a pattern published in the fabric carries the
-      Tier 1 baselines of its contract history beside its source, and the
-      adopting runtime proves a candidate against the piece's contract before
-      the follow transition commits — the second row of §8's table.
+- [ ] The acceptable-replacement relation: the adopting runtime proves a
+      candidate's contract applies over the piece's own recorded contract — the
+      Tier 1 relation, run at adoption — and adopts unattended only a candidate
+      that passes and whose change is schema-expressible; anything else is
+      offered to the owner. The second row of §8's table.
 - [ ] The live subscription to a mutable entity's revision head while a
       following piece runs, through the same guarded transition.
 - [ ] Cross-space source replication under CFC policy, failing closed before
       copying.
-- [ ] The migrate step (Stage 3) accepted from a fabric origin under the second
-      row's proof, and refused from the third.
+- [ ] The migrate step (Stage 3) from a fabric origin runs only after the
+      owner's acceptance, which is what confers the writer delegation an
+      unattended non-gated update does not carry (invariant 7).
 
 Success: a provider with no access to this deployment publishes a pattern in a
 space, pieces in other spaces follow it by the owner's consent, a same-contract
-release reaches them on their next start, and a stored-shape change reaches them
-through a declared migrate step with no operator anywhere.
+or schema-expressible release reaches them on their next start with no one in
+the loop, and a data migration reaches them as an offer each owner accepts once.
 
 ## Relationship to other documents
 
