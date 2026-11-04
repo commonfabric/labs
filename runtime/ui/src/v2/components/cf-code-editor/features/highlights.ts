@@ -131,6 +131,28 @@ const highlightTheme = EditorView.baseTheme({
 });
 
 /**
+ * The id of the innermost highlight the editor draws over `pos`: the shortest
+ * drawn range that holds it, the earlier-starting of two the same length.
+ */
+export function highlightAt(
+  state: EditorState,
+  pos: number,
+): string | undefined {
+  let found: { id: string; from: number; to: number } | undefined;
+  state.field(highlightField, false)?.decorations.between(
+    pos,
+    pos,
+    (from, to, value) => {
+      if (from > pos || to <= pos) return;
+      if (found === undefined || to - from < found.to - found.from) {
+        found = { id: value.spec.attributes["data-highlight-id"], from, to };
+      }
+    },
+  );
+  return found?.id;
+}
+
+/**
  * Draws the host's highlights and calls `onClick` with the id of the
  * innermost highlight under a primary-button press, leaving the press to
  * place the caret as usual.
@@ -140,14 +162,11 @@ export function highlights(onClick: (id: string) => void): Extension {
     highlightField,
     highlightTheme,
     EditorView.domEventHandlers({
-      mousedown(event) {
-        if (event.button !== 0 || !(event.target instanceof Element)) {
-          return false;
-        }
-        const id = event.target.closest("[data-highlight-id]")?.getAttribute(
-          "data-highlight-id",
-        );
-        if (id) onClick(id);
+      mousedown(event, view) {
+        if (event.button !== 0) return false;
+        const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+        const id = pos === null ? undefined : highlightAt(view.state, pos);
+        if (id !== undefined) onClick(id);
         return false;
       },
     }),
