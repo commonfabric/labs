@@ -101,10 +101,10 @@ describe(
     // carries the fired event's consequence, and reads the last link's write
     // once, right after the action.
     for (
-      const [what, file, passed] of [
-        ["a handler's own events in one space", "own-event", 2],
-        ["a cascade that crosses into another space", "cross-space", 2],
-        ["a participant's cascade", "participant-own-event", 2],
+      const [what, file] of [
+        ["a handler's own events in one space", "own-event"],
+        ["a cascade that crosses into another space", "cross-space"],
+        ["a participant's cascade", "participant-own-event"],
       ] as const
     ) {
       it(`settles through ${what} before the next step reads`, async () => {
@@ -114,7 +114,7 @@ describe(
           outcome = await runTests(resolve(root, `${file}.test.tsx`), { root });
         });
         expect(outcome?.failed).toBe(0);
-        expect(outcome?.passed).toBe(passed);
+        expect(outcome?.passed).toBe(2);
       });
     }
 

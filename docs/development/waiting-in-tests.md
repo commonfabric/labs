@@ -442,6 +442,16 @@ turning true. A test that installs its own gate or fault seam owns that seam's
 edge already: record each hit on a log rather than incrementing a counter, and
 the counter's readers become the log's, with a wait available for free.
 
+`ExecutorHost.whenQuiescent()` is the barrier for a whole cascade rather than
+for one seq: it resolves once every tenure's loop has come to rest with nothing
+it can do on its own, across spaces, and it covers what the watermark does not,
+such as an event a served handler fired that a later wave serves. Its value
+stays the same until a loop does anything further, so a caller that has let its
+own runtime react to what the wait delivered asks again and compares. `cf test`
+settles on it ([The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process)). It lives on the host, so a
+loop in a worker does not offer it.
+
 A serving-side value that exists only in the SERVING runtime's view — a write
 sealed into an open wave, which the store does not hold yet — has no edge in
 that list, and the `waitForCellValue` shape below is wrong for it: idling the
