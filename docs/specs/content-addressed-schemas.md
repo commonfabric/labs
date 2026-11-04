@@ -677,10 +677,11 @@ reconnect declares holdings the same way. Until that answer, a load of the
 document waits rather than taking it for absent, since the server holds it,
 and `synced()` and `inputSynced()` wait too, so a settle resting on them sees
 what the answer applies.
-Each copy of a document, by its seq, is asked for once, so a copy the
-replica cannot apply even then ends there: it logs
-`schema-doc-quarantine-unhealed`, a load of it fails, and nothing asks
-again until a newer copy arrives. The arrival diagnostic is the loud
+Each copy of a document, by its seq, is asked for once while it stays
+quarantined, so a copy the response carries and the replica still cannot
+apply ends there: it logs `schema-doc-quarantine-unhealed`, a load of it
+fails, and nothing asks again until a newer copy arrives or a removal clears
+the record. The arrival diagnostic is the loud
 record throughout, and the underlying absorb/ordering defect is the thing
 to find and fix (OW61). The repair
 paths that do exist serve callers, not arrival: the traversal loader's

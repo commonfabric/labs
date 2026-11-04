@@ -18,13 +18,19 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
+  type ResponseMessage,
   type ServerMessage,
   type SessionSync,
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
-import { DocumentLoadError, loadDocument } from "../src/document-readiness.ts";
+import {
+  createDocumentReadiness,
+  DocumentLoadError,
+  DocumentPending,
+  loadDocument,
+} from "../src/document-readiness.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG, type URI } from "../src/sigil-types.ts";
@@ -32,14 +38,22 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "../src/storage/cache.deno.ts";
+import type {
+  NativeStorageCommit,
+  SealedCommitVerdict,
+} from "../src/storage/interface.ts";
 import type { SessionFactory, SpaceReplica } from "../src/storage/v2.ts";
 import { TestStorageManager } from "./memory-v2-test-utils.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 /** How many re-deliveries prove a loop, past which the transport stops dropping. */
 const LOOP_BOUND = 4;
 
 const DOCUMENT_ID = "of:quarantine-redelivery-document";
 const ABSENT_ID = "of:quarantine-redelivery-absent";
+const PLAIN_ID = "of:quarantine-redelivery-plain";
+const OWN_ID = "of:quarantine-redelivery-own";
+const OUTPUT_ID = "of:quarantine-redelivery-output";
 
 const leafSchema = { type: "string", title: "redelivery-leaf" } as const;
 const leafHash = internSchemaAsTaggedHashString(leafSchema);
@@ -57,6 +71,33 @@ class CidDroppingFactory implements SessionFactory {
 
   /** Whether the server appears not to take declared holdings. */
   hidesHoldings = false;
+
+  /** The ids each `session.watch.set` declared as held, in order. */
+  readonly watchSetHoldings: string[][] = [];
+
+  /** Each `session.watch.set`'s response frame as the client got it, in order. */
+  readonly watchSetResponses: SessionSync[] = [];
+
+  /** Every session frame the client got, in order, after any dropping. */
+  readonly frames: SessionSync[] = [];
+
+  /** Rewrites a `session.watch.set` response on its way to the client. */
+  rewriteWatchSetResponse:
+    | ((response: ServerMessage) => ServerMessage)
+    | undefined;
+
+  /** The request types whose responses wait for `releaseResponses()`. */
+  readonly heldTypes = new Set<string>();
+
+  /** Resolves when the client next gets a `session/effect`. */
+  nextEffect = Promise.withResolvers<void>();
+
+  /** Resolves when a response is first held. */
+  readonly responseHeld = Promise.withResolvers<void>();
+
+  readonly #requestTypes = new Map<string, string>();
+
+  #held: (() => void)[] = [];
 
   /** Resolves when the client first sends a `session.watch.set`. */
   readonly firstWatchSet = Promise.withResolvers<void>();
@@ -93,13 +134,29 @@ class CidDroppingFactory implements SessionFactory {
     return { client, session };
   }
 
+  /** Delivers the held responses, and holds no more. */
+  releaseResponses(): void {
+    this.heldTypes.clear();
+    for (const deliver of this.#held.splice(0)) deliver();
+  }
+
   #transport(): MemoryV2Client.Transport {
     const inner = MemoryV2Client.loopback(this.#server);
     return {
       ...inner,
       send: (payload) => {
-        const sent = decodeMemoryBoundary(payload) as { type?: string };
+        const sent = decodeMemoryBoundary(payload) as {
+          type?: string;
+          requestId?: string;
+          holdings?: { id: string }[];
+        };
+        if (sent.requestId !== undefined && sent.type !== undefined) {
+          this.#requestTypes.set(sent.requestId, sent.type);
+        }
         if (sent.type === "session.watch.set") {
+          this.watchSetHoldings.push(
+            (sent.holdings ?? []).map(({ id }) => id),
+          );
           this.watchSets += 1;
           this.firstWatchSet.resolve();
           if (this.watchSets >= LOOP_BOUND) this.dropsLeft = 0;
@@ -107,19 +164,55 @@ class CidDroppingFactory implements SessionFactory {
         return inner.send(payload);
       },
       setReceiver: (next) =>
-        inner.setReceiver((payload) =>
-          next(
-            encodeMemoryBoundary(
-              this.#filter(
-                decodeMemoryBoundary(payload) as unknown as ServerMessage,
-              ) as unknown as FabricValue,
-            ),
-          )
-        ),
+        inner.setReceiver((payload) => {
+          const message = this.#filter(
+            decodeMemoryBoundary(payload) as unknown as ServerMessage,
+          );
+          const encoded = encodeMemoryBoundary(
+            message as unknown as FabricValue,
+          );
+          const requestType = message.type === "response"
+            ? this.#requestTypes.get(message.requestId)
+            : undefined;
+          if (requestType !== undefined && this.heldTypes.has(requestType)) {
+            this.#held.push(() => next(encoded));
+            this.responseHeld.resolve();
+            return;
+          }
+          next(encoded);
+          if (message.type === "session/effect") {
+            const reached = this.nextEffect;
+            this.nextEffect = Promise.withResolvers<void>();
+            reached.resolve();
+          }
+        }),
     };
   }
 
-  #filter(message: ServerMessage): ServerMessage {
+  #filter(arriving: ServerMessage): ServerMessage {
+    const message = arriving.type === "response" &&
+        this.#requestTypes.get(arriving.requestId) === "session.watch.set"
+      ? this.rewriteWatchSetResponse?.(arriving) ?? arriving
+      : arriving;
+    const filtered = this.#dropped(message);
+    const { effect, ok } = filtered as {
+      effect?: SessionSync;
+      ok?: { sync?: SessionSync };
+    };
+    const sync = effect ?? ok?.sync;
+    if (sync?.type === "sync") {
+      this.frames.push(sync);
+      if (
+        filtered.type === "response" &&
+        this.#requestTypes.get(filtered.requestId) === "session.watch.set"
+      ) {
+        this.watchSetResponses.push(sync);
+      }
+    }
+    return filtered;
+  }
+
+  #dropped(message: ServerMessage): ServerMessage {
     const frame = message as ServerMessage & {
       effect?: SessionSync;
       ok?: { sync?: SessionSync };
@@ -166,7 +259,7 @@ const unhealedErrors = (): number => {
   return counts?.["schema-doc-quarantine-unhealed"]?.error ?? 0;
 };
 
-describe("schema-doc-quarantine-redelivery", () => {
+describe("storage/v2", () => {
   let server: MemoryV2Server.Server;
   let signer: Identity;
   let space: MemorySpace;
@@ -187,8 +280,11 @@ describe("schema-doc-quarantine-redelivery", () => {
     },
   });
 
-  const write = async (values: Record<string, FabricValue>): Promise<void> => {
-    const tx = writer.edit();
+  const writeAs = async (
+    runtime: Runtime,
+    values: Record<string, FabricValue>,
+  ): Promise<void> => {
+    const tx = runtime.edit();
     for (const [id, value] of Object.entries(values)) {
       tx.writeValueOrThrow(
         { space, id: id as URI, scope: "space", path: [] },
@@ -197,6 +293,13 @@ describe("schema-doc-quarantine-redelivery", () => {
     }
     expect((await tx.commit().settled).ok).toBeDefined();
   };
+
+  const write = (values: Record<string, FabricValue>): Promise<void> =>
+    writeAs(writer, values);
+
+  /** A schema no reader has been sent, and a `cid:` document's value for it. */
+  const otherSchema = { type: "number", title: "redelivery-other" } as const;
+  const otherHash = internSchemaAsTaggedHashString(otherSchema);
 
   /** A reader over a transport that drops `cid:` upserts from `drops` frames. */
   const readerDropping = (drops: number) => {
@@ -209,10 +312,13 @@ describe("schema-doc-quarantine-redelivery", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
     });
-    cleanups.push(async () => {
-      await runtime.dispose();
-      await storage.close();
-    });
+    let closed: Promise<void> | undefined;
+    const close = (): Promise<void> =>
+      closed ??= (async () => {
+        await runtime.dispose();
+        await storage.close();
+      })();
+    cleanups.push(close);
     const replica = storage.open(space).replica as SpaceReplica;
     const cellOf = (id: string) =>
       runtime.getCellFromLink({
@@ -222,11 +328,23 @@ describe("schema-doc-quarantine-redelivery", () => {
         path: [],
         schema: { type: "unknown" },
       });
-    const revision = () =>
-      (replica.getDocument(DOCUMENT_ID as URI) as
+    const revision = (id = DOCUMENT_ID) =>
+      (replica.getDocument(id as URI) as
         | { value?: { revision?: number } }
         | undefined)?.value?.revision;
-    return { factory, runtime, storage, replica, cellOf, revision };
+    /** Syncs `id` with no load waiting on what becomes of it. */
+    const syncOf = (id: string) =>
+      storage.open(space).sync(id as URI, { path: [], schema: false });
+    return {
+      factory,
+      runtime,
+      storage,
+      replica,
+      cellOf,
+      revision,
+      syncOf,
+      close,
+    };
   };
 
   beforeEach(async () => {
@@ -263,12 +381,87 @@ describe("schema-doc-quarantine-redelivery", () => {
       expect(factory.watchSets).toBe(1);
     });
 
-    it("has applied it by the time `inputSynced()` resolves, with no load waiting", async () => {
-      const { factory, storage, replica, revision } = readerDropping(1);
-      await storage.open(space).sync(DOCUMENT_ID as URI, {
-        path: [],
-        schema: false,
+    it("declares what it holds, so its response carries only the document and its closure", async () => {
+      await write({ [PLAIN_ID]: { revision: 1 } });
+      const { factory, runtime, cellOf } = readerDropping(0);
+      await loadDocument(runtime, cellOf(PLAIN_ID));
+      factory.dropsLeft = 1;
+
+      await loadDocument(runtime, cellOf(DOCUMENT_ID));
+
+      expect(factory.watchSetHoldings).toEqual([[PLAIN_ID]]);
+      const [response] = factory.watchSetResponses;
+      expect(response.upserts.map(({ id }) => id).toSorted()).toEqual(
+        [`cid:${leafHash}`, DOCUMENT_ID].toSorted(),
+      );
+      expect(response.removes).toEqual([]);
+    });
+
+    it("applies a frame that arrived ahead of its response", async () => {
+      await write({ [PLAIN_ID]: { revision: 1 } });
+      const { factory, runtime, replica, cellOf, syncOf, revision } =
+        readerDropping(0);
+      await loadDocument(runtime, cellOf(PLAIN_ID));
+      factory.dropsLeft = 1;
+      factory.heldTypes.add("session.watch.set");
+      await syncOf(DOCUMENT_ID);
+      await factory.firstWatchSet.promise;
+      const effect = factory.nextEffect.promise;
+      await write({ [PLAIN_ID]: { revision: 2 } });
+      await effect;
+
+      factory.releaseResponses();
+      await replica.inputSynced();
+
+      expect(revision(PLAIN_ID)).toBe(2);
+      expect(revision()).toBe(1);
+    });
+
+    it("applies a retraction its response carries", async () => {
+      await write({ [PLAIN_ID]: { revision: 1 } });
+      const { factory, runtime, replica, cellOf } = readerDropping(0);
+      await loadDocument(runtime, cellOf(PLAIN_ID));
+      factory.dropsLeft = 1;
+      factory.rewriteWatchSetResponse = (response) => {
+        const { ok } = response as ResponseMessage<{ sync: SessionSync }>;
+        return {
+          ...response,
+          ok: {
+            ...ok,
+            sync: {
+              ...ok!.sync,
+              removes: [{ branch: "", id: PLAIN_ID, scope: "space" }],
+            },
+          },
+        } as ServerMessage;
+      };
+
+      await loadDocument(runtime, cellOf(DOCUMENT_ID));
+
+      expect(replica.holdings().map(({ id }) => id)).not.toContain(PLAIN_ID);
+      expect(replica.isConfirmedDocument(PLAIN_ID as URI, "space")).toBe(false);
+    });
+
+    it("heals a later copy with a request of its own", async () => {
+      const { factory, runtime, replica, cellOf, revision } = readerDropping(1);
+      await loadDocument(runtime, cellOf(DOCUMENT_ID));
+      factory.dropsLeft = 1;
+
+      const effect = factory.nextEffect.promise;
+      await write({
+        [`cid:${otherHash}`]: otherSchema as unknown as FabricValue,
+        [DOCUMENT_ID]: naming(2, otherHash),
       });
+      await effect;
+      await replica.framesApplied();
+
+      expect(factory.watchSets).toBe(2);
+      expect(revision()).toBe(2);
+    });
+
+    it("has applied it by the time `inputSynced()` resolves, with no load waiting", async () => {
+      const { factory, syncOf, replica, revision } = readerDropping(1);
+      await syncOf(DOCUMENT_ID);
 
       await replica.inputSynced();
 
@@ -277,11 +470,8 @@ describe("schema-doc-quarantine-redelivery", () => {
     });
 
     it("has applied it by the time `synced()` resolves, with no load waiting", async () => {
-      const { factory, storage, replica, revision } = readerDropping(1);
-      await storage.open(space).sync(DOCUMENT_ID as URI, {
-        path: [],
-        schema: false,
-      });
+      const { factory, syncOf, replica, revision } = readerDropping(1);
+      await syncOf(DOCUMENT_ID);
 
       await replica.synced();
 
@@ -296,6 +486,289 @@ describe("schema-doc-quarantine-redelivery", () => {
       await loadDocument(runtime, cellOf(DOCUMENT_ID));
 
       expect(unhealedErrors()).toBe(before);
+    });
+  });
+
+  describe("a re-delivery under way", () => {
+    /** A reader whose re-delivery of the document has gone out unanswered. */
+    const healingReader = () => {
+      const reader = readerDropping(1);
+      reader.factory.heldTypes.add("session.watch.set");
+      return reader;
+    };
+
+    it("is not ended by another frame carrying the same copy", async () => {
+      const before = unhealedErrors();
+      const { factory, replica, runtime, cellOf, revision } = healingReader();
+      const load = loadDocument(runtime, cellOf(DOCUMENT_ID));
+      await factory.firstWatchSet.promise;
+      const { seq } = factory.frames[0].upserts.find(({ id }) =>
+        id === DOCUMENT_ID
+      )!;
+
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 0,
+        toSeq: seq,
+        upserts: [{
+          branch: "",
+          id: DOCUMENT_ID,
+          scope: "space",
+          seq,
+          doc: { value: naming(1) },
+        }],
+        removes: [],
+      }, "integrate");
+      factory.releaseResponses();
+
+      expect(await load).toBe(true);
+      expect(revision()).toBe(1);
+      expect(unhealedErrors()).toBe(before);
+    });
+
+    it("runs no computed over the document until it arrives, so no absent value is stored", async () => {
+      const { factory, runtime, replica, cellOf, syncOf } = healingReader();
+      await syncOf(DOCUMENT_ID);
+      await factory.firstWatchSet.promise;
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const seen: unknown[] = [];
+      // deno-lint-ignore no-explicit-any -- the builder's lift type is untyped
+      const computeName = (cf as any).lift(
+        (value: { revision?: number } | undefined) => {
+          seen.push(value?.revision);
+          return value?.revision ?? "absent";
+        },
+      );
+      // deno-lint-ignore no-explicit-any -- the page's input is untyped
+      const page = (cf as any).pattern(({ source }: any) => ({
+        name: computeName(source),
+      }));
+      const tx = runtime.edit();
+      const result = runtime.run(
+        tx,
+        page,
+        { source: cellOf(DOCUMENT_ID).withTx(tx) },
+        runtime.getCell(space, "quarantine-redelivery-page", undefined, tx),
+      );
+      expect((await tx.commit().verdict).ok).toBeDefined();
+      const shown: unknown[] = [];
+      const cancel = result.key("name").sink((value: unknown) => {
+        shown.push(value);
+      });
+      await runtime.idle();
+      await server.idle();
+      await runtime.idle();
+
+      /** What a runtime with no quarantine finds stored for the computed. */
+      const stored = async (): Promise<unknown> => {
+        const link = result.key("name").resolveAsCell()
+          .getAsNormalizedFullLink();
+        const fresh = readerDropping(0);
+        const cell = fresh.runtime.getCellFromLink({
+          ...link,
+          schema: { type: "unknown" },
+        });
+        await loadDocument(fresh.runtime, cell);
+        return cell.getRaw();
+      };
+
+      expect(seen).toEqual([]);
+      expect(await stored()).toBeUndefined();
+
+      factory.releaseResponses();
+      await replica.synced();
+      await runtime.idle();
+      await replica.synced();
+      await server.idle();
+      await runtime.idle();
+
+      expect(seen).toEqual([1]);
+      expect(shown.at(-1)).toBe(1);
+      expect(await stored()).toBe(1);
+      cancel();
+    });
+
+    it("waits for no sealed commit, which the input barriers must not", async () => {
+      const { factory, syncOf, replica, revision } = healingReader();
+      const verdict = Promise.withResolvers<SealedCommitVerdict>();
+      const sealed = replica.sealNative(
+        {
+          operations: [{
+            op: "set",
+            id: "of:quarantine-redelivery-sealed" as URI,
+            type: "application/json",
+            value: { value: 1 },
+          }],
+        } as unknown as NativeStorageCommit,
+        undefined,
+        verdict.promise,
+        { reads: { confirmed: [], pending: [] } },
+      );
+      await syncOf(DOCUMENT_ID);
+      await factory.firstWatchSet.promise;
+
+      factory.releaseResponses();
+      await replica.inputSynced();
+
+      expect(revision()).toBe(1);
+      verdict.resolve({ withdrawn: { message: "done with this case" } });
+      await sealed.settled;
+    });
+
+    it("ends with `close()`, logging nothing about the document", async () => {
+      const before = unhealedErrors();
+      const { factory, runtime, cellOf, close } = healingReader();
+      const load = loadDocument(runtime, cellOf(DOCUMENT_ID));
+      const failure = load.then(() => undefined, (error: Error) => error);
+      await factory.firstWatchSet.promise;
+
+      await close();
+
+      expect(await failure).toBeInstanceOf(DocumentLoadError);
+      expect(unhealedErrors()).toBe(before);
+    });
+
+    it("applies nothing from a response that lands as the replica closes", async () => {
+      const { factory, replica, syncOf, close } = healingReader();
+      await syncOf(DOCUMENT_ID);
+      await factory.responseHeld.promise;
+
+      factory.releaseResponses();
+      const closing = replica.close();
+      await closing;
+      await close();
+
+      expect(factory.watchSetResponses.length).toBe(1);
+      expect(replica.isConfirmedDocument(DOCUMENT_ID as URI, "space"))
+        .toBe(false);
+    });
+
+    it("reads what was held when the request goes out, not when it was queued", async () => {
+      await write({
+        [PLAIN_ID]: { revision: 1 },
+        [OUTPUT_ID]: { revision: 1 },
+      });
+      const { factory, runtime, replica, cellOf, syncOf } = readerDropping(0);
+      await loadDocument(runtime, cellOf(PLAIN_ID));
+      expect(replica.holdings().map(({ id }) => id)).toContain(PLAIN_ID);
+
+      // An earlier mutation holds the re-delivery's turn while a frame retracts
+      // the document, and the quarantine comes in during that wait.
+      factory.heldTypes.add("session.watch.add");
+      const earlier = syncOf(OUTPUT_ID);
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_000,
+        toSeq: 900_001,
+        upserts: [{
+          branch: "",
+          id: DOCUMENT_ID,
+          scope: "space",
+          seq: 900_001,
+          doc: { value: naming(1) },
+        }],
+        removes: [],
+      }, "integrate");
+      await Promise.resolve();
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_001,
+        toSeq: 900_002,
+        upserts: [],
+        removes: [{ branch: "", id: PLAIN_ID, scope: "space" }],
+      }, "integrate");
+
+      factory.releaseResponses();
+      await earlier;
+      await replica.inputSynced();
+
+      expect(factory.watchSetHoldings.length).toBe(1);
+      expect(factory.watchSetHoldings[0]).not.toContain(PLAIN_ID);
+    });
+  });
+
+  describe("a re-delivery the server refuses", () => {
+    /** A reader whose re-delivery comes back as `refusal`. */
+    const refusedReader = (refusal: Record<string, unknown>) => {
+      const reader = readerDropping(1);
+      reader.factory.rewriteWatchSetResponse = (response) =>
+        ({
+          type: "response",
+          requestId: (response as ResponseMessage<unknown>).requestId,
+          error: { name: "AuthorizationError", message: "refused", ...refusal },
+        }) as unknown as ServerMessage;
+      return reader;
+    };
+
+    it("fails the load with the refusal, and records the denial", async () => {
+      const { runtime, storage, cellOf } = refusedReader({});
+
+      const failure = await loadDocument(runtime, cellOf(DOCUMENT_ID))
+        .then(() => undefined, (error: Error) => error);
+
+      expect(failure).toBeInstanceOf(DocumentLoadError);
+      expect((failure?.cause as Error).message).toContain("refused");
+      expect(storage.authorizationError(space)).toBeDefined();
+    });
+
+    it("loads as absent when the refusal is of a deleted space", async () => {
+      const { runtime, cellOf } = refusedReader({ deleted: true });
+
+      expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(false);
+    });
+  });
+
+  describe("a quarantine a space's existence depends on", () => {
+    const writeSpaceCell = () =>
+      write({
+        [writer.getSpaceCell(space).getAsNormalizedFullLink().id]: naming(1),
+      });
+
+    it("reads as existing once the re-delivery applies", async () => {
+      await writeSpaceCell();
+      const { runtime, factory } = readerDropping(1);
+
+      expect(await runtime.spaceExists(space)).toBe(true);
+      expect(factory.watchSets).toBe(1);
+    });
+
+    it("rejects rather than reading as absent when no re-delivery can apply", async () => {
+      await writeSpaceCell();
+      const { runtime } = readerDropping(Infinity);
+
+      await expect(runtime.spaceExists(space)).rejects.toThrow();
+    });
+  });
+
+  describe("a document a reader confirmed absent, then quarantined", () => {
+    it("stops reading as absent, and reports the failed load", async () => {
+      const cancels: (() => void)[] = [];
+      const { factory, runtime, replica, cellOf } = readerDropping(Infinity);
+      const readiness = createDocumentReadiness(
+        runtime,
+        (cancel) => cancels.push(cancel),
+      );
+      const cell = cellOf(ABSENT_ID);
+      const presence = () => {
+        const tx = runtime.edit();
+        try {
+          return readiness.requireDocument(cell, tx);
+        } finally {
+          tx.abort();
+        }
+      };
+      expect(presence).toThrow(DocumentPending);
+      await runtime.storageManager.synced();
+      expect(presence()).toBe(false);
+
+      await write({ [ABSENT_ID]: naming(1) });
+      await factory.firstWatchSet.promise;
+      await replica.quarantineFailure(ABSENT_ID as URI, "space");
+
+      expect(presence).toThrow(DocumentPending);
+      await runtime.storageManager.synced();
+      expect(presence).toThrow(DocumentLoadError);
+      for (const cancel of cancels) cancel();
     });
   });
 
@@ -400,6 +873,37 @@ describe("schema-doc-quarantine-redelivery", () => {
       expect(factory.watchSets).toBe(1);
     });
 
+    it("stops failing its load once a frame applies a deletion", async () => {
+      const { replica } = await failedReader();
+
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_000,
+        toSeq: 900_001,
+        upserts: [{
+          branch: "",
+          id: DOCUMENT_ID,
+          scope: "space",
+          seq: 900_001,
+          deleted: true,
+        }],
+        removes: [],
+      }, "integrate");
+
+      expect(await replica.quarantineFailure(DOCUMENT_ID as URI, "space"))
+        .toBeUndefined();
+    });
+
+    it("stops failing its load once the replica resets", async () => {
+      const { replica } = await failedReader();
+
+      replica.reset();
+
+      expect(replica.isQuarantined(DOCUMENT_ID as URI, "space")).toBe(false);
+      expect(await replica.quarantineFailure(DOCUMENT_ID as URI, "space"))
+        .toBeUndefined();
+    });
+
     it("stops failing its load once a frame removes it", async () => {
       const { replica } = await failedReader();
 
@@ -421,11 +925,6 @@ describe("schema-doc-quarantine-redelivery", () => {
       const before = unhealedErrors();
       const { factory, replica, runtime, cellOf, revision } = readerDropping(0);
       expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
-      const otherSchema = {
-        type: "number",
-        title: "redelivery-other",
-      } as const;
-      const otherHash = internSchemaAsTaggedHashString(otherSchema);
       factory.dropsLeft = Infinity;
 
       await write({
@@ -438,6 +937,32 @@ describe("schema-doc-quarantine-redelivery", () => {
       expect(unhealedErrors()).toBe(before + 1);
       expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
       expect(revision()).toBe(1);
+    });
+  });
+
+  describe("a newer copy no re-delivery can apply, over the replica's own write", () => {
+    it("leaves the write to read, and loads as present", async () => {
+      const own = readerDropping(0);
+      expect(await loadDocument(own.runtime, own.cellOf(OWN_ID))).toBe(false);
+      await writeAs(own.runtime, { [OWN_ID]: naming(1) });
+      await server.idle();
+      expect(own.revision(OWN_ID)).toBe(1);
+
+      const other = readerDropping(0);
+      expect(await loadDocument(other.runtime, other.cellOf(OWN_ID))).toBe(
+        true,
+      );
+      own.factory.dropsLeft = Infinity;
+      await writeAs(other.runtime, {
+        [`cid:${otherHash}`]: otherSchema as unknown as FabricValue,
+        [OWN_ID]: naming(2, otherHash),
+      });
+      await own.factory.firstWatchSet.promise;
+
+      expect(await own.replica.quarantineFailure(OWN_ID as URI, "space"))
+        .toBeUndefined();
+      expect(await loadDocument(own.runtime, own.cellOf(OWN_ID))).toBe(true);
+      expect(own.revision(OWN_ID)).toBe(1);
     });
   });
 

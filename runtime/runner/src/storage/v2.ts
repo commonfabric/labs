@@ -5556,7 +5556,19 @@ type QuarantinedDocument = {
 
   /** Whether the server has been asked to re-deliver this copy. */
   requested: boolean;
+
+  /** The refusal that ended the re-delivery, if one did. */
+  refusal?: PullError;
 };
+
+/** The document `upsert` delivers. */
+const upsertAddress = (
+  upsert: SessionSync["upserts"][number],
+): LocalDocAddress => ({
+  id: upsert.id as URI,
+  scope: upsert.scope,
+  ...(upsert.scopeKey !== undefined ? { scopeKey: upsert.scopeKey } : {}),
+});
 
 /**
  * Why a document's load failed: the server holds the document, and this replica
@@ -6487,11 +6499,14 @@ export class SpaceReplica
    * handed over: applied it, its subscribers told, or dropped it as failing to
    * apply, which `#consumeUpdates()` logs. The consumer of the watch view does
    * either in one synchronous stretch and then comes back for the next frame,
-   * so that coming back is the signal.
+   * so that coming back is the signal. A frame dealt with can have left a
+   * quarantine that sets off a re-delivery, which this waits for too, since the
+   * barriers on input can have passed before that frame applied.
    */
   async framesApplied(): Promise<void> {
     await this.#sessionClient?.delivered();
     await this.#subscribedWatchView?.whenSyncsConsumed();
+    await this.#quarantineHeal;
   }
 
   /**
@@ -7440,12 +7455,17 @@ export class SpaceReplica
     );
   }
 
+  /** ISpaceReplica.isQuarantined. */
+  isQuarantined(id: URI, scope?: CellScope): boolean {
+    return this.#quarantined.has(this.#docKeyOf({ id, scope }));
+  }
+
   /** ISpaceReplica.quarantineFailure. */
   async quarantineFailure(
     id: URI,
     scope?: CellScope,
     instance?: ScopeKey,
-  ): Promise<Error | undefined> {
+  ): Promise<Error | PullError | undefined> {
     const key = this.#docKeyOf({
       id,
       scope,
@@ -7457,12 +7477,17 @@ export class SpaceReplica
     ) {
       await this.#quarantineHeal;
     }
-    // A replica that applied an earlier value still has that to give. An
-    // earlier deletion leaves it nothing.
-    return this.#quarantined.get(key)?.status === "unhealed" &&
-        (this.#delivered.get(key)?.deleted ?? true)
-      ? new DocumentQuarantinedError(id)
-      : undefined;
+    const document = this.#quarantined.get(key);
+    if (document === undefined) return undefined;
+    // A replica holding a value still has that to give, however it came by it:
+    // a delivery or its own accepted write. A deletion leaves it nothing.
+    if (
+      this.#visibleVersion(id, scope, undefined, instance)?.version.value !==
+        undefined
+    ) {
+      return undefined;
+    }
+    return document.refusal ?? new DocumentQuarantinedError(id);
   }
 
   /** ISpaceReplica.completeThroughSeq. */
@@ -11181,10 +11206,10 @@ export class SpaceReplica
    * Helper for `#applySessionSyncFrame()`, which brings the record of
    * quarantined documents up to date with a frame whose upserts named in
    * `quarantined` it is about to drop. A document the frame applies or removes
-   * is no longer held back. A copy not seen before is due a re-delivery. The
-   * same copy arriving again from that re-delivery cannot be applied by any
-   * further delivery, so it ends here: nothing asks for it again until a newer
-   * copy arrives, which only a write can make, and a read of it fails.
+   * is no longer held back. A copy not seen before is due a re-delivery. A copy
+   * seen before is left as it stands, whichever frame carries it again:
+   * `#redeliverQuarantined()` decides how a re-delivery ended from its own
+   * response.
    */
   #noteQuarantinesOf(
     sync: SessionSync,
@@ -11193,12 +11218,7 @@ export class SpaceReplica
     let healDue = false;
     for (const upsert of sync.upserts) {
       if (typeof upsert.id !== "string") continue;
-      const address = {
-        id: upsert.id as URI,
-        scope: upsert.scope,
-        ...(upsert.scopeKey !== undefined ? { scopeKey: upsert.scopeKey } : {}),
-      };
-      const key = this.#docKeyOf(address);
+      const key = this.#docKeyOf(upsertAddress(upsert));
       if (!quarantined.has(upsert.id)) {
         this.#quarantined.delete(key);
         continue;
@@ -11212,11 +11232,6 @@ export class SpaceReplica
           requested: false,
         });
         healDue = true;
-      } else if (known.status === "healing" && known.requested) {
-        this.#endQuarantineHeal(
-          known,
-          "its re-delivery was quarantined as well",
-        );
       }
     }
     for (const remove of sync.removes) {
@@ -11225,9 +11240,18 @@ export class SpaceReplica
     if (healDue) this.#healQuarantined();
   }
 
-  /** Records that nothing more will be done to bring `document` here. */
-  #endQuarantineHeal(document: QuarantinedDocument, reason: string): void {
+  /**
+   * Records that nothing more will be done to bring `document` here, until a
+   * newer copy arrives, which only a write can make. A read of it fails, with
+   * `refusal` if a refusal is why.
+   */
+  #endQuarantineHeal(
+    document: QuarantinedDocument,
+    reason: string,
+    refusal?: PullError,
+  ): void {
     document.status = "unhealed";
+    document.refusal = refusal;
     logger.error("schema-doc-quarantine-unhealed", () => [
       `Document ${document.id} stays quarantined at seq ${document.seq}: ` +
       `${reason}. A read of it fails until a newer copy applies.`,
@@ -11237,12 +11261,7 @@ export class SpaceReplica
   /** Starts working through the quarantined documents, unless it is under way. */
   #healQuarantined(): void {
     if (this.#quarantineHeal !== undefined || this.#closed) return;
-    const heal = this.#redeliverQuarantined().finally(() => {
-      this.#quarantineHeal = undefined;
-      if (this.#quarantinesAwaitingRequest().length > 0) {
-        this.#healQuarantined();
-      }
-    });
+    const heal = this.#redeliverQuarantined();
     this.#quarantineHeal = heal;
     // Input this replica asked for, as a pull's is, so the barriers on input
     // wait for it with or without a reader. A settle rests on them: what the
@@ -11264,45 +11283,74 @@ export class SpaceReplica
    * declaring this replica's holdings, which leave them and any `cid:` document
    * they need unlisted, so its one response delivers them together
    * (docs/specs/memory-v2/04-protocol.md, section 4.3.5). Each copy is asked for
-   * once. One the response leaves out is no longer watched, so it is absent.
+   * once while it stays quarantined. A copy the response carries and that is
+   * still quarantined after it cannot be applied by any further delivery. One
+   * the response leaves out is no longer watched, so it is absent. A close ends
+   * this with nothing to report: it is no finding about any document.
    */
   async #redeliverQuarantined(): Promise<void> {
     // Called from inside a frame's integration, which this must not interleave.
     await Promise.resolve();
-    while (true) {
-      const requested = this.#quarantinesAwaitingRequest();
-      if (requested.length === 0 || this.#closed) return;
-      for (const document of requested) document.requested = true;
-      let failure: string | undefined;
-      try {
-        const { client, session } = await this.#activeSessionHandle();
-        if (client.serverFlags?.sessionHoldings !== true) {
-          throw new Error("the server takes no declared holdings");
+    try {
+      while (true) {
+        const requested = this.#quarantinesAwaitingRequest();
+        if (requested.length === 0 || this.#closed) return;
+        for (const document of requested) document.requested = true;
+        const carried = new Set<string>();
+        let failure: string | undefined;
+        let refusal: PullError | undefined;
+        try {
+          const { client, session } = await this.#activeSessionHandle();
+          if (client.serverFlags?.sessionHoldings !== true) {
+            throw new Error("the server takes no declared holdings");
+          }
+          // Read when the request goes out, since an earlier mutation can hold
+          // it back while a frame changes what this replica holds.
+          const { view, precedingSyncs, sync } = await session.watchSetSync(
+            undefined,
+            () => this.holdings(),
+          );
+          if (this.#closed) {
+            view.close();
+            return;
+          }
+          this.#noteAuthorizationStatus({ ok: {} });
+          this.#watchView = view;
+          for (const precedingSync of precedingSyncs) {
+            this.#applySessionSync(precedingSync, "integrate");
+          }
+          for (const upsert of sync.upserts) {
+            carried.add(this.#docKeyOf(upsertAddress(upsert)));
+          }
+          this.#applyPushedFrame(sync);
+          this.#consumeWatchView(view);
+        } catch (error) {
+          if (this.#closed) return;
+          const pullError = toPullError(error);
+          this.#noteAuthorizationStatus({ error: pullError });
+          if (isPermanentAuthorizationFailure(pullError)) refusal = pullError;
+          failure = `its re-delivery failed: ${describeFailure(error)}`;
         }
-        const { view, precedingSyncs, sync } = await session.watchSetSync(
-          undefined,
-          this.holdings(),
-        );
-        if (this.#closed) {
-          view.close();
-          return;
+        for (const [key, document] of this.#quarantined) {
+          if (!requested.includes(document) || document.status !== "healing") {
+            continue;
+          }
+          if (failure !== undefined) {
+            this.#endQuarantineHeal(document, failure, refusal);
+          } else if (carried.has(key)) {
+            this.#endQuarantineHeal(
+              document,
+              "its re-delivery was quarantined as well",
+            );
+          } else {
+            this.#quarantined.delete(key);
+          }
         }
-        this.#watchView = view;
-        for (const precedingSync of precedingSyncs) {
-          this.#applySessionSync(precedingSync, "integrate");
-        }
-        this.#applyPushedFrame(sync);
-        this.#consumeWatchView(view);
-      } catch (error) {
-        failure = `its re-delivery failed: ${describeFailure(error)}`;
       }
-      for (const [key, document] of this.#quarantined) {
-        if (!requested.includes(document) || document.status !== "healing") {
-          continue;
-        }
-        if (failure === undefined) this.#quarantined.delete(key);
-        else this.#endQuarantineHeal(document, failure);
-      }
+    } finally {
+      // In the step that finds nothing left to ask for, so a quarantine arriving
+      // after it starts a heal of its own.
+      this.#quarantineHeal = undefined;
     }
   }
 

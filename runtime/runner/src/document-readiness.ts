@@ -190,6 +190,17 @@ export function createDocumentReadiness(
         return true;
       }
 
+      // A document confirmed absent that has since arrived, held back by a
+      // quarantine, is not absent, so its load runs again.
+      if (
+        confirmations.get(key)?.status === "confirmed" &&
+        runtime.storageManager.open(link.space).replica.isQuarantined?.(
+          link.id,
+          link.scope,
+        )
+      ) {
+        confirmations.delete(key);
+      }
       const prior = confirmations.get(key);
       if (prior?.status === "confirmed") return false;
       if (prior?.status === "failed") throw prior.error;

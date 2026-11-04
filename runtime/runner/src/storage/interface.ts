@@ -3812,16 +3812,22 @@ export interface ISpaceReplica extends ISpace {
   ): number | undefined;
 
   /**
+   * Whether a quarantine holds back a copy of the document the server holds, so
+   * that an earlier finding of its absence no longer stands.
+   */
+  isQuarantined?(id: URI, scope?: CellScope): boolean;
+
+  /**
    * Waits for any re-delivery of the document a quarantine holds back, and
-   * returns the failure if the replica still cannot apply it and has no earlier
-   * value to read. `undefined` otherwise, which says nothing of whether the
-   * document exists.
+   * returns the failure if the replica still cannot apply it and has no value
+   * to read: the refusal that ended the re-delivery, if one did. `undefined`
+   * otherwise, which says nothing of whether the document exists.
    */
   quarantineFailure?(
     id: URI,
     scope?: CellScope,
     instance?: ScopeKey,
-  ): Promise<Error | undefined>;
+  ): Promise<Error | PullError | undefined>;
 
   /**
    * Whether the replica holds a known stored version of the document, with
