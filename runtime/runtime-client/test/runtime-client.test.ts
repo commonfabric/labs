@@ -1216,6 +1216,13 @@ describe("RuntimeClient", () => {
       const { client } = clientWithResponse({ data: null });
       expect(await client.getPatternCoverage()).toBeNull();
     });
+
+    it("returns the messages the worker's loggers kept", async () => {
+      const messages = { runner: { "a-key": ["it broke"] } };
+      const { client, requests } = clientWithResponse({ messages });
+      expect(await client.getLoggerErrorMessages()).toEqual(messages);
+      expect(requests).toEqual([{ type: RequestType.GetLoggerErrorMessages }]);
+    });
   });
 
   describe("boot-window diagnostics", () => {
