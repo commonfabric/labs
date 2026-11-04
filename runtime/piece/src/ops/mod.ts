@@ -93,6 +93,8 @@ export {
 export {
   type DeletionMarkDecision,
   markDeletedSpaceOf,
+  type ProfileRetirementDecision,
+  retireDeletedProfileOf,
 } from "./mark-deleted-space.ts";
 export {
   type OfferDecision,

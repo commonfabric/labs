@@ -3027,10 +3027,12 @@ export class RuntimeProcessor {
   }
 
   /**
-   * Records in the user's Home catalog that `space` is deleted, as the
-   * runtime that hears of a deletion does (`docs/features/shared-space-catalog.md`,
-   * "Deleted spaces"), without creating a Home the user has none of. Home's
-   * handler asks the server itself before it writes, and a mark that loses
+   * Records in the user's Home that `space` is deleted, as the runtime that
+   * hears of a deletion does: in its catalog (`docs/features/shared-space-catalog.md`,
+   * "Deleted spaces"), and among its retired profiles where the space is a
+   * profile's (`docs/common/conventions/HOME_SPACE.md`), without creating a
+   * Home the user has none of. Home's handlers ask the server themselves
+   * before they write, and a mark that loses
    * the race to another runtime's is an expected conflict, so nothing here
    * waits for the handling; `handleIdle()` waits for the send, and for the
    * handling as for any scheduler work. A failure to send is reported and not
