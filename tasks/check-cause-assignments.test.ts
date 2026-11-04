@@ -854,7 +854,10 @@ describe("check-cause-assignments", () => {
      * stand-in compiler, applies `change` to its working tree, and returns the
      * result of running the gate there against that commit. The repository's
      * configuration lets the dump, whose modules are this checkout's, name the
-     * packages it imports.
+     * packages it imports, and compiles them with this checkout's compiler
+     * options. Deno caches one compiled copy of each module, so a dump compiled
+     * under other options replaces the copy a coverage profile of this test
+     * process was taken against, and that profile then fails to convert.
      */
     async function runGate(
       change: Readonly<Record<string, string>>,
@@ -867,11 +870,13 @@ describe("check-cause-assignments", () => {
         prefix: "cause-assignments-gate-",
       });
       try {
-        const { imports } = await readDenoConfig(join(ROOT, "deno.jsonc"));
+        const { imports, compilerOptions } = await readDenoConfig(
+          join(ROOT, "deno.jsonc"),
+        );
         await write(repo, {
           ...STAND_IN_COMPILER,
           ...patterns,
-          "deno.jsonc": JSON.stringify({ imports }),
+          "deno.jsonc": JSON.stringify({ imports, compilerOptions }),
           "notes.md": "a note\n",
         });
         await Deno.rename(

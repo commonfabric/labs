@@ -12915,10 +12915,14 @@ export class Runner {
           inherited
         : inherited;
       if (!isObjectNotArray(resolved)) return false;
+      // The outermost `asCell` entry is the position's own handle, and the
+      // entries after it describe what that handle holds. `Stream<void>` is
+      // `["stream", "opaque"]`: a stream, sent to through its link, whose
+      // payload is what is opaque.
       const isOpaque = (candidate: JSONSchema) =>
-        ContextualFlowControl.getAsCellValues(candidate).some((entry) =>
-          ContextualFlowControl.getAsCellKind(entry) === "opaque"
-        );
+        ContextualFlowControl.getAsCellKind(
+          ContextualFlowControl.getAsCellValues(candidate)[0],
+        ) === "opaque";
       if (isOpaque(schema as JSONSchema) || isOpaque(resolved)) return true;
       const arms = resolved.anyOf ?? resolved.oneOf;
       if (!Array.isArray(arms)) return false;
@@ -15523,8 +15527,13 @@ export class Runner {
     };
     // The child bound here is the pattern object the child's own nodes are
     // held under, so a plan that finds this binding hands its instantiation
-    // the child the first plan bound, and the child's nodes find theirs.
-    const binding = isStandInArgument(argumentCellLink)
+    // the child the first plan bound, and the child's nodes find theirs. A
+    // binding against a stand-in argument, or against none because the
+    // instance's argument is not readable yet, is not held: a later plan of
+    // the node binds against the argument the instance has by then, under
+    // another key, so nothing would find the held one again.
+    const binding = argumentCellLink === undefined ||
+        isStandInArgument(argumentCellLink)
       ? bind()
       : this.#patternNodeBindings.bindingFor({
         ...this.#bindingSubjectMembers(node, pattern),
