@@ -55,7 +55,9 @@ export default pattern<Record<string, never>, SpaceStarterOutput>(() => {
   );
   const named = computed(() => space.result?.get()?.hasChatRoom === true);
   const room = computed(() => space.result?.get()?.chatRoom);
-  const ready = computed(() => room?.get()?.[UI] !== undefined);
+  const ready = computed(() =>
+    room?.get()?.[UI] !== undefined && room?.get()?.[VIEWS]?.room !== undefined
+  );
   const canCreate = computed(() => {
     if (
       !space.result || space.result.get()?.hasChatRoom !== false ||

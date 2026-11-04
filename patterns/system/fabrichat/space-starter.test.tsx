@@ -78,6 +78,15 @@ export default pattern(() => {
   const saved = Writable.of<{ start?: Stream<unknown> }>({});
   const held = Writable.of<{ room?: Writable<{ [NAME]?: string }> }>({});
   const notRoom = new Writable({ [NAME]: "Other piece" });
+  const uiOnly = new Writable({
+    [NAME]: "UI-only piece",
+    [UI]: {
+      type: "vnode",
+      name: "span",
+      props: {},
+      children: ["Unrelated piece UI"],
+    },
+  });
   const emptyRoom = new Writable<{ [NAME]?: string }>();
   const installOlderRegistry = action(() =>
     root.key("ensureChatRoom").set(loom.ensureChatRoom)
@@ -90,6 +99,7 @@ export default pattern(() => {
     if (loom.chatRoom !== undefined) held.set({ room: loom.chatRoom });
   });
   const nameOtherPiece = action(() => loom.setChatRoom.send({ room: notRoom }));
+  const nameUiOnly = action(() => loom.setChatRoom.send({ room: uiOnly }));
   const nameEmptyRoom = action(() =>
     loom.setChatRoom.send({ room: emptyRoom })
   );
@@ -182,6 +192,19 @@ export default pattern(() => {
       { assertion: assert(() => first[VIEWS].room === undefined) },
       { action: repeat },
       { assertion: assert(() => loom.chatRoom?.equals(notRoom) === true) },
+      { action: nameUiOnly },
+      { assertion: assert(() => loom.hasChatRoom === true) },
+      { render: first[UI] },
+      {
+        assertion: assert(() =>
+          hasText(first[UI], "The space's conversation is unavailable.")
+        ),
+      },
+      { assertion: assert(() => !hasText(first[UI], "Unrelated piece UI")) },
+      { assertion: assert(() => !hasText(first[UI], "Start conversation")) },
+      { assertion: assert(() => first[VIEWS].room === undefined) },
+      { action: repeat },
+      { assertion: assert(() => loom.chatRoom?.equals(uiOnly) === true) },
       { action: nameEmptyRoom },
       { assertion: assert(() => loom.hasChatRoom === true) },
       { render: first[UI] },
