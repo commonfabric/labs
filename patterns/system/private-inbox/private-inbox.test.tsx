@@ -50,9 +50,6 @@ const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
 /** A well-formed host origin for an offer to name. */
 const HOST = "https://example.com";
 
-/** A present `undefined`, for a malformed offer's field, typed to get it sent. */
-const MISSING: any = undefined;
-
 /** The offer in `offers` with `id`, if any. */
 function offerWithId(
   offers: readonly (Offer | undefined)[],
@@ -411,12 +408,15 @@ export default pattern(() => {
       from: me.get(),
     };
     inbox.receive.send({ ...valid, id: "bad-space", space: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-space", space: MISSING });
+    const { space: _space, ...noSpace } = valid;
+    inbox.receive.send({ ...noSpace, id: "no-space" });
     inbox.receive.send({ ...valid, id: "bad-from", from: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-from", from: MISSING });
+    const { from: _from, ...noFrom } = valid;
+    inbox.receive.send({ ...noFrom, id: "no-from" });
     inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
     inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
-    inbox.receive.send({ ...valid, id: "no-host", host: MISSING });
+    const { host: _host, ...noHost } = valid;
+    inbox.receive.send({ ...noHost, id: "no-host" });
     inbox.receive.send({
       ...valid,
       id: "userinfo-host",
