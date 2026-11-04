@@ -405,6 +405,56 @@ Deno.bench({
 });
 
 //
+// A frozen subtree hashed again under a fresh container. No hash is cached for
+// the subtree itself, only for the container the hash was asked of, so the
+// whole subtree is walked again; the cached sorted keys of its objects are what
+// such a walk reuses.
+//
+
+/** As `makeLargeNestedTree()`, with every object's keys in UTF-8 order. */
+function makeOrderedLargeNestedTree(
+  depth: number,
+  breadth: number,
+): FabricPlainObject {
+  if (depth === 0) {
+    return { label: "leaf-node", leaf: true, value: 42.5 };
+  }
+  const children: Record<string, FabricValue> = {};
+  for (let i = 0; i < breadth; i++) {
+    children[`child_${i}`] = makeOrderedLargeNestedTree(depth - 1, breadth);
+  }
+  return { children, depth };
+}
+const frozenOrderedLargeTree = deepFreeze(makeOrderedLargeNestedTree(6, 3));
+
+let wrapperCount = 0;
+
+Deno.bench({
+  name: "frozen large tree under a fresh container (keys out of order)",
+  group: "frozen-large-tree-rewalk",
+  fn(b) {
+    const data = deepFreeze({ count: wrapperCount++, tree: frozenLargeTree });
+    b.start();
+    hashOf(data);
+    b.end();
+  },
+});
+
+Deno.bench({
+  name: "frozen large tree under a fresh container (keys in order)",
+  group: "frozen-large-tree-rewalk",
+  fn(b) {
+    const data = deepFreeze({
+      count: wrapperCount++,
+      tree: frozenOrderedLargeTree,
+    });
+    b.start();
+    hashOf(data);
+    b.end();
+  },
+});
+
+//
 // `{the, of}` unclaimed-fact pattern benchmarks
 //
 
