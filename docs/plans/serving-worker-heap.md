@@ -35,10 +35,21 @@ in order. Each column includes those to its left.
 | 501 | 2,023 | 1,564 | 1,234 | 1,189 | 808 |
 | 1,001 | | | | | 1,394 |
 
-Each create now leaves about 1.2 MB, against 3.6 MB before. The toolshed's heap
-limit is 8 GB per isolate (`deploying.md`). Server CPU per create is unchanged:
-0.24-0.43 s before and 0.25-0.37 s after, two alternating rounds of three, 100
-creates each, at load 77-269.
+Each create left about 1.2 MB on that server, against 3.6 MB before. The
+toolshed's heap limit is 8 GB per isolate (`deploying.md`). Server CPU per create
+is unchanged: 0.24-0.43 s before and 0.25-0.37 s after, two alternating rounds of
+three, 100 creates each, at load 77-269.
+
+A worker rig (`heap-worker-probe.ts`, under "The process") serves a fresh board
+from a `ServingWorker` the way the toolshed does and has the worker write its own
+snapshots, so each holder is measured in the process that holds it. On that rig
+a create leaves 862 KB on the worker, measured over 40 creates after a first 10.
+Whether the board's root is the loop's demand decides most of that: `cf piece new`
+sends the served `instantiate` verb with `start: true`, which makes the root a
+demand root, and the same board created without it leaves a third as much. A
+server's board is demanded, so the demanded figure is the one to work on. The
+memory server's session graphs, 375 KB per create on the Topics board, are on
+the main thread under the worker arm and so are not on the worker.
 
 ## Landed
 
@@ -50,27 +61,44 @@ creates each, at load 77-269.
 - The release drops the result pattern's keyless index entry, and a stopped piece's
   node bindings go too (`NodeBindingMemo.release()`). Both hold the cells of the run
   that started it, and through them its transaction.
+- A wave lets go of its sealed commits once it has committed or been abandoned
+  (`#releaseSealedState` in `executor/wave.ts`), keeping the counts and the
+  settlement the serving loop reads afterwards. Each sealed commit holds the
+  documents a run wrote and read, and `SpaceServer.#waveByTx` maps every
+  transaction that sealed into a wave to that wave, so a node that kept its run's
+  transaction kept the whole wave with it: 690 KB of the 1,551 KB a demanded
+  board's create left on the worker.
 
 ## What is left
 
-These come from snapshots at 101 and 301 Topics, per create, removing holders in
-this order. The total is about 1.27 MB, and a transaction no longer stays per create.
+Per create on the worker rig, a demanded board, removing holders cumulatively in
+this order. The total is 862 KB.
 
-- `ImmutableCellStore.#snapshots`, 285 KB: a child's immutable inputs documents,
-  which outlive the stopped piece. `getImmutableCell()` makes them owned by their
-  frozen values and live handles, yet they stay in the runtime's root store, so start
-  from what puts them there. `bindImmutableCells()` in `traverse-recorder.ts` and
-  `#retainValue()` are the first places to read.
-- `deepFrozenCache`, 252 KB, and `sortedKeyCache`, 83 KB. Both are weak tables, so
-  their size should follow the live objects they name and fall as those do. Check
-  them again after the holders above and below shrink.
-- `SpaceReplica.#docs`, 175 KB: the worker's copy of the documents a create wrote,
-  which nothing evicts.
-- `DerivedInternalCellIds`, 45 KB, a bounded cache that is still filling.
-- `stringRepCache`, `#documentHolds` and `Provider.#syncRequests`, about 15-35 KB
-  each.
-- About 255 KB in no one holder, led by the scheduler's trigger index, which grows
-  because the board's own derivations read every Topic.
+- The replica's watch bookkeeping, about 310 KB together, the largest and the
+  next to take. The worker's runtime watches every document a create writes and
+  nothing withdraws a watch when the piece that wrote it stops: the entities of
+  `SpaceReplica.#subscribedWatchView` keep each Topic's `result`, `internal` and
+  `$UI` documents, about 140 KB, and around them `#watchSelectorTracker` 36 KB,
+  `#rootWatches` 31 KB, the session's `#watchSpecs` and `#watchSpecPositions`
+  35 KB, `watchIds` 24 KB, `#docs` 22 KB, `#watchedIds` 11 KB and `#delivered`
+  11 KB. Start from what registers a watch for a served piece's documents, in
+  `storage/v2.ts`, and ask whether a stopped piece's documents need one at all.
+- The transaction of the run that started the piece, 55 KB. A node a run starts
+  binds its result cell to the run's transaction in `#instantiateNode`
+  (`runner.ts`), and the map builtin's element instances of a demanded board are
+  such nodes. `map.ts` already strips the transaction from the element cells it
+  stores; the result cell wants the same, and since it reaches every node, the
+  change needs the executor suites.
+- The scheduler's trigger index, about 50 KB, reached through
+  `#eventPreflightDependencyState`, and the read logs of the active computations,
+  about 30 KB. The index grows because the board's own derivations read every
+  Topic.
+- Weak and bounded caches: `deepFrozenCache` 105 KB, `DerivedInternalCellIds`
+  44 KB, a bounded cache still filling, `externalRefHashCache` 12 KB,
+  `stringRepCache` 10 KB, and the engine's `documentCache` 8 KB, bounded. The
+  weak ones should fall as the holders above do; check them again after.
+- The provider's `#syncRequests`, 27 KB, and `#documentHolds`, 18 KB: sync
+  requests and holds for the documents of a piece that has stopped.
 
 Beyond these:
 
@@ -99,11 +127,22 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    a read. The difference from the running server is what the running server keeps
    that it does not need.
 
-3. **Take two snapshots of a growing heap.** Run the loop on the main thread, since
-   the inspector reaches nothing else, and first check that the growth per create
-   matches the worker's. Divide by the work between them, so a one-time load shows
-   up as what it is. Take the first after 100 or so, since an empty board's first
-   creates load modules.
+3. **Take two snapshots of the worker's growing heap.** `heap-worker-probe.ts`
+   serves a fresh board from a `ServingWorker` with `heap-worker-module.ts` as
+   the worker's entry, creates Topics through the board's `addTopic` verb, and
+   has the worker write its own snapshot after the first N creates and after M
+   more. `--v8-flags=--expose-gc` reaches the worker, and a snapshot the worker
+   writes holds the worker's heap and nothing else. Divide the growth by M, so a
+   one-time load shows up as what it is; N of 10 is past an empty board's module
+   loads. The board's root is the loop's demand unless `PROBE_START=0`, and the
+   demanded board is the server's case.
+
+   ```bash
+   deno run -A --config deno.jsonc --v8-flags=--expose-gc skills/perf-investigation/scripts/heap-worker-probe.ts 10 40 /tmp/heap-probe
+   ```
+
+   A running server can be snapshotted over the inspector instead, which reaches
+   its main thread alone, so the loop has to run there:
 
    ```bash
    EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true SERVER_EXECUTION_WORKER=false ./scripts/start-local-dev.sh --port-offset 640 --inspect
@@ -112,6 +151,10 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    ```bash
    deno run --allow-net --allow-write skills/perf-investigation/scripts/heap-snapshot.ts 9869 a.heapsnapshot
    ```
+
+   That heap also holds the memory server's session graphs, which the worker arm
+   keeps on the main thread, so a holder found there is charged to the worker
+   only once the worker rig shows it.
 
 4. **Read retained sizes.** `heap-retained.ts` charges each object to what alone
    keeps it alive. A holder that retains a lot is a fix. When several holders share
@@ -129,6 +172,9 @@ A create here is an `addTopic` event, and any verb that starts a piece will do.
    ```bash
    deno run -A --v8-flags=--max-old-space-size=40000 skills/perf-investigation/scripts/heap-removal.ts a.heapsnapshot b.heapsnapshot 200 --cut edge:#docs --cut node:ExtendedStorageTransaction
    ```
+
+   `--steps` sets how many steps of the path name a group, and `--rows` how
+   many groups print; a deeper path tells two holders under one field apart.
 
    A path through a WeakMap's table is not a retaining path: the entry's value is
    kept by its key. Both tools leave that edge out, and a tool that follows it will

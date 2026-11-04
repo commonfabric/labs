@@ -7,7 +7,7 @@
  *
  *   deno run -A --v8-flags=--max-old-space-size=40000 heap-removal.ts \
  *     <a.heapsnapshot> <b.heapsnapshot> <units> \
- *     [--cut edge:#docs] [--cut node:ExtendedStorageTransaction] ...
+ *     [--cut edge:#docs] [--cut node:ExtendedStorageTransaction] ... [--steps 6] [--rows 30]
  *
  * `edge:NAME` removes every edge so named: a private field, or a closure's
  * variable. `node:NAME` removes every object so named, whatever reaches it.
@@ -35,11 +35,18 @@ const UNNAMED_STEPS = new Set([
   "[]",
 ]);
 
-/** How many steps of a path name the group it falls in. */
+/** How many steps of a path name the group it falls in, without `--steps`. */
 const PATH_STEPS = 6;
 
+/** How many groups are printed, without `--rows`. */
+const PATH_ROWS = 30;
+
 /** Returns what the snapshot in the file at `path` keeps under `cuts`. */
-async function removalOf(path: string, cuts: Cut[]): Promise<Removal> {
+async function removalOf(
+  path: string,
+  cuts: Cut[],
+  pathSteps: number,
+): Promise<Removal> {
   const graph = await readHeapGraph(path);
   const { nodeCount, firstEdge, retains } = graph;
   const edgeCut = new Uint8Array(graph.stringCount);
@@ -87,7 +94,7 @@ async function removalOf(path: string, cuts: Cut[]): Promise<Removal> {
   }
   return {
     totals,
-    left: groupByPath(graph, seen, parentEdge, parentNode),
+    left: groupByPath(graph, seen, parentEdge, parentNode, pathSteps),
   };
 }
 
@@ -97,6 +104,7 @@ function groupByPath(
   seen: Uint8Array,
   parentEdge: Int32Array,
   parentNode: Int32Array,
+  pathSteps: number,
 ): Map<string, number> {
   const steps = new Map<number, string[]>();
   const stepsOf = (node: number): string[] => {
@@ -110,7 +118,7 @@ function groupByPath(
     for (let i = chain.length - 1; i >= 0; i--) {
       const label = graph.edgeLabel(parentEdge[chain[i]]);
       const named = !UNNAMED_STEPS.has(label) && !/^\d+$/.test(label);
-      if (named && known.length < PATH_STEPS) {
+      if (named && known.length < pathSteps) {
         known = [...known, label.slice(0, 28)];
       }
       steps.set(chain[i], known);
@@ -132,12 +140,28 @@ if (import.meta.main) {
   const [pathA, pathB, unitsArgument] = Deno.args;
   const units = Number(unitsArgument);
   if (pathA === undefined || pathB === undefined || !(units > 0)) {
-    console.error("usage: heap-removal.ts <a> <b> <units> [--cut kind:name]");
+    console.error(
+      "usage: heap-removal.ts <a> <b> <units> [--cut kind:name] " +
+        "[--steps N] [--rows N]",
+    );
     Deno.exit(2);
   }
   const cuts: Cut[] = [];
+  let pathSteps = PATH_STEPS;
+  let pathRows = PATH_ROWS;
   for (let i = 3; i < Deno.args.length; i++) {
-    if (Deno.args[i] !== "--cut") continue;
+    const option = Deno.args[i];
+    if (option === "--steps" || option === "--rows") {
+      const count = Number(Deno.args[++i]);
+      if (!(count > 0)) {
+        console.error(`${option} takes a positive count, not ${Deno.args[i]}`);
+        Deno.exit(2);
+      }
+      if (option === "--steps") pathSteps = count;
+      else pathRows = count;
+      continue;
+    }
+    if (option !== "--cut") continue;
     const [kind, ...rest] = (Deno.args[++i] ?? "").split(":");
     const name = rest.join(":");
     if ((kind !== "edge" && kind !== "node") || name === "") {
@@ -146,8 +170,8 @@ if (import.meta.main) {
     }
     cuts.push({ kind, name });
   }
-  const a = await removalOf(pathA, cuts);
-  const b = await removalOf(pathB, cuts);
+  const a = await removalOf(pathA, cuts, pathSteps);
+  const b = await removalOf(pathB, cuts, pathSteps);
   console.log("KB per unit growing after each cumulative removal:");
   for (const [key, total] of b.totals) {
     const growth = (total - (a.totals.get(key) ?? 0)) / units / 1e3;
@@ -158,7 +182,7 @@ if (import.meta.main) {
     key,
     (size - (a.left.get(key) ?? 0)) / units / 1e3,
   ]).sort((x, y) => y[1] - x[1]);
-  for (const [key, growth] of rows.slice(0, 30)) {
+  for (const [key, growth] of rows.slice(0, pathRows)) {
     console.log(`${growth.toFixed(1).padStart(8)}  ${key}`);
   }
 }
