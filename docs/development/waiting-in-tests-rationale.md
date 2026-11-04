@@ -813,7 +813,9 @@ thread, and an idle toolshed responds within 100 milliseconds. Sixty seconds is
 and costs nothing if a slower server reaches it. A browser test against a
 toolshed at background priority has been seen past five seconds, which this
 measurement did not reproduce, and it did not cover a store holding a lot of
-data.
+data. The one production number on record is a different read: [the rehearsal
+plan](../plans/space-clone-rehearsal.md) allows twenty seconds for a cold load
+before calling a deployment unhealthy, and the bound is three times that.
 
 The two waits run one after the other, so a server that says nothing fails a
 client 120 seconds after it asked, with `Could not connect to "..."`. An aborted
