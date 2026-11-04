@@ -263,7 +263,7 @@ describe("fabrichat add offer across runtimes", () => {
     } as unknown as FabricValue);
     await harness.settle();
     expect(
-      ((await ada.rawRead(pointer)).value as unknown as typeof stored).cfc
+      ((await grace.rawRead(pointer)).value as unknown as typeof stored).cfc
         .labelMap.entries,
     ).toContainEqual(copy);
 
