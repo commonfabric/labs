@@ -3109,6 +3109,10 @@ export class RuntimeProcessor {
       undefined,
       "space",
     );
+    // Nothing can still need attention in a space nothing can act in.
+    if (this.#spaceDeletion(request.space) !== undefined) {
+      return { notices: [] };
+    }
     if (indexSync.error !== undefined) {
       throw new Error(indexSync.error.message, { cause: indexSync.error });
     }
@@ -3265,6 +3269,10 @@ export class RuntimeProcessor {
   async handleGetSpaceRootPattern(
     request: PatternGetSpaceRoot,
   ): Promise<SpaceRootPatternResponse> {
+    // A root a runtime read before the deletion is still in its replica, and
+    // nothing is to be reconciled or started against it.
+    const deletion = this.#spaceDeletion(request.space);
+    if (deletion !== undefined) throw deletion;
     const cc = this.#getSpaceCtx(request.space);
     if (request.start === false) {
       // The caller reads the root's exports rather than rendering it, so
@@ -3330,6 +3338,17 @@ export class RuntimeProcessor {
   }
 
   /**
+   * Returns the server's refusal of `space` when the refusal says the space is
+   * deleted, and `undefined` when it does not. A read of a deleted space ends
+   * with no data rather than failing, so a caller that would report what it
+   * found, or that nothing is there, asks this first.
+   */
+  #spaceDeletion(space: MemorySpace): Error | undefined {
+    const refusal = this.#runtime.storageManager.spaceAccessError?.(space);
+    return isDeletedSpaceError(refusal) ? refusal : undefined;
+  }
+
+  /**
    * Handles a `PieceGetRequest`. The answer is an address — a cell carrying
    * the schema it is read under — so what this loads is what deciding the
    * address takes: the requested document, and behind a redirect the document
@@ -3371,6 +3390,8 @@ export class RuntimeProcessor {
     // arrives, plus what the server resolves at the address itself when the
     // value stored there is a link.
     await requestedCell.sync();
+    const deletion = this.#spaceDeletion(request.space);
+    if (deletion !== undefined) throw deletion;
     // A piece's root is the piece, even when its value is a redirect, as it is
     // for a pattern that returns a sub-pattern's result whole. Only a
     // document that is no piece names one.
@@ -3512,7 +3533,11 @@ export class RuntimeProcessor {
       // A reference reaching nothing is what the caller asked about, so it
       // comes back as an answer. Everything else — a transport fault, a
       // document that will not decode — stays an error, which is the only
-      // way a caller can tell "this name is not bound" from "ask again".
+      // way a caller can tell "this name is not bound" from "ask again". A
+      // deleted space binds no name because nothing can be read from it, which
+      // says nothing about the name.
+      const deletion = this.#spaceDeletion(space);
+      if (deletion !== undefined) throw deletion;
       if (error instanceof SlugResolutionError) {
         return {
           refusal: { code: error.code ?? "unresolved", message: error.message },

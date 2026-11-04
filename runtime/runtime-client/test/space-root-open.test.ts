@@ -25,7 +25,7 @@ import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno"
 import type { RuntimeProcessor } from "@/backends/mod.ts";
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { MessagePortRuntimeTransport } from "@/client/transports/message-port/transport-message-port.ts";
-import { RequestType } from "@/protocol/mod.ts";
+import { RequestType, RuntimeErrorCode } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
 import { buildProcessor } from "./backends/build-processor.ts";
 
@@ -171,6 +171,16 @@ async function rootlessSpace(grants: ACL = { "*": "WRITE" }) {
       }
     },
 
+    /**
+     * Deletes the space, as its sole member. Holds only for a space that
+     * grants nobody else anything.
+     */
+    deleteSpace: async () => {
+      await new ACLManager(ownerParty.runtime, space).delete(owner.did());
+      await ownerParty.runtime.idle();
+      await ownerParty.storage.synced();
+    },
+
     /** Whether a space answers to `did`, asked as the owner. */
     spaceExists: (did: MemorySpace) => ownerParty.runtime.spaceExists(did),
 
@@ -256,6 +266,60 @@ describe("space-root-open", () => {
       }
       expect(await room.storedSpaceCell()).toBeUndefined();
       expect(room.fetched).toEqual([]);
+    });
+  });
+
+  describe("a deleted space", () => {
+    /** The code the error of a request that has to fail crosses with. */
+    const codeOf = async (request: Promise<unknown>): Promise<unknown> => {
+      const failure = await request.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      return (failure as { code?: unknown }).code;
+    };
+
+    /**
+     * Each load the shell can make of a view of `space`, none of which
+     * resolves, or finds nothing, for a deleted space. `piece` names a piece
+     * the space held.
+     */
+    const loads = (
+      client: RuntimeClient,
+      space: MemorySpace,
+      piece: string,
+    ) => [
+      () => client.getSpaceRootPattern(space),
+      () => client.getSpaceRootPattern(space, { start: false }),
+      () => client.getPiece(piece, space),
+      () => client.getPiece(piece, space, true),
+      () => client.resolveSlug("top", space),
+    ];
+
+    for (const opener of ["owner", "visitor"] as const) {
+      // The owner's runtime held the space when it was deleted, and its session
+      // was revoked. The visitor's never opened it, and is refused on opening.
+      it(`says so to a runtime that was the ${opener}, and fetches nothing`, async () => {
+        await using room = await rootlessSpace({});
+        const root = await room.owner.getSpaceRootPattern(room.space);
+        await room.deleteSpace();
+        const client = room[opener];
+        room.fetched.length = 0;
+
+        for (const load of loads(client, room.space, root!.id())) {
+          expect(await codeOf(load())).toBe(RuntimeErrorCode.SpaceDeleted);
+        }
+        expect(room.fetched).toEqual([]);
+      });
+    }
+
+    it("has no event needing attention", async () => {
+      await using room = await rootlessSpace({});
+      await room.owner.getSpaceRootPattern(room.space);
+      await room.deleteSpace();
+
+      expect(await room.visitor.listEventAttention(room.space)).toEqual([]);
     });
   });
 
