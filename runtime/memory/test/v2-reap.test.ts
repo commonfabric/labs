@@ -242,6 +242,22 @@ describe("reap", () => {
     );
   });
 
+  it("refuses a store whose ACL document's head is not a set", async () => {
+    const seq = await build();
+    const db = new Database(store);
+    try {
+      db.prepare(
+        `UPDATE revision SET op = 'delete', data = NULL
+         WHERE id = ? AND seq = ?`,
+      ).run(ACL, seq);
+    } finally {
+      db.close();
+    }
+    await expect(reapStore({ store, out })).rejects.toThrow(
+      `${ACL} holds no deletion tombstone`,
+    );
+  });
+
   it("refuses a store holding no ACL document", async () => {
     await build();
     const db = new Database(store);
@@ -317,6 +333,7 @@ describe("reap", () => {
       touch(`${plan.cellDatabaseFilePrefix}00000001-wal`);
       touch(`${cellDatabaseFilePrefix(ALICE)}00000002.sqlite`);
       touch(`${ALICE}.sqlite`);
+      touch("%zz.sqlite");
 
       expect(liveCellDatabases(plan, `${dir}/${SPACE}.sqlite`)).toEqual({
         files: [`${plan.cellDatabaseFilePrefix}00000001.sqlite`],

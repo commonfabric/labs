@@ -123,6 +123,16 @@ describe("reap", () => {
       ).toContain("private_rows: only the kept rows, unchanged");
     });
 
+    it("fails a result holding a row of a table whose name only looks like SQLite's own", () => {
+      tamper(`INSERT INTO sqliteX VALUES ('a')`);
+      const verification = verifyReap({ result: out, against: store });
+      expect(
+        verification.checks.filter((check) => !check.passed).map((check) =>
+          check.name
+        ),
+      ).toEqual(["sqliteX: only the kept rows, unchanged"]);
+    });
+
     it("fails a result holding a table the backup lacks", () => {
       tamper(`CREATE TABLE added (x TEXT); INSERT INTO added VALUES ('a')`);
       const verification = verifyReap({ result: out, against: store });
