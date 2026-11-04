@@ -6,6 +6,7 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import type { Cell } from "../src/cell.ts";
 import type { ExecutorHost } from "../src/executor/host.ts";
 import {
@@ -20,22 +21,32 @@ const owner = await Identity.fromPassphrase("executor quiescence owner");
 
 /**
  * A chain of handlers, each sending the next one an event on its own account,
- * of which only the last writes.
+ * of which only the last writes. The first holds up its wave past the flush
+ * deadline, which leaves the next link queued for a later wave rather than
+ * served in the wave that carries its sender.
  */
 const CHAIN_SOURCE = `
 import { handler, pattern, type Stream, Writable } from "commonfabric";
-type Note = { value: string };
+type Note = { value: string; spent?: number };
 const land = handler<Note, { landed: Writable<string> }>(
   (event, { landed }) => landed.set(event.value),
 );
 const relay = handler<Note, { next: Stream<Note> }>(
   (event, { next }) => next.send(event),
 );
+const relayAfterTheDeadline = handler<Note, { next: Stream<Note> }>(
+  (event, { next }) => {
+    // Counted rather than timed: a pattern's clock does not move during a run.
+    let spent = 0;
+    for (let i = 0; i < 300_000_000; i++) spent = (spent + i) | 0;
+    next.send({ value: event.value, spent });
+  },
+);
 export default pattern(() => {
   const landed = new Writable<string>("").for("landed");
   const third = relay({ next: land({ landed }) });
   const second = relay({ next: third });
-  return { landed, start: relay({ next: second }) };
+  return { landed, start: relayAfterTheDeadline({ next: second }) };
 });
 `;
 
@@ -63,7 +74,7 @@ type PatternFixture = {
  */
 async function withPattern(
   source: string,
-  options: Pick<ServingMemoryServerOptions, "policy" | "fetch" | "onWaveCycle">,
+  options: Pick<ServingMemoryServerOptions, "fetch" | "onWaveCycle">,
   body: (fixture: PatternFixture) => Promise<void>,
 ): Promise<void> {
   await using serving = await startServingMemoryServer({
@@ -104,12 +115,7 @@ async function withPattern(
   }
 }
 
-/**
- * {@link withPattern} for the chain, read to its first value, on a loop that
- * gives every wave one millisecond to settle. A deadline that short cuts the
- * waves, which leaves each handler's event queued for a later wave rather than
- * served in the wave that carries its sender.
- */
+/** {@link withPattern} for the chain, read to its first value. */
 function withChain(
   body: (
     fixture: PatternFixture & {
@@ -121,7 +127,7 @@ function withChain(
   const cancels: Array<() => void> = [];
   return withPattern(
     CHAIN_SOURCE,
-    { policy: { flushDeadlineMs: 1 } },
+    {},
     async (fixture) => {
       const { runtime, result } = fixture;
       cancels.push(result.sink(() => {}));
@@ -144,6 +150,13 @@ function withChain(
 }
 
 /**
+ * `host.whenQuiescent()` under the stuck-condition net, which fails a test whose
+ * loop never comes to rest rather than leaving it to run out its lane.
+ */
+const quiescence = (host: ExecutorHost): Promise<number> =>
+  withStuckNet(host.whenQuiescent(), "the serving loop's quiescence");
+
+/**
  * Takes turns of the event loop for longer than the loop takes to run out of
  * things to do, its demand grace included. A wait that ends early has ended by
  * the time this returns.
@@ -159,7 +172,7 @@ describe("executor-quiescence", () => {
   it("resolves after every link of a cascade of handlers' own events has committed", async () => {
     await withChain(async ({ host, runtime, result, start }) => {
       await start("first");
-      await host.whenQuiescent();
+      await quiescence(host);
       await runtime.storageManager.pullOpenSpacesToHead();
       await runtime.idle();
       expect(result.key("landed").get()).toBe("first");
@@ -180,7 +193,7 @@ describe("executor-quiescence", () => {
       const cancel = result.sink(() => {});
       try {
         await runtime.storageManager.synced();
-        await host.whenQuiescent();
+        await quiescence(host);
         expect(answered).toBe(true);
         await runtime.storageManager.pullOpenSpacesToHead();
         await runtime.idle();
@@ -194,7 +207,7 @@ describe("executor-quiescence", () => {
   it("resolves after a lifecycle verb in the loop's cycle has finished", async () => {
     let finished = false;
     await withPattern(CHAIN_SOURCE, {}, async ({ host, space }) => {
-      await host.whenQuiescent();
+      await quiescence(host);
       const verb = host.runLifecycleVerb(space, {
         name: "held",
         run: async () => {
@@ -203,7 +216,7 @@ describe("executor-quiescence", () => {
           return {};
         },
       });
-      await host.whenQuiescent();
+      await quiescence(host);
       expect(finished).toBe(true);
       await verb;
     });
@@ -216,7 +229,7 @@ describe("executor-quiescence", () => {
     await withPattern(CHAIN_SOURCE, {
       onWaveCycle: () => cycles++,
     }, async ({ host, runtime, space }) => {
-      await host.whenQuiescent();
+      await quiescence(host);
       const cyclesBefore = cycles;
       const wakesBefore = host.stats().demand.watchWakes;
       const cancel = runtime.getCell<string>(space, "watched", {
@@ -225,7 +238,7 @@ describe("executor-quiescence", () => {
       try {
         await runtime.storageManager.synced();
         expect(host.stats().demand.watchWakes).toBeGreaterThan(wakesBefore);
-        await host.whenQuiescent();
+        await quiescence(host);
         expect(cycles).toBeGreaterThan(cyclesBefore);
       } finally {
         cancel();
@@ -284,7 +297,7 @@ describe("executor-quiescence", () => {
         sessionId: `service:${space}`,
         localSeq: 990_100,
       });
-      await host.whenQuiescent();
+      await quiescence(host);
       const engine = await serving.server.engineForSpace(space);
       expect(Engine.selectPendingStreamEventDocs(engine)).toStrictEqual([]);
       expect(host.stats().events.deferredRescansFired).toBeGreaterThan(0);
@@ -312,7 +325,7 @@ describe("executor-quiescence", () => {
         type: "number",
       }).withTx(tx).set(1);
       expect((await tx.commit().settled).error).toBeUndefined();
-      await serving.host.host!.whenQuiescent();
+      await quiescence(serving.host.host!);
       expect(settled).toStrictEqual(["active"]);
     } finally {
       await serving.host.close();
@@ -322,19 +335,19 @@ describe("executor-quiescence", () => {
 
   it("resolves after a parked space with a live session is served again", async () => {
     await withChain(async ({ host, space }) => {
-      await host.whenQuiescent();
+      await quiescence(host);
       void host.spaceServer(space)!.park("host-test");
-      await host.whenQuiescent();
+      await quiescence(host);
       expect(host.spaceServer(space)?.active).toBe(true);
     });
   });
 
   it("resolves with the same value until a loop does anything further", async () => {
     await withChain(async ({ host, start }) => {
-      const before = await host.whenQuiescent();
-      expect(await host.whenQuiescent()).toBe(before);
+      const before = await quiescence(host);
+      expect(await quiescence(host)).toBe(before);
       await start("first");
-      expect(await host.whenQuiescent()).not.toBe(before);
+      expect(await quiescence(host)).not.toBe(before);
     });
   });
 
