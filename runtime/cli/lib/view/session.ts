@@ -671,7 +671,7 @@ export class Session {
     if (this.#foldFileCache?.doc !== this.#currentDoc) {
       this.#foldFileCache = {
         doc: this.#currentDoc,
-        files: diffFiles(this.#currentDoc.text),
+        files: diffFiles(this.#currentDoc.text, this.#source.declaredTests),
       };
     }
     return this.#foldFileCache.files;

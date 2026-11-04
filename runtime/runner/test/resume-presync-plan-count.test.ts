@@ -408,6 +408,34 @@ describe("resume-presync-plan-count", () => {
     );
   });
 
+  it("holds no binding for a tree once it stops", async () => {
+    // A stopped piece's nodes are planned again only by a restart, which
+    // binds them again; the bindings of the instances it ran, its rows'
+    // among them, are dropped when it stops.
+    const author = replica();
+    const compiled = await author.patternManager.compilePattern(TREE_PROGRAM, {
+      space,
+    });
+    const tx = author.edit();
+    const result = author.getCell<{ rows: { value: number }[] }>(
+      space,
+      "stopped-tree-bindings",
+      compiled.resultSchema,
+      tx,
+    );
+    author.run(tx, compiled, { items: ITEMS }, result);
+    await tx.commit().settled;
+    await result.pull();
+    await author.settled();
+    expect(author.runner.accessForTestingOnly.heldNodeBindings).toBe(
+      treePairs(compiled),
+    );
+
+    author.runner.stop(result);
+    await author.settled();
+    expect(author.runner.accessForTestingOnly.heldNodeBindings).toBe(0);
+  });
+
   describe("a pattern node's binding", () => {
     // A plan binds a pattern node against the argument of the instance
     // holding it. Before that instance has an argument to read, a binding
