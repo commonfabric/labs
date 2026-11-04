@@ -103,7 +103,7 @@ Properties inherited for free:
   create-only receipt document causal to the grant id — the shipped
   exactly-once discipline (`experimental.commitPreconditions`: the event
   path already mints the handler result cell from the durable event id via
-  `{resultFor: cause}` + `markCreateOnly`, and a duplicate handling dies as
+  `handlingReceiptId()` + `markCreateOnly`, and a duplicate handling dies as
   a `receipt-exists` permanent rejection, `runner.ts` /
   `scheduler/events.ts`). A consuming release claims
   `{grantConsumed: {grantId}}` the same way; standing grants simply never
@@ -549,7 +549,7 @@ substrate (scheduler-v2 §7.6 / decision 13, flag
 (`scheduler/events.ts` `tx.dispatchedEventId = queuedEvent.id`), handler
 frame cause derived from it (`runner.ts` — "every id minted in this frame
 derives from the durable event id"), create-only receipt cell
-`{resultFor: cause}` + `markCreateOnly` as the exactly-once witness,
+`handlingReceiptId()` + `markCreateOnly` as the exactly-once witness,
 `receipt-exists` permanent rejection (`scheduler/events.ts`). Labs-side:
 Epic B decision 1 (`docs/history/plans/cfc-future-work-implementation.md`), CT-1874
 (home-clause constraint), [`cfc-label-metadata-confidentiality.md`](./cfc-label-metadata-confidentiality.md)

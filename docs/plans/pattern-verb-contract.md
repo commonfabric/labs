@@ -131,16 +131,11 @@ callable layer predates:
   (`runtime/runner/test/scheduler-event-receipts.test.ts`). `Cell.send` now
   takes that id as its third argument and `Cell.set`'s stream branch forwards
   it through `scopeCallerEventId` (`runtime/runner/src/cell.ts`), which binds
-  an opaque caller key to the specific stream so two verbs sharing input
-  bindings cannot collide on one receipt.
-- Every handling gets a **canonical per-invocation result cell** addressed
-  `{ resultFor: cause }`, where `cause = { $ctx: <bound closure>, $event:
-  <event id> }` — `Runner.#instantiateJavaScriptHandlerNode` builds the `cause`
-  (`$event: tx.dispatchedEventId ?? crypto.randomUUID()`) and
-  `Runner.#handleJavaScriptHandlerResult` mints the cell from it, both in
-  `runtime/runner/src/runner.ts`; the `$ctx`/`$event` argument shape comes
-  from `generateHandlerSchema` (`runtime/runner/src/schema.ts`). So the
-  address folds in the handler's binding, not the id alone. A return value
+  an opaque caller key to the specific stream.
+- Every handling gets a **canonical per-invocation result cell** addressed by
+  `handlingReceiptId()` (`runtime/runner/src/scheduler/event-identity.ts`): the
+  `receipt:` scheme over a hash of the event id and its stream, so the address
+  folds in neither the handler's binding nor the sender. A return value
   **containing reactives or cells** is run as a result pattern into that cell
   (`navigateTo` is the existing UI consumer); a **plain JSON return projects
   into the receipt** under the `plainResultReceipts` experimental option
@@ -1019,8 +1014,7 @@ design-level order.
    result cell's address to the caller. Standing fix, useful regardless.
 4. Plumb the id and the readback: pass a caller-supplied `eventId` from
    `cf piece call` through `cell.send()` to `queueEvent`; have `topics` verbs
-   return values; have the CLI reconstruct the cause and read the
-   `{ resultFor }` cell after commit (explicit sync — a cold plain read
+   return values; have the CLI read the receipt cell after commit (explicit sync — a cold plain read
    returns `undefined`), and reclassify `precondition: "receipt-exists"` as
    success-with-readback rather than failure. Plus the one runtime change from
    open question 3 if plain returns are to survive.

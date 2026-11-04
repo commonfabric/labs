@@ -1,7 +1,8 @@
 /**
  * Validates stored arguments without treating unreadable links as invalid
- * values, and without reading through a stored link the argument schema types
- * as a cell handle.
+ * values, without reading through a stored link that reaches data outside the
+ * argument's own space and scope, and without reading through one the
+ * argument schema types as a cell handle.
  */
 
 import {
@@ -82,24 +83,39 @@ interface HandleViewContext {
 
   /** The transaction the stored value is read through. */
   tx: IExtendedStorageTransaction;
+
+  /** The space and scope of the stored value's own document. */
+  home: { space: string; scope: string | undefined };
 }
 
 /**
  * Returns the stored value at `cell` as validation reads it: its schemaless
- * materialization through `tx`, in which a stored link at a position whose
- * schema in `schema` declares a cell handle is that handle rather than the
- * value the link reaches. What the link reaches is judged by its top level
- * alone: a shallow read of it, which takes in no label declared below it, is
- * held to the `type` the position's schema allows, and a primitive also to
- * its `enum` and `const`. Nothing below that level is read, so no constraint
- * on it is judged here; the reactive reads that follow the handle check it
- * against the handle's own schema. A link whose top level does not fit is no
- * handle: its position reads as the materialized value, judged in full.
+ * materialization through `tx`, in which a stored link that reaches another
+ * space or scope than `cell`'s is a handle rather than the value the link
+ * reaches, whatever the position's schema in `schema` declares. Nothing of
+ * what it reaches is read, so nothing about it is judged here: the reactive
+ * reads that follow the link check it against the schema they read it under,
+ * as they check a link this replica cannot read. That data is another
+ * piece's or another audience's, and it carries labels of its own, which a
+ * read here would join to the transaction doing the judging, and so to
+ * everything that transaction writes, such as the result of a nested piece
+ * whose stored argument links another person's data.
+ *
+ * A stored link that stays within `cell`'s space and scope, such as one to an
+ * element the argument's own write stored as a document, is the argument's
+ * own data. Where the position's schema declares a cell handle it is that
+ * handle rather than the value the link reaches, and what the link reaches is
+ * judged by its top level alone: a shallow read of it, which takes in no label
+ * declared below it, is held to the `type` the position's schema allows, and a
+ * primitive also to its `enum` and `const`. Nothing below that level is read,
+ * so no constraint on it is judged here; the reactive reads that follow the
+ * handle check it against the handle's own schema. A link whose top level does
+ * not fit is no handle: its position reads as the materialized value, judged
+ * in full.
  *
  * Every other position reads as the materialized value does. So do the
  * positions along `materializedPath`, the one a caller writes at, whatever
- * their schema declares, since what is written there lands in what the link
- * reaches.
+ * they hold, since what is written there lands in what the link reaches.
  *
  * `acceptsOpaque` is the predicate a merge of defaults and a validation over
  * `value` take as their `acceptOpaqueValue`: it accepts the handles this view
@@ -120,6 +136,7 @@ export function materializeStoredValueForValidation(
     views: new WeakMap(),
     handles: new WeakSet(),
     tx,
+    home: cellHome(cell),
   };
   return {
     value: viewStoredLinksAsHandles(
@@ -332,7 +349,14 @@ function viewStoredLinksAsHandles(
     ? new Array(materialized.length)
     : {};
   bySchema?.set(schema, view);
-  for (const key of Object.keys(materialized)) {
+  // The keys come from the container's own bytes, which hold its slots' links
+  // unfollowed: asking the materialized container for its keys resolves every
+  // slot's link.
+  const storedContainer = container.getRaw({ meta: ignoreReadForScheduling });
+  const keys = isKeyableObjectOrArray(storedContainer)
+    ? Object.keys(storedContainer)
+    : Object.keys(materialized);
+  for (const key of keys) {
     Object.defineProperty(view, key, {
       configurable: true,
       enumerable: true,
@@ -342,10 +366,11 @@ function viewStoredLinksAsHandles(
         const slot = container.key(key);
         // Only the slot's own bytes are read here: a raw read resolves links
         // on the way to the slot and leaves the one stored in it unfollowed.
-        const handle = !kept &&
-          declaresHandleForLink(childSchema) &&
-          isCellLink(slot.getRaw({ meta: ignoreReadForScheduling })) &&
-          reachedTopLevelFits(slot, childSchema, context.tx);
+        const stored = slot.getRaw({ meta: ignoreReadForScheduling });
+        const handle = !kept && isCellLink(stored) &&
+          (reachesOutsideHome(stored, slot, context) ||
+            (declaresHandleForLink(childSchema) &&
+              reachedTopLevelFits(slot, childSchema, context.tx)));
         if (handle) context.handles.add(slot);
         const child = handle ? slot : viewStoredLinksAsHandles(
           (materialized as Record<string, unknown>)[key],
@@ -364,6 +389,33 @@ function viewStoredLinksAsHandles(
     });
   }
   return view;
+}
+
+/** The space and scope of `cell`'s document. */
+function cellHome(cell: Cell<unknown>): HandleViewContext["home"] {
+  const { space, scope } = cell.getAsNormalizedFullLink();
+  return { space, scope };
+}
+
+/**
+ * Helper for `viewStoredLinksAsHandles()`, which says whether the link
+ * `stored` at `slot` reaches, through any links it chains through, a position
+ * outside `context.home`. Only the documents inside it are read on the way.
+ */
+function reachesOutsideHome(
+  stored: CellLink,
+  slot: Cell<unknown>,
+  context: HandleViewContext,
+): boolean {
+  const inside = (link: NormalizedFullLink) =>
+    link.space === context.home.space &&
+    (link.scope ?? "space") === (context.home.scope ?? "space");
+  return readStoredLinkChainRaw(
+    context.tx,
+    parseLink(stored, slot),
+    new Set(),
+    inside,
+  ).outside === true;
 }
 
 /** Per-validation caches for the unreadable-link view. */
@@ -403,16 +455,22 @@ function overlayAddressKey(link: NormalizedFullLink): string {
  * exit, preserving the caller's set. The overlay starts a fresh chain for each
  * link it resolves. The repeat-address guard terminates alias-only cycles;
  * direct callers can exercise it without first materializing the linked graph.
+ *
+ * Given `within`, the walk reads no document at a position `within` refuses:
+ * it stops there, before the read, and says so as `outside`.
  */
 export function readStoredLinkChainRaw(
   tx: IExtendedStorageTransaction,
   startLink: NormalizedFullLink,
   chain: Set<string>,
+  within?: (link: NormalizedFullLink) => boolean,
 ): {
   value: unknown;
   base: NormalizedFullLink;
   /** Whether the result depends on a repeated address in the active chain. */
   cyclic?: true;
+  /** Whether the chain reached a position `within` refuses, unread. */
+  outside?: true;
 } {
   const added: string[] = [];
   const follow = (
@@ -431,6 +489,9 @@ export function readStoredLinkChainRaw(
   try {
     let link = startLink;
     while (true) {
+      if (within !== undefined && !within(link)) {
+        return { value: undefined, base: link, outside: true };
+      }
       const { ok, error } = tx.read(
         {
           space: link.space,

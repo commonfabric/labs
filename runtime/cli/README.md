@@ -1353,20 +1353,20 @@ snapshot taken while the space is still served.
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
 the directory's neighbors are the authority on where a space's file is.
-`--documents` names the instances by id prefix (`of:`, `computed:` or `cid:`),
-and may repeat; the ACL document is never selected. `--scope` restricts the
-selection to `space`, `user` or `session` instances; repeated or nested prefixes
-count as one selection. The cut is the head of every selected instance unless
-`--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the store's own format
-and no other) or `--keep-last <n>` bounds it, and a row survives if any bound
-keeps it. `--keep-payloads <duration>` (default `24h`) is the window, measured
-from the newest client commit, within which commits keep their payload; outside
-it a commit's payload is replaced by a marker carrying a hash of what it held,
-unless its seq is 1, an `op_*` row references it, or it is a compaction commit,
-whether or not a surviving revision still points at the commit. A hollowed
-commit is still a row in the log, told apart from an elided write by its marker;
-what is gone is its contents, which the backup keeps. A commit whose payload
-survives stays inspectable in full.
+`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:`
+or `cid:`), and may repeat; the ACL document is never selected. `--scope`
+restricts the selection to `space`, `user` or `session` instances; repeated or
+nested prefixes count as one selection. The cut is the head of every selected
+instance unless `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the
+store's own format and no other) or `--keep-last <n>` bounds it, and a row
+survives if any bound keeps it. `--keep-payloads <duration>` (default `24h`) is
+the window, measured from the newest client commit, within which commits keep
+their payload; outside it a commit's payload is replaced by a marker carrying a
+hash of what it held, unless its seq is 1, an `op_*` row references it, or it is
+a compaction commit, whether or not a surviving revision still points at the
+commit. A hollowed commit is still a row in the log, told apart from an elided
+write by its marker; what is gone is its contents, which the backup keeps. A
+commit whose payload survives stays inspectable in full.
 
 A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
@@ -1890,10 +1890,19 @@ for the runner to observe. A repeated cancellation keeps the first timestamp,
 and a terminal record is unchanged. Cancellation does not synchronously change
 the run's state; the runner acknowledges it by ending the run `cancelled`.
 
-All three commands take `--identity` / `CF_IDENTITY` and `--api-url` /
+`cf agent remove <run> [--json]` takes a finished run off the home queue, so
+`ls` and `show` stop finding it. The record stays where it is, and the piece
+that requested it keeps following it. It removes the one entry at the address
+the record's id gives it, which is where the `agent` builtin lists every run. A
+run that has not ended is refused (cancel it first), and so is a run the queue
+lists more than once or anywhere else; nothing is removed then. Removing an
+entry lowers no label: the entry's document keeps what it holds, and the queue
+stops naming it, so reading the queue no longer reaches that entry's labels.
+
+All four commands take `--identity` / `CF_IDENTITY` and `--api-url` /
 `CF_API_URL`. The API URL names the home toolshed; each queue entry determines
-the host used to read or cancel that record. Completion offers the state
-vocabulary and live run ids from the home queue.
+the host used to read, cancel, or remove that record. Completion offers the
+state vocabulary and live run ids from the home queue.
 
 ## Agent runner
 

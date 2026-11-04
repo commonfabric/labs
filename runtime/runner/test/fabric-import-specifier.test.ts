@@ -177,6 +177,9 @@ describe("fabric import specifiers", () => {
       `cf:of:${HASH}`,
       // The scheme requires the fid1 segment, like of:.
       `cf:computed:${HASH}`,
+      // A receipt holds one handling's outcome, which is nothing to import.
+      `cf:receipt:fid1:${HASH}`,
+      `cf:/kitchen/receipt:fid1:${HASH}`,
       // The retired fid2 tag form is not readable.
       `cf:of:fid2:computed:${HASH}`,
       "cf:data:abc",

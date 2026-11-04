@@ -589,7 +589,14 @@ Default slot for cf-tab elements
 **Purpose**: Container for resizable panels **Tag**:
 `<cf-resizable-panel-group>` **Attributes**:
 
-- `direction` - "horizontal" | "vertical" **Events**:
+- `direction` - "horizontal" | "vertical"
+- `stack-below` (`stackBelow` in JSX) - a positive number of pixels (anything
+  else throws a `RangeError`): while the group itself is narrower, its panels
+  stack vertically whatever `direction` says, keeping their split and the
+  handle. Prefer the layout breakpoints, 640, 768 or 1024. For example, to put a
+  list beside its detail where there is room and above it where there is not:
+  `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
+  **Events**:
 - `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
   slot for panels and handles
 
@@ -944,10 +951,13 @@ label):
 ### cf-suggestions
 
 **Purpose**: Draws the ranked suggestion cards anchored at one thing, at a fixed
-size. A card is drawn where its `anchor` link names `$about`; a card with no
-`anchor` field falls back to the first link in its `about`, then its
-`act_target`, and a null `anchor` is drawn on no thing. The component performs
-no act; the host binds its events. **Tag**: `<cf-suggestions>`
+size. A card is drawn where its `anchor` link names the thing `$about` names or
+links to, so `$about={item}` inside `items.map(...)` draws the item's cards. The
+`anchor` is compared as stored, so it must link to the thing itself, not to a
+cell that links to it. A card with no `anchor` field falls back to the first
+link in its `about`, then its `act_target`, and a null `anchor` is drawn on no
+thing. Nothing is drawn until `$about` has resolved. The component performs no
+act; the host binds its events. **Tag**: `<cf-suggestions>`
 
 **Bindings**:
 

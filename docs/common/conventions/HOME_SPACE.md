@@ -141,12 +141,11 @@ most-recently-used (MRU) ordering:
   is skipped before it is read, so once it is retired and no live profile is
   left, the roster is empty and `#profile` opens profile creation. The picker
   sends `retireProfile` for a profile `profiles` lists whose
-  `spaceDeleted(space)` returns `true`, as a pattern that lists catalog entries
-  sends `markDeleted`. `setProfileRetired` admits such a profile in place of
-  the ownership test it can no longer pass: its link is in `profiles` and
-  `spaceDeleted(space)` returns `true` in the handler, asked by the handler
-  itself, so an event naming a profile that is not deleted is held to the
-  usual refusals. The refusals that keep `#profile` from moving without the
+  `spaceDeleted(space)` returns `true`. `setProfileRetired` admits such a
+  profile in place of the ownership test it can no longer pass: its link is in
+  `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
+  the handler itself, so an event naming a profile that is not deleted is held
+  to the usual refusals. The refusals that keep `#profile` from moving without the
   person choosing do not apply, since a deleted profile is none of the live
   ones they protect. Where the memory server has not yet answered for the
   space, the handler runs again once it has, under the conditions
@@ -408,7 +407,9 @@ user's favorites only, and the queue is not a favorite.
 The piece holds two things:
 
 - `entries` - one `{ run, host }` entry per `AgentRun` record the user has
-  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  submitted and not removed, across spaces and toolsheds. `cf agent remove`
+  takes a finished run's entry off the queue and leaves its record where it
+  is. The `agent` builtin adds an entry
   when a request commits, as an element addressed by the record's id
   (`elementById` and `addUnique`, the way favorites are keyed), so two requests
   indexed side by side land as two elements. `run` links to the record in the requesting space;

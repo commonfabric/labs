@@ -1,3 +1,7 @@
+import {
+  getLoggerCountsBreakdown,
+  getLoggerErrorMessagesBreakdown,
+} from "@commonfabric/logger";
 import type { PendingRequestDiagnostic } from "@commonfabric/runtime-client";
 
 import { describeThrown } from "./describe-thrown.ts";
@@ -26,14 +30,17 @@ const CONSOLE_TAIL_LIMIT = 40;
  */
 const WORKER_LOG_BUDGET_MS = 30_000;
 
-// How many kinds of worker warning and error a report lists.
-const WORKER_PROBLEM_LIMIT = 20;
+// How many kinds of logged warning and error a report lists, for one process.
+const LOG_PROBLEM_LIMIT = 20;
+
+// How many of the selectors a wait's condition collected a report lists.
+const CONDITION_ELEMENT_LIMIT = 20;
 
 /**
- * One message a logger in the page's runtime worker has recorded at `warn` or
- * `error`, with how many times it did at each.
+ * One message a logger has recorded at `warn` or `error`, with how many times
+ * it did at each.
  */
-export interface WorkerLogProblem {
+export interface LogProblem {
   /** The name of the logger that recorded it. */
   logger: string;
 
@@ -45,6 +52,36 @@ export interface WorkerLogProblem {
 
   /** How many times it was recorded at `error`. */
   error: number;
+
+  /**
+   * The earliest messages it was recorded with at `error`, as the logger kept
+   * them. There are at most a few, however large `error` is. Absent where it
+   * was never recorded at `error`, and where the process does not report them.
+   */
+  errorMessages?: string[];
+}
+
+/**
+ * One selector a wait's condition asked the probe to collect, and what it
+ * matched, which is what says whether an awaited element exists when the
+ * condition itself is an opaque function.
+ */
+export interface ConditionElement {
+  /** The selector, as the condition wrote it. */
+  selector: string;
+
+  /** How many elements match it as the report is written. */
+  matched: number;
+
+  /** How many of those are rendered, as `ProbeApi.isRendered()` decides. */
+  rendered: number;
+
+  /**
+   * The most elements it matched at any check during the wait, which writing
+   * the report does not count as one. `0` says the element did not exist at any
+   * moment the condition looked.
+   */
+  mostMatched: number;
 }
 
 /**
@@ -111,13 +148,32 @@ export interface ShellPageProbe {
    * trouble. Absent where there is no runtime to ask, and where the runtime is
    * one that does not report them.
    */
-  workerProblems?: WorkerLogProblem[];
+  workerProblems?: LogProblem[];
 
   /**
    * Why those could not be read, when asking threw or the worker did not
    * answer in time.
    */
   workerProblemsError?: string;
+
+  /**
+   * Why the messages behind the worker's errors could not be read, when asking
+   * threw or the worker did not answer in time. The counts stand regardless.
+   */
+  workerErrorMessagesError?: string;
+
+  /**
+   * The selectors the condition of a running `waitForCondition` collected,
+   * oldest first. Absent for a read that names no wait, which only a report of
+   * such a wait does.
+   */
+  conditionElements?: ConditionElement[];
+
+  /**
+   * Why those could not be read. A wait installed in a document that has since
+   * been replaced has no condition left to ask, and is reported here.
+   */
+  conditionElementsError?: string;
 
   /** The start of the document's rendered text. */
   text: string;
@@ -158,11 +214,20 @@ export async function readShellPageProbe(
 /**
  * Helper for {@link readShellPageProbe}, which reads everything but the
  * worker's logs. It needs no worker, so it answers whenever the page's main
- * thread does.
+ * thread does. `waiter` names the running `waitForCondition` whose collected
+ * elements to read as well.
  */
-async function readPageFields(page: Page): Promise<ShellPageProbe> {
-  return await page.evaluate((textLimit: number, tailLimit: number) => {
+async function readPageFields(
+  page: Page,
+  waiter?: string,
+): Promise<ShellPageProbe> {
+  return await page.evaluate((
+    textLimit: number,
+    tailLimit: number,
+    waiter: string | null,
+  ) => {
     const scope = globalThis as typeof globalThis & {
+      __cfcWaiters?: Map<string, { elements(): ConditionElement[] }>;
       app?: { serialize?: () => { view?: unknown; identityDid?: string } };
       commonfabric?: {
         rt?: { getPendingRequests?: () => PendingRequestDiagnostic[] };
@@ -202,6 +267,23 @@ async function readPageFields(page: Page): Promise<ShellPageProbe> {
       }
     }
 
+    let conditionElements: ConditionElement[] | undefined;
+    let conditionElementsError: string | undefined;
+    if (waiter !== null) {
+      const running = scope.__cfcWaiters?.get(waiter);
+      if (running === undefined) {
+        conditionElementsError = "the wait is not installed in this " +
+          "document, so a navigation replaced the one it started in, unless " +
+          "its condition held just as time ran out";
+      } else {
+        try {
+          conditionElements = running.elements();
+        } catch (error) {
+          conditionElementsError = `reading them threw: ${String(error)}`;
+        }
+      }
+    }
+
     const body = document.body;
     const text = (body?.innerText ?? body?.textContent ?? "").trim()
       .slice(0, textLimit);
@@ -223,18 +305,26 @@ async function readPageFields(page: Page): Promise<ShellPageProbe> {
       runtime: rt !== undefined,
       pendingRequests,
       pendingRequestsError,
+      conditionElements,
+      conditionElementsError,
       text,
       consoleTail,
     };
-  }, { args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT] });
+  }, { args: [TEXT_LIMIT, CONSOLE_TAIL_LIMIT, waiter ?? null] });
 }
+
+/** The fields of {@link ShellPageProbe} that a read of the worker's logs fills. */
+type WorkerLogFields = Pick<
+  ShellPageProbe,
+  "workerProblems" | "workerProblemsError" | "workerErrorMessagesError"
+>;
 
 /**
  * Helper for {@link readShellPageProbe}, which asks the page's runtime for the
- * messages its worker has logged at `warn` or `error`. It never rejects: a
- * worker that does not answer within `budgetMs`, a runtime that refuses, a page
- * that cannot be asked, and a page whose main thread stops answering all come
- * back as the reason.
+ * messages its worker has logged at `warn` or `error`, and for the text of those
+ * at `error`. It never rejects: a worker that does not answer within `budgetMs`,
+ * a runtime that refuses, a page that cannot be asked, and a page whose main
+ * thread stops answering all come back as the reason.
  *
  * The page enforces `budgetMs` itself, which it cannot do once its main thread
  * has stopped, so the whole read is also bounded here, at that budget plus the
@@ -243,7 +333,7 @@ async function readPageFields(page: Page): Promise<ShellPageProbe> {
 async function readWorkerProblems(
   page: Page,
   budgetMs: number,
-): Promise<Pick<ShellPageProbe, "workerProblems" | "workerProblemsError">> {
+): Promise<WorkerLogFields> {
   const pageLimitMs = budgetMs + PROBE_READ_LIMIT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const unanswered = new Promise<never>((_, reject) => {
@@ -269,7 +359,7 @@ async function readWorkerProblems(
 async function readWorkerProblemsInPage(
   page: Page,
   budgetMs: number,
-): Promise<Pick<ShellPageProbe, "workerProblems" | "workerProblemsError">> {
+): Promise<WorkerLogFields> {
   return await page.evaluate(async (budgetMs: number) => {
     type LogCountsByMessage = Record<
       string,
@@ -281,11 +371,15 @@ async function readWorkerProblemsInPage(
           getLoggerCounts?: () => Promise<{
             counts: Record<string, number | LogCountsByMessage>;
           }>;
+          getLoggerErrorMessages?: () => Promise<
+            Record<string, Record<string, string[]>>
+          >;
         };
       };
     }).commonfabric?.rt;
-    let workerProblems: WorkerLogProblem[] | undefined;
+    let workerProblems: LogProblem[] | undefined;
     let workerProblemsError: string | undefined;
+    let workerErrorMessagesError: string | undefined;
     if (rt?.getLoggerCounts) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -319,6 +413,24 @@ async function readWorkerProblemsInPage(
           }
         }
         workerProblems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+        if (
+          rt.getLoggerErrorMessages &&
+          workerProblems.some((problem) => problem.error > 0)
+        ) {
+          // A failure here leaves the counts standing, which are already read.
+          try {
+            const messages = await Promise.race([
+              rt.getLoggerErrorMessages(),
+              unanswered,
+            ]);
+            for (const problem of workerProblems) {
+              problem.errorMessages = messages[problem.logger]
+                ?.[problem.message];
+            }
+          } catch (error) {
+            workerErrorMessagesError = String(error);
+          }
+        }
       } catch (error) {
         workerProblems = undefined;
         workerProblemsError = String(error);
@@ -326,7 +438,7 @@ async function readWorkerProblemsInPage(
         if (timer !== undefined) clearTimeout(timer);
       }
     }
-    return { workerProblems, workerProblemsError };
+    return { workerProblems, workerProblemsError, workerErrorMessagesError };
   }, { args: [budgetMs] });
 }
 
@@ -363,9 +475,68 @@ function describePendingRequests(probe: ShellPageProbe): string[] {
 }
 
 /**
+ * Renders `problems` under `heading`, one line per message with the text of what
+ * was recorded at `error` beneath it, up to {@link LOG_PROBLEM_LIMIT}.
+ */
+function describeLogProblems(
+  heading: string,
+  problems: LogProblem[],
+): string[] {
+  const shown = problems.slice(0, LOG_PROBLEM_LIMIT);
+  const lines = [
+    `${heading} (${problems.length} ` +
+    `${problems.length === 1 ? "kind" : "kinds"}, most errors first):`,
+    ...shown.flatMap((problem) => [
+      `    ${problem.logger} ${problem.message}: ` +
+      `${problem.error} error, ${problem.warn} warn`,
+      ...(problem.errorMessages ?? []).map((message, index) =>
+        `      error ${index + 1} of ${problem.error}: ` +
+        message.replace(/\s+/g, " ")
+      ),
+    ]),
+  ];
+  if (problems.length > shown.length) {
+    lines.push(`    and ${problems.length - shown.length} more`);
+  }
+  return lines;
+}
+
+/**
+ * Renders what the loggers of the process running the test have recorded at
+ * `error`, most errors first.
+ *
+ * The test's own runtime logs here and not in any page's worker, so nothing else
+ * in a report reads it. A logger's counts cover the whole process, so an error
+ * listed here may come from an earlier test in the same file.
+ */
+export function describeTestProcessLoggerErrors(): string[] {
+  const heading = "  test process logger errors, over its whole run";
+  const messages = getLoggerErrorMessagesBreakdown();
+  const problems: LogProblem[] = [];
+  for (
+    const [logger, byMessage] of Object.entries(getLoggerCountsBreakdown())
+  ) {
+    if (typeof byMessage !== "object") continue;
+    for (const [message, levels] of Object.entries(byMessage)) {
+      if (typeof levels !== "object" || levels.error === 0) continue;
+      problems.push({
+        logger,
+        message,
+        warn: levels.warn,
+        error: levels.error,
+        errorMessages: messages[logger]?.[message],
+      });
+    }
+  }
+  if (problems.length === 0) return [`${heading}: none`];
+  problems.sort((a, b) => b.error - a.error || b.warn - a.warn);
+  return describeLogProblems(heading, problems);
+}
+
+/**
  * Helper for {@link describeShellPage}, which renders the warnings and errors
  * the page's runtime worker has recorded, one line per message, most errors
- * first.
+ * first, with the text of what was recorded at `error` beneath its line.
  *
  * As with the pending requests, no runtime, a runtime that does not report, a
  * report that failed, and a worker with nothing recorded each say which they
@@ -384,17 +555,49 @@ function describeWorkerProblems(probe: ShellPageProbe): string[] {
     return [`${heading}: this runtime does not report them`];
   }
   if (problems.length === 0) return [`${heading}: none`];
-  const shown = problems.slice(0, WORKER_PROBLEM_LIMIT);
+  const lines = describeLogProblems(heading, problems);
+  if (probe.workerErrorMessagesError !== undefined) {
+    lines.push(
+      `    reading the errors' messages failed: ` +
+        probe.workerErrorMessagesError,
+    );
+  }
+  return lines;
+}
+
+/**
+ * Helper for {@link describeShellPage}, which renders what the elements a wait's
+ * condition collected came to, one line per selector, or nothing for a report
+ * about no wait.
+ *
+ * Each line tells apart the element that never existed, the one that came and
+ * went, and the one that exists and failed the rest of the condition. A condition
+ * collecting nothing says so, because its source is then all there is to read.
+ */
+function describeConditionElements(probe: ShellPageProbe): string[] {
+  const heading = "  elements the condition collected";
+  if (probe.conditionElementsError !== undefined) {
+    return [`${heading}: ${probe.conditionElementsError}`];
+  }
+  const elements = probe.conditionElements;
+  if (elements === undefined) return [];
+  if (elements.length === 0) {
+    return [`${heading}: none, it asked the probe to collect nothing`];
+  }
+  const shown = elements.slice(0, CONDITION_ELEMENT_LIMIT);
   const lines = [
-    `${heading} (${problems.length} ` +
-    `${problems.length === 1 ? "kind" : "kinds"}, most errors first):`,
-    ...shown.map((problem) =>
-      `    ${problem.logger} ${problem.message}: ` +
-      `${problem.error} error, ${problem.warn} warn`
+    `${heading} (${elements.length} ` +
+    `${elements.length === 1 ? "selector" : "selectors"}):`,
+    ...shown.map(({ selector, matched, rendered, mostMatched }) =>
+      `    ${JSON.stringify(selector)}: ` +
+      (matched === 0 && mostMatched === 0
+        ? "no match now, or at any check during the wait"
+        : `${matched} matched now, ${rendered} rendered, at most ` +
+          `${mostMatched} at any check during the wait`)
     ),
   ];
-  if (problems.length > shown.length) {
-    lines.push(`    and ${problems.length - shown.length} more`);
+  if (elements.length > shown.length) {
+    lines.push(`    and ${elements.length - shown.length} more`);
   }
   return lines;
 }
@@ -428,6 +631,7 @@ export function describeShellPage(probe: ShellPageProbe): string {
   } else {
     lines.push("  globalThis.app: absent");
   }
+  for (const line of describeConditionElements(probe)) lines.push(line);
   for (const line of describePendingRequests(probe)) lines.push(line);
   for (const line of describeWorkerProblems(probe)) lines.push(line);
   if (!probe.rootView) {
@@ -457,9 +661,13 @@ const PROBE_READ_LIMIT_MS = 10_000;
  * has closed, a browser that has gone away, and a main thread that never gets
  * around to the probe must none of them replace the failure being reported
  * with a second one, or hold it back, so the read is guarded here rather than
- * at each call site.
+ * at each call site. `waiter` names the running `waitForCondition` whose
+ * collected elements the report is to include.
  */
-export async function readAndDescribeShellPage(page: Page): Promise<string> {
+export async function readAndDescribeShellPage(
+  page: Page,
+  waiter?: string,
+): Promise<string> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const unanswered = new Promise<never>((_, reject) => {
@@ -473,7 +681,10 @@ export async function readAndDescribeShellPage(page: Page): Promise<string> {
         PROBE_READ_LIMIT_MS,
       );
     });
-    const probe = await Promise.race([readPageFields(page), unanswered]);
+    const probe = await Promise.race([
+      readPageFields(page, waiter),
+      unanswered,
+    ]);
     // The worker read carries its own budget, which is longer than this bound,
     // and bounds itself against a page that stops answering.
     const worker = probe.runtime

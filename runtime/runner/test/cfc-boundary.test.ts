@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { toFileUrl } from "@std/path";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
@@ -4979,99 +4980,124 @@ describe("ExtendedStorageTransaction CFC gate", () => {
   });
 
   it("reloads stored schema envelopes after a fresh runtime restart", async () => {
-    const storageManager = StorageManager.emulate({
-      as: signer,
-    });
-    const runtime1 = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-      ...characterizationCfcPosture,
-    });
-    try {
-      const firstTx = runtime1.edit();
-      firstTx.setCfcEnforcementMode("enforce-explicit");
-      const firstCell = runtime1.getCell(
-        signer.did(),
-        "cfc-schema-restart",
-        {
-          type: "object",
-          properties: {
-            secret: {
-              type: "string",
-              ifc: { confidentiality: ["secret"] },
-            },
-          },
-          required: ["secret"],
+    // The restart reaches the store: the first server closes and the second
+    // opens the same files. So what the second runtime holds before it writes
+    // can only have come back from those files.
+    const directory = await Deno.makeTempDir({ prefix: "cfc-schema-restart-" });
+    const firstSchema = {
+      type: "object",
+      properties: {
+        secret: {
+          type: "string",
+          ifc: { confidentiality: ["secret"] },
         },
-        firstTx,
-      );
-      firstCell.set({ secret: "hello" });
-      firstTx.prepareCfc();
-      const firstResult = await firstTx.commit().settled;
-      expect(firstResult.ok).toBeDefined();
-
-      const persistedId = parseLink(firstCell.getAsLink()).id!;
-      await runtime1.dispose({ closeStorage: false });
-
-      const runtime2 = new Runtime({
+      },
+      required: ["secret"],
+    } as const satisfies JSONSchema;
+    const secondSchema = {
+      type: "object",
+      properties: {
+        ...firstSchema.properties,
+        title: {
+          type: "string",
+          default: "",
+        },
+      },
+      required: ["secret", "title"],
+    } as const satisfies JSONSchema;
+    const start = () => {
+      const server = new MemoryV2Server.Server({
+        ...TEST_MEMORY_SERVER_AUTH,
+        store: toFileUrl(`${directory}/`),
+      });
+      const storageManager = new SharedV2StorageManager({
+        as: signer,
+        memoryHost: new URL("memory://"),
+      }, server);
+      const runtime = new Runtime({
         apiUrl: new URL("https://example.com"),
         storageManager,
         ...characterizationCfcPosture,
       });
-      try {
-        const replica = storageManager.open(signer.did())
-          .replica as unknown as {
-            getDocument(id: string): {
-              value?: unknown;
-              cfc?: { schemaHash: string };
-            } | undefined;
-          };
-        const original = replica.getDocument(persistedId);
-        expect(original?.value).toEqual({ secret: "hello" });
-        expect(original?.cfc?.schemaHash).toBeDefined();
-        expect(
-          replica.getDocument(`cid:${original!.cfc!.schemaHash}`)?.value,
-        ).toMatchObject({ type: "object", required: ["secret"] });
+      const replica = storageManager.open(signer.did())
+        .replica as unknown as {
+          getDocument(id: string): {
+            value?: unknown;
+            cfc?: { schemaHash: string };
+          } | undefined;
+        };
+      return { server, storageManager, runtime, replica };
+    };
 
-        const secondTx = runtime2.edit();
-        secondTx.setCfcEnforcementMode("enforce-explicit");
-        const secondCell = runtime2.getCell(
+    try {
+      const first = start();
+      let persistedId: string;
+      let storedCfc: { schemaHash: string } | undefined;
+      try {
+        const firstTx = first.runtime.edit();
+        firstTx.setCfcEnforcementMode("enforce-explicit");
+        const firstCell = first.runtime.getCell(
           signer.did(),
           "cfc-schema-restart",
-          {
-            type: "object",
-            properties: {
-              secret: {
-                type: "string",
-                ifc: { confidentiality: ["secret"] },
-              },
-              title: {
-                type: "string",
-                default: "",
-              },
-            },
-            required: ["secret", "title"],
-          },
-          secondTx,
+          firstSchema,
+          firstTx,
         );
-        secondCell.set({ secret: "hello", title: "restarted" });
+        firstCell.set({ secret: "hello" });
+        firstTx.prepareCfc();
+        const firstResult = await firstTx.commit().settled;
+        expect(firstResult.ok).toBeDefined();
+        await first.storageManager.synced();
+
+        persistedId = parseLink(firstCell.getAsLink()).id!;
+        storedCfc = first.replica.getDocument(persistedId)?.cfc;
+        expect(storedCfc?.schemaHash).toBeDefined();
+      } finally {
+        await first.runtime.dispose();
+        await first.storageManager.close();
+        await first.server.close();
+      }
+
+      const second = start();
+      try {
+        expect(second.replica.getDocument(persistedId)).toBeUndefined();
+
+        const secondCell = second.runtime.getCell(
+          signer.did(),
+          "cfc-schema-restart",
+          secondSchema,
+        );
+        await secondCell.sync();
+
+        const reloaded = second.replica.getDocument(persistedId);
+        expect(reloaded?.value).toEqual({ secret: "hello" });
+        expect(reloaded?.cfc).toEqual(storedCfc);
+        expect(
+          second.replica.getDocument(`cid:${storedCfc!.schemaHash}`)?.value,
+        ).toMatchObject({ type: "object", required: ["secret"] });
+
+        const secondTx = second.runtime.edit();
+        secondTx.setCfcEnforcementMode("enforce-explicit");
+        secondCell.withTx(secondTx).set({
+          secret: "hello",
+          title: "restarted",
+        });
         secondTx.prepareCfc();
         const secondResult = await secondTx.commit().settled;
         expect(secondResult.ok).toBeDefined();
 
-        const persisted = replica.getDocument(persistedId);
-        const schemaDoc = replica.getDocument(
-          `cid:${persisted!.cfc!.schemaHash}`,
-        );
-        expect(schemaDoc?.value).toMatchObject({
-          type: "object",
-          required: ["secret", "title"],
-        });
+        const rewritten = second.replica.getDocument(persistedId);
+        expect(rewritten?.cfc?.schemaHash).not.toBe(storedCfc!.schemaHash);
+        expect(
+          second.replica.getDocument(`cid:${rewritten!.cfc!.schemaHash}`)
+            ?.value,
+        ).toMatchObject({ type: "object", required: ["secret", "title"] });
       } finally {
-        await runtime2.dispose();
+        await second.runtime.dispose();
+        await second.storageManager.close();
+        await second.server.close();
       }
     } finally {
-      await storageManager.close();
+      await Deno.remove(directory, { recursive: true });
     }
   });
 

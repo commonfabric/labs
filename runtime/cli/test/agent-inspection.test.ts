@@ -7,7 +7,10 @@ import {
 } from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "@commonfabric/runner/storage/cache.deno";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import {
@@ -15,6 +18,7 @@ import {
   cancelAgentRun,
   readAgentRun,
   readAgentRuns,
+  removeAgentRun,
   selectAgentRun,
 } from "../lib/agent-inspection.ts";
 
@@ -22,19 +26,28 @@ const HOME_HOST = "https://home.example";
 const OTHER_HOST = "https://other.example";
 
 describe("agent-inspection", () => {
+  let signer: Identity;
   let home: `did:key:${string}`;
+  let servers: Map<string, ReturnType<typeof newLoopbackServer>>;
   let runtimes: Map<string, Runtime>;
-  let managers: ReturnType<typeof StorageManager.emulate>[];
+  let managers: EmulatedStorageManager[];
   let deps: AgentInspectionDeps;
   const config = { identity: "/test.key", apiUrl: HOME_HOST };
 
+  // Each host's store is a server the test owns, so it outlives the runtimes
+  // that inspection disposes once it has answered.
   beforeEach(async () => {
-    const signer = await Identity.fromPassphrase(crypto.randomUUID());
+    signer = await Identity.fromPassphrase(crypto.randomUUID());
     home = signer.did();
+    servers = new Map();
     managers = [];
     runtimes = new Map();
     for (const host of [HOME_HOST, OTHER_HOST]) {
-      const storageManager = StorageManager.emulate({ as: signer });
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      servers.set(host, server);
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
       managers.push(storageManager);
       runtimes.set(
         host,
@@ -56,6 +69,7 @@ describe("agent-inspection", () => {
   afterEach(async () => {
     for (const runtime of runtimes.values()) await runtime.dispose();
     for (const manager of managers) await manager.close();
+    for (const server of servers.values()) await server.close();
   });
 
   const seed = async () => {
@@ -164,6 +178,94 @@ describe("agent-inspection", () => {
     expect(run.host).toBe(OTHER_HOST);
     expect(run.state).toBe("running");
     expect(run.cancelRequestedAt).toBe("2026-09-20T12:00:00.000Z");
+  });
+
+  describe("removing a run from the queue", () => {
+    /** Lists `record` at the address the `agent` builtin gives its entry. */
+    const listAtItsAddress = async (
+      record: ReturnType<Runtime["getCell"]>,
+      host: string,
+    ) => {
+      const runtime = runtimes.get(HOME_HOST)!;
+      await runtime.editWithRetry((tx) => {
+        const entries = runtime.getCell(home, "home-pattern", undefined, tx)
+          .key("agentQueue").key("entries");
+        const entry = entries.elementById(record.getAsNormalizedFullLink().id);
+        entry.set({ run: record, host });
+        entries.addUnique(entry);
+      });
+    };
+
+    // A command disposes the connections it used. These cases read the queue
+    // again afterwards, so their connections outlive the command.
+    beforeEach(() => {
+      for (const runtime of runtimes.values()) {
+        runtime.dispose = () => Promise.resolve();
+      }
+    });
+    afterEach(() => {
+      for (const runtime of runtimes.values()) {
+        Reflect.deleteProperty(runtime, "dispose");
+      }
+    });
+
+    /** The same two runs as `seed()`, each listed as a real listing does. */
+    const seedAtAddresses = async () => {
+      const seeded = await seed();
+      const runtime = runtimes.get(HOME_HOST)!;
+      await runtime.editWithRetry((tx) => {
+        runtime.getCell(home, "home-pattern", undefined, tx)
+          .key("agentQueue").key("entries").set([]);
+      });
+      await listAtItsAddress(seeded.completed, OTHER_HOST);
+      await listAtItsAddress(seeded.queued, HOME_HOST);
+      return seeded;
+    };
+
+    it("takes a finished run off the queue and leaves its record and the other runs", async () => {
+      const { completed } = await seedAtAddresses();
+
+      const removed = await removeAgentRun(config, "hash-completed", deps);
+
+      expect(removed.state).toBe("completed");
+      expect((await readAgentRuns(config, deps)).map((run) => run.requestHash))
+        .toEqual(["hash-queued"]);
+      expect(completed.key("state").get()).toBe("completed");
+    });
+
+    it("refuses a run that has not finished, and leaves it listed", async () => {
+      await seedAtAddresses();
+
+      await expect(removeAgentRun(config, "hash-queued", deps)).rejects.toThrow(
+        "only a finished run can be removed",
+      );
+
+      expect((await readAgentRuns(config, deps)).length).toBe(2);
+    });
+
+    it("refuses a run listed twice, and leaves both listings", async () => {
+      const { completed } = await seedAtAddresses();
+      const runtime = runtimes.get(HOME_HOST)!;
+      const entries = runtime.getCell(home, "home-pattern").key("agentQueue")
+        .key("entries");
+      await runtime.editWithRetry((tx) => {
+        entries.withTx(tx).push({ run: completed, host: OTHER_HOST });
+      });
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("listed 2 times");
+
+      expect((entries.get() as unknown[] | undefined)?.length).toBe(3);
+    });
+
+    it("refuses an entry away from the address its id gives it", async () => {
+      await seed();
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("cannot be removed");
+
+      expect((await readAgentRuns(config, deps)).length).toBe(2);
+    });
   });
 
   it("reads an exact record without opening an unrelated unavailable host", async () => {
@@ -361,7 +463,26 @@ describe("agent-inspection", () => {
     await expect(cancelAgentRun(config, "hash-completed", deps)).rejects.toBe(
       rejection,
     );
-    expect(completed.key("cancelRequestedAt").get()).toBeUndefined();
+
+    // Inspection disposed the remote runtime, so the record is read back from
+    // the remote host's store by a runtime of its own.
+    const reader = new Runtime({
+      apiUrl: new URL(OTHER_HOST),
+      storageManager: EmulatedStorageManager.connectTo(
+        servers.get(OTHER_HOST)!,
+        { as: signer },
+      ),
+    });
+    try {
+      const stored = reader.getCellFromLink(
+        completed.getAsNormalizedFullLink(),
+      );
+      await stored.sync();
+      expect(stored.key("state").get()).toBe("running");
+      expect(stored.key("cancelRequestedAt").get()).toBeUndefined();
+    } finally {
+      await reader.dispose();
+    }
   });
 
   it("rejects an unknown identifier", async () => {

@@ -206,6 +206,7 @@ export class CFCellLink extends BaseElement {
 
   private async _resolveCell() {
     const generation = ++this._resolveCellGeneration;
+    const superseded = () => generation !== this._resolveCellGeneration;
     const cell = this.cell;
     const link = this.link;
     const runtime = this.runtime;
@@ -214,10 +215,10 @@ export class CFCellLink extends BaseElement {
     if (cell) {
       this._prepareSubscriptionTarget(this._cellKey(cell));
       try {
-        const followed = await this.#follow(cell, generation);
+        const followed = await this.#linkTarget.follow(cell, superseded);
         if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
-        if (generation !== this._resolveCellGeneration) return;
+        if (superseded()) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
         // cancellation, not a failure to surface. Read the cell's own runtime,
         // not the ambient `this.runtime` (cleared to undefined on logout).
@@ -241,10 +242,10 @@ export class CFCellLink extends BaseElement {
         }
         const linkedCell = runtime.getCellFromRef(parsedLink as CellRef);
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
-        const followed = await this.#follow(linkedCell, generation);
+        const followed = await this.#linkTarget.follow(linkedCell, superseded);
         if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
-        if (generation !== this._resolveCellGeneration) return;
+        if (superseded()) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
         // cancellation, not a failure to surface. Read the runtime the linked
         // cell was built from, not the ambient `this.runtime` (cleared on logout).
@@ -259,32 +260,6 @@ export class CFCellLink extends BaseElement {
       this._prepareSubscriptionTarget(undefined);
       this._setResolvedCell(undefined);
     }
-  }
-
-  /**
-   * Helper for `_resolveCell()`, which resolves `source`, follows its link,
-   * and returns the cell to show: `undefined` where the link names nothing
-   * readable. Returns `undefined` in place of the result once a later
-   * resolution or a disconnect supersedes the one numbered `generation`.
-   */
-  async #follow(
-    source: CellHandle,
-    generation: number,
-  ): Promise<{ cell: CellHandle | undefined } | undefined> {
-    const superseded = () => generation !== this._resolveCellGeneration;
-    let resolved = await source.resolveAsCell();
-    if (superseded()) return undefined;
-    const target = await this.#linkTarget.watch(source, resolved);
-    if (superseded()) return undefined;
-    if (target === undefined) return { cell: undefined };
-    if (!target.equals(resolved)) {
-      // The watch reports every move from here on. A first hop other than the
-      // first resolution means the link moved before the watch began, or
-      // leads through further links, so resolving again finds where it ends.
-      resolved = await source.resolveAsCell();
-      if (superseded()) return undefined;
-    }
-    return { cell: resolved };
   }
 
   private _updateSubscription() {

@@ -404,14 +404,13 @@ function withSlotIdentityLabel(
  */
 function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
   if (!rowSchema || typeof rowSchema !== "object") return [];
-  const props = (rowSchema as { properties?: Record<string, unknown> })
-    .properties;
+  const { properties: props, $defs } = rowSchema as {
+    properties?: Record<string, unknown>;
+    $defs?: Record<string, unknown>;
+  };
   if (!props || typeof props !== "object") return [];
   return Object.entries(props)
-    .filter(([, v]) =>
-      !!v && typeof v === "object" &&
-      Array.isArray((v as { asCell?: unknown }).asCell)
-    )
+    .filter(([, v]) => mayReadAsCell(v, $defs, new Set()))
     .map(([k]) => k);
 }
 
@@ -419,8 +418,8 @@ function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
  * The row schema describes the value a pattern observes after link
  * materialization, while SQLite stores an asCell column as an encoded link and
  * this builtin writes its decoded sigil object. Validate those transport
- * objects as objects rather than following the field's `$ref` and requiring
- * the linked value itself to be embedded in the row.
+ * objects as objects while keeping the column's declared alternatives, such
+ * as `null`. The linked value itself need not be embedded in the row.
  *
  * SQLite rows are flat, so only direct row properties can name result columns.
  */
@@ -438,9 +437,50 @@ function rowSchemaForDecodedLinks(
   }
   const properties = { ...rowSchema.properties };
   for (const column of linkColumns) {
-    properties[column] = { type: "object" };
+    properties[column] = {
+      anyOf: [{ type: "object" }, properties[column]],
+    };
   }
   return { ...rowSchema, properties };
+}
+
+/**
+ * Whether `schema` can read as a cell: it is marked `asCell`, or one of its
+ * `anyOf`, `oneOf`, or `allOf` branches is, so a `Cell<T> | null` column is a
+ * link column too. A `$ref` into the row schema's `$defs`, as a named type
+ * lowers to, is followed; `visiting` holds the refs being followed, so a cycle
+ * among them ends.
+ */
+function mayReadAsCell(
+  schema: unknown,
+  $defs: Record<string, unknown> | undefined,
+  visiting: Set<string>,
+): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const { asCell, anyOf, oneOf, allOf, $ref } = schema as {
+    asCell?: unknown;
+    anyOf?: unknown;
+    oneOf?: unknown;
+    allOf?: unknown;
+    $ref?: unknown;
+  };
+  if (Array.isArray(asCell)) return true;
+  if (
+    [anyOf, oneOf, allOf].some((branches) =>
+      Array.isArray(branches) &&
+      branches.some((branch) => mayReadAsCell(branch, $defs, visiting))
+    )
+  ) {
+    return true;
+  }
+  const name = typeof $ref === "string" && $ref.startsWith("#/$defs/")
+    ? $ref.slice("#/$defs/".length)
+    : undefined;
+  if (name === undefined || visiting.has(name)) return false;
+  visiting.add(name);
+  const found = mayReadAsCell($defs?.[name], $defs, visiting);
+  visiting.delete(name);
+  return found;
 }
 
 /** Replace each asCell column's stored sigil-link STRING with the parsed sigil

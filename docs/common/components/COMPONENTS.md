@@ -1271,10 +1271,15 @@ Each card is a flat row with a string `id` and these optional fields:
   first;
 - `tags` — a JSON string of the card's tags.
 
-A card is drawn where its `anchor` names the same cell as `$about`: same space,
-entity, scope, and path, without following a cell that holds a link. A card
-with no `anchor` field, which has not been through intake, is anchored at the
-first link of its `about`, else at its `act_target`. A card with a null `anchor`, and
+A card is drawn where its `anchor` names the cell `$about` resolves to: same
+space, entity, scope, and path. `$about` is resolved first because a pattern
+usually binds a cell that holds a link to the thing, as `item` is inside
+`items.map((item) => …)`, and the element follows that link when it moves to
+another thing. It draws nothing until `$about` has resolved. A card's `anchor`
+is compared as the row holds it, so it names the thing itself, as intake writes
+it, not a cell that links to it. A card with no `anchor` field, which has not
+been through intake, is anchored at the first link of its `about`, else at its
+`act_target`. A card with a null `anchor`, and
 a card without a string `id`, is never drawn inline. Cards draw at a fixed size,
 which `--cf-suggestions-card-width` and `--cf-suggestions-card-height` set
 (at least 10rem by 5rem), spaced by `--cf-suggestions-gap`. While it draws no

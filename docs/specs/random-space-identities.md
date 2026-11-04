@@ -2,8 +2,7 @@
 
 ## Status
 
-Implemented in this repository, except for deletion, which is specified and
-not yet implemented: "Deleting a space" below says what it does. The
+Implemented in this repository, deletion and reaping included. The
 [implementation plan](../plans/random-space-identities.md) says what is built
 and the deployment steps that remain.
 

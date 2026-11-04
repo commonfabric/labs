@@ -11,11 +11,16 @@ import {
   type Cell,
   computed,
   hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSession,
   resultOf,
   spaceAccess,
+  spaceDeleted,
   VIEWS,
   wish,
 } from "commonfabric";
@@ -70,8 +75,15 @@ export interface PlacedRoom {
   canSend?: PerSession<boolean>;
 }
 
-/** Whether the viewer can read a placed room. */
-export type PlacementState = "member" | "not-member" | "unavailable";
+/**
+ * Whether the viewer can read a placed room: `"deleted"` says no one can
+ * again, since the room's space is deleted, whatever the viewer's level.
+ */
+export type PlacementState =
+  | "member"
+  | "not-member"
+  | "deleted"
+  | "unavailable";
 
 /**
  * A placement's data face: what a placed chat holds, and what the viewer may
@@ -137,14 +149,19 @@ const FabriChatPlacement = pattern<
     hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
   );
   const about = computed(() => room.get()?.about);
-  // The viewer's access to the room's space decides: `"none"` is not a
-  // member, and `undefined`, not known yet, is unavailable, as is a room a
-  // member can't read yet.
+  const observedAbout = observeAvailability(about);
+  // A deleted space is read first, since its level is `"none"` for everyone
+  // and no retry admits anyone. Otherwise the viewer's access to the room's
+  // space decides: `"none"` is not a member, and `undefined`, not known yet,
+  // is unavailable, as is a room a member can't read yet.
   const state = computed((): PlacementState => {
+    if (spaceDeleted(room) === true) return "deleted";
     const level = spaceAccess(room);
     return level === "none"
       ? "not-member"
-      : level === undefined || about?.kind === undefined
+      : level === undefined || hasError(observedAbout) ||
+          isObsolete(observedAbout) || isPending(observedAbout) ||
+          isSyncing(observedAbout) || observedAbout?.kind === undefined
       ? "unavailable"
       : "member";
   });
@@ -164,7 +181,7 @@ const FabriChatPlacement = pattern<
   );
   const chat = {
     state,
-    about: computed(() => (isMember ? about : undefined)),
+    about: isMember ? about : undefined,
     messages,
     canSend: canSendForSession,
     participants: computed(() =>
@@ -174,9 +191,7 @@ const FabriChatPlacement = pattern<
   };
 
   return {
-    [NAME]: computed(() =>
-      isMember ? about?.title ?? "Chat" : "Chat (unavailable)"
-    ),
+    [NAME]: isMember ? about?.title ?? "Chat" : "Chat (unavailable)",
     room,
     [VIEWS]: { chat },
   };

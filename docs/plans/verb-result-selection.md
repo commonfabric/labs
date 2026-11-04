@@ -86,9 +86,7 @@ minted later for it, so the sharing is address-level, not object-level: the
 receipt-only branch writes it, the
 `deferForNavigate` branch is the **sole** caller of
 `setupDeferredHandlerResultPattern` (the navigateTo case, not the reactive one),
-and ordinary reactive results go through `runWithStartOwnership`. Other
-`{ resultFor: … }` cells in the same file take a resolved output-redirect spot
-as cause and are **not** receipts — do not pattern-match on `resultFor` alone.
+and ordinary reactive results go through `runWithStartOwnership`.
 
 Tools take a different path — `runtime.run` into a fresh result cell, surfaced
 as `resultRef` — and produce no receipt.
@@ -145,23 +143,22 @@ This is result readback, not invocation history.
 Any scheme for re-deriving a receipt's address has to reproduce this exactly.
 
 ```text
-receipt address = getCell(patternResultCell.space, { resultFor: cause })
-cause           = { ...inputs, $event: tx.dispatchedEventId ?? <random uuid> }
+receipt id = "receipt:" + hashOf({ event: <event id>, stream: <stream link> })
 ```
 
-`inputs` is the handler node's bound closure. The receipt lives in the **pattern
-result cell's space**, not necessarily the caller's, and is created with **no
-scope argument**, so receipts are space-scoped today.
+`handlingReceiptId()` (`runtime/runner/src/scheduler/event-identity.ts`) computes
+it, for a client that handles the event, a serving runtime, and a sender that
+runs nothing. The receipt lives in the **stream's space**, not necessarily the
+caller's, and receipts are space-scoped.
 
-**`$event` is not the caller's id.** A caller-supplied id is bound to the
+**The event id is not the caller's id.** A caller-supplied id is bound to the
 session that chose it and to the stream it was sent to before it becomes an
 event id: `scopeCallerEventId`
 (`runtime/runner/src/scheduler/event-identity.ts`) hashes
 `{caller, id, path, scope, session, space}` — the id string, the session, and
 the whole stream link — into `evt:caller:<hash>`, and `Cell.send` routes every
-supplied id through it. That binding is deliberate: two verbs sharing input
-bindings must not collide on one receipt, and neither must two callers that
-picked the same word for their own invocation. The hash is deterministic
+supplied id through it. That binding is deliberate: two callers that picked the same word for their own
+invocation must not collide on one receipt. The hash is deterministic
 across processes, so a retry from a fresh CLI invocation derives the same id —
 which is what makes any re-derivation scheme possible at all.
 
@@ -274,6 +271,7 @@ an address emitted by one command is accepted by the next without reshaping.
 | Bare hash | `fid1:…` | accepted | a hash — **not a complete identity** |
 | Entity URI | `of:fid1:…` | accepted | this entity, in its stored spelling |
 | Kinded URI | `computed:fid1:…` | **refused, by name** | a *different* entity from the `of:` one over the same hash |
+| Receipt URI | `receipt:fid1:…` | accepted | one handling's receipt, also a *different* entity from the `of:` one over the same hash |
 
 **Where the scheme is understood.** `entityIdFrom`
 (`runtime/runner/src/create-ref.ts`) is the entity-specific intake seam: it
@@ -281,7 +279,9 @@ accepts the `of:` scheme and **refuses `computed:` rather than stripping it**,
 because stripping would rename an id to its `of:` sibling, a different
 entity. Not one layer lower: `FabricHash.fromString` parses any tagged hash,
 whatever it names, and `of:` is a URI scheme, not a hash tag — the schemed
-form is not a parseable tagged hash.
+form is not a parseable tagged hash. A `receipt:` address never reaches it:
+`getPieceCell` reads one as the id it already is, since the envelope hands it to
+a caller to read back.
 
 **One seam reaches most callers.** The address-string paths that matter go
 through `entityIdFrom`: the CLI, the shell (`runtime-processor`), and slug
@@ -388,13 +388,12 @@ not have, and only the third is unserved:
 - *Lost the response, verb has effects outside its transaction.* Replay would
   re-send the mail or re-spend the model call. This is the case with no answer.
 
-**Option A — derive the address in the client.** Rebuild the cause from piece,
-verb, and a caller-chosen invocation id, per "How addresses are derived" above.
-The cost is coupling: addressing must be byte-identical across replicas, and a
-handler node's bound `inputs` are runner-internal, so the runner would have to
-export something like `receiptLinkFor(streamCell, eventId)` purely to serve this.
-Duplicating the cause-building in a client instead would create a two-place
-invariant that silently breaks addressing when either side drifts.
+**Option A — derive the address in the client.** Rebuild the address from the
+verb's stream and a caller-chosen invocation id, per "How addresses are derived"
+above. `handlingReceiptLink()` already computes it from those two, so the client
+derives nothing the runner has to export for it. What is left is the event id:
+`scopeCallerEventId` binds the session into it, so the caller has to hold on to
+the session that chose the id.
 
 **Option B — make replay safe instead.** If the harm is a re-executed effectful
 body, the fix may belong in the runner rather than the client: the receipt cell
