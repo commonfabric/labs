@@ -22,6 +22,8 @@ export default pattern(() => {
   const room = new Writable({ [NAME]: "Room" });
   const other = new Writable({ [NAME]: "Other room" });
   const unrelated = new Writable({ [NAME]: "Unrelated piece" });
+  const emptyRoom = new Writable<{ [NAME]?: string }>();
+  const nameEmpty = action(() => loom.setChatRoom.send({ room: emptyRoom }));
   const name = action(() => loom.setChatRoom.send({ room }));
   const nameOther = action(() => loom.setChatRoom.send({ room: other }));
   const clear = action(() => loom.setChatRoom.send({}));
@@ -47,7 +49,10 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert(() => loom.chatRoom?.get() === undefined) },
       { assertion: assert(() => oldRoot.chatRoom?.get() === undefined) },
+      { assertion: assert(() => loom.hasChatRoom === false) },
+      { assertion: assert(() => oldRoot.hasChatRoom === false) },
       { action: name },
+      { assertion: assert(() => loom.hasChatRoom === true) },
       { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
       { assertion: assert(() => loom.chatRoom?.equals(other) === false) },
       { action: name },
@@ -58,15 +63,22 @@ export default pattern(() => {
       // it was.
       { assertion: assert(() => room.get()[NAME] === "Room") },
       { action: clear },
+      { assertion: assert(() => loom.hasChatRoom === false) },
       { assertion: assert(() => loom.chatRoom?.get() === undefined) },
       { action: clear },
       { assertion: assert(() => loom.chatRoom?.get() === undefined) },
       { action: name },
       { action: nameForeign },
       { assertion: assert(() => loom.chatRoom?.equals(room) === true) },
+      { action: nameEmpty },
+      { assertion: assert(() => loom.hasChatRoom === true) },
+      { assertion: assert(() => loom.chatRoom?.get() === undefined) },
+      { action: clear },
+      { assertion: assert(() => loom.hasChatRoom === false) },
       // The designation is independent of the panels: removing every panel
       // showing the room, through either removal stream, leaves it named,
       // and adding the room back changes nothing.
+      { action: name },
       { action: addRoom },
       { action: duplicateRoom },
       { action: addUnrelated },

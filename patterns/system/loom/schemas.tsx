@@ -319,6 +319,10 @@ export interface LoomOutput {
   participants: ParticipantProfile[];
   addParticipant: Stream<{ profile: ParticipantProfile }>;
   chatRoom?: Writable<LinkedChatRoom>;
+
+  /** Whether a room is designated, including an empty or unreadable target. */
+  hasChatRoom: boolean;
+
   setChatRoom: Stream<ChatRoomChoice>;
   ensureChatRoom: Stream<void>;
 

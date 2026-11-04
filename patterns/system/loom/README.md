@@ -262,7 +262,11 @@ shared state. It is a link to a room piece in the Loom's own space, typed as
 `LinkedChatRoom`, which declares only the room's name: a reader of the Loom
 loads nothing of the conversation, and a client opens the room through the link
 under its own access. A Loom that names no room, including a root whose state
-holds no `chatRoom` field, reads the link's value as `undefined`.
+holds no `chatRoom` field, reads the link's value as `undefined`. `hasChatRoom`
+reports whether the root designates a room, independently of whether its target
+can be read or holds a value. A named empty or unreadable target leaves it
+`true`; clearing the designation makes it `false`. Consumers use this flag to
+distinguish a missing designation from an unavailable room.
 `setChatRoom({room?})` names the room, or clears it when `room` is omitted;
 sending the same event again leaves the same state. It refuses a room in another
 space. `ensureChatRoom()` names a room the root creates itself, unless the Loom

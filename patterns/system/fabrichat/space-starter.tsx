@@ -15,40 +15,52 @@ import {
   wish,
 } from "commonfabric";
 import type { ChatRoomView } from "./room.tsx";
-import {
-  CHAT_START_ACTION,
-  CHAT_START_SURFACE,
-  type ChatDisplay,
-  type ChatProfile,
-} from "./schemas.tsx";
+import { type ChatDisplay, type ChatProfile } from "./schemas.tsx";
 
 /** The registered room's rendering and data face. */
 interface SpaceChatRoom {
   [UI]: VNode;
-  [VIEWS]: { room: ChatRoomView };
+  [VIEWS]?: { room?: ChatRoomView };
 }
 
 /** The Loom root's space conversation and its creation operation. */
 interface SpaceChat {
   chatRoom?: Cell<SpaceChatRoom>;
+  hasChatRoom?: boolean;
   ensureChatRoom?: Stream<void>;
+}
+
+/** The registered room and its rendering, absent until the root names one. */
+export interface SpaceStarterOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  room: Cell<SpaceChatRoom> | undefined;
+  [VIEWS]: { room: ChatRoomView | undefined };
 }
 
 /**
  * Opens the enclosing space's conversation and offers profile setup. The
- * reviewed Start gesture asks the Loom root to create its room only if absent.
+ * Start action asks the Loom root to create its room only if absent.
  */
-export default pattern(() => {
+export default pattern<Record<string, never>, SpaceStarterOutput>(() => {
   const profile = wish<PerSession<ChatProfile>>({ query: "#profile" });
   const selectedProfile: PerSession<ChatProfile | undefined> = profile.result;
   const space = wish<Cell<SpaceChat>>({ query: "#default" });
   // A stream schema supplies a handle even when the underlying field is
   // absent. The unbranded projection checks that the operation exists.
-  const registry = wish<{ ensureChatRoom?: unknown }>({ query: "#default" });
+  const registry = wish<{ ensureChatRoom?: unknown }>(
+    {
+      query: "#default",
+    },
+  );
+  const named = computed(() => space.result?.get()?.hasChatRoom === true);
   const room = computed(() => space.result?.get()?.chatRoom);
-  const ready = computed(() => room?.get() !== undefined);
+  const ready = computed(() => room?.get()?.[UI] !== undefined);
   const canCreate = computed(() => {
-    if (!space.result || registry.result?.ensureChatRoom === undefined) {
+    if (
+      !space.result || space.result.get()?.hasChatRoom !== false ||
+      registry.result?.ensureChatRoom === undefined
+    ) {
       return false;
     }
     const access = spaceAccess(space.result);
@@ -74,18 +86,13 @@ export default pattern(() => {
             <cf-text>
               Everyone with access to this space can read its conversation.
             </cf-text>
-            <div
-              data-ui-pattern={CHAT_START_SURFACE}
-              data-ui-event-integrity={CHAT_START_SURFACE}
-            >
-              <cf-button
-                disabled={!canCreate}
-                data-ui-action={CHAT_START_ACTION}
-                onClick={start}
-              >
-                Start conversation
-              </cf-button>
-            </div>
+            {named
+              ? <cf-text>The space's conversation is unavailable.</cf-text>
+              : (
+                <cf-button disabled={!canCreate} onClick={start}>
+                  Start conversation
+                </cf-button>
+              )}
           </cf-vstack>
         )}
         <div
@@ -99,7 +106,7 @@ export default pattern(() => {
     ),
     room,
     [VIEWS]: {
-      room: computed(() => room?.get()?.[VIEWS].room),
+      room: computed(() => room?.get()?.[VIEWS]?.room),
     },
   };
 });

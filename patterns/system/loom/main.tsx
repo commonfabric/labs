@@ -893,6 +893,7 @@ export default pattern<LoomInput, LoomOutput>(
       participants: roster,
       addParticipant: addParticipant({ roster: participants }),
       chatRoom: room,
+      hasChatRoom: computed(() => chatRoom.get().room !== undefined),
       setChatRoom: setChatRoom({ chatRoom }),
       ensureChatRoom: ensureChatRoom({ chatRoom }),
       fileStore: store,
