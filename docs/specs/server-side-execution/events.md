@@ -245,9 +245,10 @@ handler fires
   writer owes the handler nothing and the preflight leaves it alone. A
   `Stream<void>` input (`asCell: ["stream", "opaque"]`) is a stream whose
   payload is opaque: the handler sends to it through its link, so the
-  preflight brings that link's writers up to date as for a read. Handlers never read last-wave state: events drain
-  as part of regular execution — the loop is simply not idle until all events
-  are processed — and the preflight ahead of each dispatch makes the
+  preflight brings that link's writers up to date as for a read. Handlers
+  never read last-wave state: events drain as part of regular execution —
+  the loop is simply not idle until all events are processed — and the
+  preflight ahead of each dispatch makes the
   inputs a handler reads current. Within that rule the serving
   scheduler's pass takes every ready event behind the head as well, each
   through its own preflight, and settles the derivations once behind all
