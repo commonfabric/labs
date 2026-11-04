@@ -109,6 +109,12 @@ describe("orientation", () => {
     );
   });
 
+  it("leaves completion links to the host contract", () => {
+    expect(finishTaskTool.descriptor.description).not.toContain(
+      "never as a link or path in message",
+    );
+  });
+
   describe("without finish_task", () => {
     it("names finish_task to a run that holds it and to no other", () => {
       const holding = buildCfHarnessBaseSystemPrompt({
