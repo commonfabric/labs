@@ -266,12 +266,17 @@ const SUBSCHEMA_LIST_KEYS: ReadonlySet<string> = new Set<string>(
   ARRAY_SUBSCHEMA_KEYS,
 );
 
+/** The keywords that hold a table of schemas only a `$ref` reaches. */
+const REFERENCE_TABLE_KEYS: ReadonlySet<string> = new Set<string>([
+  ...DEFS_KEYS,
+  "definitions",
+]);
+
 /** The keywords whose value is a record of nested schemas. */
 const SUBSCHEMA_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   ...RECORD_SUBSCHEMA_KEYS,
   ...UNUSED_RECORD_SUBSCHEMA_KEYS,
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
 ]);
 
 /** Whether a keyword leads to a nested schema, in any of the three shapes. */
@@ -1317,12 +1322,12 @@ function objectSubsetIssues(
   // or a typed index signature, still publishes a value there, which must
   // hold to every contract the previous object gave the name. A verb is
   // refused even when optional, and so is a field holding one at any depth,
-  // because a verb's absence is not something a holder can read: a stream handle reads as itself when nothing is stored,
-  // so a holder still bound to it keeps sending, and each event is dropped
-  // for want of a handler. And a verb's event refuses it outright: a caller
-  // still sends a field the event stops declaring, and an event strips
-  // undeclared fields before any handler runs, so the caller's value would
-  // be dropped without a refusal.
+  // because a verb's absence is not something a holder can read: a stream
+  // handle reads as itself when nothing is stored, so a holder still bound to
+  // it keeps sending, and each event is dropped for want of a handler. And a
+  // verb's event refuses it outright: a caller still sends a field the event
+  // stops declaring, and an event strips undeclared fields before any handler
+  // runs, so the caller's value would be dropped without a refusal.
   //
   // An argument's named fields are not held either way: dropping one gives up
   // a demand, which leaves a writer's value unread rather than breaking a
@@ -1784,12 +1789,6 @@ function matchingPatternPropertySchemas(
   }
   return matches;
 }
-
-/** The keywords that hold a table of schemas only a `$ref` reaches. */
-const REFERENCE_TABLE_KEYS: ReadonlySet<string> = new Set<string>([
-  ...DEFS_KEYS,
-  "definitions",
-]);
 
 /**
  * Whether `schema`, a field's contract under `root`, publishes a verb anywhere
@@ -2658,8 +2657,7 @@ export const DEFAULT_INERT_SUBSCHEMA_KEYS: ReadonlySet<string> = new Set([
   // Hold definitions nothing reads directly. A definition a value takes is
   // reached through the `$ref` that names it, and `resolveSchema` follows every
   // `$ref` this walk passes.
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
   // Apply to the value once their condition holds.
   "if",
   "then",
