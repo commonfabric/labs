@@ -44,6 +44,15 @@ referenced files or synchronize changes back to a local Markdown file. Once
 editors open the note, change its body through the collaborative editor or the
 verbs below rather than replacing it with an ordinary whole-value write.
 
+## In the filesystem
+
+Mounted through FUSE, the note is a single `index.md`: its title in the
+frontmatter, then the body. Saving the file writes both back. A save replaces
+the whole body, which the body accepts only until an editor has changed it;
+after that, a save that changes the body is refused, while one that changes only
+the title still lands. Change the body then through the verbs below, which the
+mount exposes as callable files beside `index.md`.
+
 ## Editing from a handler or an agent
 
 Three verbs edit the body while people are typing in it, so an agent or another
@@ -90,6 +99,7 @@ the note and back into it.
 deno run --no-lock -A runtime/cli/mod.ts test patterns/apps/shared-note/main.test.tsx
 ```
 
-The pattern test covers initial text, compact views, profile setup, editor
-bindings, error display, recovery, the live-cursor notice, and the verbs.
-Browser integration covers multiple identities and the actual editor protocol.
+The pattern test covers initial text, the filesystem projection, compact views,
+profile setup, editor bindings, error display, recovery, the live-cursor notice,
+and the verbs. Browser integration covers multiple identities and the actual
+editor protocol.
