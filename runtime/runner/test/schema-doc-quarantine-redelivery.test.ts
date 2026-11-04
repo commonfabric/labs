@@ -55,6 +55,9 @@ class CidDroppingFactory implements SessionFactory {
   /** How many `session.watch.set` requests the client has sent. */
   watchSets = 0;
 
+  /** Whether the server appears not to take declared holdings. */
+  hidesHoldings = false;
+
   readonly #server: MemoryV2Server.Server;
 
   /** Constructs an instance over `server` that drops from `drops` frames. */
@@ -116,7 +119,14 @@ class CidDroppingFactory implements SessionFactory {
     const frame = message as ServerMessage & {
       effect?: SessionSync;
       ok?: { sync?: SessionSync };
+      flags?: Record<string, unknown>;
     };
+    if (frame.type === "hello.ok" && this.hidesHoldings) {
+      return {
+        ...(frame as object),
+        flags: { ...frame.flags, sessionHoldings: false },
+      } as unknown as ServerMessage;
+    }
     if (frame.type === "session/effect" && frame.effect?.type === "sync") {
       return {
         ...(frame as object),
@@ -317,6 +327,77 @@ describe("schema-doc-quarantine-redelivery", () => {
 
       expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
       expect(revision()).toBe(2);
+    });
+  });
+
+  describe("a quarantined document a later frame settles", () => {
+    /** A reader whose read of the document has failed, and stopped dropping. */
+    const failedReader = async () => {
+      const reader = readerDropping(Infinity);
+      await expect(
+        loadDocument(reader.runtime, reader.cellOf(DOCUMENT_ID)),
+      ).rejects.toThrow(DocumentLoadError);
+      reader.factory.dropsLeft = 0;
+      return reader;
+    };
+
+    it("loads as present once a frame applies a newer copy", async () => {
+      const { factory, replica, runtime, cellOf, revision } =
+        await failedReader();
+
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_000,
+        toSeq: 900_001,
+        upserts: [{
+          branch: "",
+          id: `cid:${leafHash}`,
+          scope: "space",
+          seq: 900_001,
+          doc: { value: leafSchema },
+        }, {
+          branch: "",
+          id: DOCUMENT_ID,
+          scope: "space",
+          seq: 900_001,
+          doc: { value: naming(3) },
+        }],
+        removes: [],
+      }, "integrate");
+
+      expect(await loadDocument(runtime, cellOf(DOCUMENT_ID))).toBe(true);
+      expect(revision()).toBe(3);
+      expect(factory.watchSets).toBe(1);
+    });
+
+    it("stops failing its load once a frame removes it", async () => {
+      const { replica } = await failedReader();
+
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_000,
+        toSeq: 900_001,
+        upserts: [],
+        removes: [{ branch: "", id: DOCUMENT_ID, scope: "space" }],
+      }, "integrate");
+
+      expect(await replica.quarantineFailure(DOCUMENT_ID as URI, "space"))
+        .toBeUndefined();
+    });
+  });
+
+  describe("a quarantine on a server that takes no declared holdings", () => {
+    it("fails the load without asking, and logs that it stays quarantined", async () => {
+      const before = unhealedErrors();
+      const reader = readerDropping(Infinity);
+      reader.factory.hidesHoldings = true;
+
+      await expect(
+        loadDocument(reader.runtime, reader.cellOf(DOCUMENT_ID)),
+      ).rejects.toThrow(DocumentLoadError);
+
+      expect(reader.factory.watchSets).toBe(0);
+      expect(unhealedErrors()).toBe(before + 1);
     });
   });
 
