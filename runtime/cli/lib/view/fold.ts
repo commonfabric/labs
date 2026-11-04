@@ -48,11 +48,25 @@ export interface DiffFileRange {
   readonly summary: Line;
 }
 
-/** The files a diff touches, each with its line range and collapsed summary. */
-export function diffFiles(text: string): DiffFileRange[] {
+/** Which of the given repository paths the repository itself declares to be
+ * tests (true) or not tests (false). A path it says nothing about is absent. */
+export type DeclaredTests = (
+  paths: readonly string[],
+) => ReadonlyMap<string, boolean>;
+
+/** The files a diff touches, each with its line range and collapsed summary. A
+ * file is a test when `declaredTests` says so, and otherwise when
+ * {@link isTestPath} does. */
+export function diffFiles(
+  text: string,
+  declaredTests?: DeclaredTests,
+): DiffFileRange[] {
   const model = parseDiff(text);
   if (!model) return [];
   const raw = text.split("\n");
+  const pathOf = (file: { newPath?: string; oldPath?: string }) =>
+    file.newPath ?? file.oldPath ?? "(unknown file)";
+  const declared = declaredTests?.(model.files.map(pathOf));
   return model.files.map((file, index) => {
     let adds = 0;
     let dels = 0;
@@ -62,7 +76,7 @@ export function diffFiles(text: string): DiffFileRange[] {
       else if (kind === "del") dels++;
     }
     const binary = anyBinary(raw, file.headerLine, file.endLine);
-    const path = file.newPath ?? file.oldPath ?? "(unknown file)";
+    const path = pathOf(file);
     return {
       index,
       headerLine: file.headerLine,
@@ -71,7 +85,7 @@ export function diffFiles(text: string): DiffFileRange[] {
       oldPath: file.oldPath,
       newPath: file.newPath,
       binary,
-      isTest: isTestPath(path),
+      isTest: declared?.get(path) ?? isTestPath(path),
       isMarkdown: isMarkdownPath(path),
       adds,
       dels,
@@ -264,30 +278,37 @@ const TEST_SEGMENTS = new Set([
 ]);
 
 /** Whether a directory segment conventionally holds tests or test support:
- * one of `TEST_SEGMENTS`, a suite like `browser-tests`, or a helper library
- * like `test-utils`. */
+ * one of `TEST_SEGMENTS`, a suite like `browser-tests`, a helper library like
+ * `test-utils`, or a camel-case test target like Xcode's `AppTests` or
+ * Gradle's `androidTest`. */
 function isTestSegment(segment: string): boolean {
   const s = segment.toLowerCase();
   return TEST_SEGMENTS.has(s) || /[-_.]tests$/.test(s) ||
-    /^test[-_]?(support|utils?|helpers?)$/.test(s);
+    /^test[-_]?(support|utils?|helpers?)$/.test(s) ||
+    /([a-z\d]Tests?|[A-Z]Tests)$/.test(segment);
 }
 
 /** Whether a path names a test or test-support file: one under a test-ish
  * directory, or a basename like `x.test.ts`, `x.spec.js`, `x.test.d.ts`,
  * `x_test.go`, `x_spec.rb`, `x-fixture.ts`, `x-fixtures.ts`, `x.stories.tsx`,
- * `test_x.py`, `test-helpers.ts`, `conftest.py`, or `x.golden`. The marker
- * must precede the final extension, so data about a test, such as
- * `x.test.ts.jsonl`, does not qualify. A `test-` prefix names tooling about
- * tests as often as tests, as in `test-runner.ts`, so only pytest's
- * `test_*.py` and helper libraries qualify by prefix. Likewise `_spec` also
- * names specification documents, so only RSpec's `*_spec.rb` qualifies by that
- * suffix. */
+ * `test_x.py`, `test-helpers.ts`, `conftest.py`, or `x.golden`, or a
+ * camel-case one like `ParserTest.kt`, `ParserTests.swift`, or
+ * `ParserFixtures.swift`. The marker must precede the final extension, so data
+ * about a test, such as `x.test.ts.jsonl`, does not qualify. A `test-` prefix
+ * names tooling about tests as often as tests, as in `test-runner.ts`, so only
+ * pytest's `test_*.py` and helper libraries qualify by prefix. Likewise `_spec`
+ * also names specification documents, so only RSpec's `*_spec.rb` qualifies by
+ * that suffix. A repository whose own conventions differ declares its tests
+ * through {@link DeclaredTests}. */
 export function isTestPath(path: string): boolean {
   const segs = path.split(/[\\/]/);
-  const base = (segs.pop() ?? "").toLowerCase();
+  const name = segs.pop() ?? "";
+  const base = name.toLowerCase();
   if (segs.some(isTestSegment)) return true;
   return /(\.(test|spec|stories)|[-_]test|[-_]fixtures?)(\.d)?\.[^.]+$/
     .test(base) ||
+    /([A-Z][a-z\d]+(Tests?|Fixtures?)|[A-Z](Tests|Fixtures))(\.d)?\.[^.]+$/
+      .test(name) ||
     /^test_.*\.py$/.test(base) ||
     /_spec\.rb$/.test(base) ||
     /^test[-_]?(support|utils?|helpers?)\./.test(base) ||

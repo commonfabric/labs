@@ -17,6 +17,7 @@ import type { Document, Line, ViewMode } from "./model.ts";
 import type { DiffHunk, DiffModel } from "./diff.ts";
 import type { DiffCountFileContext } from "./diffcounts.ts";
 import type { LineEndingProvenance } from "./editbuffer.ts";
+import type { DeclaredTests } from "./fold.ts";
 import type {
   Highlighter,
   Language,
@@ -97,6 +98,10 @@ export interface EditableSource {
   diffCountContexts?(
     text: string,
   ): readonly DiffCountFileContext[] | undefined;
+
+  /** For a diff, which of its paths the repository declares to be tests or not
+   * tests, overriding what their names suggest. */
+  readonly declaredTests?: DeclaredTests;
 
   /** False when there is no underlying file to edit or the selected language
    * is read-only. `reason` is shown when a cursor move is attempted on a
