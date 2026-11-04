@@ -29,11 +29,10 @@ of everything the reap removes; keeping it is the space owner's decision.
 ## The host run
 
 The run is one script. It stops at the first command that fails, so no step
-runs on the strength of one that did not finish. The backup opens the store
-through a URI, which a DID's characters never need escaping in. Set the four names at its top
-first: the space's DID, a date for the file names, the live directory, and
-the directory that receives what the swap replaces, which has to be on the
-live directory's file system for the copy to be quick.
+runs on the strength of one that did not finish. Set the four names at its top
+first: the space's DID, a date for the file names, the live directory, and the
+directory that receives what the swap replaces, which has to be on the live
+directory's file system for the copy to be quick.
 
 ```bash
 set -euo pipefail
@@ -52,8 +51,16 @@ cf space reap "$LIVE/$DID.sqlite" --dry-run --live "$LIVE/$DID.sqlite"
 # 1. Stop every instance. Nothing writes any space from here on. A log
 #    beside the store that is not empty holds what an instance did not write
 #    back, so it stops the run; an empty one goes, and so does the `-shm`
-#    index, which holds no writes.
+#    index, which holds no writes. Every instance has to report itself
+#    inactive before anything is read.
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
 for log in -wal -journal; do
   if [ -s "$DID.sqlite$log" ]; then
     echo "$DID.sqlite$log is not empty: stop here" >&2
@@ -65,7 +72,11 @@ sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 # 2. The authoritative backup, AFTER the stop, checksummed: the rollback, the
 #    archive, and the source. Read as immutable: nothing writes the file now,
 #    and no log beside it holds anything.
-sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
+# SQLite decodes `%HH` in a URI's path and ends the path at `?` or `#`, so
+# those three are escaped in the store's path.
+STORE_URI="file:$(printf '%s' "$LIVE/$DID.sqlite" |
+  sed -e 's/%/%25/g' -e 's/?/%3F/g' -e 's/#/%23/g')"
+sqlite3 "$STORE_URI?immutable=1" \
   "VACUUM INTO '$REPLACED/$DID.pre-reap-$DATE.sqlite'"
 sha256sum "$REPLACED/$DID.pre-reap-$DATE.sqlite"
 
@@ -120,7 +131,16 @@ open. With the same four names set:
 ```bash
 set -euo pipefail
 cd "$LIVE"
+# Stop every instance, and stop here unless each reports itself inactive:
+# nothing moves while an instance may still have the result open.
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
 sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 sudo cp -p "$REPLACED/$DID.live-$DATE.sqlite" "$DID.sqlite.restored"
 sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"

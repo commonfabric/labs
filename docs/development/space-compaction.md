@@ -284,8 +284,16 @@ cd "$LIVE"
 # 2. Stop every instance. Nothing writes any space from here on. A log
 #    beside the store that is not empty holds what an instance did not write
 #    back, so it stops the run; an empty one goes, and so does the `-shm`
-#    index, which holds no writes.
+#    index, which holds no writes. Every instance has to report itself
+#    inactive before anything is read.
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
 for log in -wal -journal; do
   if [ -s "$DID.sqlite$log" ]; then
     echo "$DID.sqlite$log is not empty: stop here" >&2
@@ -298,7 +306,11 @@ sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 #    checksummed. This is the rollback, the archive, and the source. It reads
 #    the store as immutable, which is exact now that nothing writes it and no
 #    log beside it holds anything (see below for why not `-readonly`).
-sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
+# SQLite decodes `%HH` in a URI's path and ends the path at `?` or `#`, so
+# those three are escaped in the store's path.
+STORE_URI="file:$(printf '%s' "$LIVE/$DID.sqlite" |
+  sed -e 's/%/%25/g' -e 's/?/%3F/g' -e 's/#/%23/g')"
+sqlite3 "$STORE_URI?immutable=1" \
   "VACUUM INTO '$REPLACED/$DID.pre-compaction-$DATE.sqlite'"
 sha256sum "$REPLACED/$DID.pre-compaction-$DATE.sqlite"
 
@@ -358,9 +370,16 @@ same four names set:
 set -euo pipefail
 cd "$LIVE"
 
-# 1. Stop every instance and confirm each has stopped. (sudo.)
+# 1. Stop every instance, and stop here unless each reports itself inactive:
+#    nothing moves while an instance may still have the result open. (sudo.)
 for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
-for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p" || true; done # 21 lines: inactive
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
 
 # 2. Keep the result, with the companions it grew, where its names cannot
 #    collide with the original's.
