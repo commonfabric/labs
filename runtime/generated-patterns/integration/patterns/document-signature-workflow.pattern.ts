@@ -243,7 +243,7 @@ const sanitizeSigner = (
     email,
     status,
     order,
-    signedAt,
+    ...(signedAt !== undefined && { signedAt }),
   };
 };
 
@@ -326,7 +326,8 @@ const markSignerDeclined = handler(
     if (entry.status === "declined") return;
     const reason = sanitizeReason(event?.reason);
     const next = current.slice();
-    next[index] = { ...entry, status: "declined", signedAt: undefined };
+    const { signedAt: _signedAt, ...unsigned } = entry;
+    next[index] = { ...unsigned, status: "declined" };
     storeSigners(context, sortSigners(next));
     const suffix = reason.length > 0 ? ` (${reason})` : "";
     const message = `${entry.name} (${entry.role}) declined${suffix}`;
@@ -346,7 +347,8 @@ const resetSigner = handler(
       return;
     }
     const next = current.slice();
-    next[index] = { ...entry, status: "pending", signedAt: undefined };
+    const { signedAt: _signedAt, ...unsigned } = entry;
+    next[index] = { ...unsigned, status: "pending" };
     storeSigners(context, sortSigners(next));
     const message = `${entry.name} reset to pending`;
     context.log.set(appendHistory(context.log.get() ?? [], message));

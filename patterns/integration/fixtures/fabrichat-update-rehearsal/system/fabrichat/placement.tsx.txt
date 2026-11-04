@@ -14,6 +14,7 @@ import {
   pattern,
   type PerSession,
   spaceAccess,
+  spaceDeleted,
   VIEWS,
   wish,
 } from "commonfabric";
@@ -67,8 +68,15 @@ export interface PlacedRoom {
   canSend?: PerSession<boolean>;
 }
 
-/** Whether the viewer can read a placed room. */
-export type PlacementState = "member" | "not-member" | "unavailable";
+/**
+ * Whether the viewer can read a placed room: `"deleted"` says no one can
+ * again, since the room's space is deleted, whatever the viewer's level.
+ */
+export type PlacementState =
+  | "member"
+  | "not-member"
+  | "deleted"
+  | "unavailable";
 
 /**
  * A placement's data face: what a placed chat holds, and what the viewer may
@@ -130,10 +138,12 @@ const FabriChatPlacement = pattern<
   const profileWish = wish<PerSession<ProfileCell>>({ query: "#profile" });
   const viewer = profileWish.result;
   const about = computed(() => room.get()?.about);
-  // The viewer's access to the room's space decides: `"none"` is not a
-  // member, and `undefined`, not known yet, is unavailable, as is a room a
-  // member can't read yet.
+  // A deleted space is read first, since its level is `"none"` for everyone
+  // and no retry admits anyone. Otherwise the viewer's access to the room's
+  // space decides: `"none"` is not a member, and `undefined`, not known yet,
+  // is unavailable, as is a room a member can't read yet.
   const state = computed((): PlacementState => {
+    if (spaceDeleted(room) === true) return "deleted";
     const level = spaceAccess(room);
     return level === "none"
       ? "not-member"
