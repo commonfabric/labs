@@ -2455,9 +2455,13 @@ export declare const CELL_LIKE: unique symbol;
  * returns one, passes too, because its type cannot be told apart from the
  * field's. Either is a value, not the property left out.
  */
-// deno-lint-ignore ban-types
-type OptionalInputUndefined<T, K extends keyof T> = {} extends Pick<T, K>
-  ? undefined
+// An index signature's key is not an optional property, though `Pick` over it
+// is satisfied by `{}` too; its values keep their declared type.
+type OptionalInputUndefined<T, K extends keyof T> = string extends K ? never
+  : number extends K ? never
+  : symbol extends K ? never
+  // deno-lint-ignore ban-types
+  : {} extends Pick<T, K> ? undefined
   : never;
 
 /**
@@ -3586,8 +3590,8 @@ export type PatternToolFunction = <
   // `sandboxId`); otherwise validate that E (after stripping cells) is a subset
   // of T.
   extraParams?: [keyof E & FrameworkProvidedKeys<T>] extends [never]
-    ? (StripCell<E> extends { [K in keyof T]?: T[K] | undefined }
-      ? FactoryInput<E>
+    ? (StripCell<E> extends
+      { [K in keyof T]?: T[K] | OptionalInputUndefined<T, K> } ? FactoryInput<E>
       : never)
     : never,
 ) => PatternToolResult<E>;

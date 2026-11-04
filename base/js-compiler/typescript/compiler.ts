@@ -481,6 +481,7 @@ export class TypeScriptCompiler {
     if (!noCheck) {
       const semanticErrors = function* (
         of: Checker,
+        phase: string,
       ): Generator<void, ReturnType<Checker["collectSemanticErrors"]>, void> {
         const errors: ReturnType<Checker["collectSemanticErrors"]> = [];
         for (const sourceFile of of.checkableSources()) {
@@ -488,12 +489,12 @@ export class TypeScriptCompiler {
           for (const error of of.collectSemanticErrors(sourceFile)) {
             errors.push(error);
           }
-          compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
+          compileTimingLogger.time(typeCheckStart, "phase", phase);
           yield;
         }
         return errors;
       };
-      const errors = yield* semanticErrors(checker);
+      const errors = yield* semanticErrors(checker, "typeCheckFile");
       // Stored source admitted before `exactOptionalPropertyTypes` was the
       // rule may hold an `undefined` written into an optional property, which
       // the flag refuses, and those bytes cannot be re-authored. Such a
@@ -517,9 +518,11 @@ export class TypeScriptCompiler {
             host,
           ),
         );
-        if ((yield* semanticErrors(inexactChecker)).length === 0) {
-          errors.length = 0;
-        }
+        const admitted = yield* semanticErrors(
+          inexactChecker,
+          "typeCheckFileInexact",
+        );
+        if (admitted.length === 0) errors.length = 0;
       }
       checker.throwIfErrors(errors);
     }
