@@ -146,6 +146,19 @@ const isListedOwn = (
     ownProfileSpaces(profiles, spaceOf(profiles)).includes(space);
 };
 
+// Whether `entry` is one the picker offers to restore: one of the user's own
+// listed profiles (`isListedOwn()`) whose space is not deleted. A runtime that
+// read a deleted profile's document before the deletion still holds it, so
+// `isListedOwn()` alone can count it, and a deleted profile is not restored.
+const isRestorable = (
+  profiles: Cell<BackwardsCompatibleProfile[]>,
+  entry: ProfileLink,
+): boolean => {
+  const space = spaceOf(entry);
+  return space !== undefined && isListedOwn(profiles, entry) &&
+    spaceDeleted(space) !== true;
+};
+
 // Whether the profile row `i` of `profiles` holds is in a deleted space, by
 // the memory server's word (`spaceDeleted()`).
 const isDeletedRow = (
@@ -347,12 +360,12 @@ export default pattern<
     )
   );
 
-  // The retired profiles that are the user's own listed ones
-  // (`isListedOwn()`), each with a Restore that makes it one of the user's
-  // profiles again. Another entry's row is empty.
+  // The retired profiles the picker can restore (`isRestorable()`), each with
+  // a Restore that makes it one of the user's profiles again. Another entry's
+  // row is empty; a deleted one is among `deletedRows`.
   const retiredRows = retiredProfiles.map((p, i) =>
     ifElse(
-      computed(() => isListedOwn(profiles, retiredProfiles.key(i))),
+      computed(() => isRestorable(profiles, retiredProfiles.key(i))),
       <cf-hstack gap="2" align="center">
         <div style={{ flex: "1" }}>
           <cf-cell-link $cell={p} />
@@ -406,7 +419,7 @@ export default pattern<
         {ifElse(
           computed(() =>
             (linksOf(retiredProfiles) ?? []).some((entry) =>
-              isListedOwn(profiles, entry)
+              isRestorable(profiles, entry)
             )
           ),
           <cf-vstack gap="1">

@@ -2614,9 +2614,15 @@ export class PiecesController<T = unknown> {
     this.#assertHomeSpace("mark a deleted space");
     const home = await this.getDefaultPattern(false);
     if (home === undefined) return "no-home";
-    const decision = await markDeletedSpaceOf(home, space);
-    await retireDeletedProfileOf(home, space);
-    return decision;
+    // Each is sent whatever becomes of the other, since nothing sends either
+    // again; a failure of either is still reported.
+    const [mark, retirement] = await Promise.allSettled([
+      markDeletedSpaceOf(home, space),
+      retireDeletedProfileOf(home, space),
+    ]);
+    if (mark.status === "rejected") throw mark.reason;
+    if (retirement.status === "rejected") throw retirement.reason;
+    return mark.value;
   }
 
   #assertHomeSpace(operation: string): void {
