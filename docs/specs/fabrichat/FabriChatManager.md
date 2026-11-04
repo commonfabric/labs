@@ -64,7 +64,10 @@ the listed rooms' rosters hold.
 Forgetting a declared conversation never archives its container.
 
 Joining a record-backed standalone room registers its own space even when a
-container declares it. A standalone room's catalog membership remains authoritative. Its current
+container declares it, and records a membership of it, as creating or
+accepting a standalone room does: the record keeps the room's link where the
+catalog's finding of it, which reads the space, can't, so a deleted room is
+listed under `deletedRooms` by it. A standalone room's catalog membership remains authoritative. Its current
 catalog state and revision govern listing and forgetting even when the room
 also has an explicit membership record or a container declares it. Catalog
 restoration supersedes an older room tombstone; catalog archive or removal

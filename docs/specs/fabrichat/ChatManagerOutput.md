@@ -186,30 +186,39 @@ session that has none is refused.
   [deleted](../random-space-identities.md#deleting-a-space) is left out: its
   catalog entry is in the `deleted` state, or `spaceDeleted(room)` returns
   `true`.
-- **`deletedRooms`** lists, newest first, every room this user's manager knows
-  of whose space is deleted, apart from the rooms this user can still use, as
-  the catalog lists a deleted entry apart from saved and archived ones: a room
-  whose catalog entry is in the `deleted` state, and a room of `rooms` or
-  `roomMembership`, saved or archived, for which `spaceDeleted(room)` returns
-  `true`. A room archived before its space was deleted is listed too, as the
-  catalog lists its entry, so a person sees the same deletions in Home and in
-  FabriChat. So is a room declared inside a container's space, once that space
-  is deleted: the room lives in the container's space and is deleted with it
+- **`deletedRooms`** lists, newest first, every room this user holds a
+  membership for, saved or archived, whose space is
+  [deleted](../random-space-identities.md#deleting-a-space): its catalog entry
+  is in the `deleted` state, or `spaceDeleted(room)` returns `true`. It is
+  apart from the rooms this user can still use, as the catalog lists a deleted
+  entry apart from saved and archived ones. The manager records a membership
+  for every room it creates, accepts or joins, so the record outlives the
+  catalog's finding of the room, which reads the space; a room archived before
+  its space was deleted is listed too, as the catalog lists its entry, so a
+  person sees the same deletions in Home and in FabriChat. So is a room
+  declared inside a container's space, once that space is deleted: the room
+  lives in the container's space and is deleted with it
   ([`clients.md`](clients.md#showing-a-room)). A deleted room can't be read,
   written or forgotten, so a client shows each one as deleted and offers no
   control for it. Nothing through the entry's link can be read, so what is left
   to show is what the manager holds itself: the catalog's `title` hint for a
   standalone room, or for a room declared in a container the container's catalog
-  `title`, and for any room the entry's own `kind`, `counterpart` and `since`.
-  Recording the deletion is the catalog's `markDeleted`, sent by the runtime
-  that holds the catalog
+  `title`, and for any room the record's own `kind`, `counterpart` and `since`.
+  A room from before the manager recorded memberships at creation and
+  acceptance has no record, so once its catalog entry is deleted nothing holds
+  its link, and it is the catalog's `deleted` list's to show. Recording the
+  deletion is the catalog's `markDeleted`, sent by the runtime that holds the
+  catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces));
   the manager writes nothing when a room is deleted.
 - **`roomMembership`** keeps explicit choices about individual conversations:
   resolved room links, `saved` or `archived` state, `since`, and opaque
-  `revision`. An optional `catalogRevision` records that standalone catalog
-  membership governs the room, including when its catalog entry is removed.
-  These choices are independent of the catalog's container membership.
+  `revision`. The manager records one for every room it creates, accepts or
+  joins, beside the catalog entry a standalone room has, and one for every
+  explicit choice about a room a container declares. An optional
+  `catalogRevision` records that standalone catalog membership governs the
+  room, including when its catalog entry is removed. These choices are
+  independent of the catalog's container membership.
 - **`sharedSpaceCatalog`** is that catalog
   ([`shared-space-catalog.md`](../../features/shared-space-catalog.md)), as
   stored. A standalone room's catalog `title` is a display hint: the room's
@@ -339,7 +348,8 @@ outward act when it creates a room, or offers one it finds.
   room whose members are this user and `counterpart`, grants `counterpart`
   access, offers the room through `profile`'s inbox when there is one and adds
   `profile` to the room's participants, or else produces a notice for them, and
-  records the new entry in `rooms` and `direct`; adding this user to the new
+  records the new entry in `rooms`, `roomMembership` and `direct`; adding this
+  user to the new
   room's participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `counterpart` is this
   user, or `profile`'s label doesn't name `counterpart`.
@@ -389,7 +399,8 @@ Creates a group room. This is an outward act: it grants other people access.
   when another group room has the same members. Grants each member access,
   offers the room to each member `profiles` names and adds their profile to the
   room's participants, produces a notice for each other member, and records the
-  entry in `rooms`; adding this user to the new room's participants follows.
+  entry in `rooms` and `roomMembership`; adding this user to the new room's
+  participants follows.
 - **Outcome:** `done` with the entry, or `refused` if `title` is empty,
   `members` is absent, a member is not a principal's DID, or a profile in
   `profiles` attests no principal. The creating transaction reads no inbox
@@ -470,7 +481,8 @@ Records a room this user has been admitted to.
   [`clients.md`](clients.md#finding-conversations)), except for a room offered
   to them, which their host accepts for them once it has vetted and registered
   the offer.
-- **Effect:** records an entry in `rooms`, putting a forgotten room back
+- **Effect:** records an entry in `rooms`, and a membership of the room in
+  `roomMembership`, putting a forgotten room back
   whatever its catalog entry's revision, unless `keepArchived` is set: accepting
   the room is the person's choice to have it listed, so this restore wins over
   a concurrent forget. With `keepArchived`, an archived entry stays archived,
