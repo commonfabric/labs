@@ -1,13 +1,18 @@
-/** Reads agent-run metadata through the home queue and requests cancellation. */
+/**
+ * Reads agent-run metadata through the home queue, requests cancellation, and
+ * takes a finished run off the queue.
+ */
 
 import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
 import type { Runtime } from "@commonfabric/runner";
 import {
   AGENT_RUN_TERMINAL_STATES,
   type AgentQueueIndex,
+  agentQueueIndexCell,
   AgentQueueIndexSchema,
   type AgentRunRecord,
   AgentRunRecordSchema,
+  removeRecordFromQueue,
 } from "@commonfabric/runner/agent-run";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
@@ -115,12 +120,15 @@ export function selectAgentRun(
   return matches[0];
 }
 
-/** Reads all available records, one selected record, or requests cancellation. */
+/**
+ * Reads all available records or one selected record, or acts on the selected
+ * record: requests its cancellation, or takes it off the queue.
+ */
 async function inspect(
   config: AgentInspectionConfig,
   deps: AgentInspectionDeps,
   identifier?: string,
-  cancel = false,
+  action?: "cancel" | "remove",
 ): Promise<AgentRunInspection[]> {
   const home = (await deps.loadIdentity(config.identity)).did();
   const homeHost = new URL(config.apiUrl).origin;
@@ -197,7 +205,35 @@ async function inspect(
     }
     if (identifier !== undefined) {
       const selected = selectAgentRun(runs, identifier);
-      if (!cancel) return [selected];
+      if (action === undefined) return [selected];
+      if (action === "remove") {
+        if (!AGENT_RUN_TERMINAL_STATES.has(selected.state)) {
+          throw new Error(
+            `Agent run ${selected.address} is ${selected.state}; only a ` +
+              "finished run can be removed. Cancel it first.",
+          );
+        }
+        // Its own transaction, apart from the reads above: one that read the
+        // record, or the entries, would have to label the list with what it
+        // read, and a run's label from another space does not fit there.
+        let listed = false;
+        const removed = await runtime.editWithRetry((tx) => {
+          listed = removeRecordFromQueue(
+            agentQueueIndexCell(runtime, home, tx),
+            selected.id,
+          );
+        });
+        if (removed.error) {
+          throw new Error(removed.error.message, { cause: removed.error });
+        }
+        if (!listed) {
+          throw new Error(
+            `Agent run ${selected.address} is not at the queue address its ` +
+              "id gives it, so it cannot be removed.",
+          );
+        }
+        return [selected];
+      }
       const held = cells.get(`${selected.host}/${selected.address}`)!;
       const committed = await held.runtime.editWithRetry((tx) => {
         const record = held.record.withTx(tx);
@@ -246,5 +282,17 @@ export async function cancelAgentRun(
   identifier: string,
   deps: AgentInspectionDeps = defaultDeps,
 ): Promise<AgentRunInspection> {
-  return (await inspect(config, deps, identifier, true))[0];
+  return (await inspect(config, deps, identifier, "cancel"))[0];
+}
+
+/**
+ * Takes a finished run off the identity's home queue, returning its metadata.
+ * The record stays where it is; the queue only stops naming it.
+ */
+export async function removeAgentRun(
+  config: AgentInspectionConfig,
+  identifier: string,
+  deps: AgentInspectionDeps = defaultDeps,
+): Promise<AgentRunInspection> {
+  return (await inspect(config, deps, identifier, "remove"))[0];
 }
