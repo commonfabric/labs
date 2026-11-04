@@ -601,9 +601,9 @@ By the time the marker arrives, the server holds what the announcing participant
 wrote before it, so the reads that follow resolve against a server that has it.
 On the server-execution arm what a participant's handlers write is the serving
 loop's, and the participant announces only once every event it fired has its
-consequence back at its own runtime, so that holds for those writes too; an
-event a served handler fires on its own account is no participant's, and is not
-covered.
+consequence back at its own runtime and the serving loop has finished what that
+set off, so that holds for those writes too, and for what an event a served
+handler fires on its own account writes.
 Two mechanisms deliver it and both are ordered behind the marker. A document
 already in the awaiting replica's watch set arrives in a fan-out frame the
 server computes by diffing current storage, so a frame carrying the marker

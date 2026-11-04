@@ -127,8 +127,8 @@ import {
 } from "./runtime-error-expectation.ts";
 import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
 import {
-  type ServedQuiescence,
   servedConsequences,
+  type ServedQuiescence,
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";

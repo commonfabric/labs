@@ -83,8 +83,8 @@ import {
   runtimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
 import {
-  type ServedQuiescence,
   servedConsequences,
+  type ServedQuiescence,
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";

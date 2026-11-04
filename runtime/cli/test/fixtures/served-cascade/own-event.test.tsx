@@ -14,26 +14,43 @@ import {
   Writable,
 } from "commonfabric";
 
-const land = handler<{ value: string }, { landed: Writable<string[]> }>(
+type Note = { value: string; spent?: number };
+
+const land = handler<Note, { landed: Writable<string[]> }>(
   (event, { landed }) => {
     landed.push(event.value);
   },
 );
 
-const relay = handler<{ value: string }, { next: Stream<{ value: string }> }>(
+const relay = handler<Note, { next: Stream<Note> }>(
   (event, { next }) => {
     next.send(event);
   },
 );
 
+/**
+ * Holds up the wave the event is served in past its flush deadline, so that the
+ * event this handler sends is served in a later wave than the one that carries
+ * this event's consequence.
+ */
+const relayAfterTheDeadline = handler<
+  Note,
+  { next: Stream<Note> }
+>((event, { next }) => {
+  // Counted rather than timed: a pattern's clock does not move during a run.
+  let spent = 0;
+  for (let i = 0; i < 300_000_000; i++) spent = (spent + i) | 0;
+  next.send({ value: event.value, spent });
+});
+
 const Chain = pattern<
   { landed: Writable<string[]> },
-  { landed: string[]; start: Stream<{ value: string }> }
+  { landed: string[]; start: Stream<Note> }
 >(({ landed }) => {
   const last = land({ landed });
   const third = relay({ next: last });
   const second = relay({ next: third });
-  return { landed, start: relay({ next: second }) };
+  return { landed, start: relayAfterTheDeadline({ next: second }) };
 });
 
 export default pattern(() => {
