@@ -36,7 +36,7 @@ describe("orientation", () => {
     expect(prompt).not.toContain(
       "The parent can run an indexed pattern with run_pattern",
     );
-    expect(finishTaskTool.descriptor.description).toContain(
+    expect(prompt).toContain(
       "Found requires released evidence",
     );
   });
@@ -85,7 +85,7 @@ describe("orientation", () => {
     expect(prompt).toContain(
       "If sending is unavailable, say so immediately and offer a draft",
     );
-    expect(finishTaskTool.descriptor.description).toContain(
+    expect(finishTaskTool.descriptor.description).not.toContain(
       "rather than asking for an address as though that enables sending",
     );
   });
@@ -104,7 +104,7 @@ describe("orientation", () => {
     expect(prompt).toContain(
       "Describe only the successfully applied change, say the result could not be inspected",
     );
-    expect(finishTaskTool.descriptor.description).toContain(
+    expect(finishTaskTool.descriptor.description).not.toContain(
       "Never ask for a nonexistent permission to release results",
     );
   });
@@ -112,6 +112,15 @@ describe("orientation", () => {
   it("leaves completion links to the host contract", () => {
     expect(finishTaskTool.descriptor.description).not.toContain(
       "never as a link or path in message",
+    );
+  });
+
+  it("keeps the disclosure boundary in the finish tool and evidence policy in orientation", () => {
+    expect(finishTaskTool.descriptor.description).toContain(
+      "Include only information already released to you, not data behind opaque handles.",
+    );
+    expect(finishTaskTool.descriptor.description).not.toContain(
+      "Found requires released evidence",
     );
   });
 
