@@ -132,6 +132,52 @@ function narrowedOutputProgram(): RuntimeProgram {
 }
 
 /**
+ * A producer that publishes `seed` as an optional `note` beside its label, or,
+ * with `withNote` false, the next revision, which no longer publishes it.
+ */
+function noteProducerProgram(withNote: boolean): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, pattern } from 'commonfabric';",
+        withNote
+          ? "export default pattern<{ seed?: string }, { label: string; note?: string }>("
+          : "export default pattern<{ seed?: string }, { label: string }>(",
+        "  ({ seed }) => ({",
+        "    [NAME]: 'Note producer',",
+        "    label: 'producer',",
+        ...(withNote ? ["    note: seed,"] : []),
+        "  }),",
+        ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/** A consumer that reads an optional `note` and says when there is none. */
+function noteConsumerProgram(): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [{
+      name: "/main.tsx",
+      contents: [
+        "import { NAME, pattern } from 'commonfabric';",
+        "export default pattern<{ note?: string }, { seen: string }>(",
+        "  ({ note }) => ({",
+        "    [NAME]: 'Note consumer',",
+        "    seen: note ?? 'absent',",
+        "  }),",
+        ");",
+        "",
+      ].join("\n"),
+    }],
+  };
+}
+
+/**
  * The CFC-labeled variants below exist because the three rules above all
  * reason about DECLARED types, and a fourth thing decides whether the setup
  * commit lands: the CFC schema envelope physically stored on the piece's
@@ -479,6 +525,38 @@ describe("setsrc compatibility preflight", () => {
     await runtime.idle();
     expect((piece.getCell().getAsQueryResult() as { label?: string }).label)
       .toBe("seen:hello");
+  });
+
+  it("applies a source that stops publishing an optional output a linked piece reads", async () => {
+    // The consumer's link to `note` was admitted against an optional producer
+    // slot, so it already reads absence; the producer giving the field up
+    // leaves the consumer reading exactly that.
+
+    const producer = await pieces.create(noteProducerProgram(true), {
+      input: { seed: "hello" },
+    });
+    const consumer = await pieces.create(noteConsumerProgram());
+    await pieces.link(
+      producer.getCell().getAsNormalizedFullLink().id,
+      ["note"],
+      consumer.getCell().getAsNormalizedFullLink().id,
+      ["note"],
+    );
+    await runtime.idle();
+    // `pull()` materializes the consumer's computed output; a bare `get()`
+    // returns whatever it last held.
+    const seen = () => pieces.getResult(consumer.getCell()).key("seen").pull();
+    expect(await seen()).toBe("hello");
+
+    const report = await producer.checkPattern(noteProducerProgram(false));
+    expect(report.issues).toEqual({});
+    await producer.setPattern(noteProducerProgram(false));
+    await runtime.idle();
+
+    expect(pieces.getResult(producer.getCell()).get()).toEqual({
+      label: "producer",
+    });
+    expect(await seen()).toBe("absent");
   });
 
   it("agrees with the apply path on the verdict and the cause", async () => {

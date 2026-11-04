@@ -163,6 +163,11 @@ export const REQUEST_DISPOSITIONS = {
     why: "the scheduler's graph of actions and the cells they touch",
   },
   [RequestType.GetLoggerCounts]: setting,
+  [RequestType.GetLoggerErrorMessages]: {
+    kind: "ungated",
+    why: "the text of messages logged at `error`, which can quote a value, " +
+      "as an error report's message can",
+  },
   [RequestType.GetStorageDiagnostics]: {
     kind: "no-cell-value",
     why: "storage state, which exports no cell values",
