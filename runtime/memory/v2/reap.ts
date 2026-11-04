@@ -62,6 +62,15 @@ export type ReapRun = ReapPlan & {
 };
 
 /**
+ * A reap written beside its result path and not yet put there: `out` is
+ * where {@link publishReap} puts it.
+ */
+export type StagedReap = ReapRun & {
+  /** The file the run made and wrote, which only this run removes. */
+  staged: string;
+};
+
+/**
  * Each table whose rows a reap may keep, with the condition a kept row meets,
  * over the named parameters `:acl` (the ACL document's id), `:seq` (the
  * deletion commit's) and the deletion commit's `:invocation` and
@@ -218,41 +227,55 @@ const planWithParameters = (
 /**
  * Reaps the deleted space's store at `options.store`, a copy of its backup,
  * into a fresh file at `options.out`, `<store>.reaped.sqlite` beside it by
- * default. The store itself is only read. The result keeps the deletion
- * commit's row, the invocation and authorization rows it references, the
- * deletion tombstone's revision and head rows, and the default branch's
- * row; every other row of every table is removed, and the result is checked
- * and vacuumed before it is returned. A run that does not finish leaves no
- * result.
+ * default: {@link stageReap}, then {@link publishReap}.
+ *
+ * @throws as those do.
+ */
+export const reapStore = async (
+  options: { store: string; out?: string },
+): Promise<ReapRun> => publishReap(await stageReap(options));
+
+/**
+ * Writes the reap of the deleted space's store at `options.store`, a copy of
+ * its backup, into a file of the run's own beside its result path,
+ * `options.out` or `<store>.reaped.sqlite` beside the store. The store itself
+ * is only read. The result keeps the deletion commit's row, the invocation
+ * and authorization rows it references, the deletion tombstone's revision and
+ * head rows, and the default branch's row; every other row of every table is
+ * removed, and the result is checked and vacuumed before it is returned.
+ *
+ * The run creates that file itself, exclusively, under a name no other run
+ * picks, so the only file a run that does not finish removes is its own; the
+ * result path is not touched until {@link publishReap}.
  *
  * @throws ReapRefused when the store is not a deleted space's, is held open,
  *   predates a migration the server runs on opening it, or the result path
  *   exists; Error when a check of the result fails.
  */
-export const reapStore = async (
+export const stageReap = async (
   options: { store: string; out?: string },
-): Promise<ReapRun> => {
+): Promise<StagedReap> => {
   const store = resolve(options.store);
   const out = options.out === undefined
     ? `${store}.reaped.sqlite`
     : resolve(options.out);
   preflightOfflineStore(store, out, (reason) => new ReapRefused(reason));
+  const staged = `${out}.staging-${crypto.randomUUID()}`;
+  Deno.openSync(staged, { createNew: true, write: true }).close();
 
-  // Nothing was at `out` before the run, so whatever is there once it fails,
-  // a partial copy included, is the run's, and it is removed, so none is left
-  // to install by mistake.
   try {
     // The copy the run rewrites is made on a connection that cannot write,
-    // so the store is never written.
+    // so the store is never written. `VACUUM INTO` takes the empty file the
+    // run made.
     const source = new Database(store, { readonly: true });
     try {
       await refuseUnmigratedStore(source);
-      source.prepare(`VACUUM main INTO ?`).run(out);
+      source.prepare(`VACUUM main INTO ?`).run(staged);
     } finally {
       source.close();
     }
 
-    const result = new Database(out);
+    const result = new Database(staged);
     try {
       result.exec("PRAGMA locking_mode = EXCLUSIVE");
       result.exec("PRAGMA foreign_keys = OFF");
@@ -272,24 +295,48 @@ export const reapStore = async (
       }).immediate();
       checkRewrittenStore(result);
       result.exec("VACUUM");
-      return { ...planned.plan, out, outBytes: fileSize(out) };
+      return { ...planned.plan, out, outBytes: fileSize(staged), staged };
     } finally {
       result.close();
     }
   } catch (error) {
-    removeReapResult(out);
+    discardReap(staged);
     throw error;
   }
 };
 
 /**
- * Removes the reap result at `out` and the companions SQLite may have left
- * beside it, whichever are there: a result that failed is not one to install.
+ * Puts `run`'s staged file at its result path, by a link that fails when
+ * anything is there by then, and removes the staged name. The run's file is
+ * then the result, and nothing another process put at the path is replaced.
+ *
+ * @throws ReapRefused when the result path exists; whatever else the link
+ *   throws. Either way the staged file is removed.
  */
-export const removeReapResult = (out: string): void => {
+export const publishReap = (run: StagedReap): ReapRun => {
+  try {
+    Deno.linkSync(run.staged, run.out);
+  } catch (error) {
+    discardReap(run.staged);
+    if (!(error instanceof Deno.errors.AlreadyExists)) throw error;
+    throw new ReapRefused(
+      `${run.out} exists; the result is never overwritten`,
+    );
+  }
+  discardReap(run.staged);
+  const { staged: _staged, ...published } = run;
+  return published;
+};
+
+/**
+ * Removes the staged file at `staged` and the companions SQLite may have left
+ * beside it, whichever are there: a staged result that is not published is
+ * not one to install.
+ */
+export const discardReap = (staged: string): void => {
   for (const suffix of ["", "-wal", "-shm", "-journal"]) {
     try {
-      Deno.removeSync(`${out}${suffix}`);
+      Deno.removeSync(`${staged}${suffix}`);
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }

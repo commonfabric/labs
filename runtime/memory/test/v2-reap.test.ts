@@ -13,12 +13,15 @@ import {
   serverSeq,
 } from "../v2/engine.ts";
 import {
+  discardReap,
   formatReapPlan,
   formatReapRun,
   liveCellDatabases,
   planReap,
+  publishReap,
   ReapRefused,
   reapStore,
+  stageReap,
 } from "../v2/reap.ts";
 import { cellDatabaseFilePrefix } from "../v2/storage-path.ts";
 
@@ -209,6 +212,42 @@ describe("reap", () => {
       "holds no deletion tombstone",
     );
     expect(() => Deno.statSync(out)).toThrow(Deno.errors.NotFound);
+    expect(
+      [...Deno.readDirSync(dir)].filter((entry) =>
+        entry.name.includes(".staging-")
+      ),
+    ).toEqual([]);
+  });
+
+  it("never removes or replaces what another process puts at the result path while a run is staged", async () => {
+    await build();
+
+    // A run whose result is discarded, as one that fails its check is.
+    const discarded = await stageReap({ store, out });
+    Deno.writeTextFileSync(out, "theirs");
+    discardReap(discarded.staged);
+    expect(Deno.readTextFileSync(out)).toBe("theirs");
+    expect(() => Deno.statSync(discarded.staged)).toThrow(Deno.errors.NotFound);
+
+    // A run that would publish over it.
+    Deno.removeSync(out);
+    const refused = await stageReap({ store, out });
+    Deno.writeTextFileSync(out, "theirs");
+    expect(() => publishReap(refused)).toThrow(ReapRefused);
+    expect(Deno.readTextFileSync(out)).toBe("theirs");
+    expect(() => Deno.statSync(refused.staged)).toThrow(Deno.errors.NotFound);
+  });
+
+  it("publishes a staged result at the result path, leaving nothing staged", async () => {
+    const seq = await build();
+    const staged = await stageReap({ store, out });
+    expect(() => Deno.statSync(out)).toThrow(Deno.errors.NotFound);
+
+    const run = publishReap(staged);
+
+    expect(run.out).toBe(out);
+    expect(rows(out, "commit").map((row) => row.seq)).toEqual([seq]);
+    expect(() => Deno.statSync(staged.staged)).toThrow(Deno.errors.NotFound);
   });
 
   it("refuses a store holding a commit after its deletion, which no server writes", async () => {

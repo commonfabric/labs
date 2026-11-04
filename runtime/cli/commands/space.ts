@@ -39,14 +39,16 @@ import {
   storeSchemaRefusals,
 } from "@commonfabric/memory/v2/compact";
 import {
+  discardReap,
   formatReapPlan,
   formatReapRun,
   liveCellDatabases,
   planReap,
+  publishReap,
   ReapRefused,
-  reapStore,
+  type ReapRun,
   refuseUnmigratedStore,
-  removeReapResult,
+  stageReap,
 } from "@commonfabric/memory/v2/reap";
 import type { CellScope } from "@commonfabric/memory/v2";
 import {
@@ -884,9 +886,12 @@ export const space = new Command()
     const result = options.out ?? `${store}.reaped.sqlite`;
     assertNotLiveStore(store, "store");
     assertNotLiveStore(result, "result");
-    let run;
+    // The result is written to a file of the run's own and put at the
+    // result path only once it has passed its check, so a result that fails
+    // is never at the path, and nothing else there is removed.
+    let staged;
     try {
-      run = await reapStore({ store, out: result });
+      staged = await stageReap({ store, out: result });
     } catch (error) {
       if (error instanceof ReapRefused) {
         throw new ValidationError(error.message);
@@ -894,25 +899,29 @@ export const space = new Command()
       throw error;
     }
     let verification;
+    let run: ReapRun | undefined;
     try {
-      verification = verifyReap({ result: run.out, against: store });
+      verification = verifyReap({ result: staged.staged, against: store });
+      if (verification.ok) run = publishReap(staged);
     } catch (error) {
-      removeReapResult(run.out);
+      // `publishReap()` has removed what it staged; a check that threw has
+      // not.
+      discardReap(staged.staged);
+      if (error instanceof ReapRefused) {
+        throw new ValidationError(error.message);
+      }
       throw error;
     }
-    out(!!options.json, { ...run, verification }, () => {
-      // A result that failed its check is removed below, so only one that
-      // passed is reported as a result.
-      console.log(verification.ok ? formatReapRun(run) : formatReapPlan(run));
+    if (run === undefined) discardReap(staged.staged);
+    const { staged: _staged, ...planned } = staged;
+    out(!!options.json, { ...(run ?? planned), verification }, () => {
+      console.log(
+        run === undefined ? formatReapPlan(planned) : formatReapRun(run),
+      );
       console.log("");
       console.log(formatCompactionVerification(verification));
     });
-    if (!verification.ok) {
-      // A result that failed its check is not one to install, so none is
-      // left to install by mistake.
-      removeReapResult(run.out);
-      Deno.exit(1);
-    }
+    if (run === undefined) Deno.exit(1);
   })
   /* space create */
   .command("create", buildCreateSpaceCommand("space create"))
