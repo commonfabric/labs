@@ -61,6 +61,7 @@ type MaterializedAgentQueueEntry = {
 export type AgentRunnerEntry = {
   host: string;
   tools: string[];
+  progress?: boolean;
   registrationId?: string;
   registeredAt: string;
   lastClaimAt?: string;

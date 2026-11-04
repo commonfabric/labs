@@ -115,6 +115,19 @@ const completedCliResult = (
   },
 });
 
+Deno.test("parseCfHarnessCliArgs requires host backing for explicit report_progress", async () => {
+  const argv = ["--allow-tool", "report_progress", "Ask"];
+  await expect(parseCfHarnessCliArgs(argv, { cwd: "/tmp/project", env: {} }))
+    .rejects.toThrow("report_progress requires a host progress publisher");
+  const parsed = await parseCfHarnessCliArgs(argv, {
+    cwd: "/tmp/project",
+    env: {},
+    reportProgress: () => Promise.resolve(),
+  });
+  if ("help" in parsed) throw new Error("expected config result");
+  expect(parsed.allowedToolIds).toContain("report_progress");
+});
+
 Deno.test("parseCfHarnessCliArgs resolves defaults from cwd and positional prompt text", async () => {
   const parsed = await parseCfHarnessCliArgs(
     ["Summarize", "this", "workspace"],

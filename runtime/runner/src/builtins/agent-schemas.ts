@@ -122,6 +122,7 @@ export const AgentParamsSchema = internSchema(
   {
     type: "object",
     properties: {
+      progress: { type: "boolean" },
       task: { type: "string" },
       inputs: {
         type: "object",
@@ -148,6 +149,7 @@ export const AgentResultSchema = internSchema(
   {
     type: "object",
     properties: {
+      progress: {},
       pending: { type: "boolean", default: false },
       result: {},
       error: { type: "string" },
@@ -166,7 +168,7 @@ export const AgentResultSchema = internSchema(
  * Two writers share it and never overlap. The builtin's post-commit effect
  * writes the request fields once, at creation: `requestHash`, `request`,
  * `piece`, `space`, `task`, `inputs`, `resultSchema`, `maxConfidentiality`,
- * `tools`, `submittedAt`, `state`, and `stateSince`. A runner writes
+ * `tools`, `progressRequested`, `submittedAt`, `state`, and `stateSince`. A runner writes
  * everything from `claim` on as an authored client — `claim`, `attempts`,
  * the terminal fields — and moves `state` and `stateSince` as it goes. The
  * builtin never writes the record again; it reads it, which is what lets a
@@ -206,6 +208,8 @@ export const AgentRunRecordSchema = internSchema(
         },
         required: ["runner", "leaseUntil"],
       },
+      progressRequested: { type: "boolean" },
+      progress: { asCell: ["cell"] },
       attempts: { type: "number" },
       cancelRequestedAt: { type: "string" },
       result: { asCell: ["cell"] },
@@ -288,6 +292,7 @@ export const AgentQueueIndexSchema = internSchema(
           host: { type: "string" },
           tools: { type: "array", items: { type: "string" } },
           registrationId: { type: "string" },
+          progress: { type: "boolean" },
           registeredAt: { type: "string" },
           lastClaimAt: { type: "string" },
         },

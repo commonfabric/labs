@@ -944,6 +944,7 @@ export default pattern(() => {
   const answer = agent<{ answer: string }>({
     task,
     inputs: {},
+    progress: true,
     resultSchema: {
       type: "object",
       properties: { answer: { type: "string" } },
@@ -958,9 +959,17 @@ export default pattern(() => {
         <cf-iframe
           src={GUEST_HTML}
           script={GUEST_SCRIPT}
-          $context={{ pending: answer.pending, answer: answer.result, ask }}
+          $context={{
+            pending: answer.pending,
+            progress: answer.progress,
+            error: answer.error,
+            answer: answer.result,
+            ask,
+          }}
           resourceKinds={{
             pending: "readonly",
+            progress: "readonly",
+            error: "readonly",
             answer: "readonly",
             ask: "stream",
           }}
@@ -971,6 +980,18 @@ export default pattern(() => {
   };
 });
 ```
+
+`progress: true` supplies the agent's reporting tool and its instructions.
+The guest reads the latest report through `fabric.cell("progress")` and
+subscribes with `sink()` just as it does for the other read-only resources.
+While `pending` is true, render the report's `message` or a fallback such as
+"Working…" before a report arrives. A report also carries `sequence` and
+`updatedAt`; it is optional, and the latest one remains available when the
+request finishes. Render `error` or `answer` once `pending` is false. Omitting
+`progress`, or setting it to false, provides no reporting tool or instructions.
+The [agent capability](../capabilities/agent.md#interim-progress) owns the
+report lifecycle and confidentiality rules; the guest's read ceiling still
+governs which reports it can read.
 
 A built-in that already returns a stream needs no verb of its own:
 `llmDialog()` returns `addMessage`, which goes in the `$context` record as it
