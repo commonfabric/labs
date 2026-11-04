@@ -1,4 +1,12 @@
-import { computed, NAME, pattern, UI, wish } from "commonfabric";
+import {
+  computed,
+  hasError,
+  NAME,
+  pattern,
+  resultOf,
+  UI,
+  wish,
+} from "commonfabric";
 
 export default pattern(
   () => {
@@ -6,14 +14,17 @@ export default pattern(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const profile = hasError(profileWish.result)
+      ? undefined
+      : resultOf(profileWish.result);
+    const profileName = hasError(profileNameWish.result)
+      ? undefined
+      : resultOf(profileNameWish.result);
     const displayName = computed(() =>
-      profileWish.result?.initialNameApplied ??
-        profileNameWish.result ?? "No profile"
+      profile?.initialNameApplied ?? profileName ?? "No profile"
     );
     const status = computed(() =>
-      profileNameWish.result
-        ? `Profile: ${profileNameWish.result}`
-        : "No profile"
+      profileName ? `Profile: ${profileName}` : "No profile"
     );
     return {
       [NAME]: "Shared Profile Demo",

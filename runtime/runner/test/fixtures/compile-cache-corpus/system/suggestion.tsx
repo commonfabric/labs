@@ -4,17 +4,18 @@ import {
   type Default,
   fetchText,
   handler,
+  hasError,
   ifElse,
+  isPending,
   llmDialog,
   NAME,
   pattern,
   patternTool,
+  resultOf,
   type Stream,
-  toSchema,
   UI,
   type VNode,
   wish,
-  type WishState,
   Writable,
 } from "commonfabric";
 import { bash, fetchAndRunPattern, listMentionable } from "./common-fabric.tsx";
@@ -31,15 +32,24 @@ type SuggestionResult = {
 
 type SuggestionResultCell = Writable<SuggestionResult>;
 
+// Internal sidecar state. The outer wish runtime translates this legacy
+// optional selection into WishState.result availability before exposing it.
+type SuggestionPatternState = {
+  result: SuggestionResultCell | undefined;
+  candidates: SuggestionResultCell[];
+  error?: unknown;
+  [UI]: VNode;
+};
+
 const triggerGeneration = handler<
   unknown,
   {
     addMessage: Stream<BuiltInLLMMessage>;
     situation: string;
-    result: any | null;
+    shouldGenerate: boolean;
   }
->((_, { addMessage, situation, result }) => {
-  if (!result) {
+>((_, { addMessage, situation, shouldGenerate }) => {
+  if (shouldGenerate) {
     addMessage.send({
       role: "user",
       content: [{ type: "text" as const, text: situation }],
@@ -90,7 +100,7 @@ export default pattern<
     context: { [id: string]: any };
     initialResults: SuggestionResultCell[] | Default<[]>;
   },
-  WishState<SuggestionResultCell> & { [UI]: VNode }
+  SuggestionPatternState
 >(({ situation, context, initialResults }) => {
   // --- Picker state (used when initialResults is non-empty) ---
   const selectedIndex = new Writable(0);
@@ -110,22 +120,26 @@ export default pattern<
 
   // --- LLM state (freeform query path) ---
   const profile = wish<string>({ query: "#learnedSummary" });
+  const profileText = resultOf(profile.result);
 
-  const mentionable = wish<MentionablePiece[]>({
+  const mentionableWish = wish<MentionablePiece[]>({
     query: "#mentionable",
-  }).result;
-  const { entries: summaryEntries } = wish<{
+  });
+  const mentionable = resultOf(mentionableWish.result);
+  const summaryWish = wish<{
     entries: SummaryIndexEntry[];
-  }>({ query: "#summaryIndex" }).result!;
+  }>({ query: "#summaryIndex" });
+  const { entries: summaryEntries } = resultOf(summaryWish.result);
 
   const suggestionHistory = SuggestionHistory({});
 
   const patternIndexUrl = wish<{ url: Writable<string> }>({
     query: "#patternIndex",
   });
+  const patternIndexLocation = resultOf(patternIndexUrl.result);
   const resolvedPatternUrl = new Writable<string>("/api/patterns/index.md");
   computed(() => {
-    const urlRef = patternIndexUrl?.result?.url;
+    const urlRef = patternIndexLocation.url;
     const urlValue = typeof urlRef?.get === "function"
       ? urlRef.get()
       : (typeof urlRef === "string" ? urlRef : undefined);
@@ -134,12 +148,12 @@ export default pattern<
     }
   });
 
-  const { result: patternIndex } = fetchText({
+  const patternIndexRequest = fetchText({
     url: resolvedPatternUrl,
   });
+  const patternIndex = resultOf(patternIndexRequest);
 
   const profileContext = computed(() => {
-    const profileText = profile.result;
     return profileText ? `\n\n--- User Context ---\n${profileText}\n---` : "";
   });
 
@@ -174,11 +188,7 @@ Use the user context above to personalize your suggestions when relevant.`;
   >(null);
   const hasPendingQuestion = computed(() => pendingQuestion.get() != null);
 
-  const {
-    addMessage,
-    pending,
-    result: suggestionResult,
-  } = llmDialog({
+  const dialog = llmDialog<{ cell: SuggestionResultCell }>({
     system: systemPrompt,
     messages,
     tools: {
@@ -196,11 +206,20 @@ Use the user context above to personalize your suggestions when relevant.`;
       },
     },
     context,
-    resultSchema: toSchema<{ cell: SuggestionResultCell }>(),
     queue: "suggestions",
   });
-
-  const llmResult = computed(() => suggestionResult?.cell);
+  const { addMessage, pending } = dialog;
+  const error = computed(() =>
+    hasError(dialog.result) ? dialog.result.errorMessage : undefined
+  );
+  const shouldGenerate = computed(() =>
+    isPending(dialog.result) || hasError(dialog.result)
+  );
+  const llmResult = computed(() =>
+    isPending(dialog.result) || hasError(dialog.result)
+      ? undefined
+      : resultOf(dialog.result).cell
+  );
 
   // Reactively select between picker and LLM result. This must be a named
   // computed variable — the CTS transformer leaves named Cells as-is in the
@@ -219,7 +238,7 @@ Use the user context above to personalize your suggestions when relevant.`;
         onstart={triggerGeneration({
           addMessage,
           situation,
-          result: llmResult,
+          shouldGenerate,
         })}
       />
       <cf-cell-link
@@ -228,7 +247,7 @@ Use the user context above to personalize your suggestions when relevant.`;
       />
       {ifElse(
         computed(() => !!llmResult),
-        computed(() => llmResult),
+        <cf-render $cell={llmResult} />,
         undefined,
       )}
       <cf-message-beads
@@ -270,6 +289,7 @@ Use the user context above to personalize your suggestions when relevant.`;
   return {
     result,
     candidates: initialResults,
+    error,
     // [UI] must be a static VNode — the reconciler breaks if it's a computed.
     // Switch between modes at the child level instead.
     [UI]: (

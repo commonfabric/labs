@@ -556,7 +556,7 @@ field is a complete tagged `null` per Section 4.1, the single byte `TAG_NULL`.
 a `FabricPrimitive` subclass and has a dedicated type tag; it is hashed from
 its own stored values (below) and is **not** hashed via `TAG_INSTANCE`.
 
-- **Reason**: The reason string (`pending`, `syncing`, or `error`), encoded as
+- **Reason**: The reason string (`pending`, `syncing`, `error`, or `obsolete`), encoded as
   a complete tagged string value per Section 4.4.
 - **Error kind**: For reason `error`, the kind string (`general`,
   `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`,
@@ -569,11 +569,16 @@ its own stored values (below) and is **not** hashed via `TAG_INSTANCE`.
   given or was given as its kind's default — a complete tagged `null`.
 
 The three fields are fed in order — reason, kind, message — with no enclosing
-container and no `TAG_END` terminator, since the field count is fixed. Every
+container and no `TAG_END` terminator. Every
 position is always fed, so the stream for a transient reason is the reason
 followed by two `TAG_NULL` bytes. The default message a kind supplies is not
 hashed: an `error` whose message is its kind's default hashes as one with no
 message. See `1-fabric-values.md` Section 1.4.12.
+
+For reason `obsolete` only, a fourth field follows: `obsoleteMessage` as a
+complete tagged string, or tagged `null` when absent. Empty string and absence
+therefore hash differently. The kind and error-message fields are both `null`.
+The reason determines the field count; no other reason feeds a fourth field.
 
 ### 4.19 Cycles
 

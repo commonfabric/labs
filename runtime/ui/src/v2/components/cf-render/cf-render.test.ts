@@ -25,6 +25,15 @@ import {
   type PieceContextMenuDetail,
 } from "./index.ts";
 
+function stylesText(): string {
+  const styles = Array.isArray(CFRender.styles)
+    ? CFRender.styles
+    : [CFRender.styles];
+  return (styles as Array<{ cssText: string }>)
+    .map((style) => style.cssText)
+    .join("\n");
+}
+
 // NOTE: Full rendering lifecycle tests (cell swap cleanup, subscription
 // management, render-into-container) require a real DOM with document.body
 // and Lit's rendering pipeline. These can't run in Deno's headless test
@@ -91,6 +100,27 @@ describe("CFRender", () => {
     const cell = createMockCellHandle({ ui: "some-vnode" });
     element.cell = cell as CellHandle;
     expect(element.cell).toBe(cell);
+  });
+
+  it("owns the theme-aware pending presentation", () => {
+    const styles = stylesText();
+    expect(styles).toContain('[data-cf-pending="true"]');
+    expect(styles).toContain("--cf-render-pending-opacity");
+    expect(styles).toContain("--cf-render-pending-filter");
+    expect(styles).toContain("grayscale");
+    expect(styles).toContain(
+      'span[style*="display"][style*="contents"]',
+    );
+  });
+
+  it("dims the first rendered elements through nested transparent wrappers", () => {
+    const styles = stylesText().replace(/\s+/g, " ");
+    expect(styles).toContain(
+      ':not([data-cf-pending="true"] [data-cf-pending="true"]) :not(:is(cf-fragment, span[style*="display"][style*="contents"]))',
+    );
+    expect(styles).toContain(
+      ':not(:is(cf-fragment, span[style*="display"][style*="contents"])):not([data-cf-pending="true"] :not(',
+    );
   });
 });
 

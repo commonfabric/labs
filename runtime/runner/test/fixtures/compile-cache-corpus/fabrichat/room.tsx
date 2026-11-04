@@ -18,6 +18,7 @@
  */
 import {
   action,
+  type AsyncResult,
   type Cell,
   computed,
   type Default,
@@ -26,10 +27,15 @@ import {
   type FabricEpochNsec,
   grantSpaceAccess,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSession,
   principalOf,
+  resultOf,
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
@@ -1221,9 +1227,14 @@ export const FabriChatRoomCore = pattern<
   const joined = computed(() =>
     roster === undefined ? [] : rosterProfiles(roster)
   );
-  const listed = computed((): ProfileCell[] =>
-    ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
-  );
+  const selectedParticipants = computed((): AsyncResult<ProfileCell[]> => {
+    if (ownSpace) return [...joined];
+    const root = space.result;
+    if (hasError(root)) return [...joined];
+    if (isPending(root) || isSyncing(root) || isObsolete(root)) return root;
+    return [...(root.participants ?? []), ...joined];
+  });
+  const listed = resultOf(selectedParticipants);
   const participants = computed(() => participantsOf(listed, facts.authors));
   // A profile lives in its owner's own space, and attests no one to a reader
   // that space refuses, so the entries, and the principals taken from them,
@@ -1644,23 +1655,34 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const managerWish = wish<
       RoomManager & { openDirect: Stream<StartDirectEvent> }
     >({ query: "#chatManager" });
+    const profile = computed(() =>
+      hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
+    );
+    const container = computed(() =>
+      hasError(containerWish.result)
+        ? undefined
+        : resultOf(containerWish.result)
+    );
+    const manager = computed(() =>
+      hasError(managerWish.result) ? undefined : resultOf(managerWish.result)
+    );
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a
     // value, as `FabriChatMessageRow` says.
     const setupDisplay = computed((): ChatDisplay =>
-      profileWish.result === undefined ? "block" : "none"
+      profile === undefined ? "block" : "none"
     );
     const room = FabriChatRoomCore(
       {
-        myProfile: profileWish.result,
-        container: containerWish.result,
+        myProfile: profile,
+        container,
         about,
         messages,
         titles,
         roster: participants,
         addRequests,
-        startDirect: managerWish.result?.openDirect,
+        startDirect: manager?.openDirect,
         self,
-        manager: managerWish.result,
+        manager,
       },
     );
 

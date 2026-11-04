@@ -3,9 +3,11 @@ import {
   type BuiltInLLMMessage,
   type BuiltInLLMTool,
   generateObject,
+  hasError,
   type JSONValue,
   lift,
   pattern,
+  resultOf,
 } from "commonfabric";
 import type { JSONSchema } from "commonfabric";
 import {
@@ -58,7 +60,7 @@ export const subAgentPattern = pattern<SubAgentInput, any>((
   const parsedResultSchema = parseResultSchema({ resultSchema });
   const requestSystem = appendTaskToSystem({ system, prompt });
 
-  const response = generateObject({
+  const responseRequest = generateObject({
     prompt,
     messages,
     context,
@@ -70,6 +72,9 @@ export const subAgentPattern = pattern<SubAgentInput, any>((
     schemaSanitizePromptInjection,
     schema: parsedResultSchema,
   } as any);
+  const response = resultOf(responseRequest);
 
-  return response.error ? { error: response.error } : response.result;
+  return hasError(responseRequest)
+    ? { error: responseRequest.errorMessage }
+    : response;
 });

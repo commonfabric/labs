@@ -59,6 +59,7 @@ function isCommonFabricDeclarationSourceFile(fileName: string): boolean {
   return normalized === COMMONFABRIC_DECLARATION ||
     normalized.endsWith(`/${COMMONFABRIC_DECLARATION}`) ||
     normalized.endsWith("/base/api/index.ts") ||
+    normalized.endsWith("/base/data-model/src/api.ts") ||
     normalized.includes("/@commonfabric/api/") ||
     normalized.includes("/runtime/runner/src/");
 }

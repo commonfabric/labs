@@ -6,28 +6,30 @@
  * This pattern tests the correct way to handle pending/error/result states
  * with generateObject. The corrected doc example should look like this:
  *
- * {ifElse(idea.pending,
+ * {ifElse(isPending(ideaRequest),
  *   <span>Generating...</span>,
- *   ifElse(idea.error,
- *     <span>Error: {idea.error}</span>,
+ *   ifElse(hasError(ideaRequest),
+ *     <span>Error: {ideaRequest.errorMessage}</span>,
  *     <div>
- *       <h3>{idea.result?.name}</h3>
- *       <p>{idea.result?.description}</p>
- *       <p>${idea.result?.price}</p>
+ *       <h3>{idea.name}</h3>
+ *       <p>{idea.description}</p>
+ *       <p>${idea.price}</p>
  *     </div>
  *   )
  * )}
  *
- * Note: Use optional chaining (?.) because TypeScript doesn't narrow through ifElse.
- * At runtime, if we reach the inner else branch, result IS defined (pending=false, error=false).
+ * `resultOf()` provides the success-only value while the guards expose the
+ * pending and error variants.
  */
 import {
   Default,
   generateObject,
+  hasError,
   ifElse,
+  isPending,
   NAME,
   pattern,
-  toIndentedDebugString,
+  resultOf,
   UI,
 } from "commonfabric";
 
@@ -42,18 +44,15 @@ export interface Input {
 }
 
 export default pattern<Input, Input>(({ userInput }) => {
-  const idea = generateObject<ProductIdea>({
+  const ideaRequest = generateObject<ProductIdea>({
     prompt: userInput,
     system:
       "Generate a creative product idea based on the user's input. Be concise.",
   });
+  const idea = resultOf(ideaRequest);
 
   // Error message as string for display
-  const errorMessage = idea.error
-    ? (typeof idea.error === "string"
-      ? idea.error
-      : toIndentedDebugString(idea.error))
-    : null;
+  const errorMessage = hasError(ideaRequest) ? ideaRequest.errorMessage : null;
 
   return {
     [NAME]: "GenerateObject Error Handling Test",
@@ -77,21 +76,20 @@ export default pattern<Input, Input>(({ userInput }) => {
             borderRadius: "8px",
           }}
         >
-          {/* This is the CORRECT pattern - nested ifElse for error handling */}
-          {/* Note: Use optional chaining (?.property) since TypeScript doesn't narrow through ifElse */}
+          {/* Nested ifElse exercises explicit pending/error handling. */}
           {ifElse(
-            idea.pending,
+            isPending(ideaRequest),
             <span>
               <cf-loader size="sm" /> Generating...
             </span>,
             ifElse(
-              idea.error,
+              hasError(ideaRequest),
               <span style={{ color: "red" }}>Error: {errorMessage}</span>,
               <div>
-                <h3 style={{ marginTop: 0 }}>{idea.result?.name}</h3>
-                <p>{idea.result?.description}</p>
+                <h3 style={{ marginTop: 0 }}>{idea.name}</h3>
+                <p>{idea.description}</p>
                 <p>
-                  <strong>Price:</strong> ${idea.result?.price}
+                  <strong>Price:</strong> ${idea.price}
                 </p>
               </div>,
             ),
@@ -101,9 +99,9 @@ export default pattern<Input, Input>(({ userInput }) => {
         <div style={{ marginTop: "1rem", fontSize: "0.875rem", color: "#666" }}>
           <strong>Debug info:</strong>
           <ul>
-            <li>pending: {String(idea.pending)}</li>
+            <li>pending: {String(isPending(ideaRequest))}</li>
             <li>error: {errorMessage}</li>
-            <li>result: {idea.result ? "present" : "null"}</li>
+            <li>result: {idea ? "present" : "null"}</li>
           </ul>
         </div>
       </div>

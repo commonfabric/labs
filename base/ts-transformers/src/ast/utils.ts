@@ -603,6 +603,24 @@ export function isMethodCall(node: ts.PropertyAccessExpression): boolean {
   );
 }
 
+/** Resolves an identifier's value binding through authored node lineage. */
+export function getIdentifierValueSymbol(
+  identifier: ts.Identifier,
+  checker: ts.TypeChecker,
+): ts.Symbol | undefined {
+  const original = ts.getOriginalNode(identifier);
+  const target = ts.isIdentifier(original) ? original : identifier;
+  const parent = target.parent;
+  if (
+    parent && ts.isShorthandPropertyAssignment(parent) && parent.name === target
+  ) {
+    return checker.getShorthandAssignmentValueSymbol(parent) ??
+      checker.getSymbolAtLocation(target);
+  }
+  return checker.getSymbolAtLocation(target) ??
+    checker.getSymbolAtLocation(identifier);
+}
+
 /**
  * When a property access is a method call, get the object being called on.
  * This is useful for closures that should capture the object, not the method.

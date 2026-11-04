@@ -2,9 +2,9 @@
  * The marker for data that is not available, and its two vocabularies: the
  * reasons it can give, and the kinds of error the `error` reason sorts into,
  * each as a runtime table beside the class; the message each kind falls back
- * to; and one prefab instance per transient reason. The codecs decode a state
- * naming a transient reason to the prefab rather than to a fresh instance, so
- * the two are the canonical instances of what they name, though nothing turns
+ * to; and one message-free prefab per non-error reason. The codecs decode a
+ * message-free non-error state to its prefab rather than to a fresh instance,
+ * though nothing turns
  * on that: two instances with the same state are equal by content however
  * they were made.
  */
@@ -50,6 +50,7 @@ export const UNAVAILABLE_REASONS = Object.freeze(
   {
     pending: "pending",
     syncing: "syncing",
+    obsolete: "obsolete",
     error: "error",
   } as const,
 );
@@ -99,22 +100,23 @@ type FabricUnavailableState = {
   reason: UnavailableReason;
   errorKind?: UnavailableErrorKind;
   errorMessage?: string;
+  obsoleteMessage?: string;
 };
 
-/** The reasons that have a prefab instance: every reason but `error`. */
-type TransientReason = Exclude<UnavailableReason, "error">;
+/** The reasons that have a message-free prefab instance. */
+type PrefabReason = Exclude<UnavailableReason, "error">;
 
 /**
  * A marker standing in for data that is not available, saying why. It holds
- * no data of its own: the reason, and for the `error` reason the kind of
- * error and a message, are the whole of what it says, so it is a
- * `FabricPrimitive` rather than a container.
+ * no payload of its own: its reason and diagnostic fields are the whole of
+ * what it says, so it is a `FabricPrimitive` rather than a container.
  *
  * The reasons split along one axis, which `isTransient()` reports: `pending`
- * and `syncing` say the data is on its way, and `error` says producing it
- * failed. Only the `error` reason carries a kind, and it always does; only
- * the `error` reason may carry a message, and `errorMessage` supplies one for
- * its kind when none was given. The constructor refuses the other pairings.
+ * and `syncing` say the data is on its way, `error` says producing it failed,
+ * and `obsolete` says the output is no longer served. Only `error` carries
+ * an error kind and error message; only `obsolete` may carry migration
+ * guidance in `obsoleteMessage`. Diagnostics confer no authority to act.
+ * The constructor refuses the other pairings.
  * See Section 1.4.12 of `1-fabric-values.md`.
  */
 export class FabricUnavailable extends BaseFabricPrimitive
@@ -131,16 +133,21 @@ export class FabricUnavailable extends BaseFabricPrimitive
    */
   readonly #errorMessage: string | null;
 
+  /** Guidance about a retired output, when the reason is `obsolete`. */
+  readonly #obsoleteMessage: string | null;
+
   /**
    * Constructs an instance with the given reason, kind of error, and
    * message. Throws when `reason` is not one of the reasons; when it is
    * `error` and `errorKind` is not one of the kinds; or when it is a
-   * transient reason and either `errorKind` or `errorMessage` is not `null`.
+   * non-error reason and either error field is not `null`; or when
+   * `obsoleteMessage` is non-string or belongs to another reason.
    */
   constructor(
     reason: UnavailableReason,
     errorKind: UnavailableErrorKind | null = null,
     errorMessage: string | null = null,
+    obsoleteMessage: string | null = null,
   ) {
     super(BLESSING_TOKEN, FabricUnavailable);
 
@@ -180,9 +187,21 @@ export class FabricUnavailable extends BaseFabricPrimitive
       );
     }
 
+    if (obsoleteMessage !== null) {
+      if (reason !== UNAVAILABLE_REASONS.obsolete) {
+        throw new Error("Only reason `obsolete` takes an `obsoleteMessage`.");
+      }
+      if (typeof obsoleteMessage !== "string") {
+        throw new Error(
+          debugStr`Not an \`obsoleteMessage\`: $quote${obsoleteMessage}`,
+        );
+      }
+    }
+
     this.#reason = reason;
     this.#errorKind = errorKind;
     this.#errorMessage = storedMessage;
+    this.#obsoleteMessage = obsoleteMessage;
   }
 
   //
@@ -211,7 +230,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
 
   /**
    * The message, when the reason is `error`: the one stored, or the kind's
-   * default when none is. `null` for a transient reason.
+   * default when none is. `null` for any non-error reason.
    */
   get errorMessage(): string | null {
     const kind = this.#errorKind;
@@ -222,12 +241,17 @@ export class FabricUnavailable extends BaseFabricPrimitive
   }
 
   /**
-   * The message as stored, with no default supplied: `null` for a transient
+   * The message as stored, with no default supplied: `null` for a non-error
    * reason, and for an `error` whose message is its kind's default or was
    * never given. This is what the codecs and the hasher read.
    */
   get rawErrorMessage(): string | null {
     return this.#errorMessage;
+  }
+
+  /** Guidance about a retired output; `null` when none was given. */
+  get obsoleteMessage(): string | null {
+    return this.#obsoleteMessage;
   }
 
   /** Whether the reason is `pending`. */
@@ -238,6 +262,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
   /** Whether the reason is `syncing`. */
   isSyncing(): boolean {
     return this.#reason === UNAVAILABLE_REASONS.syncing;
+  }
+
+  /** Whether the output is no longer served. */
+  isObsolete(): boolean {
+    return this.#reason === UNAVAILABLE_REASONS.obsolete;
   }
 
   /**
@@ -252,11 +281,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
   }
 
   /**
-   * Whether the data is on its way rather than failed: `true` for the
-   * `pending` and `syncing` reasons, `false` for `error` whatever its kind.
+   * Whether the data is on its way: `true` for `pending` and `syncing`,
+   * `false` for `error` and `obsolete`.
    */
   isTransient(): boolean {
-    return this.#reason !== UNAVAILABLE_REASONS.error;
+    return this.#reason === UNAVAILABLE_REASONS.pending ||
+      this.#reason === UNAVAILABLE_REASONS.syncing;
   }
 
   /**
@@ -268,6 +298,10 @@ export class FabricUnavailable extends BaseFabricPrimitive
     const reason = this.#reason;
     const errorKind = this.#errorKind;
     const errorMessage = this.#errorMessage;
+
+    if (this.#obsoleteMessage !== null) {
+      return Object.freeze({ reason, obsoleteMessage: this.#obsoleteMessage });
+    }
 
     if (errorKind === null) {
       return Object.freeze({ reason });
@@ -421,7 +455,8 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * the shape of a {@link FabricUnavailableState}: a plain object whose own
    * `reason` is one of the reasons, whose own `errorKind`, if
    * present at all, is one of the kinds, and whose own `errorMessage`, if
-   * present at all, is a string. Every field is read as an own property, so
+   * present at all, is a string; likewise for `obsoleteMessage`. Every field
+   * is read as an own property, so
    * nothing inherited stands in for one. Presence is the test for the optional
    * fields rather than a comparison against `undefined`, because the realm
    * format carries `undefined` faithfully, and a field sent that way is a
@@ -433,10 +468,11 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return false;
     }
 
-    const { reason, errorKind, errorMessage } = state as {
+    const { reason, errorKind, errorMessage, obsoleteMessage } = state as {
       reason: unknown;
       errorKind?: unknown;
       errorMessage?: unknown;
+      obsoleteMessage?: unknown;
     };
 
     if (
@@ -454,23 +490,25 @@ export class FabricUnavailable extends BaseFabricPrimitive
       return false;
     }
 
-    return !Object.hasOwn(state, "errorMessage") ||
-      (typeof errorMessage === "string");
+    return (!Object.hasOwn(state, "errorMessage") ||
+      (typeof errorMessage === "string")) &&
+      (!Object.hasOwn(state, "obsoleteMessage") ||
+        (typeof obsoleteMessage === "string"));
   }
 
-  /** Helper for `#instanceForState()`, which reports whether `reason` is transient. */
-  static #isTransientReason(
+  /** Whether the reason has a message-free prefab. */
+  static #isPrefabReason(
     reason: UnavailableReason,
-  ): reason is TransientReason {
+  ): reason is PrefabReason {
     return reason !== UNAVAILABLE_REASONS.error;
   }
 
   /**
    * Helper for `#instanceForState()`, which returns the prefab instance for
-   * a transient reason. The `switch` is exhaustive with no default, so a
-   * transient reason added without a prefab stops this file compiling.
+   * a non-error reason. The `switch` is exhaustive with no default, so a
+   * prefab reason added without an instance stops this file compiling.
    */
-  static #prefabFor(reason: TransientReason): FabricUnavailable {
+  static #prefabFor(reason: PrefabReason): FabricUnavailable {
     switch (reason) {
       case UNAVAILABLE_REASONS.pending: {
         return UNAVAILABLE_PENDING;
@@ -479,12 +517,17 @@ export class FabricUnavailable extends BaseFabricPrimitive
       case UNAVAILABLE_REASONS.syncing: {
         return UNAVAILABLE_SYNCING;
       }
+
+      case UNAVAILABLE_REASONS.obsolete: {
+        return UNAVAILABLE_OBSOLETE;
+      }
     }
   }
 
   /**
    * Helper for both codecs' `decode()`, which returns the instance a decoded
-   * state stands for: the prefab for a state that is a transient reason alone, and a fresh instance otherwise. Throws as
+   * state stands for: the prefab for a non-error reason alone, and a fresh
+   * instance otherwise. Throws as
    * the constructor does when the fields present do not belong with the reason.
    * The optional fields are read as own properties, as `#isState()`
    * tested them, so a field that is only inherited is absent here too.
@@ -499,10 +542,14 @@ export class FabricUnavailable extends BaseFabricPrimitive
     const errorMessage = Object.hasOwn(state, "errorMessage")
       ? state.errorMessage
       : undefined;
+    const obsoleteMessage = Object.hasOwn(state, "obsoleteMessage")
+      ? state.obsoleteMessage
+      : undefined;
 
     if (
-      FabricUnavailable.#isTransientReason(reason) &&
-      (errorKind === undefined) && (errorMessage === undefined)
+      FabricUnavailable.#isPrefabReason(reason) &&
+      (errorKind === undefined) && (errorMessage === undefined) &&
+      (obsoleteMessage === undefined)
     ) {
       return FabricUnavailable.#prefabFor(reason);
     }
@@ -511,6 +558,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
       reason,
       errorKind ?? null,
       errorMessage ?? null,
+      obsoleteMessage ?? null,
     );
   }
 }
@@ -523,6 +571,11 @@ export const UNAVAILABLE_PENDING = new FabricUnavailable(
 /** The instance for reason `syncing`. */
 export const UNAVAILABLE_SYNCING = new FabricUnavailable(
   UNAVAILABLE_REASONS.syncing,
+);
+
+/** The message-free instance for reason `obsolete`. */
+export const UNAVAILABLE_OBSOLETE = new FabricUnavailable(
+  UNAVAILABLE_REASONS.obsolete,
 );
 
 // Compile-time check that the exported `FabricUnavailable` constructor matches

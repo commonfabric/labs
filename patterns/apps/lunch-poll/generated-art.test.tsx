@@ -1,4 +1,4 @@
-import { assert, pattern, TESTS, UI } from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   findElement,
   findNodeByProp,
@@ -52,10 +52,24 @@ export default pattern(() => {
 
   // The generation path (mocked endpoint): a generation-allowed instance
   // with nothing stored fetches and exposes its fetch-derived outputs.
+  const generationPrompt = new Writable("Sushi Place");
+  const generationEnabled = new Writable(true);
+  const generationSource = new Writable("");
   const generating = GeneratedArt({
-    prompt: "Sushi Place",
-    shouldGenerate: true,
+    prompt: generationPrompt,
+    shouldGenerate: generationEnabled,
+    sourceUrl: generationSource,
   });
+  const disableGeneration = action(() => generationEnabled.set(false));
+  const selectStoredImage = action(() => {
+    generationSource.set(STORED_IMAGE);
+    generationEnabled.set(true);
+  });
+  const clearPrompt = action(() => {
+    generationSource.set("");
+    generationPrompt.set("");
+  });
+  const regenerate = action(() => generationPrompt.set("Tacos & Tea"));
 
   // The static instances assert via the rendered UI; the generating instance
   // ALSO asserts direct reads of fetch-derived outputs (`fetchState`,
@@ -82,6 +96,18 @@ export default pattern(() => {
 
   const assert_generated_overlay_renders = assert(() =>
     findElement(generating[UI], "cf-image") !== undefined
+  );
+  const assert_generation_clears_to_fallback = assert(() =>
+    readValue(generating.fetchState) === "" &&
+    readValue(generating.imageDataUrl) === "" &&
+    findElement(generating[UI], "img") === undefined &&
+    findElement(generating[UI], "cf-image") === undefined
+  );
+  const assert_generated_image_is_replaced_by_stored_image = assert(() =>
+    readValue(generating.fetchState) === "stored" &&
+    readValue(generating.imageDataUrl) === "" &&
+    findNodeByProp(generating[UI], "src", STORED_IMAGE) !== undefined &&
+    findElement(generating[UI], "cf-image") === undefined
   );
 
   const assert_safe_image_url_accepts_web_urls = assert(() =>
@@ -167,6 +193,19 @@ export default pattern(() => {
       // The first of these reads the generating instance's mocked fetch,
       // which starts it; the harness waits for the response before it
       // reads again.
+      { assertion: assert_generation_outputs_materialize },
+      { assertion: assert_generated_overlay_renders },
+      { action: disableGeneration },
+      { render: generating[UI] },
+      { assertion: assert_generation_clears_to_fallback },
+      { action: selectStoredImage },
+      { render: generating[UI] },
+      { assertion: assert_generated_image_is_replaced_by_stored_image },
+      { action: clearPrompt },
+      { render: generating[UI] },
+      { assertion: assert_generation_clears_to_fallback },
+      { action: regenerate },
+      { render: generating[UI] },
       { assertion: assert_generation_outputs_materialize },
       { assertion: assert_generated_overlay_renders },
     ],

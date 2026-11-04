@@ -1134,7 +1134,7 @@ async function startTopicsLifts(
     const table = demanded.pivot === undefined ? undefined : runtime.run(
       tx,
       lifts.crossrefTable,
-      { sources: seeded.board },
+      { sources: seeded.board, values: seeded.board },
       output<PivotRow[]>(`${prefix}crossrefs`),
     );
     const backlinks = new Map<number, Cell<unknown[]>>();

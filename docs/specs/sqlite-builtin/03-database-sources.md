@@ -121,8 +121,9 @@ operator connects a file to it via `cf`:
 // Shown inside a pattern body.
 // The pattern is source-agnostic — it just consumes whatever is wired into `db`.
 pattern<{ db: SqliteDb }>(({ db }) => {
-  const rows = db.query<{ name: string }>("SELECT name FROM lookup");
-  // Until connected, `rows.pending` stays true (Section 05 / Example 07-#5).
+  const request = db.query<{ name: string }>("SELECT name FROM lookup");
+  // Until connected, `isPending(request)` is true and `resultOf(request)`
+  // waits (Section 05 / Example 07-#5).
   // `reactOn` is omitted for injected sources in v1 (deferred — Q12).
 });
 ```
@@ -161,9 +162,9 @@ action detects the scheme before its normal `parseLink`):
    handle, so multiple pieces share one handle cell.
 
 **Pending-until-connected** falls out of reactivity: an unpopulated `db` input
-is an empty cell, so `sqliteQuery` reports `pending: true`; when `cf` writes the
-link, the input cell changes, the query action re-runs, and it connects. (A
-populated-but-unreachable database surfaces `error` instead.)
+is an empty cell, so `sqliteQuery` publishes a pending marker; when `cf` writes
+the link, the input cell changes, the query action re-runs, and it connects. (A
+populated-but-unreachable database publishes `error` instead.)
 
 v1 behavior: the server attaches the registered file **read-only** (PRAGMA
 `query_only` for the synchronous attach→op→detach window) instead of the

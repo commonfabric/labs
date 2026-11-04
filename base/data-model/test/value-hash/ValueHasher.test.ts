@@ -674,6 +674,45 @@ describe("ValueHasher", () => {
       });
 
       describe("FabricUnavailable (dedicated TAG_UNAVAILABLE primitive tag)", () => {
+        it("includes obsolete guidance while distinguishing absence from an empty message", () => {
+          const messages = [null, "", "Use new.title.", "Use new.body."];
+          const hashes = messages.map((message) =>
+            hex(hashBytesOf(
+              new FabricUnavailable("obsolete", null, null, message),
+            ))
+          );
+          expect(new Set(hashes).size).toBe(messages.length);
+          expect(hashBytesOf(new FabricUnavailable("obsolete"))).toEqual(
+            sha256([
+              0x2d,
+              0x24,
+              0x08,
+              ...new TextEncoder().encode("obsolete"),
+              0x20,
+              0x20,
+              0x20,
+            ]),
+          );
+          expect(
+            hashBytesOf(
+              new FabricUnavailable("obsolete", null, null, "Use new."),
+            ),
+          )
+            .toEqual(
+              sha256([
+                0x2d,
+                0x24,
+                0x08,
+                ...new TextEncoder().encode("obsolete"),
+                0x20,
+                0x20,
+                0x24,
+                0x08,
+                ...new TextEncoder().encode("Use new."),
+              ]),
+            );
+        });
+
         it('matches a hand-computed byte stream for `FabricUnavailable("pending")`', () => {
           // TAG_UNAVAILABLE (0x2D), the reason as a tagged string, then the
           // absent kind and the absent message each as TAG_NULL (0x20).

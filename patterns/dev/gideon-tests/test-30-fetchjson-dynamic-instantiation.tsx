@@ -14,7 +14,17 @@
  * 1. Static fetchJson at top level (control - should work)
  * 2. fetchJson inside .map() with expression callback (claimed to fail)
  */
-import { computed, Default, fetchJson, NAME, pattern, UI } from "commonfabric";
+import {
+  computed,
+  Default,
+  fetchJson,
+  hasError,
+  isPending,
+  NAME,
+  pattern,
+  resultOf,
+  UI,
+} from "commonfabric";
 
 interface Repo {
   id: string;
@@ -48,6 +58,7 @@ export default pattern<InputSchema, Input>(({ repos }) => {
   const staticFetch = fetchJson<{ stargazers_count?: number }>({
     url: staticUrl,
   });
+  const staticValue = resultOf(staticFetch);
 
   // Approach 2: fetchJson inside .map() - expression callback (no block syntax)
   // This is claimed to fail with frame mismatch or return undefined
@@ -59,13 +70,11 @@ export default pattern<InputSchema, Input>(({ repos }) => {
 
   // Display results
   const staticResult = computed(() =>
-    staticFetch.pending
+    isPending(staticFetch)
       ? "Loading..."
-      : staticFetch.error
-      ? `Error: ${staticFetch.error}`
-      : staticFetch.result
-      ? `Stars: ${staticFetch.result.stargazers_count ?? "N/A"}`
-      : "No data"
+      : hasError(staticFetch)
+      ? `Error: ${staticFetch.errorMessage}`
+      : `Stars: ${staticValue.stargazers_count ?? "N/A"}`
   );
 
   return {
@@ -133,7 +142,7 @@ export default pattern<InputSchema, Input>(({ repos }) => {
             </div>
             <div style={{ fontSize: "12px", color: "#666" }}>
               <strong>Pending:</strong>{" "}
-              {computed(() => String(staticFetch.pending))}
+              {computed(() => String(isPending(staticFetch)))}
             </div>
           </div>
 
@@ -156,31 +165,35 @@ export default pattern<InputSchema, Input>(({ repos }) => {
               fetchJson inside .map() callback
             </code>
             <div>
-              {dynamicFetches.map((fetch, index) => (
-                <div
-                  key={index}
-                  style={{
-                    marginBottom: "10px",
-                    padding: "8px",
-                    backgroundColor: "#f9f9f9",
-                    borderRadius: "4px",
-                  }}
-                >
-                  <strong>Repo {index + 1}:</strong>
-                  <div style={{ fontSize: "12px" }}>
-                    Pending: {computed(() => String(fetch.pending))}
-                    {" | "}
-                    Error:{" "}
-                    {computed(() => fetch.error ? String(fetch.error) : "none")}
-                    {" | "}
-                    Result: {computed(() =>
-                      fetch.result
-                        ? `Stars: ${fetch.result.stargazers_count ?? "N/A"}`
-                        : "No data"
-                    )}
+              {dynamicFetches.map((request, index) => {
+                const result = resultOf(request);
+                return (
+                  <div
+                    key={index}
+                    style={{
+                      marginBottom: "10px",
+                      padding: "8px",
+                      backgroundColor: "#f9f9f9",
+                      borderRadius: "4px",
+                    }}
+                  >
+                    <strong>Repo {index + 1}:</strong>
+                    <div style={{ fontSize: "12px" }}>
+                      Pending: {computed(() => String(isPending(request)))}
+                      {" | "}
+                      Error:{" "}
+                      {computed(() =>
+                        hasError(request) ? request.errorMessage : "none"
+                      )}
+                      {" | "}
+                      Result:{" "}
+                      {computed(() =>
+                        `Stars: ${result.stargazers_count ?? "N/A"}`
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

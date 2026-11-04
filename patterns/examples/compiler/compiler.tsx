@@ -2,10 +2,11 @@ import {
   compileAndRun,
   Default,
   handler,
-  ifElse,
+  hasError,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   UI,
   Writable,
 } from "commonfabric";
@@ -47,10 +48,11 @@ const handleEditContent = handler<
 );
 
 export default pattern<Input>(({ code }) => {
-  const { result, error, errors: _ } = compileAndRun({
+  const compileRequest = compileAndRun({
     files: [{ name: "/main.tsx", contents: code }],
     main: "/main.tsx",
   });
+  const result = resultOf(compileRequest);
 
   return {
     [NAME]: "My First Compiler",
@@ -62,15 +64,19 @@ export default pattern<Input>(({ code }) => {
           oncf-change={updateCode({ code })}
           //errors={errors}
         />
-        {ifElse(
-          error,
-          <b>fix the error: {error}</b>,
-          <cf-button
-            onClick={visit({ result })}
-          >
-            Navigate To Piece
-          </cf-button>,
-        )}
+        {hasError(compileRequest)
+          ? (
+            <b>
+              fix the error: {compileRequest.errorMessage}
+            </b>
+          )
+          : (
+            <cf-button
+              onClick={visit({ result })}
+            >
+              Navigate To Piece
+            </cf-button>
+          )}
       </div>
     ),
     code,

@@ -8,6 +8,7 @@ import {
   action,
   assert,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   table,
@@ -22,13 +23,13 @@ interface Row {
 }
 
 const MappedRows = pattern<{ db: SqliteDb; count: number }>(({ db, count }) => {
-  const query = db.query<Row>(
+  const query = resultOf(db.query<Row>(
     "SELECT id, title FROM messages ORDER BY id LIMIT ?",
-    { params: [count] },
-  );
+    { params: [count], reactOn: db },
+  ));
   return {
     query,
-    [UI]: <div>{query.result?.map((row) => <p>{row.title}</p>)}</div>,
+    [UI]: <div>{query.rows.map((row) => <p>{row.title}</p>)}</div>,
   };
 });
 
@@ -65,12 +66,12 @@ export default pattern(() => {
     [TESTS]: [
       { action: seed },
       { action: action(() => console.log("Mapped render N=11")) },
-      { assertion: assert(() => small.query.result?.length === 11) },
+      { assertion: assert(() => small.query.rows.length === 11) },
       { render: small[UI] },
       {
         action: action(() => {
           console.log("Labeled copy N=11");
-          copied.set((small.query.result ?? []).map((row: Row) => ({
+          copied.set(small.query.rows.map((row: Row) => ({
             id: row.id,
             title: row.title,
           })));
@@ -78,12 +79,12 @@ export default pattern(() => {
       },
       { assertion: assert(() => copied.get().length === 11) },
       { action: action(() => console.log("Mapped render N=50")) },
-      { assertion: assert(() => medium.query.result?.length === 50) },
+      { assertion: assert(() => medium.query.rows.length === 50) },
       { render: medium[UI] },
       {
         action: action(() => {
           console.log("Labeled copy N=50");
-          copied.set((medium.query.result ?? []).map((row: Row) => ({
+          copied.set(medium.query.rows.map((row: Row) => ({
             id: row.id,
             title: row.title,
           })));
@@ -91,12 +92,12 @@ export default pattern(() => {
       },
       { assertion: assert(() => copied.get().length === 50) },
       { action: action(() => console.log("Mapped render N=150")) },
-      { assertion: assert(() => large.query.result?.length === 150) },
+      { assertion: assert(() => large.query.rows.length === 150) },
       { render: large[UI] },
       {
         action: action(() => {
           console.log("Labeled copy N=150");
-          copied.set((large.query.result ?? []).map((row: Row) => ({
+          copied.set(large.query.rows.map((row: Row) => ({
             id: row.id,
             title: row.title,
           })));

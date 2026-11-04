@@ -206,6 +206,7 @@ import {
   SealedCommitVerdict,
   SealedNativeCommit,
   State,
+  type StorageConnectionState,
   StorageNotification,
   StorageTransactionRejected,
   StoredDocumentAddress,
@@ -1694,6 +1695,12 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+  #connectionStates = new Map<MemorySpace, StorageConnectionState>();
+  #connectionTeardownDepth = 0;
+  #connectionObservers = new Map<
+    MemorySpace,
+    Set<(state: StorageConnectionState) => void>
+  >();
 
   /**
    * The kind each space declares, as {@link spaceKind} read it in a session
@@ -2603,6 +2610,74 @@ export class StorageManager implements IStorageManager {
       0;
   }
 
+  subscribeConnectionState(
+    space: MemorySpace,
+    callback: (state: StorageConnectionState) => void,
+  ): Cancel {
+    let observers = this.#connectionObservers.get(space);
+    if (observers === undefined) {
+      observers = new Set();
+      this.#connectionObservers.set(space, observers);
+    }
+    observers.add(callback);
+    this.#notifyConnectionObserver(space, callback);
+    return () => {
+      observers.delete(callback);
+      if (
+        observers.size === 0 &&
+        this.#connectionObservers.get(space) === observers
+      ) this.#connectionObservers.delete(space);
+    };
+  }
+
+  #notifyConnectionObserver(
+    space: MemorySpace,
+    callback: (state: StorageConnectionState) => void,
+  ): void {
+    try {
+      callback(
+        this.#connectionStates.get(space) ??
+          Object.freeze({ status: "idle", epoch: 0 }),
+      );
+    } catch (error) {
+      console.error("space-connection subscriber threw:", error);
+    }
+  }
+
+  #publishConnectionState(
+    space: MemorySpace,
+    state: MemoryV2Client.SpaceSessionConnectionState,
+  ): void {
+    const epoch = this.#connectionStates.get(space)?.epoch ?? 0;
+    if (this.#connectionTeardownDepth > 0 && state.status !== "closed") return;
+    const next: StorageConnectionState = Object.freeze(
+      state.status === "ready"
+        ? { status: "ready", epoch: epoch + 1 }
+        : { status: state.status, epoch, cause: state.cause },
+    );
+    this.#connectionStates.set(space, next);
+    for (const callback of [...(this.#connectionObservers.get(space) ?? [])]) {
+      if (this.#connectionStates.get(space) !== next) break;
+      this.#notifyConnectionObserver(space, callback);
+    }
+  }
+
+  #closeConnectionObservers(): void {
+    for (
+      const space of new Set([
+        ...this.#connectionObservers.keys(),
+        ...this.#connectionStates.keys(),
+      ])
+    ) {
+      this.#publishConnectionState(space, {
+        status: "closed",
+        epoch: 0,
+        cause: new Error("storage manager closed"),
+      });
+    }
+    this.#connectionObservers.clear();
+  }
+
   /** @inheritDoc */
   async serverFlags(
     space: MemorySpace,
@@ -2726,6 +2801,8 @@ export class StorageManager implements IStorageManager {
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        onConnectionState: (state) =>
+          this.#publishConnectionState(space, state),
         trackPendingCommit: (promise) => this.trackPendingCommit(promise),
         onSessionReplaced: () => {
           for (const observer of [...this.#spaceSessionReplacedObservers]) {
@@ -3001,6 +3078,8 @@ export class StorageManager implements IStorageManager {
   }
 
   async close(): Promise<void> {
+    this.#connectionTeardownDepth++;
+    this.#closeConnectionObservers();
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
@@ -3029,13 +3108,20 @@ export class StorageManager implements IStorageManager {
     } finally {
       // The providers have ended their sessions, so whatever connection the
       // factory kept open for them has nothing left on it.
-      await this.#sessionFactory.close?.();
-      this.#schemaRegistryLease?.();
-      this.#schemaRegistryLease = undefined;
+      try {
+        await this.#sessionFactory.close?.();
+      } finally {
+        const releaseLease = this.#schemaRegistryLease;
+        this.#schemaRegistryLease = undefined;
+        this.#connectionTeardownDepth--;
+        releaseLease?.();
+      }
     }
   }
 
   async closeNow(): Promise<void> {
+    this.#connectionTeardownDepth++;
+    this.#closeConnectionObservers();
     this.#detachedSessionResumes.clear();
     try {
       if (this.#providers.size === 0) {
@@ -3055,9 +3141,14 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
-      await this.#sessionFactory.close?.();
-      this.#schemaRegistryLease?.();
-      this.#schemaRegistryLease = undefined;
+      try {
+        await this.#sessionFactory.close?.();
+      } finally {
+        const releaseLease = this.#schemaRegistryLease;
+        this.#schemaRegistryLease = undefined;
+        this.#connectionTeardownDepth--;
+        releaseLease?.();
+      }
     }
   }
 
@@ -4521,6 +4612,9 @@ type ProviderOptions = {
   settings: IRemoteStorageProviderSettings;
   subscription: IStorageSubscription;
   onAccessChange?: (error: Error | undefined) => void;
+  onConnectionState?: (
+    state: MemoryV2Client.SpaceSessionConnectionState,
+  ) => void;
 
   /**
    * Called when the memory server answers an open of the session, admitting
@@ -5111,8 +5205,17 @@ class Provider
       return;
     }
     const previous = this.replica;
-    this.#routeAbort.abort(new Error("memory replica route replaced"));
     this.options.routeState.generation++;
+    const generation = this.options.routeState.generation;
+    this.#routeAbort.abort(new Error("memory replica route replaced"));
+    this.options.onConnectionState?.({
+      status: "disconnected",
+      epoch: 0,
+      cause: new Error("memory replica route replaced"),
+    });
+    if (this.#destroyed || this.options.routeState.generation !== generation) {
+      return;
+    }
     this.#routeAbort = new AbortController();
     const replacement = this.#createReplica();
     previous.transferLocalSessionStateTo(replacement);
@@ -5911,6 +6014,8 @@ export class SpaceReplica
   #lastAuthorizationError: IAuthorizationError | null = null;
   #sessionAdmissionError: Error | undefined;
   #onAccessChange?: (error: Error | undefined) => void;
+  #cancelConnectionState: Cancel | undefined;
+  readonly #onConnectionState?: ProviderOptions["onConnectionState"];
   #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
   #onSessionReplaced?: () => void;
@@ -5947,6 +6052,7 @@ export class SpaceReplica
       (() => false);
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
+    this.#onConnectionState = options.onConnectionState;
     this.#onSessionAnswered = options.onSessionAnswered;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
@@ -6766,6 +6872,8 @@ export class SpaceReplica
     this.#sessionHandle = undefined;
     this.#sessionAdmissionError = undefined;
     this.#sessionClient = undefined;
+    this.#cancelConnectionState?.();
+    this.#cancelConnectionState = undefined;
     // Dropping the terminated session drops the `closeError` half of
     // `authorizationError()` with it. That is the right direction — keeping it
     // would report a denial for a space that may have just healed, and a
@@ -7612,6 +7720,8 @@ export class SpaceReplica
   }
 
   async close(): Promise<void> {
+    this.#cancelConnectionState?.();
+    this.#cancelConnectionState = undefined;
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
     this.#localCoverageObservers.clear();
@@ -7791,6 +7901,8 @@ export class SpaceReplica
   }
 
   closeNow(): void {
+    this.#cancelConnectionState?.();
+    this.#cancelConnectionState = undefined;
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
     this.#localCoverageObservers.clear();
@@ -12699,6 +12811,21 @@ export class SpaceReplica
           }
           this.#sessionClient = resolved.client;
           this.#sessionSession = resolved.session;
+          this.#cancelConnectionState?.();
+          const onConnectionState = (
+            state: MemoryV2Client.SpaceSessionConnectionState,
+          ) => {
+            if (
+              !this.#closed &&
+              this.#routeState.generation === this.#routeGeneration &&
+              this.#sessionSession === resolved.session
+            ) this.#onConnectionState?.(state);
+          };
+          this.#cancelConnectionState = resolved.session
+            .subscribeConnectionState?.(onConnectionState);
+          if (resolved.session.subscribeConnectionState === undefined) {
+            onConnectionState({ status: "ready", epoch: 1 });
+          }
           this.#sessionAdmissionError = undefined;
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);

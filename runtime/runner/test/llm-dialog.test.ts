@@ -1,7 +1,12 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+} from "@commonfabric/data-model/availability";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
 import {
   addMockResponse,
   clearMockResponses,
@@ -14,10 +19,14 @@ import type {
   JSONSchema,
 } from "@commonfabric/api";
 import { createBuilder } from "../src/builder/factory.ts";
+import { generateObjectState } from "../src/builder/built-in.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
+import {
+  LLMDialogResultSchema,
+  LLMMessageSchema,
+} from "../src/builtins/llm-schemas.ts";
 import { llmToolExecutionHelpers } from "../src/builtins/llm-dialog.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
 import { waitForLlmMessages } from "./support/llm-result.ts";
@@ -40,9 +49,7 @@ describe("llmDialog", () => {
   >["commonfabric"]["patternTool"];
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
   let llmDialog: ReturnType<typeof createBuilder>["commonfabric"]["llmDialog"];
-  let generateObject: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["generateObject"];
+  let generateObject: typeof generateObjectState;
 
   beforeEach(() => {
     clearMockResponses();
@@ -61,8 +68,8 @@ describe("llmDialog", () => {
       Writable,
       handler,
       patternTool,
-      generateObject,
     } = commonfabric);
+    generateObject = generateObjectState;
   });
 
   afterEach(async () => {
@@ -70,6 +77,254 @@ describe("llmDialog", () => {
     await runtime.idle();
     await runtime?.dispose();
     await storageManager?.close();
+  });
+
+  it("publishes pending only for dialogs with a presented result", async () => {
+    const presentedSchema = {
+      type: "object",
+      properties: { answer: { type: "number" } },
+      required: ["answer"],
+    } as const satisfies JSONSchema;
+    const withResultPattern = pattern(
+      () => {
+        const messages = Cell.of<BuiltInLLMMessage[]>([]);
+        return llmDialog({ messages, resultSchema: presentedSchema } as any);
+      },
+      false,
+      LLMDialogResultSchema,
+    );
+    const withoutResultPattern = pattern(
+      () => {
+        const messages = Cell.of<BuiltInLLMMessage[]>([]);
+        return llmDialog({ messages });
+      },
+      false,
+      LLMDialogResultSchema,
+    );
+
+    const withResult = runtime.run(
+      tx,
+      withResultPattern,
+      {},
+      runtime.getCell(space, "llmDialog-presented-result", undefined, tx),
+    );
+    const withoutResult = runtime.run(
+      tx,
+      withoutResultPattern,
+      {},
+      runtime.getCell(space, "llmDialog-control-only", undefined, tx),
+    );
+    await tx.commit().settled;
+
+    await withResult.pull();
+    await withoutResult.pull();
+
+    expect(withResult.key("result").getRaw()).toBe(UNAVAILABLE_PENDING);
+    expect(withoutResult.key("result").getRaw()).toBeUndefined();
+  });
+
+  it("publishes an error result when the first presented-result turn fails", async () => {
+    const presentedSchema = {
+      type: "object",
+      properties: { answer: { type: "number" } },
+      required: ["answer"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => {
+        const messages = Cell.of<BuiltInLLMMessage[]>([]);
+        return llmDialog({ messages, resultSchema: presentedSchema } as any);
+      },
+      false,
+      LLMDialogResultSchema,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      {},
+      runtime.getCell(space, "llmDialog-first-result-error", undefined, tx),
+    );
+    await tx.commit().settled;
+    await result.pull();
+
+    const addMessage = await result.key("addMessage").pull();
+    addMessage.send({ role: "user", content: "Present a result" });
+    await runtime.settled();
+
+    const unavailable = result.key("result").getRaw();
+    expect(isUnavailable(unavailable)).toBe(true);
+    if (isUnavailable(unavailable) && unavailable.reason === "error") {
+      expect(unavailable.errorMessage).toMatch(/no matching mock response/);
+    }
+    expect(result.key("error").get()).toMatch(/no matching mock response/);
+  });
+
+  it("preserves the last presented result across a later failed turn", async () => {
+    loadConversationFixture({
+      description: "Presented dialog result survives a later failed turn",
+      responses: [
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["First turn"], messageCount: 1 },
+          response: {
+            role: "assistant",
+            content: [{
+              type: "tool-call",
+              toolCallId: "present-first-result",
+              toolName: "presentResult",
+              input: { answer: 42 },
+            }],
+            id: "present-first-result-response",
+          },
+        },
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["First turn"], messageCount: 3 },
+          response: {
+            role: "assistant",
+            content: "Presented.",
+            id: "present-first-result-finished",
+          },
+        },
+      ],
+    });
+
+    const presentedSchema = {
+      type: "object",
+      properties: { answer: { type: "number" } },
+      required: ["answer"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => {
+        const messages = Cell.of<BuiltInLLMMessage[]>([]);
+        return llmDialog({ messages, resultSchema: presentedSchema } as any);
+      },
+      false,
+      LLMDialogResultSchema,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      {},
+      runtime.getCell(space, "llmDialog-preserved-result", undefined, tx),
+    );
+    await tx.commit().settled;
+    await result.pull();
+
+    const addMessage = await result.key("addMessage").pull();
+    addMessage.send({ role: "user", content: "First turn" });
+    await runtime.settled();
+    expect(result.key("result").get()).toEqual({ answer: 42 });
+
+    addMessage.send({ role: "user", content: "Second turn" });
+    await runtime.settled();
+    expect(result.key("result").get()).toEqual({ answer: 42 });
+    expect(result.key("error").get()).toMatch(/no matching mock response/);
+  });
+
+  it("rejects invalid presented results and recovers across retries", async () => {
+    loadConversationFixture({
+      description: "Invalid presented result is withheld",
+      responses: [
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["Invalid turn"] },
+          response: {
+            role: "assistant",
+            content: [{
+              type: "tool-call",
+              toolCallId: "present-invalid-result",
+              toolName: "presentResult",
+              input: { answer: "no" },
+            }],
+            id: "present-invalid-result-response",
+          },
+        },
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["Invalid turn"] },
+          response: {
+            role: "assistant",
+            content: "Attempted to present an invalid result.",
+            id: "present-invalid-result-finished",
+          },
+        },
+      ],
+    });
+
+    const presentedSchema = {
+      type: "object",
+      properties: { answer: { type: "string", minLength: 4 } },
+      required: ["answer"],
+    } as const satisfies JSONSchema;
+    const testPattern = pattern(
+      () => {
+        const messages = Cell.of<BuiltInLLMMessage[]>([]);
+        return llmDialog({ messages, resultSchema: presentedSchema } as any);
+      },
+      false,
+      LLMDialogResultSchema,
+    );
+    const result = runtime.run(
+      tx,
+      testPattern,
+      {},
+      runtime.getCell(space, "llmDialog-invalid-result-retry", undefined, tx),
+    );
+    await tx.commit().settled;
+    await result.pull();
+
+    const addMessage = await result.key("addMessage").pull();
+    addMessage.send({ role: "user", content: "Invalid turn" });
+    await runtime.settled();
+
+    expect(result.key("result").getRaw()).toMatchObject({
+      reason: "error",
+      errorKind: "schemaMismatch",
+    });
+    expect(result.key("error").get()).toMatch(/schema validation/);
+
+    clearMockResponses();
+    addMessage.send({ role: "user", content: "Failed retry" });
+    await runtime.settled();
+    const retryFailure = result.key("result").getRaw();
+    expect(isUnavailable(retryFailure)).toBe(true);
+    if (isUnavailable(retryFailure)) {
+      expect(retryFailure.reason).toBe("error");
+    }
+
+    loadConversationFixture({
+      description: "Valid presented result recovers after failures",
+      responses: [
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["Valid turn"] },
+          response: {
+            role: "assistant",
+            content: [{
+              type: "tool-call",
+              toolCallId: "present-valid-result",
+              toolName: "presentResult",
+              input: { answer: "valid" },
+            }],
+            id: "present-valid-result-response",
+          },
+        },
+        {
+          type: "sendRequest",
+          expectRequest: { messagesContain: ["Valid turn"] },
+          response: {
+            role: "assistant",
+            content: "Presented a valid result.",
+            id: "present-valid-result-finished",
+          },
+        },
+      ],
+    });
+    addMessage.send({ role: "user", content: "Valid turn" });
+    await runtime.settled();
+
+    expect(result.key("result").get()).toEqual({ answer: "valid" });
+    expect(result.key("error").get()).toBeUndefined();
   });
 
   it("should support a multi-turn conversation via addMessage", async () => {

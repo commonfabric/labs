@@ -8,11 +8,16 @@ import {
   type FabricBytes,
   generateObject,
   handler,
+  hasError,
+  hasSchemaMismatch,
   ImageData,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
   type RequiresIntegrity,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -533,11 +538,25 @@ export default pattern<LotWatchInput, LotWatchOutput>(
     const profileNameWish = wish<string>({ query: "#profileName" });
     const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
-    const profileName = computed(() => (profileNameWish.result ?? "").trim());
-    const profilePicture = computed(() => profilePictureWish.result);
-    const profileAvatar = computed(() => profileAvatarWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
+    const resolvedProfileName = hasError(profileNameWish.result) ||
+        isPending(profileNameWish.result) ||
+        isSyncing(profileNameWish.result) ||
+        hasSchemaMismatch(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
+    const resolvedProfileAvatar = hasError(profileAvatarWish.result) ||
+        isPending(profileAvatarWish.result) ||
+        isSyncing(profileAvatarWish.result) ||
+        hasSchemaMismatch(profileAvatarWish.result)
+      ? ""
+      : resultOf(profileAvatarWish.result);
+    const profileName = computed(() => resolvedProfileName.trim());
+    const profileAvatar = computed(() => resolvedProfileAvatar.trim());
+    const hasProfile = computed(() => resolvedProfileName.trim() !== "");
+    const profilePicture = computed(() =>
+      hasError(profilePictureWish.result)
+        ? undefined
+        : resultOf(profilePictureWish.result)
     );
     const reporterLabel = computed(() => (reporterName.get() || "").trim());
     const hasReporter = computed(() => reporterLabel !== "");
@@ -598,7 +617,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
     // Runs reactively when a photo is captured. Uses the draft's inline `data`
     // (that's why `includeData` stays on the capture input) — transient, the
     // saved Sighting keeps only the blob url.
-    const extraction = generateObject<PlateExtraction>({
+    const extractionRequest = generateObject<PlateExtraction>({
       system:
         "You are reading a photo of a parked car to log a parking violation. " +
         "Extract the vehicle description (color + make + model in plain words), " +
@@ -643,6 +662,7 @@ export default pattern<LotWatchInput, LotWatchOutput>(
         },
       },
     });
+    const extraction = resultOf(extractionRequest);
 
     // ---- Actions ----
 
@@ -724,15 +744,16 @@ export default pattern<LotWatchInput, LotWatchOutput>(
     // the wizard.
     const setDraftSpot = action<{ spot: string }>(({ spot }) => {
       draftSpot.set(spot);
-      const r = extraction.result;
-      if (r?.description && !draftDescription.get()) {
-        draftDescription.set(r.description);
-      }
-      if (r?.plateNumber && !draftPlateNumber.get()) {
-        draftPlateNumber.set(r.plateNumber);
-      }
-      if (r?.plateState && !draftPlateState.get()) {
-        draftPlateState.set(r.plateState);
+      if (!isPending(extractionRequest) && !hasError(extractionRequest)) {
+        if (extraction.description && !draftDescription.get()) {
+          draftDescription.set(extraction.description);
+        }
+        if (extraction.plateNumber && !draftPlateNumber.get()) {
+          draftPlateNumber.set(extraction.plateNumber);
+        }
+        if (extraction.plateState && !draftPlateState.get()) {
+          draftPlateState.set(extraction.plateState);
+        }
       }
       captureStep.set("review");
     });
@@ -746,20 +767,18 @@ export default pattern<LotWatchInput, LotWatchOutput>(
 
     // Adopt the viewer's resolved shared-profile name as the reporter name.
     const adoptProfileName = action(() => {
-      const name = (profileNameWish.result ?? "").trim();
+      const name = resolvedProfileName.trim();
       if (!name) return;
       reporterName.set(name);
     });
 
-    // Phase 2: copy the LLM extraction into the editable draft fields. The
-    // extracted values are read in JSX (where `extraction.result` is reactive)
-    // and passed in as plain args — an action can't read a generateObject
-    // result directly. The user can then review/correct before saving.
+    // Phase 2: copy the success-only LLM result into the editable draft fields.
+    // The guards keep this action callable while the request is unavailable.
     const applyExtraction = action(() => {
-      const r = extraction.result;
-      if (r?.description) draftDescription.set(r.description);
-      if (r?.plateNumber) draftPlateNumber.set(r.plateNumber);
-      if (r?.plateState) draftPlateState.set(r.plateState);
+      if (isPending(extractionRequest) || hasError(extractionRequest)) return;
+      if (extraction.description) draftDescription.set(extraction.description);
+      if (extraction.plateNumber) draftPlateNumber.set(extraction.plateNumber);
+      if (extraction.plateState) draftPlateState.set(extraction.plateState);
     });
 
     const captureSighting = action<{
@@ -1725,13 +1744,13 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                               <span style="font-weight: 600; font-size: 0.875rem;">
                                 ✨ AI extracted
                               </span>
-                              {extraction.pending
+                              {isPending(extractionRequest)
                                 ? (
                                   <span style="font-size: 0.875rem; color: var(--cf-colors-gray-500);">
                                     Reading the plate…
                                   </span>
                                 )
-                                : extraction.error
+                                : hasError(extractionRequest)
                                 ? (
                                   <span style="font-size: 0.875rem; color: #991b1b;">
                                     Couldn't read the plate — fill it in
@@ -1741,15 +1760,14 @@ export default pattern<LotWatchInput, LotWatchOutput>(
                                 : (
                                   <cf-vstack gap="0">
                                     <span style="font-size: 0.875rem;">
-                                      {extraction.result?.description}
+                                      {extraction.description}
                                     </span>
                                     <span style="font-size: 0.875rem; font-family: monospace; font-weight: 500;">
-                                      {extraction.result?.plateNumber}{" "}
-                                      {extraction.result?.plateState}
+                                      {extraction.plateNumber}{" "}
+                                      {extraction.plateState}
                                     </span>
                                     <span style="font-size: 0.7rem; color: var(--cf-colors-gray-500);">
-                                      confidence:{" "}
-                                      {extraction.result?.confidence}
+                                      confidence: {extraction.confidence}
                                     </span>
                                     <cf-button
                                       variant="secondary"

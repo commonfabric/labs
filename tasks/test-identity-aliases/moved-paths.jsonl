@@ -1115,3 +1115,17 @@
 {"date": "2026-12-01", "from": {"p": "base/pure-json"}, "to": {"p": "base/json"}}
 {"date": "2026-12-01", "from": {"p": "base/utils/src/encoding.ts"}, "to": {"p": "base/text/src/utf8.ts"}}
 {"date": "2026-11-07", "from": {"p": "runtime/toolshed/routes/pattern-lifecycle/pattern-lifecycle.utils.test.ts"}, "to": {"p": "runtime/toolshed/lib/pattern-lifecycle.test.ts"}}
+{"date":"2026-12-01","from":{"p":"patterns/cheeseboard-availability.test.tsx"},"to":{"p":"patterns/apps/cheeseboard/cheeseboard-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"cheeseboard-availability.test.tsx"},"to":{"p":"apps/cheeseboard/cheeseboard-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/image-analysis-availability.test.tsx"},"to":{"p":"patterns/apps/image-analysis/image-analysis-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"image-analysis-availability.test.tsx"},"to":{"p":"apps/image-analysis/image-analysis-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/examples/profile-aware-writer-availability.test.tsx"},"to":{"p":"patterns/examples/profile-aware-writer/profile-aware-writer-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"examples/profile-aware-writer-availability.test.tsx"},"to":{"p":"examples/profile-aware-writer/profile-aware-writer-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/examples/write-and-run-availability.test.tsx"},"to":{"p":"patterns/examples/write-and-run/write-and-run-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"examples/write-and-run-availability.test.tsx"},"to":{"p":"examples/write-and-run/write-and-run-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/system/journal-availability.test.tsx"},"to":{"p":"patterns/system/journal/journal-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"system/journal-availability.test.tsx"},"to":{"p":"system/journal/journal-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/system/space-overview-availability.test.tsx"},"to":{"p":"patterns/system/space-overview/space-overview-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"system/space-overview-availability.test.tsx"},"to":{"p":"system/space-overview/space-overview-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"patterns/system/summary-index-availability.test.tsx"},"to":{"p":"patterns/system/summary-index/summary-index-availability.test.tsx"}}
+{"date":"2026-12-01","from":{"p":"system/summary-index-availability.test.tsx"},"to":{"p":"system/summary-index/summary-index-availability.test.tsx"}}

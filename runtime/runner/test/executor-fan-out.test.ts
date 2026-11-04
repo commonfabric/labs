@@ -99,14 +99,22 @@ const OWNED_DRAFT_PATTERN = [
   "});",
 ].join("\n");
 
-/** A per-user wish into the viewer's Home, and a reader of its result: the
- * reader's instance for a user follows the wish's per-user state store. */
 const WISH_TAG = "fan_out_wish_profile";
+
+/**
+ * A per-user wish into the viewer's Home, and a reader of its result: the
+ * reader's instance for a user follows the wish's per-user state store.
+ * Unavailable results deliberately produce the absence sentinel, so the
+ * store-declaration gate, rather than availability preflight, must withhold it.
+ */
 const WISH_PATTERN = [
-  "import { computed, pattern, wish } from 'commonfabric';",
+  "import { computed, hasError, isObsolete, isPending, isSyncing, pattern, wish } from 'commonfabric';",
   "export default pattern<{ n?: number }, { reader: string }>(() => {",
   `  const found = wish<{ name: string }>({ query: '#${WISH_TAG}', scope: ['~'] });`,
-  "  return { reader: computed(() => 'reader:' + String(found.result?.name)) };",
+  "  return { reader: computed(() => {",
+  "    const value = found.result;",
+  "    return 'reader:' + String(isPending(value) || isSyncing(value) || hasError(value) || isObsolete(value) ? undefined : value?.name);",
+  "  }) };",
   "});",
 ].join("\n");
 

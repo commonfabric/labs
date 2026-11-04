@@ -20,6 +20,29 @@ const filteredItems = computed(() => {
 rendering or other simple conditional values in normal pattern code, use plain
 ternaries — see [Conditional Rendering](../../patterns/conditional.md).
 
+## Availability Inside a Computation
+
+An explicit computation can inspect unavailable states when it captures the
+visible `AsyncResult<T>` request. Keep the usable `resultOf()` alias outside so
+the request and result remain one reactive source:
+
+```typescript
+// Shown for illustration only.
+const repoRequest = fetchJson<Repo>({ url });
+const repo = resultOf(repoRequest);
+
+const label = computed(() =>
+  isPending(repoRequest)
+    ? "Loading…"
+    : hasError(repoRequest)
+      ? `Error: ${repoRequest.errorMessage}`
+      : repo.name
+);
+```
+
+The computation runs for the reasons it explicitly guards. Other unavailable
+states propagate without invoking its body.
+
 The compiler's [nested-scan warning](../../../features/read-accounting.md#compiler-hints-for-nested-scans)
 points out some repeated scans of captured collections. It is a hint to measure
 and examine the computation's structure, not a failing budget or a complete

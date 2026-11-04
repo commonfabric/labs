@@ -26,9 +26,14 @@ import {
   equals,
   type FabricBytes,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerUser,
+  resultOf,
   UI,
   wish,
   Writable,
@@ -179,15 +184,37 @@ export default pattern<State>(({ people, expenses, myName }) => {
   // live cell bound to <cf-profile-badge>; the field targets give the name/picture
   // we snapshot into the ledger on "join". Profile-count-agnostic: resolves the
   // viewer's default profile.
-  const profileWish = wish({ query: "#profile" });
+  const profileWish = wish<{ name?: string; avatar?: string }>({
+    query: "#profile",
+  });
   const profileNameWish = wish<string>({ query: "#profileName" });
   const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
   const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
-  const myProfileName = computed(() => (profileNameWish.result ?? "").trim());
-  const myProfilePicture = computed(() => profilePictureWish.result);
-  const myProfileAvatar = computed(() => profileAvatarWish.result);
-  const hasProfile = computed(() =>
-    (profileNameWish.result ?? "").trim() !== ""
+  const profile = hasError(profileWish.result) ||
+      isPending(profileWish.result) ||
+      isSyncing(profileWish.result) ||
+      hasSchemaMismatch(profileWish.result)
+    ? undefined
+    : resultOf(profileWish.result);
+  const profileName = hasError(profileNameWish.result) ||
+      isPending(profileNameWish.result) ||
+      isSyncing(profileNameWish.result) ||
+      hasSchemaMismatch(profileNameWish.result)
+    ? ""
+    : resultOf(profileNameWish.result);
+  const profileAvatar = hasError(profileAvatarWish.result) ||
+      isPending(profileAvatarWish.result) ||
+      isSyncing(profileAvatarWish.result) ||
+      hasSchemaMismatch(profileAvatarWish.result)
+    ? ""
+    : resultOf(profileAvatarWish.result);
+  const myProfileName = computed(() => profileName.trim());
+  const myProfileAvatar = computed(() => profileAvatar.trim());
+  const hasProfile = computed(() => profileName.trim() !== "");
+  const myProfilePicture = computed(() =>
+    hasError(profilePictureWish.result)
+      ? undefined
+      : resultOf(profilePictureWish.result)
   );
 
   // --- Derived data ---
@@ -275,7 +302,7 @@ export default pattern<State>(({ people, expenses, myName }) => {
             }
             <cf-hstack gap="3" align="center" wrap>
               <cf-label>You are</cf-label>
-              <cf-profile-badge $profile={profileWish.result} size="sm" />
+              <cf-profile-badge $profile={profile} size="sm" />
               <cf-button
                 color="primary"
                 variant="solid"

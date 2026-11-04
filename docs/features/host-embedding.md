@@ -51,12 +51,14 @@ weeks later.
 `#profileBio`, `#profileSpace`, and hashtag search over profile elements with
 `scope: ["profile"]`. Reads are read-only; writes go only through the
 profile pattern's own owner-protected handlers (seam 7). At zero
-profiles, `#profile` renders the trusted create surface inline
-(`result` undefined) and the scalar targets land a `WishError`
-(`result` undefined) — so every consumer must use
-`wish.result ?? fallback`. Resolution order among multiple profiles is
-default-first, then most-recently-used — **pending CT-1829**, which is
-settling single-result semantics; do not bind to a fixed ordering.
+profiles, `#profile` renders the trusted create surface inline and its result
+channel carries an error availability value; scalar targets do the same.
+Consumers that present the missing-profile UI guard the original result
+channel with `hasError()`. Ordinary consumers use `resultOf(wish.result)` and
+wait. A configured `preferredProfileSpace` selects that profile first and fails
+closed if it is unavailable or no longer listed; it does not switch personas.
+Without that preference, resolution among multiple profiles is default-first,
+then most-recently-used, then list order (CT-1829).
 
 **Test.** `runtime/runner/test/wish.test.ts`,
 `describe("host embedding contract: profile wish targets")`.

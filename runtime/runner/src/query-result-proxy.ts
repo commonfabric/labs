@@ -1,3 +1,4 @@
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   FabricInstance,
   FabricPrimitive,
@@ -483,14 +484,18 @@ function createViewProxy<T>(
 
   // Atomic leaves have no reactive substructure. Returning one consumes
   // its value as well as its existence, so both reads reach the journal.
-  if (!isObjectOrArray(value) || value instanceof FabricPrimitive) {
+  if (
+    isUnavailable(value) || !isObjectOrArray(value) ||
+    value instanceof FabricPrimitive
+  ) {
     viewTx.readValueOrThrow(link);
     return remember(value);
   }
 
-  // A `FabricInstance` is _not_ exempted here the way a `FabricPrimitive` is
-  // above, so one gets wrapped in a proxy -- and that has a consequence outside
-  // this file which is easy to miss from here.
+  // A general `FabricInstance` is _not_ exempted here the way a
+  // `FabricPrimitive` and FabricUnavailable are above, so one gets wrapped in a
+  // proxy -- and that has a consequence outside this file which is easy to
+  // miss from here.
   //
   // The proxy target is an empty stub and there is no `getPrototypeOf` trap, so
   // a proxied instance's prototype is `Object.prototype` and
@@ -1117,7 +1122,12 @@ export function snapshotQueryResult<T>(value: T): T {
     // and the proxy erases the prototype, so a proxied `FabricInstance` still
     // reaches the rebuild below and snapshots as `{}`. The fix is the one the
     // marker further down this file names.
-    if (!isWalkableObjectOrArray(current)) return current;
+    if (
+      isUnavailable(current) ||
+      !isWalkableObjectOrArray(current)
+    ) {
+      return current;
+    }
     const existing = seen.get(current);
     if (existing !== undefined) return existing;
     if (Array.isArray(current)) {

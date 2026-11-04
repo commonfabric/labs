@@ -5,6 +5,11 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
+  hasError,
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
+import {
   resolveScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
@@ -33,11 +38,7 @@ const space = spaceSigner.did() as MemorySpace;
 const url = "https://example.test/instance-program.ts";
 
 /** Public state of the fetch node. */
-type FetchView = {
-  pending?: boolean;
-  result?: ProgramResult;
-  error?: unknown;
-};
+type FetchView = ProgramResult | UnavailableVariant;
 
 /** One requesting client and its view of the shared piece. */
 type ClientView = {
@@ -219,10 +220,8 @@ export default pattern<{ url: ${scoped} }, { fetched: any }>(({ url }) => ({
         view.runtime,
         view.result.key("fetched"),
         (state) =>
-          state?.pending === false &&
-          state.result?.files.some((file) =>
-              file.contents.includes(payload)
-            ) === true,
+          state !== undefined && !isUnavailable(state) &&
+          state.files.some((file) => file.contents.includes(payload)) === true,
       );
 
     return {
@@ -307,7 +306,7 @@ describe("executor-fetch-program-instances", () => {
           scopeKey: resolveScopeKey(scope, f.first.runtime.scopeKeyIdentity),
           state: "success",
         }]);
-        expect((await f.value(f.first, "served")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(f.first, "served"))).toBe(false);
         expect(f.servingErrors).toEqual([]);
       } finally {
         await f.close();
@@ -334,11 +333,11 @@ describe("executor-fetch-program-instances", () => {
             state: "success",
           },
         ]));
-        expect((await f.value(second, "second")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(second, "second"))).toBe(false);
         f.requests[0].response.resolve(programResponse("first"));
         await f.retired(2);
-        expect((await f.value(f.first, "first")).error).toBeUndefined();
-        expect((await f.value(second, "second")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(f.first, "first"))).toBe(false);
+        expect(isUnavailable(await f.value(second, "second"))).toBe(false);
         expect(f.requests).toHaveLength(2);
         expect(f.servingErrors).toEqual([]);
       } finally {
@@ -368,12 +367,16 @@ describe("executor-fetch-program-instances", () => {
         const failed = await waitForCellValue<FetchView>(
           f.first.runtime,
           f.first.result.key("fetched"),
-          (state) => state?.pending === false && state.error !== undefined,
+          (state) => hasError(state),
         );
-        expect(failed.result).toBeUndefined();
+        expect(failed).toMatchObject({
+          reason: "error",
+          errorKind: "general",
+          errorMessage: "program fetch failed",
+        });
         f.requests[1].response.resolve(programResponse("neighbor"));
         await f.retired(2);
-        expect((await f.value(second, "neighbor")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(second, "neighbor"))).toBe(false);
         expect(f.requests).toHaveLength(2);
       } finally {
         await f.close();
@@ -394,10 +397,10 @@ describe("executor-fetch-program-instances", () => {
         await setUrl(url);
         f.requests[0].response.resolve(programResponse("original"));
         await f.retired(1);
-        expect((await f.value(f.first, "original")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(f.first, "original"))).toBe(false);
         f.requests[1].response.resolve(programResponse("other"));
         await f.retired(2);
-        expect((await f.value(f.first, "original")).error).toBeUndefined();
+        expect(isUnavailable(await f.value(f.first, "original"))).toBe(false);
         expect(f.requests).toHaveLength(2);
         expect((await f.entries()).map((entry) => entry.state)).toEqual([
           "success",

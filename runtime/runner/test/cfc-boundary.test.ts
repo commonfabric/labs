@@ -5073,7 +5073,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         expect(reloaded?.cfc).toEqual(storedCfc);
         expect(
           second.replica.getDocument(`cid:${storedCfc!.schemaHash}`)?.value,
-        ).toMatchObject({ required: ["secret"] });
+        ).toMatchObject({ type: "object", required: ["secret"] });
 
         const secondTx = second.runtime.edit();
         secondTx.setCfcEnforcementMode("enforce-explicit");
@@ -5090,7 +5090,7 @@ describe("ExtendedStorageTransaction CFC gate", () => {
         expect(
           second.replica.getDocument(`cid:${rewritten!.cfc!.schemaHash}`)
             ?.value,
-        ).toMatchObject({ required: ["secret", "title"] });
+        ).toMatchObject({ type: "object", required: ["secret", "title"] });
       } finally {
         await second.runtime.dispose();
         await second.storageManager.close();

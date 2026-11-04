@@ -1,11 +1,13 @@
 import type {
   AnyBrandedCell,
+  AsyncResult,
   CollectionIndexData,
   CollectionIndexKey,
   CollectionIndexKeyEntry,
   GroupIndex,
   KeyIndex,
   ReadonlyCell,
+  SqliteQueryResult,
   TextChange,
 } from "@commonfabric/api";
 import {
@@ -193,6 +195,8 @@ import {
   schemaHasIfc,
   singleReadTx,
   validateAndTransform,
+  type ValidateAndTransformResult,
+  validateAndTransformResult,
 } from "./schema.ts";
 import { isCellScope, narrowerScopeCap, normalizeCellScope } from "./scope.ts";
 import type { SigilLink, SigilWriteRedirectLink, URI } from "./sigil-types.ts";
@@ -212,6 +216,7 @@ import type {
   Metadata,
 } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import {
   allowMutableTransactionRead,
   excludeReadFromConflict,
@@ -1905,6 +1910,28 @@ export class CellImpl<T extends FabricValue>
       meta: markerReadMeta,
     });
     return marker === true;
+  }
+
+  /** Reads without a value-only cache so a refusal remains distinguishable. */
+  getWithStatus(
+    options?: { traverseCells?: boolean },
+  ): ValidateAndTransformResult {
+    if (!this.#synced) this.#startLoad();
+    const result = validateAndTransformResult(
+      this.#runtime,
+      this.#tx,
+      this.#viewRef,
+      [],
+      { ...options, synced: this.#synced },
+    );
+    if ("error" in result) return result;
+    const holdsNoValue = result.ok === undefined ||
+      (isCell(result.ok) &&
+        areNormalizedLinksSame(
+          result.ok.getAsNormalizedFullLink(),
+          this.#link,
+        ));
+    return { ok: this.#kind === "stream" && holdsNoValue ? this : result.ok };
   }
 
   get(options?: { traverseCells?: boolean }): Readonly<StripDefaultBrand<T>> {
@@ -4300,15 +4327,20 @@ export class CellImpl<T extends FabricValue>
     const { frozen = true, lastNode = "top", ...readOptions } = options ?? {};
     if (!this.#synced) this.#startLoad(); // No await, just kicking this off
     const tx = this.#runtime.readTx(this.#tx);
-    // Resolve all links ON THE WAY to the target, but don't resolve the final
-    // link.
+    // Resolve links on the way to the target, keeping the final link raw.
+    // These crossings are content reads: the seam marks labeled hops.
     const resolved = resolveLink(this.#runtime, tx, this.#link, lastNode, {
       markIfcCrossings: true,
     });
-    const value = resolveImmutableValueLinks(
-      tx.readValueOrThrow(resolved, readOptions),
-      resolved.id,
+    const read = readAvailabilityValue(
+      tx,
+      toMemorySpaceAddress(resolved),
+      readOptions,
     );
+    const raw = read.ok !== undefined
+      ? read.ok.value
+      : tx.readValueOrThrow(resolved, readOptions);
+    const value = resolveImmutableValueLinks(raw, resolved.id);
     // Deep-copy with desired frozenness, without unwrapping to JS form --
     // getRaw() and getRawUntyped() return fabric-layer values, not
     // convertible JS ("wild west") values.
@@ -4626,15 +4658,7 @@ export class CellImpl<T extends FabricValue>
       readClearance?: boolean;
       scope?: CellScope;
     },
-  ): Reactive<
-    {
-      pending: boolean;
-      result?: Row[];
-      error?: unknown;
-      withheld?: number;
-      requestKey?: string;
-    }
-  > {
+  ): Reactive<AsyncResult<SqliteQueryResult<Row>>> {
     // The scope binds the node the way `.asScope` binds the builder export:
     // the runner folds the node's default scope into the result cell's link.
     // Validated at the boundary: an invalid scope must not reach the link.
@@ -4661,15 +4685,7 @@ export class CellImpl<T extends FabricValue>
       // options object) to the node so the builtin can decode `_cf_link`
       // columns. Read loosely — it is not part of the public options type.
       rowSchema: (options as { rowSchema?: unknown } | undefined)?.rowSchema,
-    }) as Reactive<
-      {
-        pending: boolean;
-        result?: Row[];
-        error?: unknown;
-        withheld?: number;
-        requestKey?: string;
-      }
-    >;
+    }) as Reactive<AsyncResult<SqliteQueryResult<Row>>>;
   }
 
   /**
@@ -5480,7 +5496,11 @@ function sinkHelper(
  */
 function runSinkOnce(sink: SinkAction, runtime: Runtime): ReactivityLog {
   const tx = runtime.edit();
-  runtime.scheduler.withExecutingAction(sink.action, () => sink.action(tx));
+  runtime.scheduler.withExecutingAction(
+    sink.action,
+    () => sink.action(tx),
+    tx.tx.scopeKeyIdentity,
+  );
   const log = txToReactivityLog(tx);
 
   // Technically unnecessary since we don't expect/allow callbacks to sink to
@@ -5900,6 +5920,13 @@ export function hostValueOf(value: unknown): FabricValue {
     doNotConvertCellResults: true,
     includeCfcLabelView: true,
   });
+}
+
+/** Reads a cell while retaining root schema and synchronization failures. */
+export function getCellWithStatus(
+  cell: Cell<unknown>,
+): ValidateAndTransformResult {
+  return requireCellImpl(cell).getWithStatus();
 }
 
 /**

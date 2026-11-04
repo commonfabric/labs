@@ -4,6 +4,7 @@ import {
   deepFreeze,
   fabricFromConvertibleJsValue,
   type FabricValue,
+  hashStringOf,
 } from "@commonfabric/data-model";
 import {
   getModernCellRepConfig,
@@ -173,7 +174,11 @@ import {
   CfcRejectionTally,
   type RuntimeSizes,
 } from "./runtime-sizes.ts";
-import { Action, Scheduler } from "./scheduler.ts";
+import {
+  Action,
+  type ExternalDependencyActionToken,
+  Scheduler,
+} from "./scheduler.ts";
 import {
   type CommitBackpressurePolicy,
   resolveCommitBackpressure,
@@ -212,9 +217,11 @@ import type {
   CommitError,
   DID,
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   IStorageManager,
   IStorageProvider,
   MemorySpace,
+  StorageConnectionState,
   TransactionSealDestination,
   UnexaminedAbsence,
   URI,
@@ -273,6 +280,32 @@ const WriteDebugContextStorage = (isDeno()
 Error.stackTraceLimit = 500;
 
 export const DEFAULT_MAX_RETRIES = 5;
+
+export type LinkedDocLoadStatus = "pending" | "settled" | "error";
+type LinkedDocLoad = {
+  status: LinkedDocLoadStatus;
+  entity: ReturnType<typeof entityKey>;
+  space: MemorySpace;
+  epoch: number;
+  error?: Error;
+  waiters: Set<
+    { token: ExternalDependencyActionToken; identity?: ScopeKeyIdentity }
+  >;
+  release?: () => void;
+};
+
+function missingDocLoadKey(
+  link: NormalizedFullLink,
+  identity: ScopeKeyIdentity,
+): string {
+  return hashStringOf({
+    space: link.space,
+    id: link.id,
+    scopeKey: resolveScopeKey(normalizeCellScope(link.scope), identity),
+    path: link.path.map(String),
+    schema: link.schema ?? false,
+  });
+}
 
 // Loud, counted channel for UI writes that are finally lost — see
 // `Runtime.commitUiCellWrite`. Error level so a dropped user input is
@@ -2281,6 +2314,15 @@ export class Runtime {
         options.consoleHandler,
         options.errorHandlers,
       );
+      this.#linkedDocReaderCancel = this.scheduler.observeUnsubscribe(
+        (action) => {
+          for (const entry of this.#linkedDocLoads.values()) {
+            for (const waiter of entry.waiters) {
+              if (waiter.token.action === action) entry.waiters.delete(waiter);
+            }
+          }
+        },
+      );
 
       this.#installDocumentRelease();
 
@@ -2794,6 +2836,12 @@ export class Runtime {
       // The storage manager can outlive this runtime, so the subscription the
       // watch holds on it goes now.
       this.#spaceAccessWatch?.dispose();
+      this.#linkedDocReaderCancel?.();
+      for (const cancel of this.#storageConnectionCancels.values()) cancel();
+      this.#storageConnectionCancels.clear();
+      this.#storageConnectionStates.clear();
+      for (const entry of this.#linkedDocLoads.values()) entry.release?.();
+      this.#linkedDocLoads.clear();
 
       // Pop the default frame
       if (this.#defaultFrame) {
@@ -3284,7 +3332,95 @@ export class Runtime {
    * doc suffices. Scope is part of the key: scoped instances (user/session) are
    * distinct docs, and a kick for one scope must not suppress another's.
    */
-  #missingDocLoadKicks = new Set<string>();
+  readonly #linkedDocLoads = new Map<string, LinkedDocLoad>();
+  #linkedDocReaderCancel: (() => void) | undefined;
+  readonly #storageConnectionStates = new Map<
+    MemorySpace,
+    StorageConnectionState
+  >();
+  readonly #storageConnectionCancels = new Map<MemorySpace, () => void>();
+
+  #observeStorageConnection(
+    space: MemorySpace,
+  ): StorageConnectionState | undefined {
+    if (
+      !this.#storageConnectionCancels.has(space) &&
+      this.storageManager.subscribeConnectionState !== undefined
+    ) {
+      const cancel = this.storageManager.subscribeConnectionState(
+        space,
+        (state) => {
+          const previous = this.#storageConnectionStates.get(space);
+          this.#storageConnectionStates.set(space, state);
+          for (const [key, entry] of this.#linkedDocLoads) {
+            if (entry.space !== space || entry.status === "settled") continue;
+            if (state.status === "ready") {
+              if (
+                state.epoch > entry.epoch &&
+                (entry.status === "error" ||
+                  previous?.status === "disconnected" ||
+                  previous?.status === "closed")
+              ) {
+                this.#linkedDocLoads.delete(key);
+                entry.release?.();
+                entry.release = undefined;
+                this.#wakeLinkedDocReaders(entry);
+              } else entry.epoch = state.epoch;
+            } else if (state.status === "closed") {
+              entry.release?.();
+              entry.release = undefined;
+              entry.status = "error";
+              entry.error = state.cause;
+              this.#wakeLinkedDocReaders(entry);
+            } else if (state.status === "disconnected") {
+              entry.release?.();
+              entry.release = undefined;
+            }
+          }
+        },
+      );
+      this.#storageConnectionCancels.set(space, cancel);
+    }
+    return this.#storageConnectionStates.get(space);
+  }
+
+  #wakeLinkedDocReaders(entry: LinkedDocLoad): void {
+    for (const waiter of entry.waiters) {
+      if (
+        !this.scheduler.scheduleExternalDependencySettlement(
+          waiter.token,
+          waiter.identity,
+        )
+      ) entry.waiters.delete(waiter);
+    }
+    if (entry.status === "settled") entry.waiters.clear();
+  }
+
+  /** Attaches a registered reader to existing loads for its physical dependencies. */
+  attachLinkedDocLoadWaiter(
+    reads: readonly IMemorySpaceAddress[],
+    token: ExternalDependencyActionToken,
+    identity?: ScopeKeyIdentity,
+  ): void {
+    const effectiveIdentity = identity ?? this.scopeKeyIdentity;
+    const entities = new Set(
+      reads.map((read) => entityKey(read, effectiveIdentity)),
+    );
+    for (const entry of this.#linkedDocLoads.values()) {
+      if (entry.status !== "settled" && entities.has(entry.entity)) {
+        entry.waiters.add({ token, identity });
+      }
+    }
+  }
+
+  linkedDocLoadError(
+    link: NormalizedFullLink,
+    identity?: ScopeKeyIdentity,
+  ): Error | undefined {
+    return this.#linkedDocLoads.get(
+      missingDocLoadKey(link, identity ?? this.scopeKeyIdentity),
+    )?.error;
+  }
 
   /**
    * Lets the storage manager release the documents nothing reads (see
@@ -3305,12 +3441,16 @@ export class Runtime {
       ),
       manager.subscribeDocumentsDropped?.((space, addresses) => {
         for (const address of addresses) {
-          this.#missingDocLoadKicks.delete(
-            `${space}\0${
-              address.scopeKey ??
-                resolveScopeKey(address.scope, this.scopeKeyIdentity)
-            }\0${address.id}`,
+          const dropped = entityKey(
+            { ...address, space, scope: normalizeCellScope(address.scope) },
+            this.scopeKeyIdentity,
           );
+          for (const [key, entry] of this.#linkedDocLoads) {
+            if (entry.entity !== dropped) continue;
+            this.#linkedDocLoads.delete(key);
+            entry.release?.();
+            this.#wakeLinkedDocReaders(entry);
+          }
         }
       }),
     ];
@@ -3370,7 +3510,24 @@ export class Runtime {
      * from the runtime's own. Absent = the runtime's own identity, the
      * pre-stage-A path byte for byte. */
     identity?: ScopeKeyIdentity,
-  ): void {
+  ): LinkedDocLoadStatus {
+    const effectiveIdentity = identity ?? this.scopeKeyIdentity;
+    const connection = this.#observeStorageConnection(link.space);
+    const selectorKey = missingDocLoadKey(link, effectiveIdentity);
+    const token = this.scheduler.getExecutingActionToken(identity);
+    let entry = this.#linkedDocLoads.get(selectorKey);
+    if (entry !== undefined) {
+      if (token !== undefined && entry.status !== "settled") {
+        for (const waiter of entry.waiters) {
+          if (
+            waiter.token.action === token.action &&
+            waiter.token.identityKey === token.identityKey
+          ) entry.waiters.delete(waiter);
+        }
+        entry.waiters.add({ token, identity });
+      }
+      return entry.status;
+    }
     const { space, id, scope } = link;
     // Kick keys are per scope INSTANCE (key-vocabulary.md §5's stage-F
     // serving-hazard list): name-keyed, A's kick suppressed B's load and
@@ -3379,19 +3536,43 @@ export class Runtime {
     // partition is unchanged at cardinality 1 (key-vocabulary.md §2) — or
     // against the served run's identity for a per-instance read (stage
     // A): each demanded instance's absent read kicks its own load.
-    const key = `${space}\0${
-      resolveScopeKey(scope, identity ?? this.scopeKeyIdentity)
-    }\0${id}`;
-    if (this.#missingDocLoadKicks.has(key)) return;
     // A same-space target the replica already has state for (or a manager
     // without lazy replication) needs no fetch.
     const sameSpace = sourceSpace === space;
     const mgr = this.storageManager;
-    const reserved = sameSpace &&
+    const reserved = connection?.status !== "closed" &&
+      connection?.status !== "disconnected" && sameSpace &&
       mgr.shouldPullDoc?.(space, id, scope, identity) === true;
-    if (sameSpace && !reserved) return;
-    this.#missingDocLoadKicks.add(key);
-    const load = identity === undefined
+    const pendingKey = entityKey({ space, id, scope }, effectiveIdentity);
+    const joining = mgr.pendingLoadGeneration?.(pendingKey) !== undefined;
+    if (
+      sameSpace && !reserved && !joining &&
+      connection?.status !== "disconnected" && connection?.status !== "closed"
+    ) return "settled";
+    entry = {
+      status: connection?.status === "closed" ? "error" : "pending",
+      entity: pendingKey,
+      space,
+      epoch: connection?.epoch ?? 0,
+      ...(connection?.status === "closed" && { error: connection.cause }),
+      waiters: new Set(token === undefined ? [] : [{ token, identity }]),
+      ...(reserved &&
+        {
+          release: () => mgr.retractDocPullKick?.(space, id, scope, identity),
+        }),
+    };
+    this.#linkedDocLoads.set(selectorKey, entry);
+    if (
+      connection?.status === "closed" || connection?.status === "disconnected"
+    ) {
+      entry.release?.();
+      entry.release = undefined;
+      return entry.status;
+    }
+    const current = entry;
+    const startedLoad = joining
+      ? Promise.resolve()
+      : identity === undefined
       ? this.getCellFromLink(link).sync()
       // The instance-named load: the storage manager names the run's
       // instance on the wire (lease-holder-only at admission) and lands
@@ -3399,16 +3580,38 @@ export class Runtime {
       : mgr.syncCell(this.getCellFromLink(link), {
         scopeKeyIdentity: identity,
       });
-    mgr.trackUntilSettled(
-      load.catch(() => {
-        // Allow a retry on failure (e.g. transient disconnect): clear this
-        // dedup set, and hand back the storage manager's reservation when
-        // THIS kick took it — a cross-space kick never reserved, and must
-        // not clear a reservation a concurrent same-space read holds.
-        this.#missingDocLoadKicks.delete(key);
-        if (reserved) mgr.retractDocPullKick?.(space, id, scope, identity);
-      }),
-    );
+    // syncCell registers its pending-load outcome before yielding. Observe
+    // that outcome as well as the returned cell: provider result errors are
+    // carried by the load ledger even when syncCell resolves normally.
+    const load = Promise.all([
+      startedLoad,
+      mgr.loadsSettled?.([pendingKey]) ?? Promise.resolve(),
+    ]);
+    const completion = load.then(() => {
+      if (this.#linkedDocLoads.get(selectorKey) !== current) return;
+      const state = this.#storageConnectionStates.get(space);
+      if (state?.status === "disconnected" || state?.status === "closed") {
+        return;
+      }
+      current.status = "settled";
+      this.#wakeLinkedDocReaders(current);
+    }, (cause) => {
+      // Release only this load's reservation. A failure on a ready
+      // connection remains terminal until a later reconnect epoch;
+      // disconnect and close preserve their lifecycle-owned outcomes.
+      current.release?.();
+      current.release = undefined;
+      if (this.#linkedDocLoads.get(selectorKey) !== current) return;
+      const state = this.#storageConnectionStates.get(space);
+      if (state?.status === "disconnected" || state?.status === "closed") {
+        return;
+      }
+      current.status = "error";
+      current.error = cause instanceof Error ? cause : new Error(String(cause));
+      this.#wakeLinkedDocReaders(current);
+    });
+    mgr.trackUntilSettled(completion);
+    return entry.status;
   }
 
   getCfcStats(): Readonly<CfcRuntimeStats> {

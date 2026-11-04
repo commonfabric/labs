@@ -103,6 +103,13 @@ attachments. Picking more files than the room's `maxAttachments`, or picking
 any in a space that still has no store, is refused. The thread composer
 attaches nothing.
 
+The viewer's profile and chat manager are optional capabilities. Their terminal
+Wish errors leave the conversation readable: an absent profile exposes setup,
+and an absent manager offers neither starting a direct chat nor adding the room
+to its list. Pending and syncing wishes remain unavailable rather than being
+treated as confirmed absence. Successful profile and stream projections retain
+their original cell identities.
+
 ## Writers
 
 Every write goes through one handler per stream:

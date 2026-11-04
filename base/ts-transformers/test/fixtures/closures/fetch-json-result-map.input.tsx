@@ -1,14 +1,13 @@
-import { fetchJson, pattern, UI } from "commonfabric";
+import { fetchJson, pattern, resultOf, UI } from "commonfabric";
 
 interface Item {
   name: string;
 }
 
 export default pattern<Record<string, never>>(() => {
-  const { result: items } = fetchJson<Item[]>({
+  const items = resultOf(fetchJson<Item[]>({
     url: "https://example.com",
-    result: [],
-  });
+  }));
 
   return {
     [UI]: <div>{items.map((item) => <span>{item.name}</span>)}</div>,

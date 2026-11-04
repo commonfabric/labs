@@ -217,17 +217,19 @@ describe("content-addressed action identity", () => {
       | undefined)?.error ?? 0;
 
   it("counts serializing a function implementation that carries neither provenance nor an entry ref", () => {
-    const before = errorCount("builder.serialize-shape", "noref-body-write");
-    const anonymous = (x: number) => x + 1;
-    const encodable = moduleToEncodableForm(
-      { type: "javascript", implementation: anonymous } as Module,
-    ) as Record<string, unknown>;
-    // The body-only wire shape: stringified implementation, no `$implRef`.
-    expect(typeof encodable.implementation).toBe("string");
-    expect("$implRef" in encodable).toBe(false);
-    expect(errorCount("builder.serialize-shape", "noref-body-write")).toBe(
-      before + 1,
-    );
+    for (const type of ["javascript", "javascript-availability"] as const) {
+      const before = errorCount("builder.serialize-shape", "noref-body-write");
+      const anonymous = (x: number) => x + 1;
+      const encodable = moduleToEncodableForm(
+        { type, implementation: anonymous } as Module,
+      ) as Record<string, unknown>;
+      // The body-only wire shape: stringified implementation, no `$implRef`.
+      expect(typeof encodable.implementation).toBe("string");
+      expect("$implRef" in encodable).toBe(false);
+      expect(errorCount("builder.serialize-shape", "noref-body-write")).toBe(
+        before + 1,
+      );
+    }
   });
 
   it("counts and still executes a module that reaches the fallback with no $implRef", async () => {

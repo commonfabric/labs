@@ -1,12 +1,19 @@
 import {
-  Cell,
+  type AsyncResult,
   computed,
   Default,
   generateText,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   UI,
+  type UnavailableErrorKind,
+  type VNode,
   wish,
   Writable,
 } from "commonfabric";
@@ -25,13 +32,110 @@ const handleSend = handler<
   }
 });
 
+/** The generated text and its current producer status. */
+export interface ProfileWriterResultOutput {
+  [UI]: VNode;
+  response: string;
+  availability: string;
+  error: string;
+  errorKind: UnavailableErrorKind | undefined;
+}
+
+/** Presents generated text without treating synchronization as an error. */
+export const ProfileWriterResultPresentation = pattern<
+  { topic: string; resultRequest: AsyncResult<string> },
+  ProfileWriterResultOutput
+>(({ topic, resultRequest }) => {
+  const resultState = computed(() => {
+    if (!topic) {
+      return {
+        response: "",
+        availability: "ready",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    if (isPending(resultRequest)) {
+      return {
+        response: "",
+        availability: "pending",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    if (hasError(resultRequest)) {
+      return {
+        response: "",
+        availability: "error",
+        error: resultRequest.errorMessage,
+        errorKind: resultRequest.errorKind,
+      };
+    }
+    if (isSyncing(resultRequest)) {
+      return {
+        response: "",
+        availability: "syncing",
+        error: "",
+        errorKind: undefined,
+      };
+    }
+    return {
+      response: resultOf(resultRequest),
+      availability: "ready",
+      error: "",
+      errorKind: undefined,
+    };
+  });
+
+  const resultUI = !topic
+    ? null
+    : resultState.availability === "pending"
+    ? (
+      <div style="margin-top: 16px;">
+        <cf-loader show-elapsed /> Generating personalized content...
+      </div>
+    )
+    : resultState.availability === "syncing"
+    ? <div role="status">Waiting for synchronized data.</div>
+    : resultState.error
+    ? <div role="alert">{resultState.error}</div>
+    : resultState.response
+    ? (
+      <div style="margin-top: 16px;">
+        <h3>Generated Text:</h3>
+        <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
+          {resultState.response}
+        </div>
+      </div>
+    )
+    : null;
+
+  return {
+    [UI]: <div>{resultUI}</div>,
+    response: resultState.response,
+    availability: resultState.availability,
+    error: resultState.error,
+    errorKind: resultState.errorKind,
+  };
+});
+
 export default pattern<Input>(({ title }) => {
   const topic = new Writable("");
 
-  const profile = wish<Cell<string>>({ query: "#learnedSummary" });
+  const profile = wish<string>({ query: "#learnedSummary" });
+  const profileText = resultOf(profile.result);
+  const profileDisplay = computed(() => {
+    if (isPending(profile.result) || isSyncing(profile.result)) {
+      return "Loading profile context…";
+    }
+    if (hasSchemaMismatch(profile.result)) {
+      return "Profile context has an unexpected format.";
+    }
+    if (hasError(profile.result)) return "Profile context is unavailable.";
+    return resultOf(profile.result);
+  });
 
   const systemPrompt = computed(() => {
-    const profileText = profile.result!.get();
     const profileSection = profileText
       ? `\n\n--- About the User ---\n${profileText}\n---\n`
       : "";
@@ -39,9 +143,13 @@ export default pattern<Input>(({ title }) => {
 Write content personalized to the user when appropriate.`;
   });
 
-  const result = generateText({
+  const resultRequest = generateText({
     system: systemPrompt,
     prompt: topic,
+  });
+  const resultPresentation = ProfileWriterResultPresentation({
+    topic,
+    resultRequest,
   });
 
   return {
@@ -52,10 +160,7 @@ Write content personalized to the user when appropriate.`;
 
         <cf-card>
           <h4 style="margin-top: 0;">Profile Context:</h4>
-          <cf-code-editor
-            $value={profile.result}
-            style={{ maxHeight: "256px" }}
-          />
+          <pre>{profileDisplay}</pre>
         </cf-card>
 
         <div>
@@ -78,25 +183,13 @@ Write content personalized to the user when appropriate.`;
           )
           : null}
 
-        {result.pending
-          ? (
-            <div style="margin-top: 16px;">
-              <cf-loader show-elapsed /> Generating personalized content...
-            </div>
-          )
-          : result.result
-          ? (
-            <div style="margin-top: 16px;">
-              <h3>Generated Text:</h3>
-              <div style="white-space: pre-wrap; padding: 12px; background: #f9f9f9; border-radius: 4px; line-height: 1.6;">
-                {result.result}
-              </div>
-            </div>
-          )
-          : null}
+        {resultPresentation[UI]}
       </div>
     ),
     topic,
-    response: result.result,
+    response: resultPresentation.response,
+    availability: resultPresentation.availability,
+    error: resultPresentation.error,
+    errorKind: resultPresentation.errorKind,
   };
 });

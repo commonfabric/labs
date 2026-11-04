@@ -284,20 +284,25 @@ user's home space):
 const profileWish = wish({ query: "#profile" });            // the viewer's profile CELL
 const profileNameWish = wish<string>({ query: "#profileName" });
 const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-const myName = computed(() => (profileNameWish.result ?? "").trim());
-const myPicture = computed(() => profilePictureWish.result); // image bytes, or undefined
-const hasProfile = computed(() => (profileNameWish.result ?? "").trim() !== "");
+const profile = resultOf(profileWish.result);
+const myName = computed(() => resultOf(profileNameWish.result).trim());
+const myPicture = resultOf(profilePictureWish.result);
+const hasProfile = computed(() => profile != null);
 ```
 
 **Never** add a "type your name" field and treat that string as the current user.
 The viewer is whoever the runtime says they are; `#profile` is how you read it.
+A loaded profile's existence is independent of its display name: a nameless
+profile is still an identity. Preserve unavailable name or avatar projections,
+or guard their original channels to display an explicit error; do not interpret
+a failed presentation field as an absent profile.
 
 ### Show every participant with `cf-profile-badge`
 
 ```tsx
 // Shown for illustration only.
 // the viewer — badge bound to their own profile CELL
-<cf-profile-badge $profile={profileWish.result} size="sm" />
+<cf-profile-badge $profile={profile} size="sm" />
 
 // everyone else — badge bound to the profile CELL they contributed on join
 {roster.items.map((p) => <cf-profile-badge $profile={p.profile} size="xs" />)}

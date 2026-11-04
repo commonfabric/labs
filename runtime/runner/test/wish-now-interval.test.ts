@@ -239,6 +239,9 @@ describe("interval #now wish", () => {
     // the interval, so a stopped beat must not reach the instance that asks
     // for that interval next. That instance revives it, and the wish frozen
     // by the refusal comes forward with it.
+    const secondPattern = pattern(() => {
+      return { nowValue: wish({ query: "#now/1" }) };
+    });
     const stub = await stubbedInterval(
       "revived interval now result",
       CFC_REFUSAL,
@@ -264,9 +267,6 @@ describe("interval #now wish", () => {
       expect(stub.grid()).toBe(frozen);
       expect(Math.floor(Date.now() / 1000) * 1000).toBe(frozen + 3000);
 
-      const secondPattern = pattern(() => {
-        return { nowValue: wish({ query: "#now/1" }) };
-      });
       const second = runtime.run(tx, secondPattern, {}, secondResultCell);
       await tx.commit().settled;
       tx = runtime.edit();
@@ -291,6 +291,9 @@ describe("interval #now wish", () => {
     // stop is not the one it belongs to. It says what it dropped and leaves
     // the timer running.
     const wishPattern = pattern(() => {
+      return { nowValue: wish({ query: "#now/1" }) };
+    });
+    const secondPattern = pattern(() => {
       return { nowValue: wish({ query: "#now/1" }) };
     });
     const resultCell = runtime.getCell<{ nowValue?: { result?: number } }>(
@@ -346,9 +349,6 @@ describe("interval #now wish", () => {
       ]);
 
       // A second wish revives it.
-      const secondPattern = pattern(() => {
-        return { nowValue: wish({ query: "#now/1" }) };
-      });
       const second = runtime.run(tx, secondPattern, {}, secondResultCell);
       await tx.commit().settled;
       tx = runtime.edit();

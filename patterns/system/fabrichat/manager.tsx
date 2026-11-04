@@ -49,7 +49,11 @@ import {
   eventKey,
   getPatternEnvironment,
   handler,
+  hasError,
   type InSpaceGrants,
+  isObsolete,
+  isPending,
+  isSyncing,
   isWellFormedDID,
   NAME,
   pattern,
@@ -57,6 +61,7 @@ import {
   type PerUser,
   principalOf,
   profileOwnerOf,
+  resultOf,
   spaceAccess,
   spaceDeleted,
   spaceOf,
@@ -1795,6 +1800,9 @@ export interface FabriChatManagerOutput {
    */
   rooms: PerUser<ChatIndexEntry[]>;
 
+  /** Terminal catalog-root diagnostics, isolated from the usable rooms list. */
+  discoveryErrors?: PerUser<{ space: string; message: string; kind: string }[]>;
+
   /**
    * The rooms `rooms` leaves out because their space is deleted, newest
    * first, among those this user holds a membership for, saved or archived.
@@ -1925,6 +1933,9 @@ interface FoundRoomInput {
 interface FoundRoomOutput {
   /** The room; absent until it resolves and its records say it is a room. */
   room?: Cell<ChatRoomLink>;
+
+  /** A terminal root lookup diagnostic, independent of room discovery. */
+  error?: { message: string; kind: string };
 }
 
 /** What knowing a room needs: a link that may reach one. */
@@ -1964,11 +1975,34 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       query: "#default",
       scope: computed(() => isWellFormedDID(space) ? [space] : []),
     });
+    const rootResult = computed(() =>
+      hasError(root.result) || isObsolete(root.result)
+        ? undefined
+        : resultOf(root.result)
+    );
     const standalone = computed(() => kind === CHAT_ROOM_OFFER_KIND);
     const declared = computed(() =>
-      standalone ? root.result : root.result?.key("chatRoom").get()
+      standalone ? rootResult : rootResult?.key("chatRoom").get()
     );
-    return KnownRoom({ room: declared });
+    const known = KnownRoom({ room: declared });
+    const error = computed(() => {
+      if (isPending(root.result) || isSyncing(root.result)) return undefined;
+      if (hasError(root.result)) {
+        return {
+          message: root.result.errorMessage,
+          kind: root.result.errorKind,
+        };
+      }
+      if (isObsolete(root.result)) {
+        return {
+          message: root.result.obsoleteMessage ||
+            "This catalog root is no longer served.",
+          kind: "obsolete",
+        };
+      }
+      return undefined;
+    });
+    return { room: known.room, error };
   },
 );
 
@@ -2172,6 +2206,14 @@ export const FabriChatManagerCore = pattern<
     // document that stores it, so renaming one moves its data.
     const foundForUser = savedRooms.map((entry) =>
       FoundRoom.asScope("user")({ space: entry.space, kind: entry.kind })
+    );
+    const discoveryErrorsForUser = computed(
+      (): PerUser<{ space: string; message: string; kind: string }[]> =>
+        foundForUser.flatMap((found, index) =>
+          found.error
+            ? [{ space: savedRooms[index].space, ...found.error }]
+            : []
+        ),
     );
     // The rooms this user keeps by an explicit choice, each known on its own
     // and per user, as each catalog entry's room is found.
@@ -2389,6 +2431,7 @@ export const FabriChatManagerCore = pattern<
     };
     const view = {
       rooms: roomsForUser,
+      discoveryErrors: discoveryErrorsForUser,
       deletedRooms: deletedRoomsForUser,
       sharedSpaceCatalog,
       roomMembership,
@@ -2547,13 +2590,21 @@ const FabriChatManager = pattern<
   // whose wish finds none, or fails, writes that into its own instance, never
   // over the one a session that found the profile reads.
   const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
-  const sessionProfileWish = wish<PerSession<ChatManagerProfile>>({
+  const sessionProfileWish = wish<Cell<PerSession<ChatManagerProfile>>>({
     query: "#profile",
   });
+  const myProfile = computed(() =>
+    hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
+  );
+  const sessionProfile = computed(() =>
+    hasError(sessionProfileWish.result)
+      ? undefined
+      : resultOf(sessionProfileWish.result)
+  );
   const core = FabriChatManagerCore(
     {
-      myProfile: profileWish.result,
-      sessionProfile: sessionProfileWish.result,
+      myProfile,
+      sessionProfile,
       sharedSpaceCatalog: input.sharedSpaceCatalog,
       direct: input.direct,
       requests: input.requests,
@@ -2565,6 +2616,7 @@ const FabriChatManager = pattern<
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
+    discoveryErrors: core.discoveryErrors,
     deletedRooms: core.deletedRooms,
     sharedSpaceCatalog: core.sharedSpaceCatalog,
     roomMembership: core.roomMembership,

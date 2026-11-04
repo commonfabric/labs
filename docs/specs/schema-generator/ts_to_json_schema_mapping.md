@@ -96,6 +96,11 @@ as the property would in the object type the literal stands for: a callable is
 left out, unless calling it makes a stream, a cell, or a database, which reads
 as that wrapper's `asCell`, with the UI contract hint the member carries.
 
+A synthetic reference backed by `typeRegistry` keeps the reached property's
+instantiated type when its registered semantic type still contains a generic
+parameter. A registered conditional member is formatted as its concrete
+instantiation, not as an unbound conditional accepting any value.
+
 A print can carry syntax its type does not: in place of printing a type, the
 checker writes a member's own annotation where it denotes the member's type,
 and an alias by its name. For CFC labels, whose bindings live only in syntax,
@@ -955,6 +960,16 @@ The
 open event side is pinned as a decision in `test/stream-result.test.ts`; a
 schema that declares the closure by hand is enforced at dispatch by the
 runner (C5).
+
+### 6.6 Availability aliases
+
+The canonical `FabricUnavailable` primitive and its narrowed `IsPending`,
+`IsSyncing`, `HasError`, and `HasSchemaMismatch` aliases emit
+`{ type: "FabricUnavailable" }`. Recognition follows the type's alias or symbol
+and the declaration's Common Fabric provenance, including the canonical
+`packages/data-model/src/api.ts` source file. Intersections retain recognition
+through their constituent types. Author-defined aliases with the same names
+remain ordinary types; their spelling alone does not select this primitive.
 
 ## 7. `Default<T,V>` And `DeepDefault<V>`
 
@@ -2227,6 +2242,13 @@ or a printed generation root is formatted (`formatChildType` and
   against the emitted literal
   (`ts-transformers/.../schema-generator.ts`, preferring an
   existing `$UI` property when present).
+- **`availabilityCaptureScope`** supplies the slot scope of a compiler-generated
+  availability capture. The successful cell retains its narrowed capability,
+  while native unavailable alternatives remain plain values beside it. The
+  scope is attached to the union's slot, not an alternative or a scope wrapper
+  around a cell union. This hint does not admit authored scoped-cell unions,
+  which retain the placement restrictions in §10, and is omitted when
+  `declaresNoScope` is set.
 - **`narrowedFrom`** names the value a node was built from part of, such as a
   capture narrowed to the members its callback reads. The node's schema keeps
   the value's labels: the `ifc` that formatting `type`, spelled by `typeNode`

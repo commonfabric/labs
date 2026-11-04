@@ -5,10 +5,14 @@ import {
   type Cell,
   computed,
   handler,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   navigateTo,
   pattern,
   type PerUser,
+  resultOf,
   type Stream,
   UI,
   type VNode,
@@ -58,10 +62,10 @@ const addAuthor = handler<{ name: string }, { authors: Writable<string[]> }>(
 
 /** Makes the shelf's invitation available after its profile resolves. */
 const createInvitation = handler<void, {
-  profile: Cell<Profile> | undefined;
+  profile: Profile | undefined;
   ready: Writable<boolean>;
 }>((_, { profile, ready }) => {
-  if (profile === undefined || profile.get() === undefined) return;
+  if (profile === undefined) return;
   ready.set(true);
 });
 
@@ -72,6 +76,13 @@ const openInvitation = handler<void, { invitation: SharedInvitationOutput }>(
 
 export default pattern<Record<string, never>, LibraryOutput>(() => {
   const profile = wish<Cell<Profile>>({ query: "#profile" });
+  const resolvedProfile = resultOf(profile.result);
+  const optionalProfile = computed(() =>
+    hasError(profile.result) ? undefined : resolvedProfile
+  );
+  const invitationProfile = computed(() =>
+    hasError(profile.result) ? undefined : resolvedProfile.get()
+  );
   const seed = SeedLibrary.asScope("user")({});
   const addedBooks = new Writable.perUser<ReaderPrivate<Book[]>>([]);
   const addedAuthors = new Writable.perUser<ReaderPrivate<string[]>>([]);
@@ -88,17 +99,17 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     ],
   }));
   const invitation = Invitation({
-    originatorProfile: profile.result!,
+    originatorProfile: resolvedProfile,
     library: publishedLibrary,
   });
   const create = createInvitation({
-    profile: profile.result,
+    profile: invitationProfile,
     ready: invitationReady,
   });
   const appendBook = addBook({ books: addedBooks });
   const appendAuthor = addAuthor({ authors: addedAuthors });
   const view = LibraryView({
-    profile: profile.result!,
+    profile: optionalProfile,
     books: reading.books,
     favoriteAuthors: reading.favoriteAuthors,
     agentStatus: computed(() =>
@@ -108,7 +119,13 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     addBook: appendBook,
     addAuthor: appendAuthor,
     createInvitation: create,
-    canCreateInvitation: computed(() => profile.result?.get() !== undefined),
+    canCreateInvitation: computed(() => {
+      if (
+        isPending(profile.result) || isSyncing(profile.result) ||
+        hasError(profile.result)
+      ) return false;
+      return resultOf(profile.result).get() !== undefined;
+    }),
   });
   return {
     [NAME]: "My reading shelf",

@@ -36,6 +36,7 @@ import {
 import {
   FabricUnavailable,
   UNAVAILABLE_ERROR_KINDS,
+  UNAVAILABLE_OBSOLETE,
   UNAVAILABLE_PENDING,
   UNAVAILABLE_REASONS,
   UNAVAILABLE_SYNCING,
@@ -50,6 +51,7 @@ function instancesByReason(): Record<UnavailableReason, FabricUnavailable> {
   return {
     pending: new FabricUnavailable("pending"),
     syncing: new FabricUnavailable("syncing"),
+    obsolete: new FabricUnavailable("obsolete"),
     error: new FabricUnavailable("error", "general", "boom"),
   };
 }
@@ -72,7 +74,7 @@ function errorsByKind(): Record<UnavailableErrorKind, FabricUnavailable> {
 }
 
 /** The reasons that have a prefab: every reason but `error`. */
-type TransientReason = Exclude<UnavailableReason, "error">;
+type TransientReason = Extract<UnavailableReason, "pending" | "syncing">;
 
 /**
  * The prefab for each transient reason. The `satisfies` closes the set: a
@@ -282,6 +284,7 @@ describe("FabricUnavailable", () => {
       const predicates = {
         pending: (u: FabricUnavailable) => u.isPending(),
         syncing: (u: FabricUnavailable) => u.isSyncing(),
+        obsolete: (u: FabricUnavailable) => u.isObsolete(),
         error: (u: FabricUnavailable) => u.isError(),
       } satisfies Record<UnavailableReason, (u: FabricUnavailable) => boolean>;
 
@@ -348,6 +351,129 @@ describe("FabricUnavailable", () => {
   });
 
   describe("static members", () => {
+    describe("obsolete diagnostics", () => {
+      it("keeps retirement guidance separate from errors and transient states", () => {
+        const value = new FabricUnavailable(
+          "obsolete",
+          null,
+          null,
+          "Use overview.text instead.",
+        );
+        expect(value.isObsolete()).toBe(true);
+        expect(value.isTransient()).toBe(false);
+        expect(value.isError()).toBe(false);
+        expect(value.errorKind).toBe(null);
+        expect(value.errorMessage).toBe(null);
+        expect(value.obsoleteMessage).toBe("Use overview.text instead.");
+        expect(UNAVAILABLE_OBSOLETE.obsoleteMessage).toBe(null);
+      });
+
+      it("rejects diagnostic fields belonging to another reason", () => {
+        expect(() => new FabricUnavailable("obsolete", "general"))
+          .toThrow(/takes neither/);
+        expect(() => new FabricUnavailable("obsolete", null, "wrong field"))
+          .toThrow(/takes neither/);
+        for (const reason of ["pending", "syncing", "error"] as const) {
+          expect(() =>
+            new FabricUnavailable(
+              reason,
+              reason === "error" ? "general" : null,
+              null,
+              "Use new.",
+            )
+          ).toThrow(/Only reason `obsolete`/);
+        }
+        expect(() =>
+          new FabricUnavailable(
+            "obsolete",
+            null,
+            null,
+            7 as unknown as string,
+          )
+        ).toThrow(/Not an `obsoleteMessage`/);
+      });
+
+      it("round-trips absent, empty, and authored guidance through both codecs", () => {
+        for (
+          const codec of [
+            FabricUnavailable[JSON_CODEC],
+            FabricUnavailable[REALM_CODEC],
+          ]
+        ) {
+          for (const message of [null, "", "Use overview.text instead."]) {
+            const value = new FabricUnavailable(
+              "obsolete",
+              null,
+              null,
+              message,
+            );
+            const state = codec.encode(value, NULL_LIVE_ENVIRONMENT) as {
+              reason: "obsolete";
+              obsoleteMessage?: string;
+            };
+            expect(state).toStrictEqual(
+              message === null
+                ? { reason: "obsolete" }
+                : { reason: "obsolete", obsoleteMessage: message },
+            );
+            expect(codec.canDecode(state)).toBe(true);
+            const decoded = codec.decode(
+              CODEC_TYPE_TAGS.Unavailable,
+              state,
+              NULL_LIVE_ENVIRONMENT,
+            ) as FabricUnavailable;
+            expect(decoded.obsoleteMessage).toBe(message);
+            expect(valueEqual(decoded, value)).toBe(true);
+            if (message === null) expect(decoded).toBe(UNAVAILABLE_OBSOLETE);
+          }
+        }
+      });
+
+      it("rejects malformed wire guidance and reports guidance on other reasons", () => {
+        for (
+          const codec of [
+            FabricUnavailable[JSON_CODEC],
+            FabricUnavailable[REALM_CODEC],
+          ]
+        ) {
+          for (const obsoleteMessage of [null, undefined, 3]) {
+            expect(codec.canDecode({ reason: "obsolete", obsoleteMessage }))
+              .toBe(false);
+          }
+          expect(
+            codec.decode(CODEC_TYPE_TAGS.Unavailable, {
+              reason: "pending",
+              obsoleteMessage: "Use new.",
+            }, NULL_LIVE_ENVIRONMENT),
+          )
+            .toBeInstanceOf(ProblematicValue);
+        }
+      });
+
+      it("ignores inherited retirement guidance", () => {
+        const prototype = Object.prototype as { obsoleteMessage?: string };
+        prototype.obsoleteMessage = "Inherited guidance";
+        try {
+          for (
+            const codec of [
+              FabricUnavailable[JSON_CODEC],
+              FabricUnavailable[REALM_CODEC],
+            ]
+          ) {
+            expect(
+              codec.decode(
+                CODEC_TYPE_TAGS.Unavailable,
+                { reason: "obsolete" },
+                NULL_LIVE_ENVIRONMENT,
+              ),
+            ).toBe(UNAVAILABLE_OBSOLETE);
+          }
+        } finally {
+          delete prototype.obsoleteMessage;
+        }
+      });
+    });
+
     describe("[JSON_CODEC]", () => {
       const codec = FabricUnavailable[JSON_CODEC];
       const expectedTag = CODEC_TYPE_TAGS.Unavailable;

@@ -57,14 +57,17 @@ export default pattern(({ searchQuery }) => {
   const searchUrl = computed(() =>
     searchQuery ? `/api/search?q=${encodeURIComponent(searchQuery)}` : ""
   );
-  const { result, error, pending } = fetchJson({ url: searchUrl });
+  const request = fetchJson<SearchResult>({ url: searchUrl });
+  const result = resultOf(request);
 
   return {
     [UI]: (
       <div>
-        {pending && <span>Loading...</span>}
-        {error && <span>Error: {error}</span>}
-        {result && <div>{result}</div>}
+        {isPending(request)
+          ? <span>Loading...</span>
+          : hasError(request)
+          ? <span>Error: {request.errorMessage}</span>
+          : <div>{JSON.stringify(result)}</div>}
         <cf-message-input oncf-send={handleSearch({ searchQuery })} />
       </div>
     ),

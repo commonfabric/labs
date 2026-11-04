@@ -109,8 +109,8 @@ than guessing at unsupported internals.
 | `new Stream()` | It does not exist; the bound handler is the stream |
 | `.subscribe()` on a stream | Return the stream from the pattern instead |
 | `async/await` in handlers | Use reactive APIs such as `fetchJson()` instead |
-| `await generateText(...)` | Use `.result` |
-| `await generateObject(...)` | Use `.result` |
+| `await generateText(...)` | Call it in the pattern body and use `resultOf(request)` |
+| `await generateObject(...)` | Call it in the pattern body and use `resultOf(request)` |
 
 ### 9. LLM Integration
 

@@ -1,3 +1,10 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  unavailableError,
+} from "@commonfabric/data-model/availability";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import type { UnavailableVariant } from "@commonfabric/data-model/availability";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
   type FabricPlainObject,
@@ -16,6 +23,7 @@ import type {
   IExtendedStorageTransaction,
 } from "../storage/interface.ts";
 import { markEffectCompletion } from "../executor/effect-completion.ts";
+import { selectUnavailableInput } from "../data-unavailability.ts";
 
 /**
  * How long a claimed request mutex is believed before another replica may take
@@ -56,6 +64,71 @@ export const internalSchema = internSchema(
     required: ["requestId", "lastActivity", "inputHash"],
   },
 );
+
+/**
+ * Selects the unavailable marker controlling a raw fetch invocation.
+ * Reasons use the runner-wide precedence, with ties retaining depth-first
+ * serialized argument order. Structural lookalikes are ordinary data.
+ */
+export function selectUnavailableFetchInput(
+  value: unknown,
+  resolution?: {
+    runtime: Runtime;
+    tx: IExtendedStorageTransaction;
+    base: Cell<unknown>;
+  },
+): UnavailableVariant | undefined {
+  return selectUnavailableInput(value, resolution, {
+    // `result` is a top-level TypeScript/schema hint, not a request input.
+    // Keep availability selection aligned with request hashing.
+    skipTopLevelKeys: ["result"],
+  });
+}
+
+/**
+ * Reconstructs the direct marker for state persisted by the pre-AsyncResult
+ * fetch implementation. Existing usable values and already-migrated markers
+ * always win; an old terminal error takes precedence over its pending sibling.
+ */
+export function legacyFetchResultMarker(
+  currentResult: unknown,
+  currentPending: boolean,
+  currentError: unknown,
+): UnavailableVariant | undefined {
+  if (currentResult !== undefined) return undefined;
+  if (currentError !== undefined) {
+    if (currentError instanceof Error || currentError instanceof FabricError) {
+      return unavailableError(currentError);
+    }
+    const message = currentError !== null && typeof currentError === "object" &&
+        typeof (currentError as { message?: unknown }).message === "string"
+      ? (currentError as { message: string }).message
+      : String(currentError);
+    const error = new Error(message);
+    if (
+      currentError !== null && typeof currentError === "object" &&
+      typeof (currentError as { name?: unknown }).name === "string"
+    ) {
+      error.name = (currentError as { name: string }).name;
+    }
+    return unavailableError(error);
+  }
+  return currentPending ? UNAVAILABLE_PENDING : undefined;
+}
+
+/** Writes a direct unavailable result while retaining legacy sibling state. */
+export function writeUnavailableFetchResult(
+  tx: IExtendedStorageTransaction,
+  pending: Cell<boolean>,
+  result: Cell<any>,
+  error: Cell<any>,
+  unavailable: UnavailableVariant,
+  legacyError?: unknown,
+): void {
+  pending.withTx(tx).set(unavailable.reason === "pending");
+  result.withTx(tx).setRaw(unavailable);
+  error.withTx(tx).set(legacyError ?? unavailable.rawErrorMessage ?? undefined);
+}
 
 /**
  * Computes a stable string hash of fetch-style inputs, suitable for use as
@@ -99,12 +172,80 @@ export function computeInputHashFromValue(
 }
 
 /**
+ * Synchronously revalidates an approved fetch snapshot immediately before its
+ * external effect starts. The outbox release and mutex claim each validate at
+ * their own transaction boundary; this closes the remaining hand-off window
+ * where live inputs can change after those checks but before fetch begins.
+ */
+export function liveFetchInputsMatch<
+  TInputs extends Record<string, any>,
+  TSnapshot extends Record<string, any>,
+>(
+  runtime: Runtime,
+  inputsCell: Cell<TInputs>,
+  snapshotInputs: (cell: Cell<TInputs>) => TSnapshot,
+  expectedInputHash: string,
+): boolean {
+  const tx = runtime.edit();
+  try {
+    const unavailable = selectUnavailableFetchInput(
+      inputsCell.withTx(tx).getRaw(),
+      { runtime, tx, base: inputsCell },
+    );
+    if (unavailable !== undefined) return false;
+    return computeInputHashFromValue(snapshotInputs(inputsCell.withTx(tx))) ===
+      expectedInputHash;
+  } finally {
+    tx.abort();
+  }
+}
+
+/** Revalidates both live inputs and ownership of a pending mutex claim. */
+export function liveFetchClaimMatches<
+  TInputs extends Record<string, any>,
+  TSnapshot extends Record<string, any>,
+>(
+  runtime: Runtime,
+  inputsCell: Cell<TInputs>,
+  snapshotInputs: (cell: Cell<TInputs>) => TSnapshot,
+  expectedInputHash: string,
+  internal: Cell<Schema<typeof internalSchema>>,
+  result: Cell<unknown>,
+  requestId: string,
+  identity?: ScopeKeyIdentity,
+): boolean {
+  const tx = runtime.edit();
+  try {
+    if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
+    const unavailable = selectUnavailableFetchInput(
+      inputsCell.withTx(tx).getRaw(),
+      { runtime, tx, base: inputsCell },
+    );
+    if (unavailable !== undefined) return false;
+
+    const liveHash = computeInputHashFromValue(
+      snapshotInputs(inputsCell.withTx(tx)),
+    );
+    const currentInternal = internal.withTx(tx).get();
+    const currentResult = result.withTx(tx).getRaw();
+    const resultIsPending = isUnavailable(currentResult) &&
+      currentResult.reason === "pending";
+    const matches = liveHash === expectedInputHash &&
+      currentInternal.inputHash === expectedInputHash &&
+      currentInternal.requestId === requestId &&
+      resultIsPending;
+    return matches;
+  } finally {
+    tx.abort();
+  }
+}
+
+/**
  * Attempts to claim the mutex for a request. Only claims if no other request
  * is active, or if the standing claim was made longer than `timeout` ago and is
- * therefore treated as abandoned (see {@link MUTEX_STALE_AFTER}). Claiming sets
- * pending=true and records the claim in `internal`; the caller clears
- * result/error to maintain the invariant that result/error are undefined while
- * pending.
+ * therefore treated as abandoned (see {@link MUTEX_STALE_AFTER}). Claiming
+ * atomically publishes the direct pending marker and retains the legacy
+ * pending/error sibling cells during the API transition.
  */
 export async function tryClaimMutex<T extends FabricPlainObject>(
   runtime: Runtime,
@@ -142,8 +283,28 @@ export async function tryClaimMutex<T extends FabricPlainObject>(
 
   await runtime.editWithRetry((tx) => {
     if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
+
+    // Re-check availability inside the mutex transaction. The outbox release
+    // and the reactive builtin action can race: a prior request may still be
+    // published as pending when the live input has already become unavailable.
+    // Snapshot hashing alone is not a sufficient guard because schema
+    // projection can hide the marker or normalize it to the prior hash.
+    const unavailable = selectUnavailableFetchInput(
+      inputsCell.withTx(tx).getRaw(),
+      { runtime, tx, base: inputsCell },
+    );
+    if (unavailable !== undefined) {
+      claimed = false;
+      return;
+    }
+
     const currentInternal = internal.withTx(tx).get();
     const isPending = pending.withTx(tx).get();
+    const currentResult = result.withTx(tx).getRaw();
+    const currentError = error.withTx(tx).get();
+    const hasSettledResult = currentResult !== undefined &&
+      !(isUnavailable(currentResult) &&
+        currentResult.reason === "pending");
     const now = Date.now();
     // A completed request needs no claim: when the stored hash already
     // matches the expected inputs AND a result (or error-shaped result)
@@ -160,8 +321,7 @@ export async function tryClaimMutex<T extends FabricPlainObject>(
     if (
       expectedInputHash !== undefined &&
       currentInternal.inputHash === expectedInputHash &&
-      (result.withTx(tx).get() !== undefined ||
-        error.withTx(tx).get() !== undefined)
+      (hasSettledResult || currentError !== undefined)
     ) {
       claimed = false;
       inputs = snapshotInputs(inputsCell.withTx(tx));
@@ -181,11 +341,16 @@ export async function tryClaimMutex<T extends FabricPlainObject>(
       claimed = false;
       return;
     }
-    // Can claim if:
+    const hasSettledResultForInputs = currentInternal.inputHash === inputHash &&
+      hasSettledResult;
+    // Can claim if no settled result raced this claim attempt and either:
     // 1. Nothing is pending, OR
-    // 2. The standing claim has gone stale and is treated as abandoned
-    const canClaim = !isPending ||
-      (currentInternal.lastActivity < now - timeout);
+    // 2. The standing claim has gone stale and is treated as abandoned.
+    const canClaim = !hasSettledResultForInputs &&
+      (
+        !isPending || currentInternal.requestId === "" ||
+        currentInternal.lastActivity < now - timeout
+      );
 
     if (canClaim) {
       // Marked HERE, on the arm that writes — not at the callback top:
@@ -196,13 +361,19 @@ export async function tryClaimMutex<T extends FabricPlainObject>(
       // still precedes every write of this arm, which is the
       // markEffectCompletion contract.
       if (effectKey !== undefined) markEffectCompletion(tx, effectKey);
-      pending.withTx(tx).set(true);
+      writeUnavailableFetchResult(
+        tx,
+        pending,
+        result,
+        error,
+        UNAVAILABLE_PENDING,
+      );
       // The served claim is authoritative. Its request hash must travel with
       // the claim even when an optimistic derivation already shows that hash.
       internal.withTx(tx).update({
         requestId,
         lastActivity: now,
-        ...(identity !== undefined ? { inputHash } : {}),
+        inputHash,
       });
       claimed = true;
     } else {
@@ -250,7 +421,9 @@ export async function tryWriteResult<T extends FabricPlainObject>(
     // Only write if inputs haven't changed since we started the request
     if (currentHash === expectedHash) {
       action(tx);
-      internal.withTx(tx).update({ inputHash: currentHash });
+      internal.withTx(tx).update({
+        inputHash: currentHash,
+      });
       success = true;
     }
   });
@@ -258,4 +431,24 @@ export async function tryWriteResult<T extends FabricPlainObject>(
     return { written: false, commitError: committed.error };
   }
   return { written: success };
+}
+
+/** Releases a just-acquired claim only if it still belongs to this request. */
+export async function releaseFetchMutexClaim(
+  runtime: Runtime,
+  internal: Cell<Schema<typeof internalSchema>>,
+  expectedInputHash: string,
+  requestId: string,
+  identity?: ScopeKeyIdentity,
+): Promise<void> {
+  await runtime.editWithRetry((tx) => {
+    if (identity !== undefined) tx.tx.scopeKeyIdentity = identity;
+    const current = internal.withTx(tx).get();
+    if (
+      current.inputHash === expectedInputHash &&
+      current.requestId === requestId
+    ) {
+      internal.withTx(tx).update({ requestId: "", lastActivity: 0 });
+    }
+  });
 }

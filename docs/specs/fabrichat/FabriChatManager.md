@@ -47,6 +47,12 @@ or change after a space is saved, and discovery follows it reactively. Each
 entry is found on its own, and lists its room once the room's records say it
 is one. An entry whose space this replica can't serve, as a space on another
 host is, lists nothing until it can be served, and holds back no other entry.
+The implementation's `discoveryErrors` output reports terminal catalog-root
+failures separately, as the source space, message, and error kind. Retirement
+guidance appears there with kind `obsolete`. Pending and syncing roots report
+no terminal diagnostic. A root's recovery removes its diagnostic without
+interrupting healthy room discovery; this output is derived per user, as each
+root is read under that user's access.
 
 Each entry links the room itself, so opening it displays the full conversation.
 Resolved room identity, compared with `equals()`, deduplicates a conversation
@@ -151,6 +157,13 @@ before the user's profile resolves is recorded all the same, and the user
 isn't added.
 Offering a new room to a member adds that member's profile the same way (see
 [first contact](#first-contact)).
+
+The viewer's profile is an optional capability. A terminal error resolving
+`#profile` leaves the manager's indexes readable, disables its start controls,
+and makes start requests record a refusal without creating rooms or notices.
+Pending and syncing profiles retain their native unavailable states. A usable
+profile is passed through as its original cell handle, preserving its identity
+and principal labels.
 
 ## Creating a room
 

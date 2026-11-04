@@ -5,6 +5,7 @@ import {
   type FabricValue,
   isValidFabricValue,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   Cell,
   JSONSchema,
@@ -42,7 +43,7 @@ import { CellRef, type LoggerFlagsData, PieceRef } from "@/protocol/types.ts";
  * closes. A subtree reachable from two positions is shared rather than
  * cyclic, and is walked at each.
  *
- * @throws If the value contains a cycle, or a `FabricInstance`.
+ * @throws If the value contains a cycle, or an unsupported `FabricInstance`.
  */
 export function mapCellRefsToSigilLinks(value: FabricValue): FabricValue {
   return mapOne(value, [], new IndexTrackingStack<object>());
@@ -79,7 +80,7 @@ function mapOne(
     // walks. Narrowed here by what it does: it removes a property from each
     // link payload it finds, so given a link it returns one.
     return stripSigilCfcLabelViews(value) as SigilLink;
-  } else if (value instanceof FabricPrimitive) {
+  } else if (value instanceof FabricPrimitive || isUnavailable(value)) {
     // Atomic, so there is nothing under it to map. It goes _before_ the record
     // branch: one is also a record, and that branch rebuilds from enumerable
     // own properties a fabric class does not have, which would put `{}` here in

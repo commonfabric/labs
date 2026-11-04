@@ -9,6 +9,7 @@ import {
   NAME,
   pattern,
   type ReadonlyCell,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   UI,
@@ -73,7 +74,7 @@ export default pattern(() => {
     { reactOn: db },
   );
   const selected = new Writable.perSession(false);
-  const rows = thread.result ?? [];
+  const rows = resultOf(thread).rows;
   const selection = selectThread({ rows, selected });
   const bubbles = parseThread({ rows: selection });
   const elements = bubbles.map((message) => (

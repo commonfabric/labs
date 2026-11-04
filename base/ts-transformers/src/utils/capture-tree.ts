@@ -1,10 +1,11 @@
 import ts from "typescript";
 
 import { unwrapExpression } from "./expression.ts";
-import { isSafeIdentifierText } from "./identifiers.ts";
+import { createPropertyName } from "./identifiers.ts";
 
 export interface CapturePathInfo {
   readonly root: string;
+  readonly rootIdentifier: ts.Identifier;
   readonly path: readonly string[];
   readonly expression: ts.Expression;
 }
@@ -26,7 +27,12 @@ export function parseCaptureExpression(
   const unwrapped = unwrapExpression(expr);
 
   if (ts.isIdentifier(unwrapped)) {
-    return { root: unwrapped.text, path: [], expression: expr };
+    return {
+      root: unwrapped.text,
+      rootIdentifier: unwrapped,
+      path: [],
+      expression: expr,
+    };
   }
 
   if (ts.isCallExpression(unwrapped)) {
@@ -55,43 +61,61 @@ export function parseCaptureExpression(
 
       return {
         root: receiver.root,
+        rootIdentifier: receiver.rootIdentifier,
         path: [...receiver.path, ...keySegments],
         expression: expr,
       };
     }
   }
 
-  if (ts.isPropertyAccessExpression(unwrapped)) {
+  if (
+    ts.isPropertyAccessExpression(unwrapped) ||
+    ts.isElementAccessExpression(unwrapped)
+  ) {
     const segments: string[] = [];
     let current: ts.Expression = unwrapped;
 
-    while (ts.isPropertyAccessExpression(current)) {
+    while (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
       // If we encounter optional chaining (e.g., foo?.bar), stop here and
       // capture just the expression before the optional chain.
       // This preserves nullability in the schema - the root object might be
       // null/undefined, so we shouldn't descend into its properties.
-      if (ts.isPropertyAccessChain(current)) {
-        // The expression before the ?. is our capture target
-        const beforeChain = unwrapExpression(current.expression);
-        if (ts.isIdentifier(beforeChain)) {
-          return { root: beforeChain.text, path: [], expression: beforeChain };
-        }
-        // If it's a nested property access before the chain (e.g., a.b?.c),
-        // recursively parse that part
-        if (ts.isPropertyAccessExpression(beforeChain)) {
-          return parseCaptureExpression(beforeChain);
-        }
-        // Can't parse this expression
+      if (
+        ts.isPropertyAccessChain(current) ||
+        ts.isElementAccessChain(current)
+      ) {
+        return parseCaptureExpression(current.expression);
+      }
+      if (ts.isPropertyAccessExpression(current)) {
+        segments.unshift(current.name.text);
+        // Unwrap at every descent step so wrappers anywhere in the chain
+        // (e.g. `((entry).name).x`) don't break the walk.
+        current = unwrapExpression(current.expression);
+        continue;
+      }
+
+      const argument = unwrapExpression(current.argumentExpression);
+      if (
+        !ts.isStringLiteralLike(argument) &&
+        !ts.isNumericLiteral(argument) &&
+        !ts.isNoSubstitutionTemplateLiteral(argument)
+      ) {
         return undefined;
       }
-      segments.unshift(current.name.text);
-      // Unwrap at every descent step so wrappers anywhere in the chain
-      // (e.g. `((entry).name).x`) don't break the walk.
+      segments.unshift(argument.text);
       current = unwrapExpression(current.expression);
     }
 
     if (ts.isIdentifier(current)) {
-      return { root: current.text, path: segments, expression: expr };
+      return {
+        root: current.text,
+        rootIdentifier: current,
+        path: segments,
+        expression: expr,
+      };
     }
   }
 
@@ -252,9 +276,7 @@ export function buildHierarchicalParamsValue(
   for (const [propName, childNode] of node.properties) {
     assignments.push(
       factory.createPropertyAssignment(
-        isSafeIdentifierText(propName)
-          ? factory.createIdentifier(propName)
-          : factory.createStringLiteral(propName),
+        capturePropertyName(propName, factory),
         buildHierarchicalParamsValue(childNode, rootName, factory),
       ),
     );
@@ -285,12 +307,19 @@ export function buildCapturePropertyAssignments(
     const propertyName = renameMap?.get(rootName) ?? rootName;
     properties.push(
       factory.createPropertyAssignment(
-        isSafeIdentifierText(propertyName)
-          ? factory.createIdentifier(propertyName)
-          : factory.createStringLiteral(propertyName),
+        capturePropertyName(propertyName, factory),
         buildHierarchicalParamsValue(node, rootName, factory),
       ),
     );
   }
   return properties;
+}
+
+function capturePropertyName(
+  name: string,
+  factory: ts.NodeFactory,
+): ts.PropertyName {
+  return name === "__proto__"
+    ? factory.createComputedPropertyName(factory.createStringLiteral(name))
+    : createPropertyName(name, factory);
 }

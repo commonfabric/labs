@@ -22,6 +22,7 @@
  */
 import {
   action,
+  type AsyncResult,
   type Cell,
   computed,
   type Default,
@@ -30,12 +31,17 @@ import {
   type FabricEpochNsec,
   grantSpaceAccess,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSession,
   type PerUser,
   principalOf,
   profileOwnerOf,
+  resultOf,
   SELF,
   spaceAccess,
   type SpaceAccessLevel,
@@ -1541,14 +1547,21 @@ export const FabriChatRoomCore = pattern<
   const places = facts.places;
   // The space's participants as its root lists them, for a room that isn't
   // that root. A root room's `#default` is the room itself, so it reads only
-  // its own; a space whose root isn't there yet lists none.
+  // its own. Other rooms wait for the space's root to resolve.
   const space = wish<{ participants?: ProfileCell[] }>({ query: "#default" });
   const joined = computed(() =>
     roster === undefined ? [] : rosterProfiles(roster)
   );
-  const listed = computed((): ProfileCell[] =>
-    ownSpace ? [...joined] : [...(space.result?.participants ?? []), ...joined]
-  );
+  const selectedParticipants = computed((): AsyncResult<ProfileCell[]> => {
+    if (ownSpace) return [...joined];
+    const root = space.result;
+    if (hasError(root)) return [...joined];
+    if (
+      isPending(root) || isSyncing(root) || isObsolete(root)
+    ) return root;
+    return [...(root.participants ?? []), ...joined];
+  });
+  const listed = resultOf(selectedParticipants);
   const participants = computed(() => participantsOf(listed, facts.authors));
   // Only a member may read the space's access list, and a profile lives in
   // its owner's own space, which may refuse a reader. Both are the reader's
@@ -2215,7 +2228,9 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     // Each session finds its own profile: a session whose wish finds none, or
     // fails, writes that into its own instance, never over the one a session
     // that found the profile reads.
-    const profileWish = wish<PerSession<ChatProfile>>({ query: "#profile" });
+    const profileWish = wish<Cell<PerSession<ChatProfile>>>({
+      query: "#profile",
+    });
     const containerWish = wish<Cell<ChatContainer>>({ query: "#default" });
     // The viewer's adds' outcomes, which follow them, and only them, across
     // sessions.
@@ -2228,10 +2243,21 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
     const managerWish = wish<
       RoomManager & { openDirect: Stream<StartDirectEvent> }
     >({ query: "#chatManager" });
+    const myProfile = computed(() =>
+      hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
+    );
+    const container = computed(() =>
+      hasError(containerWish.result)
+        ? undefined
+        : resultOf(containerWish.result)
+    );
+    const manager = computed(() =>
+      hasError(managerWish.result) ? undefined : resultOf(managerWish.result)
+    );
     const room = FabriChatRoomCore(
       {
-        myProfile: profileWish.result,
-        container: containerWish.result,
+        myProfile,
+        container,
         about,
         messages,
         titles,
@@ -2239,9 +2265,9 @@ const FabriChatRoom = pattern<FabriChatRoomInput, ChatRoomOutput>(
         roster: participants,
         fileStore,
         addRequests,
-        startDirect: managerWish.result?.openDirect,
+        startDirect: manager?.openDirect,
         self,
-        manager: managerWish.result,
+        manager,
       },
     );
     // Hidden by a prop rather than a branch, and `hidden` until the prop has a

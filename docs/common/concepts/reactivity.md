@@ -11,6 +11,80 @@ reads are tracked as dependencies (in computed/lift). Derive data with
 [computed()](./computed/computed.md) and gate UI with plain ternaries
 ([Conditional Rendering](../patterns/conditional.md)).
 
+## Availability Is Reactive Control Flow
+
+Single-result fetch and generation calls produce an `AsyncResult<T>`. Keep the
+request when code needs to inspect loading or failure, and derive the ordinary
+usable value with the zero-node `resultOf()` projection:
+
+```tsx
+// Shown for illustration only.
+const repoRequest = fetchJson<Repo>({ url });
+const repo = resultOf(repoRequest);
+const title = computed(() => `${repo.owner}/${repo.name}`);
+
+return isPending(repoRequest)
+  ? <div>Loading…</div>
+  : hasError(repoRequest)
+    ? <div>{repoRequest.errorMessage}</div>
+    : <h1>{title}</h1>;
+```
+
+While `repoRequest` is unavailable, computations which only consume `repo` do
+not run; the same unavailable state propagates through their outputs. Once the
+request contains a `Repo`, those computations resume with the non-optional
+usable type. Guards opt only their own computation boundary into the reasons
+they test, so code can render an error while continuing to wait through other
+states. See [Fetching Data](../capabilities/fetch.md) and
+[LLM Generation](../capabilities/llm.md) for the complete APIs.
+
+Use `latestComplete()` when continuity is intentional. It waits for its entire
+input to become usable, then keeps the last complete snapshot during later
+pending, error, syncing, or schemaMismatch intervals:
+
+```tsx
+// Shown for illustration only.
+const snapshot = latestComplete({ repo: repoRequest, ticket: ticketRequest });
+```
+
+This is an atomic join: neither field advances until both current requests are
+usable. Inspect the original requests when the UI also needs the current error
+or loading reason. Unlike `resultOf()`, `latestComplete()` creates a stateful
+built-in node.
+
+Availability policy is attached at the exact stable reactive path captured by
+a computation. Hoist dynamic selection outside the computation so the
+transformer can name that path:
+
+```tsx
+// Shown for illustration only.
+const selectedRequest = requests[index];
+const content = computed(() =>
+  hasError(selectedRequest)
+    ? <div>{selectedRequest.errorMessage}</div>
+    : <RepoCard repo={resultOf(selectedRequest)} />
+);
+```
+
+Writing `hasError(requests[index])` inside `computed()` is diagnosed because
+the serialized policy cannot identify which array element the dynamic access
+will select. Gating is capture-granular: if a computation captures a projected
+result, it waits whenever that capture is unavailable even when the branch it
+would have taken did not read the value.
+
+When an unavailable value reaches JSX without an explicit guard, the affected
+reactive slot starts blank; the rest of the surrounding render is unaffected.
+After a usable value has rendered, a pending replacement keeps the last
+element-rooted subtree visible but dimmed and non-interactive until usable data
+returns. A retained bare text node stays visible but has no element on which to
+apply the pending style or `inert`; it also has no interactive surface. Error,
+syncing, and schemaMismatch values clear the affected prior content. Use
+guards when the UI should show an explicit loading or failure state instead.
+
+The public pattern type `AsyncResult<T>` is the availability union described
+here. An unrelated internal memory utility also uses the name `AsyncResult`
+with an error type parameter; it is not part of the pattern authoring API.
+
 ## Core Principle: Writable<> is About Write Access, Not Reactivity
 
 **The most important thing to understand:** Everything in Common Fabric is reactive by default. The `Writable<>` wrapper in type signatures doesn't enable reactivity—it indicates **write intent**.

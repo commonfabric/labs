@@ -6,6 +6,7 @@ import {
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -55,18 +56,19 @@ const isPast = (date: string, today: string): boolean =>
 
 export default pattern<CalendarInput, CalendarOutput>(({ events }) => {
   const nowCell = wish<number>({ query: "#now" });
+  const nowCellValue = resultOf(nowCell.result);
   const todayDate = computed(() => {
-    const nowMs = nowCell.result;
-    return nowMs != null ? getTodayDate(nowMs) : "";
+    const nowMs = nowCellValue;
+    return getTodayDate(nowMs);
   });
 
   const newTitle = new Writable("");
-  // Seed empty and fill from #now once it resolves, so the date input defaults
-  // to today without reading the ambient clock at pattern body.
+  // Seed empty and fill from the projected #now value, so the date input
+  // defaults to today without reading the ambient clock at pattern body.
   const newDate = new Writable("");
   computed(() => {
-    const nowMs = nowCell.result;
-    if (nowMs != null && newDate.get() === "") {
+    const nowMs = nowCellValue;
+    if (newDate.get() === "") {
       newDate.set(getTodayDate(nowMs));
     }
   });

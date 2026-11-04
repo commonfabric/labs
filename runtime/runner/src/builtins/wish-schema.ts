@@ -74,6 +74,7 @@ export function wishStateSchemaForResult(
       result: {
         anyOf: [
           { type: "undefined" },
+          { type: "FabricUnavailable" },
           nestedResultSchema,
         ],
       },

@@ -15,12 +15,20 @@
  * matching rows, count with a predicate, aggregate count, SqliteDb handle
  */
 import {
+  type AsyncResult,
   computed,
   Default,
+  hasError,
+  hasSchemaMismatch,
   ifElse,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   type SqliteDb,
+  type SqliteQueryResult,
   UI,
   type VNode,
 } from "commonfabric";
@@ -55,6 +63,7 @@ export interface SourceRowCountOutput {
   /** How many of those rows satisfy `predicate`. */
   matching: number;
 
+  /** Whether the query is pending or awaiting replica synchronization. */
   pending: boolean;
 
   /** Why the read failed, empty while it has not. */
@@ -62,7 +71,7 @@ export interface SourceRowCountOutput {
 }
 
 /** One row of the aggregate, under the names the statement gives its columns. */
-interface CountRow {
+export interface CountRow {
   total: number;
   matching: number;
 }
@@ -96,33 +105,40 @@ const countSql = (table: string, predicate: string): string =>
     `FROM ${quotedIdentifier(table)}`,
   ].join("\n");
 
-/**
- * What a query reports about a failure, empty when it has not failed.
- *
- * The same narrowing the sqlite builtin applies before it writes one, so a
- * value that reaches here already a message passes through unchanged.
- */
-const errorText = (error: unknown): string =>
-  error === undefined || error === null
-    ? ""
-    : error instanceof Error
-    ? error.message
-    : String(error);
+/** The query result and labels displayed by a row count. */
+export interface SourceRowCountPresentationInput {
+  countRead: AsyncResult<SqliteQueryResult<CountRow>>;
+  table: string;
+  predicate: string;
+}
 
-export const SourceRowCount = pattern<
-  SourceRowCountInput,
+/** Presents a row count without stating a number while the query is waiting. */
+export const SourceRowCountPresentation = pattern<
+  SourceRowCountPresentationInput,
   SourceRowCountOutput
->(({ source, table, predicate }) => {
-  const countRead = source.query<CountRow>(
-    computed(() => countSql(table, predicate)),
-    { scope: "session" },
-  );
+>(({ countRead, table, predicate }) => {
+  const observedCountRead = observeAvailability(countRead);
+  const countValue = resultOf(observedCountRead);
 
-  const total = computed(() => countRead.result?.[0]?.total ?? 0);
-  const matching = computed(() => countRead.result?.[0]?.matching ?? 0);
-  const pending = computed(() => countRead.pending === true);
-  const errorMessage = computed(() => errorText(countRead.error));
-  const hasError = computed(() => errorMessage !== "");
+  const total = computed(() =>
+    isPending(observedCountRead) || hasError(observedCountRead) ||
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      ? 0
+      : countValue.rows[0]?.total ?? 0
+  );
+  const matching = computed(() =>
+    isPending(observedCountRead) || hasError(observedCountRead) ||
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      ? 0
+      : countValue.rows[0]?.matching ?? 0
+  );
+  const pending = computed(() =>
+    isPending(observedCountRead) || isSyncing(observedCountRead)
+  );
+  const errorMessage = computed(() =>
+    hasError(observedCountRead) ? observedCountRead.errorMessage : ""
+  );
+  const queryHasError = computed(() => errorMessage !== "");
 
   // Both counts fall back to zero while the read is in flight, and `0 of 0` is
   // the one reading this part exists to rule out — a full table that looks
@@ -147,7 +163,7 @@ export const SourceRowCount = pattern<
         </cf-hstack>
 
         {ifElse(
-          hasError,
+          queryHasError,
           <cf-alert status="error">{errorMessage}</cf-alert>,
           null,
         )}
@@ -160,6 +176,17 @@ export const SourceRowCount = pattern<
     pending,
     errorMessage,
   };
+});
+
+export const SourceRowCount = pattern<
+  SourceRowCountInput,
+  SourceRowCountOutput
+>(({ source, table, predicate }) => {
+  const countRead = source.query<CountRow>(
+    computed(() => countSql(table, predicate)),
+    { scope: "session" },
+  );
+  return SourceRowCountPresentation({ countRead, table, predicate });
 });
 
 export default SourceRowCount;

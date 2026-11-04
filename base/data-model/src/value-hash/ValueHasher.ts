@@ -478,6 +478,9 @@ export class ValueHasher {
         this.feedValue(fab.reason);
         this.feedValue(fab.errorKind);
         this.feedValue(fab.rawErrorMessage);
+        if (fab.reason === "obsolete") {
+          this.feedValue(fab.obsoleteMessage);
+        }
         return;
       }
 

@@ -32,12 +32,18 @@
  * 7. Check console for any "Tried to directly access opaque value" errors (should be none)
  */
 import {
+  type BuiltInLLMMessage,
   computed,
   Default,
   generateObject,
   handler,
+  hasError,
+  isPending,
   NAME,
   pattern,
+  type Reactive,
+  resultOf,
+  type Stream,
   UI,
   Writable,
 } from "commonfabric";
@@ -52,6 +58,20 @@ interface Sentiment {
   confidence: number;
   keywords: string[];
 }
+
+type LegacySentimentAnalysis = {
+  pending: Reactive<boolean>;
+  result?: Reactive<Sentiment | undefined>;
+  error?: Reactive<string>;
+  messages?: Reactive<BuiltInLLMMessage[]>;
+  partial?: Reactive<string>;
+  cancelGeneration: Stream<void>;
+};
+
+const cancelGeneration = handler<
+  void,
+  Record<string, never>
+>(() => {});
 
 interface Input {
   items: Item[] | Default<[]>;
@@ -85,23 +105,38 @@ const removeItem = handler<
 export default pattern<Input>(({ items }) => {
   // THE "DUMB MAP APPROACH" - just map directly over items
   // Framework caches each call via hash(prompt + schema + model + system)
-  const sentimentAnalyses = items.map((item) => ({
-    itemId: item.id,
-    content: item.content,
-    analysis: generateObject<Sentiment>({
+  const sentimentAnalyses = items.map((item) => {
+    const request = generateObject<Sentiment>({
       system:
         "Analyze the sentiment of the following text. Return positive, neutral, or negative sentiment with confidence 0-1 and relevant keywords.",
       prompt: item.content,
-    }),
-  }));
+    });
+    const analysis: LegacySentimentAnalysis = {
+      pending: computed(() => isPending(request)),
+      result: computed(() =>
+        isPending(request) || hasError(request) ? undefined : resultOf(request)
+      ),
+      error: computed(() => hasError(request) ? request.errorMessage : ""),
+      messages: computed((): BuiltInLLMMessage[] => []),
+      partial: computed(() => ""),
+      // The old output exposed cancellation even though the direct API does not.
+      cancelGeneration: cancelGeneration({}),
+    };
+    return {
+      itemId: item.id,
+      content: item.content,
+      // Project the direct request through the deployed output contract.
+      analysis,
+    };
+  });
 
   const pendingCount = computed(() =>
     sentimentAnalyses.map((s) => s.analysis.pending).filter((p) => p).length
   );
 
   const completedCount = computed(() =>
-    sentimentAnalyses.map((s) => s.analysis.result).filter((r) =>
-      r !== undefined
+    sentimentAnalyses.map((s) => s.analysis.result).filter((result) =>
+      result !== undefined
     ).length
   );
 

@@ -1,17 +1,20 @@
-import { Default, NAME, pattern, UI, wish } from "commonfabric";
+import { Default, NAME, pattern, resultOf, UI, wish } from "commonfabric";
 
 export default pattern<Record<string, never>>((_) => {
-  const { result: mentionable } = wish<Array<{ [NAME]: string }> | Default<[]>>(
+  const mentionableWish = wish<
+    Array<{ [NAME]: string }> | Default<[]>
+  >(
     {
       query: "#mentionable",
     },
   );
+  const mentionable = resultOf(mentionableWish.result);
 
   return {
     [NAME]: "Mentionable Inspector",
     [UI]: (
       <cf-vstack gap="3">
-        {mentionable!.map((item) => <cf-cell-link $cell={item} />)}
+        {mentionable.map((item) => <cf-cell-link $cell={item} />)}
       </cf-vstack>
     ),
   };

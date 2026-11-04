@@ -1,3 +1,8 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 /// <reference path="./clock.d.ts" />
 
 /**
@@ -179,7 +184,7 @@ describe("a refused fetchProgram takeover", () => {
     await clock.settle();
     // The taker is reading the holder's claim rather than an empty cache, so
     // the run below decides against a claim that is really there.
-    expect(takerRun.result.withTx().key("pending").get()).toBe(true);
+    expect(takerRun.result.withTx().get()).toBe(UNAVAILABLE_PENDING);
 
     const refused = deferred<void>();
     taker.scheduler.onError((error: Error) => {
@@ -226,17 +231,21 @@ describe("a refused fetchProgram takeover", () => {
 
     // Nothing of the ending landed: the entry is still the holder's, so the
     // taker reports no refusal over a resolution that is still running.
-    expect(takerRun.result.withTx().key("error").get()).toBeUndefined();
-    expect(takerRun.result.withTx().key("pending").get()).toBe(true);
+    expect(takerRun.result.withTx().get()).toBe(UNAVAILABLE_PENDING);
 
     // And the holder's resolution still reaches its result.
     released = true;
     held.resolve(moduleResponse());
-    const resolved = await waitForCellValue<{ result?: { main?: string } }>(
+    const resolved = await waitForCellValue<
+      { main?: string } | UnavailableVariant
+    >(
       holder,
       holderRun.result,
-      (value) => value?.result !== undefined,
+      (value) => !isUnavailable(value) && value?.main !== undefined,
     );
-    expect(resolved.result?.main).toBe("/held-program.ts");
+    expect(isUnavailable(resolved)).toBe(false);
+    if (!isUnavailable(resolved)) {
+      expect(resolved.main).toBe("/held-program.ts");
+    }
   });
 });

@@ -13,9 +13,11 @@ import {
   computed,
   type FabricBytes,
   handler,
+  hasError,
   NAME,
   pattern,
   type PerSession,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -267,11 +269,17 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const profilePicture = computed(() => profilePictureWish.result);
-    const profileAvatar = computed(() => profileAvatarWish.result);
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
+    const profileName = hasError(profileNameWish.result)
+      ? ""
+      : resultOf(profileNameWish.result);
+    const profileAvatar = hasError(profileAvatarWish.result)
+      ? ""
+      : resultOf(profileAvatarWish.result);
+    const hasProfile = computed(() => profileName.trim() !== "");
+    const profilePicture = computed(() =>
+      hasError(profilePictureWish.result)
+        ? undefined
+        : resultOf(profilePictureWish.result)
     );
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${profileName}` : "Create a profile to join"

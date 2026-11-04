@@ -1,0 +1,83 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "SuggestionResult": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "properties": {},
+        "type": "object"
+      },
+      "initialResults": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SuggestionResult",
+          "asCell": [
+            "cell"
+          ]
+        },
+        "type": "array"
+      },
+      "situation": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "situation",
+      "context",
+      "initialResults"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/suggestion.tsx",
+  "resultSchema": {
+    "$defs": {
+      "SuggestionResult": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "candidates": {
+        "items": {
+          "$ref": "#/$defs/SuggestionResult"
+        },
+        "type": "array"
+      },
+      "error": {
+        "type": "unknown"
+      },
+      "result": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/SuggestionResult"
+          }
+        ]
+      }
+    },
+    "required": [
+      "result",
+      "candidates",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

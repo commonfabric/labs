@@ -1,11 +1,15 @@
 import {
   computed,
   type Default,
-  generateText,
+  generateTextStream,
   handler,
+  hasError,
+  isPending,
   NAME,
   navigateTo,
+  partialResultOf,
   pattern,
+  resultOf,
   SELF,
   Stream,
   UI,
@@ -268,6 +272,8 @@ const handleGenerate = handler<
     isGenerating: Writable<boolean>;
     mentionable: any;
     beforeAIInsert: Writable<string>;
+    beforeGeneration: Writable<string>;
+    generationDraft: Writable<string>;
   }
 >((_event, state) => {
   const currentContent = state.content.get();
@@ -298,6 +304,8 @@ const handleGenerate = handler<
     ? "---\n## AI\n"
     : "\n---\n## AI\n";
   const newContent = currentContent + separator;
+  state.beforeGeneration.set(currentContent);
+  state.generationDraft.set(newContent);
   state.content.set(newContent);
 
   // Save the prefix for streaming display
@@ -349,12 +357,14 @@ const ChatNote = pattern<Input, Output>(
     model,
     [SELF]: self,
   }) => {
-    const pieceRegistry = wish<MinimalPiece[] | Default<[]>>({
+    const pieceRegistryWish = wish<MinimalPiece[] | Default<[]>>({
       query: "#pieceRegistry",
-    }).result!;
-    const mentionable = wish<MentionablePiece[] | Default<[]>>({
+    });
+    const pieceRegistry = resultOf(pieceRegistryWish.result);
+    const mentionableWish = wish<MentionablePiece[] | Default<[]>>({
       query: "#mentionable",
-    }).result!;
+    });
+    const mentionable = resultOf(mentionableWish.result);
     const mentioned = new Writable<MentionablePiece[]>([]);
     const backlinks = new Writable<MentionablePiece[]>([]);
 
@@ -367,24 +377,33 @@ const ChatNote = pattern<Input, Output>(
     const llmMessages = new Writable<LLMMessage[]>([]);
 
     // LLM call - reactive based on llmMessages
-    const llmResponse = generateText({
+    const llmResponse = generateTextStream({
       system: llmSystem,
       messages: llmMessages,
       model: model,
     });
+    const llmResult = resultOf(llmResponse);
+    const llmPartial = partialResultOf(llmResponse);
 
     // Track content before AI insertion point for streaming display
     const beforeAIInsert = new Writable<string>("");
+    const beforeGeneration = new Writable<string>("");
+    const generationDraft = new Writable<string>("");
 
     // Watch for LLM streaming partial updates
     // Side-effect-only reactive computation: tracks its reactive reads
-    // (isGenerating, llmResponse.partial, beforeAIInsert) automatically.
+    // (isGenerating, llmPartial, beforeAIInsert) automatically.
     computed(() => {
       const generating = isGenerating.get();
-      const partial = llmResponse.partial;
+      const partial = llmPartial;
       const prefix = beforeAIInsert.get();
-      if (generating && partial && prefix) {
-        content.set(prefix + partial);
+      if (
+        generating && partial && prefix &&
+        content.get() === generationDraft.get()
+      ) {
+        const draft = prefix + partial;
+        content.set(draft);
+        generationDraft.set(draft);
       }
     });
 
@@ -392,17 +411,34 @@ const ChatNote = pattern<Input, Output>(
     // Side-effect-only reactive computation; reactive reads tracked automatically.
     computed(() => {
       const generating = isGenerating.get();
-      const pending = llmResponse.pending;
-      const result = llmResponse.result;
+      const pending = isPending(llmResponse);
+      const result = llmResult;
+      // A failed generation restores only the content it still owns, leaving
+      // concurrent edits intact. Clearing its inputs allows a fresh request.
+      if (hasError(llmResponse)) {
+        if (generating) {
+          if (content.get() === generationDraft.get()) {
+            content.set(beforeGeneration.get());
+          }
+          isGenerating.set(false);
+          llmMessages.set([]);
+          beforeAIInsert.set("");
+          beforeGeneration.set("");
+          generationDraft.set("");
+        }
+        return;
+      }
       // When complete, finalize with result and closing separator
       if (!pending && result && generating) {
         const prefix = beforeAIInsert.get();
-        if (prefix) {
+        if (prefix && content.get() === generationDraft.get()) {
           content.set(prefix + result + "\n---\n");
         }
         isGenerating.set(false);
         llmMessages.set([]);
         beforeAIInsert.set("");
+        beforeGeneration.set("");
+        generationDraft.set("");
       }
     });
 
@@ -422,7 +458,7 @@ const ChatNote = pattern<Input, Output>(
     });
 
     // Generation state display (reactive expression auto-wraps at use sites)
-    const showGenerating = isGenerating.get() && llmResponse.pending;
+    const showGenerating = isGenerating.get() && isPending(llmResponse);
 
     // Can generate when there's content and not already generating
     // Optimized to avoid splitting entire content on every keystroke
@@ -555,6 +591,8 @@ const ChatNote = pattern<Input, Output>(
                   isGenerating,
                   mentionable,
                   beforeAIInsert,
+                  beforeGeneration,
+                  generationDraft,
                 })}
                 disabled={!canGenerate}
                 style={{
@@ -602,6 +640,8 @@ const ChatNote = pattern<Input, Output>(
               isGenerating,
               mentionable,
               beforeAIInsert,
+              beforeGeneration,
+              generationDraft,
             })}
           />
           {/* Keyboard shortcut: Ctrl+Enter to generate (Windows/Linux) */}
@@ -616,6 +656,8 @@ const ChatNote = pattern<Input, Output>(
               isGenerating,
               mentionable,
               beforeAIInsert,
+              beforeGeneration,
+              generationDraft,
             })}
           />
 

@@ -15,8 +15,11 @@ import {
   equals,
   generateObject,
   handler,
+  hasError,
+  isPending,
   NAME,
   pattern,
+  resultOf,
   UI,
   Writable,
 } from "commonfabric";
@@ -321,7 +324,9 @@ export default pattern<Input, Output>(
     // new generateObject calls, resetting all photos to "Analyzing...". Users can manually
     // delete photos using the delete button.
     const photoExtractions = uploadedPhotos.map((photo) => {
-      const extraction = generateObject<{ aisles: ExtractedAisle[] }>({
+      const extractionRequest = generateObject<{
+        aisles: ExtractedAisle[];
+      }>({
         system:
           'You are analyzing photos from a grocery store. Your task is to extract ALL visible aisle signs and return them as JSON.\n\nIMPORTANT: You MUST return a JSON object with an "aisles" array, even if you only see one aisle or partial information.\n\nFor each aisle sign you see:\n- Extract ONLY the aisle number (e.g., "8", "12", "5A", "5B") - DO NOT include the word "Aisle"\n- Extract each product category as a separate item in the products array\n- Include partially visible signs - do your best to read them\n\nExample output:\n{\n  "aisles": [\n    {"name": "8", "products": ["Bread", "Cereal", "Coffee"]},\n    {"name": "9", "products": ["Snacks", "Chips"]}\n  ]\n}',
         prompt: computed(() => {
@@ -364,15 +369,22 @@ export default pattern<Input, Output>(
           },
         },
       });
+      const extraction = resultOf(extractionRequest);
+      const extractedAisles = computed(() => {
+        if (isPending(extractionRequest) || hasError(extractionRequest)) {
+          return { aisles: [] as ExtractedAisle[] };
+        }
+        return { aisles: extraction.aisles || [] };
+      });
 
       return {
         photo,
         photoName: photo.name,
-        extractedAisles: {
-          aisles: (extraction.result && extraction.result.aisles) || [],
-        },
-        pending: extraction.pending,
-        error: extraction.error,
+        extractedAisles,
+        pending: isPending(extractionRequest),
+        error: hasError(extractionRequest)
+          ? extractionRequest.errorMessage
+          : undefined,
       };
     });
 

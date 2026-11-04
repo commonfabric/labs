@@ -4,7 +4,10 @@
  * `when` and `unless`.
  */
 
+import { isUnavailable } from "@commonfabric/data-model/availability";
+
 import type { Cell } from "../cell.ts";
+import { readAvailabilityAwareCell } from "../data-unavailability.ts";
 import { findAndInlineDataUriLinks } from "../data-uri.ts";
 import { resolveLink } from "../link-resolution.ts";
 import { parseLink } from "../link-utils.ts";
@@ -48,10 +51,12 @@ export interface ForwardReferenceOptions {
 }
 
 /**
- * Builds a forwarding builtin. Its action reads the condition's truthiness
- * from its root alone, so nothing below the root of a condition that is a
- * record or an array is read, and writes into the result cell a reference to
- * the selected input's resolved target.
+ * Builds the action of a forwarding builtin. The action reads the condition's
+ * truthiness from its root alone, so nothing below the root of a condition
+ * that is a record or an array is read, and writes into the result cell a
+ * reference to the selected input's resolved target.
+ * An unavailable condition propagates its native marker before truthiness
+ * is evaluated or an input is selected.
  *
  * The reference carries the schema that target resolved to. That schema is
  * what says what the position is — a stream, which holds no value, or a value
@@ -89,6 +94,16 @@ export function forwardReference(
       resolvedCondition.scope,
     );
     sendResult(tx, result);
+
+    const condition = readAvailabilityAwareCell(
+      tx,
+      inputsCell.key("condition"),
+      { surfaceReplicaSyncing: true, readValue: false },
+    );
+    if (isUnavailable(condition)) {
+      result.withTx(tx).setRaw(condition);
+      return;
+    }
 
     const truthy = readsTruthyAtRoot(runtime, tx, resolvedCondition);
     const ref = inputsCell.withTx(tx).key(select(truthy)).getAsLink({

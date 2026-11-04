@@ -1,3 +1,8 @@
+import {
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+} from "@commonfabric/data-model/availability";
+
 /// <reference path="./clock.d.ts" />
 // The fetch builtins coordinate across replicas through durable state: a claim
 // in `internal` for fetch.ts, a `fetching` cache entry for fetch-program.ts. A
@@ -22,6 +27,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
@@ -62,6 +68,22 @@ function deferred<T>(): Deferred<T> {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+async function rawResultChild(
+  runtime: Runtime,
+  container: any,
+): Promise<unknown> {
+  await runtime.storageManager.synced();
+  const child = runtime.getCellFromLink(
+    resolveLink(
+      runtime,
+      runtime.readTx(),
+      container.key("result").getAsNormalizedFullLink(),
+    ),
+  );
+  await child.sync();
+  return child.getRaw();
 }
 
 describe("fetch builtins: taking over a claim", () => {
@@ -184,12 +206,15 @@ describe("fetch builtins: taking over a claim", () => {
     await runtime.settled();
     await result.pull();
 
-    expect(result.key("error").get()).toContain("404");
-    expect(result.key("result").get()).toBeUndefined();
+    const unavailable = await rawResultChild(runtime, result);
+    expect(isUnavailable(unavailable)).toBe(true);
+    expect(
+      isUnavailable(unavailable) ? unavailable.errorMessage : undefined,
+    ).toContain("404");
     expect(result.key("pending").get()).toBe(false);
   });
 
-  it("clears its outputs when the program URL is empty", async () => {
+  it("publishes schema mismatch when the program URL is empty", async () => {
     let requests = 0;
     globalThis.fetch = () => {
       requests++;
@@ -215,7 +240,10 @@ describe("fetch builtins: taking over a claim", () => {
 
     expect(requests).toBe(0);
     expect(result.key("pending").get()).toBe(false);
-    expect(result.key("result").get()).toBeUndefined();
+    expect(await rawResultChild(runtime, result)).toMatchObject({
+      reason: "error",
+      errorKind: "invalidInput",
+    });
     expect(result.key("error").get()).toBeUndefined();
   });
 
@@ -359,7 +387,9 @@ describe("fetch builtins: taking over a claim", () => {
     heldRequest.reject(new Error("simulated network failure"));
     await runtime.settled();
 
-    expect(result.key("result").get()).toEqual({ from: "the other replica" });
+    expect(await rawResultChild(runtime, result)).toEqual({
+      from: "the other replica",
+    });
     expect(result.key("error").get()).toBeUndefined();
     expect(result.key("pending").get()).toBe(false);
   });
@@ -462,7 +492,7 @@ describe("fetch builtins: taking over a claim", () => {
     const inputs = { url: "http://mock-test-server.local/api/completed" };
 
     async function claimWithStored(
-      stored: "result" | "error" | "none",
+      stored: "result" | "error" | "pending" | "none",
     ): Promise<{ claimed: boolean; result: unknown; pending: boolean }> {
       const inputsCell = runtime.getCell<typeof inputs>(
         space,
@@ -504,6 +534,8 @@ describe("fetch builtins: taking over a claim", () => {
         result.set({ from: "the completed request" });
       } else if (stored === "error") {
         error.set({ message: "the stored error-shaped result" });
+      } else if (stored === "pending") {
+        result.setRaw(UNAVAILABLE_PENDING);
       }
       internal.set({
         requestId: "",
@@ -547,6 +579,12 @@ describe("fetch builtins: taking over a claim", () => {
 
     it("still claims when the hash matches but nothing has landed", async () => {
       const outcome = await claimWithStored("none");
+      expect(outcome.claimed).toBe(true);
+      expect(outcome.pending).toBe(true);
+    });
+
+    it("still claims when the direct result is the pending marker", async () => {
+      const outcome = await claimWithStored("pending");
       expect(outcome.claimed).toBe(true);
       expect(outcome.pending).toBe(true);
     });

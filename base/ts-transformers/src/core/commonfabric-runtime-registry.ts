@@ -15,10 +15,33 @@ export type CommonFabricRuntimeExportSpec =
       | "when"
       | "unless"
       | "wish"
+      | "llm-dialog"
       | "generate-text"
       | "generate-object"
       | "pattern-tool"
-      | "runtime-call";
+      | "runtime-call"
+      | "availability-result"
+      | "partial-result"
+      | "compile-diagnostics"
+      | "availability-observer";
+    reactiveOrigin: boolean;
+  }
+  | {
+    exportName: string;
+    category: "call";
+    callKind: "availability-guard";
+    availabilityReason:
+      | "pending"
+      | "error"
+      | "syncing"
+      | "obsolete"
+      | "schemaMismatch";
+    variantTypeName:
+      | "IsPending"
+      | "HasError"
+      | "IsSyncing"
+      | "IsObsolete"
+      | "HasSchemaMismatch";
     reactiveOrigin: boolean;
   }
   | {
@@ -228,6 +251,19 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     reactiveOrigin: true,
   },
   {
+    exportName: "generateTextStream",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "generateObjectStream",
+    category: "call",
+    callKind: "generate-object",
+    reactiveOrigin: true,
+  },
+
+  {
     exportName: "patternTool",
     category: "call",
     callKind: "pattern-tool",
@@ -248,7 +284,7 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   {
     exportName: "llmDialog",
     category: "call",
-    callKind: "runtime-call",
+    callKind: "llm-dialog",
     reactiveOrigin: true,
   },
   {
@@ -395,6 +431,76 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     exportName: "revokeSpaceAccess",
     category: "ignored",
     reactiveOrigin: false,
+  },
+  {
+    exportName: "isPending",
+    category: "call",
+    callKind: "availability-guard",
+    availabilityReason: "pending",
+    variantTypeName: "IsPending",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "hasError",
+    category: "call",
+    callKind: "availability-guard",
+    availabilityReason: "error",
+    variantTypeName: "HasError",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "isSyncing",
+    category: "call",
+    callKind: "availability-guard",
+    availabilityReason: "syncing",
+    variantTypeName: "IsSyncing",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "hasSchemaMismatch",
+    category: "call",
+    callKind: "availability-guard",
+    availabilityReason: "schemaMismatch",
+    variantTypeName: "HasSchemaMismatch",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "isObsolete",
+    category: "call",
+    callKind: "availability-guard",
+    availabilityReason: "obsolete",
+    variantTypeName: "IsObsolete",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "resultOf",
+    category: "call",
+    callKind: "availability-result",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "compileDiagnosticsOf",
+    category: "call",
+    callKind: "compile-diagnostics",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "partialResultOf",
+    category: "call",
+    callKind: "partial-result",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "latestComplete",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
+  {
+    exportName: "observeAvailability",
+    category: "call",
+    callKind: "availability-observer",
+    reactiveOrigin: true,
   },
   // nameBlob(target, blobId, name) stages a blob's record in the running
   // handler and returns its id. It builds no graph node, so it is a plain call

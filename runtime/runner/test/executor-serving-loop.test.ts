@@ -20,6 +20,8 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
+import { isUnavailable } from "@commonfabric/data-model/availability";
+
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -2360,9 +2362,7 @@ describe("stage F serving loop", () => {
 
     openClient();
     const engine = await server.engineForSpace(space);
-    const clientResult = clientRuntime.getCell<
-      { fetch: { result?: unknown; error?: unknown } }
-    >(
+    const clientResult = clientRuntime.getCell<{ fetch: unknown }>(
       space,
       "effect-result",
       undefined,
@@ -2398,7 +2398,7 @@ describe("stage F serving loop", () => {
     // budget below.
     await waitForCellValue(
       clientRuntime,
-      clientResult.key("fetch").key("result"),
+      clientResult.key("fetch"),
       (result: { from?: string } | undefined) =>
         result?.from === "https://stage-g.test/one",
       { stuckLabel: "the first leg's fetch result to render" },
@@ -2464,8 +2464,8 @@ describe("stage F serving loop", () => {
     expect((await failTx.commit().settled).error).toBeUndefined();
     await waitForCellValue(
       clientRuntime,
-      clientResult.key("fetch").key("error"),
-      (error: unknown) => error !== undefined,
+      clientResult.key("fetch"),
+      (error: unknown) => isUnavailable(error) && error.reason === "error",
       { stuckLabel: "the failing fetch's error to render" },
     );
     expect(calls.filter((url) => url.endsWith("/fails")).length).toBe(1);
@@ -2503,7 +2503,7 @@ describe("stage F serving loop", () => {
     expect((await retryTx.commit().settled).error).toBeUndefined();
     await waitForCellValue(
       clientRuntime,
-      clientResult.key("fetch").key("result"),
+      clientResult.key("fetch"),
       (result: { from?: string } | undefined) =>
         result?.from === "https://stage-g.test/two",
       { stuckLabel: "the second leg's fetch result to render" },
@@ -2579,9 +2579,7 @@ describe("stage F serving loop", () => {
     };
 
     openClient();
-    const clientResult = clientRuntime.getCell<
-      { fetch: { result?: unknown; error?: unknown } }
-    >(
+    const clientResult = clientRuntime.getCell<{ fetch: unknown }>(
       space,
       "cycle-result",
       undefined,
@@ -2595,7 +2593,7 @@ describe("stage F serving loop", () => {
     );
     await clientArg.sync();
     const observes = (leg: string) =>
-      (clientResult.key("fetch").key("result").get() as {
+      (clientResult.key("fetch").get() as {
         from?: string;
       } | undefined)?.from === `https://stage-g.test/${leg}`;
     const writeUrl = async (leg: string) => {
@@ -2706,8 +2704,8 @@ describe("stage F serving loop", () => {
 
     openClient();
     const clientResult = clientRuntime.getCell<{
-      one: { result?: { from?: string } };
-      two: { result?: { from?: string } };
+      one: unknown;
+      two: unknown;
     }>(
       space,
       "two-node-result",
@@ -2728,7 +2726,7 @@ describe("stage F serving loop", () => {
     // BOTH nodes' cells serve. The pre-fix tree wedges exactly one of
     // these waits (whichever node's closure was admitted second).
     const served = (key: "one" | "two") =>
-      (clientResult.key(key).key("result").get() as
+      (clientResult.key(key).get() as
         | { from?: string }
         | undefined)
         ?.from === "https://stage-g.test/shared";
@@ -2803,9 +2801,7 @@ describe("stage F serving loop", () => {
     };
 
     openClient();
-    const clientResult = clientRuntime.getCell<
-      { fetch: { result?: unknown; error?: unknown } }
-    >(
+    const clientResult = clientRuntime.getCell<{ fetch: unknown }>(
       space,
       "liveness-result",
       undefined,
@@ -2825,7 +2821,7 @@ describe("stage F serving loop", () => {
       expect((await tx.commit().settled).error).toBeUndefined();
       await waitForCellValue(
         clientRuntime,
-        clientResult.key("fetch").key("result"),
+        clientResult.key("fetch"),
         (result: { from?: string } | undefined) =>
           result?.from === `https://stage-g.test/${leg}`,
         { stuckLabel: "this leg's fetch result to render" },

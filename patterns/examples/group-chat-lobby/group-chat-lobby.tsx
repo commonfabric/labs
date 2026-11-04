@@ -4,10 +4,12 @@ import {
   equals,
   type FabricBytes,
   handler,
+  hasError,
   ifElse,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   UI,
   type VNode,
   wish,
@@ -172,12 +174,23 @@ export default pattern<LobbyInput, LobbyOutput>(
     const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
     const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const myPicture = computed(() => profilePictureWish.result);
-    const myAvatar = computed(() => profileAvatarWish.result);
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
+    const profile = computed(() =>
+      hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
     );
+    const myName = computed(() =>
+      hasError(profileNameWish.result) ? "" : resultOf(profileNameWish.result)
+    );
+    const myPicture = computed(() =>
+      hasError(profilePictureWish.result)
+        ? undefined
+        : resultOf(profilePictureWish.result)
+    );
+    const myAvatar = computed(() =>
+      hasError(profileAvatarWish.result)
+        ? undefined
+        : resultOf(profileAvatarWish.result)
+    );
+    const hasProfile = computed(() => myName.trim() !== "");
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${myName}` : "Create a profile to join"
     );
@@ -188,7 +201,7 @@ export default pattern<LobbyInput, LobbyOutput>(
       messages,
       users,
       sessionId,
-      profile: profileWish.result,
+      profile,
       name: myName,
       picture: myPicture,
       avatar: myAvatar,

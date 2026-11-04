@@ -7,7 +7,7 @@ function __cfHardenFn(fn: Function) {
     return fn;
 }
 import { __cfHelpers } from "commonfabric";
-import { computed, generateText, pattern, patternTool, type PatternToolResult, Writable } from "commonfabric";
+import { computed, generateTextStream, isPending, pattern, patternTool, type PatternToolResult, resultOf, Writable } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
@@ -46,48 +46,33 @@ const __cfLift_2 = __cfHelpers.lift<{
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 const __cfLift_3 = __cfHelpers.lift<{
-    genResult: {
-        pending: boolean;
-        result?: string | undefined;
-    };
+    genResult: __cfHelpers.AsyncStreamResult<string, string>;
 }, string | undefined>(({ genResult }) => {
-    if (genResult.pending)
+    if (isPending(genResult))
         return undefined;
-    return genResult.result;
+    return resultOf(genResult);
 }, {
     type: "object",
     properties: {
         genResult: {
-            type: "object",
-            properties: {
-                pending: {
-                    type: "boolean"
-                },
-                result: {
-                    type: "string"
-                }
-            },
-            required: ["pending"]
+            type: ["FabricUnavailable", "string"]
         }
     },
     required: ["genResult"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: ["string", "undefined"]
-} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
+} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true, unavailableInputPolicy: [{ path: ["genResult"], reasons: ["pending"] }] });
 const __cfPattern_1 = pattern((__cf_pattern_input: {
     language: string;
     content: string;
 }) => {
     const language = __cf_pattern_input.key("language");
     const content = __cf_pattern_input.key("content");
-    const genResult = generateText({
+    const genResult = generateTextStream({
         system: __cfLift_1({ language: language }).for(["genResult", "system"], true),
         prompt: __cfLift_2({ content: content }).for(["genResult", "prompt"], true)
     }).for("genResult", true);
-    return __cfLift_3({ genResult: {
-            pending: genResult.key("pending"),
-            result: genResult.key("result")
-        } }).for("__patternResult", true);
+    return __cfLift_3({ genResult: genResult }).for("__patternResult", true);
 }, {
     type: "object",
     properties: {
@@ -105,7 +90,7 @@ const __cfPattern_1 = pattern((__cf_pattern_input: {
 // FIXTURE: patternTool-local-var
 // Verifies: patternTool's first arg is a pattern() (CT-1655); `content` is a
 //   genuine pattern input supplied via extraParams, while the pattern-local
-//   `genResult` (from generateText) stays a local binding (not pulled into
+//   `genResult` (from generateTextStream) stays a local binding (not pulled into
 //   extraParams).
 //   patternTool(pattern(({ language, content }) => …genResult…), { content })
 export default pattern(() => {

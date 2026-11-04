@@ -19,10 +19,15 @@ import {
   computed,
   Default,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -148,23 +153,25 @@ function formatSize(bytes: number): string {
 
 export default pattern<FileShareInput, FileShareOutput>(
   ({ files, viewer }) => {
-    const profileWish = wish<{ name?: string; avatar?: string }>({
+    const profileWish = wish<UploaderProfileCell>({
       query: "#profile",
     });
 
     // A claim takes precedence over the wish.
     const hasViewerClaim = computed(() => (viewer.name ?? "").trim() !== "");
-    const uploaderProfile = hasViewerClaim
-      ? viewer.profile
-      : profileWish.result;
+    const wishedProfile = hasError(profileWish.result) ||
+        isPending(profileWish.result) || isSyncing(profileWish.result) ||
+        hasSchemaMismatch(profileWish.result)
+      ? undefined
+      : resultOf(profileWish.result);
+    const uploaderProfile = hasViewerClaim ? viewer.profile : wishedProfile;
     // Uploads open once the profile document itself has resolved, which is
     // the condition `addFiles` requires, so the input never shows while an
     // upload would still be refused. An unclaimed `viewer.profile` reads as
     // an empty cell, whose value is undefined, so the wish decides then.
-    const hasProfile = computed(() => {
-      const name = viewer.profile?.get()?.name ?? profileWish.result?.name;
-      return (name ?? "").trim() !== "";
-    });
+    const hasProfile = computed(() =>
+      (uploaderProfile?.get()?.name ?? "").trim() !== ""
+    );
 
     const boundAddFiles = addFiles({ files, profile: uploaderProfile });
 

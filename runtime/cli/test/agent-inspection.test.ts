@@ -1,6 +1,10 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import {
@@ -360,9 +364,40 @@ describe("agent-inspection", () => {
       .toThrow("Ambiguous agent run");
   });
 
-  it("lists no runs when the home queue is absent", async () => {
+  it("lists no runs when no home root is configured", async () => {
     expect(await readAgentRuns(config, deps)).toEqual([]);
   });
+
+  it("lists no runs when the home queue is ready and empty", async () => {
+    await seed();
+    const runtime = runtimes.get(HOME_HOST)!;
+    await runtime.editWithRetry((tx) => {
+      runtime.getCell(home, "home-pattern", undefined, tx).key("agentQueue")
+        .set({ entries: [] });
+    });
+    expect(await readAgentRuns(config, deps)).toEqual([]);
+  });
+
+  for (const marker of [UNAVAILABLE_PENDING, UNAVAILABLE_SYNCING]) {
+    it(`refuses a ${marker.reason} queue instead of listing no runs`, async () => {
+      await seed();
+      const runtime = runtimes.get(HOME_HOST)!;
+      await runtime.editWithRetry((tx) => {
+        runtime.getCell(home, "home-pattern", undefined, tx).key("agentQueue")
+          .set(marker);
+      });
+      const hosts: string[] = [];
+      deps.openHost = (_identity, host) => {
+        hosts.push(host);
+        return Promise.resolve(runtimes.get(host)!);
+      };
+
+      await expect(readAgentRuns(config, deps)).rejects.toThrow(
+        `Wish result is ${marker.reason}`,
+      );
+      expect(hosts).toEqual([]);
+    });
+  }
 
   it("deduplicates repeated queue entries and reuses their remote connection", async () => {
     const { completed } = await seed();

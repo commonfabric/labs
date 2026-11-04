@@ -23,6 +23,7 @@ export interface ExecuteContinuationState {
    */
   readonly settleDeferredForLoadPark: () => boolean;
 
+  readonly hasInputParkedHeadEvent: () => boolean;
   readonly scheduleWake: (at: number) => void;
   readonly hasWakeTimer: () => boolean;
   readonly setScheduled: (scheduled: boolean) => void;
@@ -119,6 +120,7 @@ export function applyPullExecuteContinuation(
   const now = performance.now();
   const hasPendingLineageHeadEvent = state.hasPendingLineageHeadEvent();
   const hasLoadWaitingHeadEvent = state.hasLoadWaitingHeadEvent();
+  const hasInputParkedHeadEvent = state.hasInputParkedHeadEvent();
   // A pass that deferred its settle to a waiting head's release waits for that
   // release, which queues the next pass; queueing one for the derivations it
   // left would run passes that defer again until the loads settle.
@@ -133,7 +135,7 @@ export function applyPullExecuteContinuation(
   const hasQueuedEventReadyNow = state.eventQueue.length > 0 &&
     !isHeadEventParked(state, now) &&
     !hasPendingLineageHeadEvent &&
-    !hasLoadWaitingHeadEvent;
+    !hasLoadWaitingHeadEvent && !hasInputParkedHeadEvent;
   const hasParkedHeadEvent = state.eventQueue.length > 0 &&
     (isHeadEventParked(state, now) || hasPendingLineageHeadEvent ||
       hasLoadWaitingHeadEvent);

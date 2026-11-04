@@ -3,6 +3,7 @@ import {
   cell,
   handler,
   pattern,
+  resultOf,
   sqliteDatabase,
   type SqliteDb,
   table,
@@ -40,7 +41,7 @@ export default pattern(() => {
   );
 
   return {
-    q,
+    q: resultOf(q),
     author,
     seed: seed({ db, author }),
   };

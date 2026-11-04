@@ -12,6 +12,11 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import {
+  hasError,
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { table } from "@commonfabric/memory/sqlite/schema";
@@ -27,9 +32,8 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 type QueryState = {
-  pending: boolean;
-  result?: Array<Record<string, unknown>>;
-  error?: unknown;
+  rows: Array<Record<string, unknown>>;
+  withheld?: number;
 };
 
 describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () => {
@@ -98,7 +102,18 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
     const rowSchema = {
       type: "object",
       properties: {
-        author_cf_link: { asCell: ["cell"], type: "object" },
+        author_cf_link: {
+          $ref: "#/$defs/User",
+          asCell: ["cell"],
+        },
+      },
+      required: ["author_cf_link"],
+      $defs: {
+        User: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+        },
       },
     } as unknown as JSONSchema;
 
@@ -127,11 +142,9 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
     const v = await waitForCellValue<QueryState>(
       runtime,
       result,
-      (s) =>
-        s?.pending === false && Array.isArray(s.result) &&
-        s.result.length === 1,
+      (s) => s !== undefined && Array.isArray(s.rows) && s.rows.length === 1,
     );
-    expect(v.error).toBeUndefined();
+    expect(v.rows).toHaveLength(1);
 
     // Read the result under the consumer's <Row> schema (asCell on the link
     // column) — exactly what the transformer lowers a typed consumer read to.
@@ -139,13 +152,13 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
       type: "object",
       additionalProperties: true,
       properties: {
-        result: { type: "array", items: rowSchema },
+        rows: { type: "array", items: rowSchema },
       },
     } as unknown as JSONSchema;
     const tree = result.asSchema(wrapSchema).get() as {
-      result?: Array<{ author_cf_link?: unknown }>;
+      rows?: Array<{ author_cf_link?: unknown }>;
     };
-    const col = tree.result?.[0]?.author_cf_link;
+    const col = tree.rows?.[0]?.author_cf_link;
     expect(isCell(col)).toBe(true);
     expect((col as { get(): unknown }).get()).toEqual({ name: "Ada" });
   });
@@ -215,23 +228,24 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
       const result = runtime.run(tx2, p, {}, resultCell);
       await tx2.commit().settled;
 
-      const v = await waitForCellValue<QueryState>(
+      const v = await waitForCellValue<QueryState | UnavailableVariant>(
         runtime,
         result,
         (s) =>
-          s?.pending === false && Array.isArray(s.result) &&
-          s.result.length === 2,
+          s !== undefined && (hasError(s) ||
+            (!isUnavailable(s) && Array.isArray(s.rows) &&
+              s.rows.length === 2)),
       );
-      expect(v.error).toBeUndefined();
+      expect(isUnavailable(v)).toBe(false);
 
       const tree = result.asSchema({
         type: "object",
         additionalProperties: true,
-        properties: { result: { type: "array", items: rowSchema } },
+        properties: { rows: { type: "array", items: rowSchema } },
       } as unknown as JSONSchema).get() as {
-        result?: Array<{ author?: unknown }>;
+        rows?: Array<{ author?: unknown }>;
       };
-      const [linked, unlinked] = tree.result ?? [];
+      const [linked, unlinked] = tree.rows ?? [];
       expect(isCell(linked?.author)).toBe(true);
       expect((linked?.author as { get(): unknown }).get()).toEqual({
         name: "Ada",
@@ -239,4 +253,50 @@ describe("sqliteQuery rowSchema-driven _cf_link decode (Piece A runtime)", () =>
       expect(unlinked?.author).toBeNull();
     });
   }
+
+  it("rejects a null link column whose schema requires a Cell", async () => {
+    const db: SqliteDbRef = {
+      id: `of:rowdec-${crypto.randomUUID()}`,
+      tables: {
+        people: table({ id: "integer primary key", author_cf_link: "text" }),
+      },
+    };
+    await seedSqlite(
+      db,
+      "INSERT INTO people (author_cf_link) VALUES (NULL)",
+    );
+    await tx.commit().settled;
+
+    const tx2 = runtime.edit();
+    const p = cf.pattern(() =>
+      cf.sqliteQuery({
+        db,
+        sql: "SELECT author_cf_link AS author FROM people ORDER BY id",
+        reactOn: db,
+        rowSchema: {
+          type: "object",
+          properties: { author: { type: "object", asCell: ["cell"] } },
+        },
+        // deno-lint-ignore no-explicit-any
+      } as any)
+    );
+    const resultCell = runtime.getCell(
+      space,
+      "rowdec-required-result",
+      p.resultSchema,
+      tx2,
+    );
+    const result = runtime.run(tx2, p, {}, resultCell);
+    await tx2.commit().settled;
+
+    const value = await waitForCellValue<QueryState | UnavailableVariant>(
+      runtime,
+      result,
+      (s) =>
+        s !== undefined && (hasError(s) ||
+          (!isUnavailable(s) && Array.isArray(s.rows))),
+    );
+    expect(hasError(value)).toBe(true);
+    expect(hasError(value) && value.errorKind).toBe("schemaMismatch");
+  });
 });

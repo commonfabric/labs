@@ -1,0 +1,38 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "prompt": {
+        "default": "Create a simple counter",
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt"
+    ],
+    "type": "object"
+  },
+  "pattern": "examples/write-and-run/write-and-run.tsx",
+  "resultSchema": {
+    "description": "The generation prompt, presentation, and current stage's error message.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "error": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

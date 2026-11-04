@@ -1,4 +1,4 @@
-import { Default, computed, lift, pattern, wish } from "commonfabric";
+import { Default, computed, lift, pattern, resultOf, wish } from "commonfabric";
 
 const passthrough = lift((items: string[]) => items);
 
@@ -8,7 +8,8 @@ const passthrough = lift((items: string[]) => items);
 // lowering sites
 //   const foo = computed(() => inner); foo.map(fn)        -> foo.mapWithPattern(...)
 //   const foo = passthrough(inner); foo.map(fn)           -> foo.mapWithPattern(...)
-//   const foo = wish<Default<T[], []>>(...).result!; map  -> foo.mapWithPattern(...)
+//   const foo = resultOf(wish<Default<T[], []>>(...).result); map
+//                                                   -> foo.mapWithPattern(...)
 //   const filtered = foo.filter(fn); filtered.map(fn)     -> filterWithPattern(...).mapWithPattern(...)
 //   const filtered = foo.filter(fn); filtered.map(item => item.toUpperCase())
 //                                                   -> receiver-method body still lowers to a lift-applied computation
@@ -27,8 +28,10 @@ export default pattern<{ items: string[] }>((state) => {
     return foo.map((item) => item + "!");
   });
 
+  const wishedState = wish<Default<string[], []>>({ query: "#items" });
+  const wishedItems = resultOf(wishedState.result);
   const fromWish = computed(() => {
-    const foo = wish<Default<string[], []>>({ query: "#items" }).result!;
+    const foo = wishedItems;
     return foo.map((item) => item + "!");
   });
 

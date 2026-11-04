@@ -20,6 +20,7 @@ import {
   ifElse,
   NAME,
   pattern,
+  resultOf,
   UI,
   type VNode,
   wish,
@@ -149,19 +150,21 @@ export const Annotation = pattern<AnnotationInput, AnnotationOutput>(
     const showBlockerPicker = new Writable<boolean>(false);
 
     // Discover all mentionable pieces for target picker
-    const mentionable = wish<MentionablePiece[]>({
+    const mentionableWish = wish<MentionablePiece[]>({
       query: "#mentionable",
-    }).result;
+    });
+    const mentionable = resultOf(mentionableWish.result);
 
     // Discover other annotations for blocked-by picker
-    const allAnnotations = wish<AnnotationPiece[]>({
+    const annotationsWish = wish<AnnotationPiece[]>({
       query: "#annotation",
-    }).result;
+    });
+    const allAnnotations = resultOf(annotationsWish.result);
 
     // Filtered mentionable list for target picker
     const filteredMentionable = computed(() => {
       const query = targetSearch.get().toLowerCase();
-      const items = (mentionable ?? []).filter(
+      const items = mentionable.filter(
         (p) => !!p,
       ) as MentionablePiece[];
       if (!query) return items.slice(0, 10);
@@ -177,7 +180,7 @@ export const Annotation = pattern<AnnotationInput, AnnotationOutput>(
     const filteredAnnotations = computed(() => {
       const query = blockerSearch.get().toLowerCase();
       const current = blockedBy.get() ?? [];
-      const items = (allAnnotations ?? [])
+      const items = allAnnotations
         .filter((a) => !!a)
         .filter((a) => !current.some((b) => b === a)) as AnnotationPiece[];
       if (!query) return items.slice(0, 10);

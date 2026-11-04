@@ -25,6 +25,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
+import { generateObjectState } from "../src/builder/built-in.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -59,9 +60,7 @@ describe("conversation fixtures", () => {
     typeof createBuilder
   >["commonfabric"]["patternTool"];
   let pattern: ReturnType<typeof createBuilder>["commonfabric"]["pattern"];
-  let generateObject: ReturnType<
-    typeof createBuilder
-  >["commonfabric"]["generateObject"];
+  let generateObject: typeof generateObjectState;
   let llmDialog: ReturnType<typeof createBuilder>["commonfabric"]["llmDialog"];
 
   beforeEach(() => {
@@ -74,7 +73,13 @@ describe("conversation fixtures", () => {
     tx = runtime.edit();
 
     const { commonfabric } = createTrustedBuilder(runtime);
-    ({ pattern, generateObject, llmDialog, Cell, patternTool } = commonfabric);
+    ({
+      pattern,
+      llmDialog,
+      Cell,
+      patternTool,
+    } = commonfabric);
+    generateObject = generateObjectState;
   });
 
   afterEach(async () => {
