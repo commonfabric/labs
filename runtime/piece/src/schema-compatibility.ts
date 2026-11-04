@@ -266,12 +266,17 @@ const SUBSCHEMA_LIST_KEYS: ReadonlySet<string> = new Set<string>(
   ARRAY_SUBSCHEMA_KEYS,
 );
 
+/** The keywords that hold a table of schemas only a `$ref` reaches. */
+const REFERENCE_TABLE_KEYS: ReadonlySet<string> = new Set<string>([
+  ...DEFS_KEYS,
+  "definitions",
+]);
+
 /** The keywords whose value is a record of nested schemas. */
 const SUBSCHEMA_MAP_KEYS: ReadonlySet<string> = new Set<string>([
   ...RECORD_SUBSCHEMA_KEYS,
   ...UNUSED_RECORD_SUBSCHEMA_KEYS,
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
 ]);
 
 /** Whether a keyword leads to a nested schema, in any of the three shapes. */
@@ -1300,20 +1305,91 @@ function objectSubsetIssues(
     ? source.patternProperties
     : target.patternProperties;
 
-  // A result's named fields are the contract consumers read, so evolution
-  // preserves every one of them even when the candidate object is otherwise
-  // open. An argument's are not: dropping one gives up a demand, which leaves a
-  // writer's value unread rather than breaking a reader. What the stored
-  // argument still needs — that the candidate can hold the value the piece
-  // already carries — the named-property proof below decides per field,
-  // accepting it under an open candidate and reporting it under a closed one. A
-  // durable-link subset proof reaches that same proof from the other side: a
-  // source may name additional fields that an open target accepts through
-  // patternProperties/additionalProperties, and treating those as "removed"
-  // rejects valid Fabric projections such as $FS.
+  // A result's required fields are a guarantee its readers were given, so
+  // evolution keeps every one of them. An optional field promised nothing of
+  // the kind: every reader of it already handles its absence, and a durable
+  // link to it was proved with that absence admitted, so the candidate may
+  // stop publishing it. Its old value is then outside the proof altogether,
+  // which is why a later update can name the field again with any shape the
+  // object's `patternProperties` and `additionalProperties` then admit — an
+  // open object admits any, a closed one none.
+  //
+  // Four things narrow that allowance. It is evolution policy, so it holds
+  // only at a whole contract boundary: inside a conjunct proof, a field one
+  // fragment does not name may be one another fragment does, and a
+  // whole-object constraint such as `dependentRequired` can name it too.
+  // A candidate that still constrains the name, through a matching pattern
+  // or a typed index signature, still publishes a value there, which must
+  // hold to every contract the previous object gave the name. A verb is
+  // refused even when optional, and so is a field holding one at any depth,
+  // because a verb's absence is not something a holder can read: a stream
+  // handle reads as itself when nothing is stored, so a holder still bound to
+  // it keeps sending, and each event is dropped for want of a handler. And a
+  // verb's event refuses it outright: a caller still sends a field the event
+  // stops declaring, and an event strips undeclared fields before any handler
+  // runs, so the caller's value would be dropped without a refusal.
+  //
+  // An argument's named fields are not held either way: dropping one gives up
+  // a demand, which leaves a writer's value unread rather than breaking a
+  // reader. What the stored argument still needs — that the candidate can hold
+  // the value the piece already carries — the named-property proof below
+  // decides per field, accepting it under an open candidate and reporting it
+  // under a closed one. A durable-link subset proof reaches that same proof
+  // from the other side: a source may name additional fields that an open
+  // target accepts through patternProperties/additionalProperties, and treating
+  // those as "removed" rejects valid Fabric projections such as $FS.
+  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
+    !hasComplexSameInstanceConstraints(source) &&
+    !hasComplexSameInstanceConstraints(target);
+  const removed = new Set<string>();
   if (context.defaultComparison === "evolution" && context.role === "result") {
+    const previousRequired = new Set(target.required ?? []);
     for (const property of Object.keys(previousProperties)) {
       if (Object.hasOwn(candidateProperties, property)) continue;
+      if (
+        allowEvolutionPolicy && !context.verbEvent &&
+        !previousRequired.has(property) &&
+        !publishesVerb(targetProperties[property], context.targetRoot)
+      ) {
+        removed.add(property);
+        const candidatePatterns = matchingPatternPropertySchemas(
+          source.patternProperties,
+          property,
+        );
+        const published = (candidatePatterns.length > 0
+          ? candidatePatterns
+          : [additionalPropertiesOf(source)]).filter((contract) =>
+            typeof contract !== "boolean"
+          );
+        const previousContracts = [
+          targetProperties[property],
+          ...matchingPatternPropertySchemas(target.patternProperties, property),
+        ];
+        for (const candidateContract of published) {
+          for (const previousContract of previousContracts) {
+            if (
+              report(
+                property,
+                schemaSubsetIssues(
+                  candidateContract,
+                  previousContract,
+                  `${path}.${property}`,
+                  { ...context, allowEvolutionPolicy: false },
+                ),
+              )
+            ) {
+              return issues;
+            }
+            if (failed.has(property)) {
+              break;
+            }
+          }
+          if (failed.has(property)) {
+            break;
+          }
+        }
+        continue;
+      }
       if (
         report(property, [
           issueAt(`${path}.${property}`, `existing result field was removed`),
@@ -1324,9 +1400,6 @@ function objectSubsetIssues(
 
   const sourceRequired = new Set(source.required ?? []);
   const targetRequired = new Set(target.required ?? []);
-  const allowEvolutionPolicy = context.allowEvolutionPolicy &&
-    !hasComplexSameInstanceConstraints(source) &&
-    !hasComplexSameInstanceConstraints(target);
   const allowEvolutionDefaults = allowEvolutionPolicy &&
     context.allowEvolutionDefaults;
   if (context.role === "argument") {
@@ -1518,7 +1591,7 @@ function objectSubsetIssues(
   }
 
   for (const property of Object.keys(previousProperties)) {
-    if (failed.has(property)) continue;
+    if (failed.has(property) || removed.has(property)) continue;
     const propertyPath = `${path}.${property}`;
     const sourceDirect = sourceProperties[property];
     const sourceContracts = [
@@ -1715,6 +1788,34 @@ function matchingPatternPropertySchemas(
     if (pattern.test(property)) matches.push(schema);
   }
   return matches;
+}
+
+/**
+ * Whether `schema`, a field's contract under `root`, publishes a verb anywhere
+ * in what it holds: a stream marker on its own node, on a node nested below it,
+ * or on what a reference along the way names. A field that only holds a verb,
+ * as `ui` holds `ui.tick`, takes that verb with it when it goes.
+ *
+ * Reference tables are not searched as such, since a definition no reference
+ * reaches publishes nothing; each reference is followed instead, once.
+ */
+function publishesVerb(schema: JSONSchema, root: JSONSchema): boolean {
+  const seen = new Set<object>();
+  const visit = (node: unknown, nodeRoot: JSONSchema): boolean => {
+    if (!isObjectNotArray(node) || seen.has(node)) return false;
+    seen.add(node);
+    if (declaresVerbStream(node as JSONSchema)) return true;
+    if (typeof (node as SchemaObject).$ref === "string") {
+      const resolved = resolveSchema(node as JSONSchema, nodeRoot);
+      if (
+        resolved.schema !== undefined && visit(resolved.schema, resolved.root)
+      ) return true;
+    }
+    return subschemaChildren(node, REFERENCE_TABLE_KEYS).some((child) =>
+      visit(child, nodeRoot)
+    );
+  };
+  return visit(schema, root);
 }
 
 function declaresVerbStream(schema: JSONSchema): boolean {
@@ -2556,8 +2657,7 @@ export const DEFAULT_INERT_SUBSCHEMA_KEYS: ReadonlySet<string> = new Set([
   // Hold definitions nothing reads directly. A definition a value takes is
   // reached through the `$ref` that names it, and `resolveSchema` follows every
   // `$ref` this walk passes.
-  ...DEFS_KEYS,
-  "definitions",
+  ...REFERENCE_TABLE_KEYS,
   // Apply to the value once their condition holds.
   "if",
   "then",
