@@ -332,17 +332,18 @@ the space is refused as before rather than admitting it as a new entry. A view
 lists a deleted entry under `deleted`, apart from saved and archived ones, with
 no membership control.
 
-Consumers call `markDeleted` when they come upon a deleted space, and nothing
-sweeps the catalog for them. Every runtime that holds a person's catalog and
-hears of a refusal marked `deleted` sends it, when the catalog holds the space
-as saved or archived, at the revision its view shows: the shell on a
-`spaceaccesslost` marked `deleted`, and a runtime that holds the catalog
-outside the shell, such as a native client's, on the same refusal. A catalog
-only the shell kept up would never record a deletion for a person who uses
-another client. A pattern that lists catalog entries sends it for an entry
-whose `spaceDeleted(space)` reads `true`. Two senders often race to record the
-same deletion, and the one that loses gets `conflict` with the reason
-`revision`, the winner having advanced the entry. That conflict is expected: it
+The runtime that holds a person's catalog records a deletion with
+`markDeleted` when it comes upon a deleted space, and nothing sweeps the catalog
+for it. Every runtime that holds the catalog and hears of a refusal marked
+`deleted` sends it, when the catalog holds the space as saved or archived, at
+the revision its view shows: the shell on a `spaceaccesslost` marked `deleted`,
+and a runtime that holds the catalog outside the shell, such as a native
+client's, on the same refusal. A catalog only the shell kept up would never
+record a deletion for a person who uses another client. A pattern that lists
+catalog entries reads `spaceDeleted(space)` to show a space as deleted, and
+records nothing. Two runtimes, or two of one person's tabs, often race to
+record the same deletion, and the one that loses gets `conflict` with the
+reason `revision`, the winner having advanced the entry. That conflict is expected: it
 means the deletion is already recorded, and its sender surfaces nothing. As with
 the other commands, the whole of what the handler does is
 `markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler
