@@ -2874,6 +2874,7 @@ export default pattern<
       // `deleted` revocation. The second event links to a document of that
       // space the runtime has not loaded, so its run loads it after the
       // revocation.
+
       const revoked = Promise.withResolvers<void>();
       onServingRuntime = (runtime) => {
         runtime.storageManager.subscribeSpaceAccessLoss?.((space) => {
@@ -2910,6 +2911,7 @@ export default pattern<
     it("runs the handler, which reads the document as absent and the space as deleted, when the memory server refuses the serving runtime's open of the space", async () => {
       // The space is deleted before the serving runtime reads anything there,
       // so its open is refused with the deleted space's permanent refusal.
+
       const { result, entries, stored, second } =
         await standUpDeletedSpaceEvents("deleted-space-refused");
       await deleteForeignSpace();
