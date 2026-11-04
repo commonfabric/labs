@@ -1,8 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  ChangeSet,
   Compartment,
   EditorState,
+  StateEffect,
   Transaction,
   type TransactionSpec,
 } from "@codemirror/state";
@@ -19,7 +21,12 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { CFCodeEditor } from "./cf-code-editor.ts";
-import { RESTATE_AFTER_VERSIONS } from "./features/highlights.ts";
+import {
+  highlightField,
+  highlightRanges,
+  RESTATE_AFTER_VERSIONS,
+  setHighlightRangesEffect,
+} from "./features/highlights.ts";
 import { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
 import { codeMirrorPresenceState } from "./codemirror-presence.ts";
 import { backlinkField } from "./features/backlinks.ts";
@@ -185,6 +192,86 @@ const synchronizedField = {
 } as const;
 
 describe("CFCodeEditor collaboration", () => {
+  it("restates highlight ranges only when the anchors or their version change", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    // Counts the dispatches that restate the ranges.
+    let dispatches = 0;
+    const dispatch = view.dispatch.bind(view);
+    view.dispatch = (spec: never) => {
+      const effects = (spec as { effects?: unknown }).effects;
+      if (
+        effects instanceof StateEffect && effects.is(setHighlightRangesEffect)
+      ) {
+        dispatches++;
+      }
+      dispatch(spec);
+    };
+    (element as any)._editorView = view;
+    (element as any).emit = () => {};
+    const anchors = [{ id: "a", from: 0, to: 2 }];
+    const snapshot = (version: number, list = anchors, pending = []) => ({
+      confirmedCursor: { epoch: 1, version },
+      pendingChanges: pending,
+      field: synchronizedField,
+      anchors: list,
+    });
+
+    (element as any)._handleCollaborationSynchronization(snapshot(4));
+    expect(highlightRanges(view.state)).toEqual([{ id: "a", from: 0, to: 2 }]);
+    expect(dispatches).toBe(1);
+
+    // The same anchors at the same version: nothing to restate.
+    (element as any)._handleCollaborationSynchronization(snapshot(4));
+    expect(dispatches).toBe(1);
+
+    // Pending edits that do not end at the editor's text: the ranges stay.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(5, [{ id: "a", from: 1, to: 2 }], [
+        ChangeSet.of({ from: 0, insert: "XYZ" }, 9).desc,
+      ] as never),
+    );
+    expect(highlightRanges(view.state)).toEqual([{ id: "a", from: 0, to: 2 }]);
+    expect(dispatches).toBe(1);
+
+    // A newer version restates them.
+    (element as any)._handleCollaborationSynchronization(
+      snapshot(6, [{ id: "a", from: 1, to: 3 }]),
+    );
+    expect(highlightRanges(view.state)).toEqual([{ id: "a", from: 1, to: 3 }]);
+    expect(dispatches).toBe(2);
+  });
+
+  it("reports no selection and draws nothing before the editor has a view", () => {
+    const events: unknown[] = [];
+    const element = new CFCodeEditor();
+    (element as any).emit = (_name: string, detail: unknown) =>
+      events.push(detail);
+
+    (element as any)._reportSelection();
+    (element as any)._handleCollaborationSynchronization({
+      confirmedCursor: { epoch: 1, version: 1 },
+      pendingChanges: [],
+      field: synchronizedField,
+      anchors: [{ id: "a", from: 0, to: 1 }],
+    });
+
+    expect(events).toEqual([]);
+  });
+
+  it("hands a changed highlights property to the editor", () => {
+    const element = new CFCodeEditor();
+    const view = statefulView([highlightField]);
+    (element as any)._editorView = view;
+    element.highlights = [{ id: "a", kind: "active" }];
+
+    (element as any).updated(new Map([["highlights", []]]));
+
+    expect(view.state.field(highlightField).highlights).toEqual([
+      { id: "a", kind: "active" },
+    ]);
+  });
+
   it("reports a held selection again only once its base falls far behind", () => {
     const events: unknown[] = [];
     const element = new CFCodeEditor();

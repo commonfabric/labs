@@ -4,6 +4,7 @@ import { type ChangeDesc, ChangeSet, EditorState } from "@codemirror/state";
 import type { CodeMirrorSynchronizationSnapshot } from "../codemirror-collaboration.ts";
 import {
   type EditorHighlight,
+  highlightAt,
   highlightField,
   type HighlightRange,
   highlightRanges,
@@ -102,8 +103,39 @@ describe("highlights", () => {
       expect(marks(next).map(({ from, to }) => [from, to])).toEqual([[1, 6]]);
     });
 
+    it("keeps its value for a transaction that changes nothing it holds", () => {
+      const state = stateWith("hello", [{ id: "a", from: 0, to: 5 }], [{
+        id: "a",
+      }]);
+
+      const next = state.update({ selection: { anchor: 2 } }).state;
+
+      expect(next.field(highlightField)).toBe(state.field(highlightField));
+    });
+
     it("returns no ranges from a state without the field", () => {
       expect(highlightRanges(EditorState.create({ doc: "x" }))).toEqual([]);
+    });
+  });
+
+  describe("highlightAt", () => {
+    const nested = stateWith("hello world", [
+      { id: "outer", from: 0, to: 11 },
+      { id: "inner", from: 6, to: 11 },
+      { id: "hidden", from: 0, to: 2 },
+    ], [{ id: "outer" }, { id: "inner" }]);
+
+    it("returns the innermost drawn highlight over a position", () => {
+      expect(highlightAt(nested, 7)).toBe("inner");
+      expect(highlightAt(nested, 3)).toBe("outer");
+      // "hidden" holds a range there but is not drawn.
+      expect(highlightAt(nested, 1)).toBe("outer");
+    });
+
+    it("returns undefined where no highlight is drawn", () => {
+      expect(highlightAt(nested, 11)).toBeUndefined();
+      expect(highlightAt(EditorState.create({ doc: "x" }), 0))
+        .toBeUndefined();
     });
   });
 
