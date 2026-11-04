@@ -8158,7 +8158,12 @@ export class SpaceReplica
     // a released root untracked asks for its watch after the removal.
     const released: RootWatches[] = [];
     for (const root of this.#rootWatches.values()) {
-      if (!releasable(root)) continue;
+      if (!releasable(root)) {
+        // A root read while the pass waited above is kept for the next pass,
+        // as one read before it began is.
+        if (!this.#holds(root.address, root.key)) deferred = true;
+        continue;
+      }
       released.push(root);
       this.#rootWatches.delete(root.key);
       const baseAddress = {

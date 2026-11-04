@@ -180,6 +180,49 @@ describe("document-release", () => {
     expect(loaded(id)).toBe(false);
   });
 
+  it("reports a document read while the pass waits to watch another on its own", async () => {
+    // A pass that releases a root first watches, on its own, a document
+    // something still reads only through that root's links. The counter is
+    // read while that watch is on its way, so the pass keeps it, and says
+    // so.
+
+    await write("child", 1);
+    const tx = writer.edit();
+    writer.getCell(space, "parent", parentSchema, tx).set({
+      child: writer.getCell(space, "child", counterSchema, tx),
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await write("counter", 1);
+    const child = idOf("child");
+    const parent = idOf("parent");
+    const id = idOf("counter");
+    await load(parent, parentSchema);
+    await load(id);
+    const reading = readerStorage.addDocumentReader((address) =>
+      address.id === child
+    );
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+
+    const watch = defer<void>();
+    const watching = defer<void>();
+    const watchAdd = server.watchAdd.bind(server);
+    server.watchAdd = async (message) => {
+      server.watchAdd = watchAdd;
+      watching.resolve();
+      await watch.promise;
+      return await watchAdd(message);
+    };
+    const pass = readerStorage.releaseUnreadDocuments();
+    await watching.promise;
+    expect(held(id)).toEqual({ value: { n: 1 } });
+    watch.resolve();
+
+    expect(await pass).toBe(true);
+    expect(held(parent)).toBeUndefined();
+    expect(loaded(id)).toBe(true);
+    reading();
+  });
+
   it("releases what a stopped piece read in the pass after the one its stop asked for", async () => {
     // The stop's own pass keeps what was loaded since the previous pass, as
     // it keeps anything a read still under way may need; the pass that
