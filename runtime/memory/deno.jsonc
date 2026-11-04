@@ -38,6 +38,7 @@
     "./v2/server": "./v2/server.ts",
     "./v2/server-execution-default": "./v2/server-execution-default.ts",
     "./v2/standalone": "./v2/standalone.ts",
+    "./v2/websocket-upgrade": "./v2/websocket-upgrade.ts",
     "./v2/connection-auth": "./v2/connection-auth.ts",
     "./v2/routed-limits": "./v2/routed-limits.ts",
     "./v2/routed-wire": "./v2/routed-wire.ts",
