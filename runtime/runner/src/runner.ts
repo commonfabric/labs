@@ -6058,6 +6058,12 @@ export class Runner {
     let instantiatedPatternKey: string | undefined;
     // The swap requested last; only it may step the watcher back.
     let latestSwap: object | undefined;
+    // The pointer the store held, apart from this start's transaction, when
+    // the start read it, where that differs from the pattern the start
+    // instantiates: the previous pattern's, until the start's own write of
+    // its pointer lands. The watcher reading it is the pointer lagging this
+    // start, not a move, so it passes over it until the pointer moves on.
+    let laggingPointerKey: string | undefined;
     // The identity of the pattern whose nodes are LIVE right now — which can
     // differ from `currentPatternKey` (the pointer value last observed): a
     // parent-driven start instantiates its given pattern while the durable
@@ -7109,6 +7115,11 @@ export class Runner {
           const newRef = asPatternIdentityRef(newValue);
           if (!newRef) return;
           const newKey = patternIdentityKey(newRef);
+          // The pointer this start found stored has not moved yet: it lags
+          // the start, and names no pattern to swap to. Once it moves, a
+          // later return to that value is a move like any other.
+          if (newKey === laggingPointerKey) return;
+          laggingPointerKey = undefined;
           if (newKey === currentPatternKey) return; // No change
           currentPatternKey = newKey;
 
@@ -7275,11 +7286,26 @@ export class Runner {
     // the session-side entry (the never-durable contract).
     const initialRef = getPatternIdentityRef(resultCellForRead) ??
       this.#sessionPatternPointer(resultCellForRead);
+    // The durable pointer as the store holds it apart from `tx`, which the
+    // watcher sees until whatever this start writes to it lands.
+    const storedPointerKey = (() => {
+      const read = this.#runtime.readTx();
+      try {
+        const stored = getPatternIdentityRef(resultCell.withTx(read));
+        return stored === undefined ? undefined : patternIdentityKey(stored);
+      } finally {
+        read.clearReadOnly?.();
+        read.abort("stored pattern pointer read complete");
+      }
+    })();
 
     // Determine initial pattern
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
       instantiatedPatternKey = currentPatternKey;
+      if (storedPointerKey !== currentPatternKey) {
+        laggingPointerKey = storedPointerKey;
+      }
       try {
         instantiateInitialPattern(givenPattern, initialRef, tx);
         // Real artifact refs only: setup mints and INDEXES a `keyless:`
@@ -7359,6 +7385,9 @@ export class Runner {
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
     instantiatedPatternKey = currentPatternKey;
+    if (storedPointerKey !== currentPatternKey) {
+      laggingPointerKey = storedPointerKey;
+    }
     const initialPattern = this.#resolveToPattern(initialResolved);
     instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
