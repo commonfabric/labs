@@ -186,6 +186,17 @@ class GatedLoopbackManager extends StorageManager {
   }
 }
 
+/** A storage manager whose session factory the test supplies. */
+class SessionFactoryStorageManager extends StorageManager {
+  /** Creates a manager with the supplied session lifecycle. */
+  static create(
+    options: Options,
+    factory: SessionFactory,
+  ): SessionFactoryStorageManager {
+    return new SessionFactoryStorageManager(options, factory);
+  }
+}
+
 describe("the session remount (profile-starvation fifth face)", () => {
   let server: MemoryV2Server.Server;
   let cleanups: Array<() => Promise<void>>;
@@ -543,6 +554,166 @@ describe("the session remount (profile-starvation fifth face)", () => {
         .error,
       "the remount re-bound the new owner",
     ).toBeUndefined();
+  });
+
+  for (const noticeFirst of [true, false]) {
+    it(`restores an absent document's standing watch when the ACL notice arrives ${noticeFirst ? "before" : "after"} session termination`, async () => {
+      const revocations = new ArrivalLog<void>();
+      const serving = LoopbackStorageManager.connect(server, {
+        as: serviceSigner,
+        servingHomeSpace: servingSpace,
+      }, (frame) => {
+        if (frame.includes('"session/revoked"')) revocations.record();
+      });
+      cleanups.push(() => serving.close());
+      const writer = clientRuntime(homeSigner);
+      const cell = writer.getCell<string>(homeSpace, "late profile", undefined);
+      const docId = cell.getAsNormalizedFullLink().id as URI;
+      expect((await probeRead(serving, homeSpace, docId)).error)
+        .toBeUndefined();
+      expect(materialized(serving, homeSpace, docId)).toBeUndefined();
+
+      if (noticeFirst) serving.noteSpaceAclChanged(homeSpace);
+      await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+      await revocations.reached(1);
+      await seedDoc(homeSigner, homeSpace, "late profile", "selected");
+      if (!noticeFirst) serving.noteSpaceAclChanged(homeSpace);
+
+      // A standing watch supplies the new value without another pull.
+      await serving.inputSynced();
+      expect(materialized(serving, homeSpace, docId)).toBe("selected");
+      const opens = servingOpens();
+      await writeDoc(homeSigner, homeSpace, "late profile", "renamed");
+      await serving.inputSynced();
+      expect(materialized(serving, homeSpace, docId)).toBe("renamed");
+      expect(servingOpens()).toBe(opens);
+    });
+  }
+
+  it("restores a space watch even when another retained watch names a refused actor's instance", async () => {
+    await setAcl(homeSigner, homeSpace, { [homeSigner.did()]: "OWNER" });
+    const id = await seedDoc(homeSigner, homeSpace, "mixed standing", "v1");
+    const revocations = new ArrivalLog<void>();
+    const serving = LoopbackStorageManager.connect(server, {
+      as: serviceSigner,
+      servingHomeSpace: servingSpace,
+      foreignScopedReadGrant: (space, principal) =>
+        server.foreignReadAuthorityFor(space, principal),
+    }, (frame) => {
+      if (frame.includes('"session/revoked"')) revocations.record();
+    });
+    cleanups.push(() => serving.close());
+    const address = { space: homeSpace, id, scope: "user" as const };
+    const identity = { principal: homeSigner.did() };
+    await serving.syncInstance(address, identity);
+    expect(serving.scopedReadStanding(address, identity)).toBe("admitted");
+    expect((await probeRead(serving, homeSpace, id)).error).toBeUndefined();
+
+    await setAcl(homeSigner, homeSpace, {
+      [strangerSigner.did()]: "OWNER",
+      [homeSigner.did()]: "READ",
+    });
+    await revocations.reached(1);
+    await revokeAcl(strangerSigner, homeSpace, homeSigner.did());
+    await writeDoc(strangerSigner, homeSpace, "mixed standing", "v2");
+    serving.noteSpaceAclChanged(homeSpace);
+    await serving.inputSynced();
+    expect(serving.scopedReadStanding(address, identity)).toBe("refused");
+    expect(materialized(serving, homeSpace, id)).toBe("v2");
+  });
+
+  it("keeps a refused standing watch for a later ACL grant without retrying the refusal on its own", async () => {
+    const revocations = new ArrivalLog<void>();
+    const stranger = LoopbackStorageManager.connect(server, {
+      as: strangerSigner,
+    }, (frame) => {
+      if (frame.includes('"session/revoked"')) revocations.record();
+    });
+    cleanups.push(() => stranger.close());
+    await setAcl(homeSigner, homeSpace, {
+      [homeSigner.did()]: "OWNER",
+      [strangerSigner.did()]: "READ",
+    });
+    const id = await seedDoc(homeSigner, homeSpace, "standing grant", "v1");
+    expect((await probeRead(stranger, homeSpace, id)).error).toBeUndefined();
+    await revokeAcl(homeSigner, homeSpace, strangerSigner.did());
+    await revocations.reached(1);
+    await writeDoc(homeSigner, homeSpace, "standing grant", "v2");
+    stranger.noteSpaceAclChanged(homeSpace);
+    await stranger.inputSynced();
+    expect(stranger.authorizationError(homeSpace)?.name)
+      .toBe("AuthorizationError");
+    expect(materialized(stranger, homeSpace, id)).not.toBe("v2");
+    const opens = sessionOpens.count((iss) => iss === strangerSigner.did());
+    await stranger.inputSynced();
+    expect(sessionOpens.count((iss) => iss === strangerSigner.did()))
+      .toBe(opens);
+
+    await setAcl(homeSigner, homeSpace, { [strangerSigner.did()]: "READ" });
+    stranger.noteSpaceAclChanged(homeSpace);
+    await stranger.inputSynced();
+    expect(stranger.authorizationError(homeSpace)).toBeUndefined();
+    expect(materialized(stranger, homeSpace, id)).toBe("v2");
+  });
+
+  it("restores a standing watch when an ACL grant arrives before an earlier reopen refusal is delivered", async () => {
+    // The server decides the refusal before the grant, but the session
+    // factory delivers it afterward. Neither observer performs another pull.
+
+    const revocations = new ArrivalLog<void>();
+    const denials = new ArrivalLog<void>();
+    const releaseDenial = Promise.withResolvers<void>();
+    const factory: SessionFactory = {
+      supportsAclBootstrap: true,
+      async create(space, signer, mountOptions = {}) {
+        if (signer === undefined) throw new Error("A session needs a signer.");
+        const client = await MemoryV2Client.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: MemoryV2Client.loopback(server),
+        });
+        try {
+          const session = await client.mount(
+            space,
+            mountOptions,
+            (_targetSpace, descriptor, context) =>
+              createSignedSessionOpenAuth(signer, space, descriptor, context),
+          );
+          session.subscribeTermination(() => revocations.record());
+          return { client, session };
+        } catch (error) {
+          denials.record();
+          await releaseDenial.promise;
+          await client.close();
+          throw error;
+        }
+      },
+    };
+    const stranger = SessionFactoryStorageManager.create({
+      as: strangerSigner,
+      memoryHost: new URL("memory://loopback"),
+    }, factory);
+    cleanups.push(async () => {
+      releaseDenial.resolve();
+      await stranger.close();
+    });
+    await setAcl(homeSigner, homeSpace, {
+      [homeSigner.did()]: "OWNER",
+      [strangerSigner.did()]: "READ",
+    });
+    const id = await seedDoc(homeSigner, homeSpace, "pending standing", "v1");
+    expect((await probeRead(stranger, homeSpace, id)).error).toBeUndefined();
+    await revokeAcl(homeSigner, homeSpace, strangerSigner.did());
+    await revocations.reached(1);
+    await writeDoc(homeSigner, homeSpace, "pending standing", "v2");
+    stranger.noteSpaceAclChanged(homeSpace);
+    await denials.reached(1);
+
+    await setAcl(homeSigner, homeSpace, { [strangerSigner.did()]: "READ" });
+    stranger.noteSpaceAclChanged(homeSpace);
+    releaseDenial.resolve();
+    await stranger.inputSynced();
+    expect(materialized(stranger, homeSpace, id)).toBe("v2");
+    expect(stranger.authorizationError(homeSpace)).toBeUndefined();
   });
 
   it("a doc watched on the DEAD session is refetched after the remount, not answered stale from the watch tracker", async () => {
