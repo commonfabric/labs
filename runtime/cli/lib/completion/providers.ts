@@ -1192,6 +1192,7 @@ const ARGUMENT_PROVIDERS: Readonly<
 > = {
   "agent show:run": agentRunCandidates,
   "agent cancel:run": agentRunCandidates,
+  "agent remove:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,
   "piece call:callable": callableCandidates,

@@ -20,19 +20,35 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
 import { createBuilder } from "../src/builder/factory.ts";
-import { agentQueueIndexCell } from "../src/builtins/agent.ts";
+import {
+  agentQueueIndexCell,
+  removeRecordFromQueue,
+} from "../src/builtins/agent.ts";
 import { renderCellReference } from "../src/cell-reference.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
 import type { Cell } from "../src/cell.ts";
-import { isCellLink } from "../src/link-utils.ts";
+import {
+  createSigilLinkFromParsedLink,
+  isCellLink,
+} from "../src/link-utils.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { seedHomeAgentQueue } from "./support/agent-queue.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+import {
+  listInHomeAgentQueue,
+  seedHomeAgentQueue,
+} from "./support/agent-queue.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("agent builtin");
 const space = signer.did();
+const otherSpace = (await Identity.fromPassphrase("agent builtin other space"))
+  .did();
 
 const RESULT_SCHEMA = {
   type: "object",
@@ -130,6 +146,30 @@ describe("agent builtin", () => {
     );
     await runtime.settled();
     return result.key("run").resolveAsCell();
+  };
+
+  // `editWithRetry` reports a commit it could not land as `{ error }`. The
+  // effect makes its writes in a fixed order — the record, then the index
+  // entry — so rejecting the nth call rejects that write and no other.
+
+  /**
+   * Rejects each of the numbered writes, counting from the next one, and
+   * runs `before` ahead of the first of them.
+   */
+  const rejectEffectWrite = (
+    nths: number[],
+    before?: () => Promise<void>,
+  ) => {
+    const original = runtime.editWithRetry.bind(runtime);
+    let calls = 0;
+    runtime.editWithRetry = (async (fn, ...rest) => {
+      calls += 1;
+      if (calls === nths[0]) await before?.();
+      if (nths.includes(calls)) {
+        return { error: new Error("rejected for the test") };
+      }
+      return original(fn, ...rest);
+    }) as typeof runtime.editWithRetry;
   };
 
   /**
@@ -421,6 +461,276 @@ describe("agent builtin", () => {
     }
   });
 
+  describe("over a queue holding a run another space labeled", () => {
+    // What a finished run's link keeps on its slot: a clause that only readers
+    // of the other space, or one person, satisfy. No document in the home
+    // space can hold it, and the home space's owner cannot release it alone.
+    const foreignClause = {
+      anyOf: [cfcAtom.user("did:key:someone-else"), cfcAtom.space(otherSpace)],
+    };
+    const strict: Partial<RuntimeOptions> = {
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+      experimental: { serverExecution: false },
+    };
+    const entriesCell = () =>
+      agentQueueIndexCell(runtime, space).key("entries");
+
+    /**
+     * Commits a queue shaped as a running home's is, its list a document of its
+     * own, listing one finished run at the address its record's id gives it.
+     * The run's link carries `foreignClause` on the entry's `run` slot and on
+     * the list's slot, as a link written when links copied their target's
+     * labels does. Returns the entry's cell.
+     */
+    const seedLabeledEntry = async () => {
+      writeSeedEnvelopeDoc(tx, space);
+      const recordId = "of:finished-run-elsewhere";
+      const list = runtime.getCell(space, "labeled-queue-list", undefined, tx);
+      const entries = agentQueueIndexCell(runtime, space, tx).key("entries");
+      entries.setRawUntyped(list.getAsWriteRedirectLink());
+      const entry = entries.elementById(recordId);
+      const linkLabel = (path: string[]) => ({
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path,
+            label: { confidentiality: [foreignClause] },
+            origin: "link",
+          }],
+        },
+      });
+      seedStoredEnvelope(tx, {
+        space,
+        scope: "space",
+        id: entry.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: {
+          run: createSigilLinkFromParsedLink({
+            space: otherSpace,
+            id: recordId,
+            path: [],
+            scope: "user",
+          }),
+          host: "https://fabric.example",
+        },
+        cfc: linkLabel(["run"]),
+      });
+      seedStoredEnvelope(tx, {
+        space,
+        scope: "space",
+        id: list.getAsNormalizedFullLink().id,
+        path: [],
+      }, {
+        value: [entry.getAsLink({ base: list })],
+        cfc: linkLabel(["0"]),
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      tx = runtime.edit();
+      return entry.withTx();
+    };
+
+    /** The clauses stored on `entry`'s `run` link. */
+    const runLinkClauses = (entry: Cell<unknown>) => {
+      const inspect = runtime.edit();
+      try {
+        return (readStoredCfcMetadata(inspect, entry.getAsNormalizedFullLink())
+          ?.labelMap.entries ?? [])
+          .filter(({ path, origin }) =>
+            origin === "link" && path.length === 1 && path[0] === "run"
+          )
+          .flatMap(({ label }) => label.confidentiality ?? []);
+      } finally {
+        inspect.abort("label inspection complete");
+      }
+    };
+
+    it("lists a new request beside it, and leaves the entry as it was", async () => {
+      setUp(strict);
+      const labeled = await seedLabeledEntry();
+
+      const result = runAgentPattern("agent-beside-labeled-entry");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const record = await waitForRecord(result);
+
+      expect(record.get()?.state).toBe("queued");
+      const listed = entriesCell().get() ?? [];
+      expect(listed.map((entry) => entry.run.getAsNormalizedFullLink().id))
+        .toEqual([
+          "of:finished-run-elsewhere",
+          record.getAsNormalizedFullLink().id,
+        ]);
+      expect(runLinkClauses(labeled)).toEqual([foreignClause]);
+    });
+
+    it("lists a request after a labeled run, whose entry takes none of its label", async () => {
+      setUp(strict);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      // A request from another space over data only that space may read.
+      const { pattern, agent, Cell: BuilderCell } = commonfabric;
+      const labeledPattern = pattern<Record<string, never>>(() => {
+        const ifc = { confidentiality: [foreignClause] };
+        return agent({
+          task: BuilderCell.of("recommend a book", { type: "string", ifc }),
+          inputs: {
+            books: BuilderCell.of(["Dune"], {
+              type: "array",
+              items: { type: "string" },
+              ifc,
+            }),
+          },
+          resultSchema: RESULT_SCHEMA,
+          // deno-lint-ignore no-explicit-any
+        } as any);
+      });
+      tx = runtime.edit();
+      const elsewhere = runtime.run(
+        tx,
+        labeledPattern,
+        {},
+        runtime.getCell(
+          otherSpace,
+          "agent-labeled-elsewhere",
+          labeledPattern.resultSchema,
+          tx,
+        ),
+      ) as Cell<AgentResult>;
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const labeledRecord = await waitForRecord(elsewhere);
+
+      const inspect = runtime.edit();
+      const recordLabels = readStoredCfcMetadata(
+        inspect,
+        labeledRecord.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      inspect.abort("label inspection complete");
+      expect(recordLabels.flatMap(({ label }) => label.confidentiality ?? []))
+        .toContainEqual(foreignClause);
+      expect(runLinkClauses(entriesCell().key(0).resolveAsCell())).toEqual([]);
+
+      tx = runtime.edit();
+      const result = runAgentPattern("agent-after-labeled-elsewhere");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const record = await waitForRecord(result);
+
+      expect(record.get()?.state).toBe("queued");
+      expect(entriesCell().get()?.length).toBe(2);
+    });
+
+    it("ends a record it cannot list as `refused`", async () => {
+      setUp(strict);
+      await seedLabeledEntry();
+
+      const result = runAgentPattern("agent-refused-beside-labeled-entry");
+      rejectEffectWrite([2]);
+      await tx.commit().settled;
+      const record = await waitForRecord(result);
+
+      expect(record.get()?.state).toBe("refused");
+      const settled = await waitForCellValue<AgentResult>(
+        runtime,
+        result,
+        (value) => value?.pending === false,
+      );
+      expect(settled.error).toBe("REFUSED");
+      expect(entriesCell().get()?.length).toBe(1);
+    });
+
+    it("lists a record once when the piece starts again", async () => {
+      setUp(strict);
+      await seedLabeledEntry();
+      const id = "agent-restart-beside-labeled-entry";
+
+      const first = runAgentPattern(id);
+      await tx.commit().settled;
+      await waitForRecord(first);
+      await restart(id, first);
+
+      expect(entriesCell().get()?.length).toBe(2);
+    });
+
+    it("still refuses a transaction that reads the entry's `run` and writes in the home space", async () => {
+      setUp(strict);
+      await seedLabeledEntry();
+
+      entriesCell().withTx(tx).get();
+      runtime.getCell(space, "derived-from-the-list", undefined, tx).set("x");
+      const { error } = await tx.commit().settled;
+      tx = runtime.edit();
+
+      expect(error?.message).toContain("writer-fit confidentiality misfit");
+    });
+
+    it("still refuses to list a request when the clause is on the queue itself", async () => {
+      setUp(strict, { seedQueue: false });
+      const queue = runtime.getCell(space, "foreign-labeled-queue", {
+        type: "object",
+        properties: {
+          entries: { type: "array", items: { type: "object" } },
+        },
+        ifc: { confidentiality: [foreignClause] },
+      }, tx);
+      queue.set({ entries: [] });
+      const defaultPattern = runtime.getCell(
+        space,
+        "foreign-labeled-home",
+        undefined,
+        tx,
+      );
+      defaultPattern.key("agentQueue").set(queue);
+      // deno-lint-ignore no-explicit-any -- Home's fields exceed the space schema.
+      (runtime.getHomeSpaceCell(tx) as any).key("defaultPattern").set(
+        defaultPattern,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      tx = runtime.edit();
+      const result = runAgentPattern("agent-foreign-labeled-queue");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await waitForRecord(result);
+
+      expect(agentQueueIndexCell(runtime, space).key("entries").get())
+        .toEqual([]);
+    });
+
+    it("takes the entry off the queue, and leaves the other runs", async () => {
+      setUp(strict);
+      await seedLabeledEntry();
+      const result = runAgentPattern("agent-removes-labeled-entry");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const record = await waitForRecord(result);
+      const remove = (recordId: string) => {
+        let removed: boolean | undefined;
+        return runtime.editWithRetry((edit) => {
+          removed = removeRecordFromQueue(
+            agentQueueIndexCell(runtime, space, edit),
+            recordId,
+          );
+        }).then(({ error }) => {
+          expect(error).toBeUndefined();
+          return removed;
+        });
+      };
+
+      expect(await remove("of:finished-run-elsewhere")).toBe(true);
+      expect(
+        (entriesCell().get() ?? []).map((entry) =>
+          entry.run.getAsNormalizedFullLink().id
+        ),
+      ).toEqual([record.getAsNormalizedFullLink().id]);
+      expect(record.get()?.state).toBe("queued");
+
+      // A record the queue does not list leaves the list as it is.
+      expect(await remove("of:finished-run-elsewhere")).toBe(false);
+      expect(entriesCell().get()?.length).toBe(1);
+    });
+  });
+
   it("ends the record as `refused` when the home space holds no queue", async () => {
     setUp({}, { seedQueue: false });
     const result = runAgentPattern("agent-no-queue");
@@ -698,30 +1008,6 @@ describe("agent builtin", () => {
   });
 
   describe("when a post-commit write is rejected", () => {
-    // `editWithRetry` reports a commit it could not land as `{ error }`. The
-    // effect makes its writes in a fixed order — the record, then the index
-    // entry — so rejecting the nth call rejects that write and no other.
-
-    /**
-     * Rejects each of the numbered writes, counting from the next one, and
-     * runs `before` ahead of the first of them.
-     */
-    const rejectEffectWrite = (
-      nths: number[],
-      before?: () => Promise<void>,
-    ) => {
-      const original = runtime.editWithRetry.bind(runtime);
-      let calls = 0;
-      runtime.editWithRetry = (async (fn, ...rest) => {
-        calls += 1;
-        if (calls === nths[0]) await before?.();
-        if (nths.includes(calls)) {
-          return { error: new Error("rejected for the test") };
-        }
-        return original(fn, ...rest);
-      }) as typeof runtime.editWithRetry;
-    };
-
     it("settles the refusal when the record cannot be created", async () => {
       setUp();
       const result = runAgentPattern("agent-record-rejected");
@@ -814,10 +1100,7 @@ describe("agent builtin", () => {
         "agent-listed-elsewhere",
         async (record) => {
           const list = runtime.edit();
-          agentQueueIndexCell(runtime, space, list).key("entries").push({
-            run: record,
-            host: "https://fabric.example",
-          });
+          listInHomeAgentQueue(runtime, space, record, list);
           await list.commit().settled;
         },
       );
@@ -1073,10 +1356,12 @@ describe("agent builtin", () => {
       const result = runAgentPattern("agent-already-listed");
       beforeEffectWrite(2, async () => {
         const list = runtime.edit();
-        agentQueueIndexCell(runtime, space, list).key("entries").push({
-          run: result.key("run").resolveAsCell(),
-          host: "https://fabric.example",
-        });
+        listInHomeAgentQueue(
+          runtime,
+          space,
+          result.key("run").resolveAsCell(),
+          list,
+        );
         await list.commit().settled;
       });
       await tx.commit().settled;

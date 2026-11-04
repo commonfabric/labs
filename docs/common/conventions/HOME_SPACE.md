@@ -408,7 +408,9 @@ user's favorites only, and the queue is not a favorite.
 The piece holds two things:
 
 - `entries` - one `{ run, host }` entry per `AgentRun` record the user has
-  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  submitted and not removed, across spaces and toolsheds. `cf agent remove`
+  takes a finished run's entry off the queue and leaves its record where it
+  is. The `agent` builtin adds an entry
   when a request commits, as an element addressed by the record's id
   (`elementById` and `addUnique`, the way favorites are keyed), so two requests
   indexed side by side land as two elements. `run` links to the record in the requesting space;

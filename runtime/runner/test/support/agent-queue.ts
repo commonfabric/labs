@@ -6,6 +6,9 @@
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
+import { agentQueueIndexCell } from "../../src/builtins/agent.ts";
+import { AgentQueueIndexSchema } from "../../src/builtins/agent-schemas.ts";
+import type { Cell } from "../../src/cell.ts";
 import type { Runtime } from "../../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 
@@ -30,4 +33,23 @@ export function seedHomeAgentQueue(
   (runtime.getHomeSpaceCell(tx) as any).key("defaultPattern").set(
     defaultPattern,
   );
+}
+
+/**
+ * Lists `record` in `homeSpace`'s agent queue under `tx`, at the address the
+ * `agent` builtin's own index write gives a record's entry.
+ */
+export function listInHomeAgentQueue(
+  runtime: Runtime,
+  homeSpace: MemorySpace,
+  record: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+): void {
+  const entries = agentQueueIndexCell(runtime, homeSpace, tx).key("entries");
+  const entry = entries.elementById(record.getAsNormalizedFullLink().id)
+    .asSchema(AgentQueueIndexSchema.properties.entries.items) as Cell<
+      { run: Cell<unknown>; host: string }
+    >;
+  entry.set({ run: record, host: "https://fabric.example" });
+  entries.addUnique(entry);
 }

@@ -11,6 +11,7 @@ import {
   cancelAgentRun,
   readAgentRun,
   readAgentRuns,
+  removeAgentRun,
   selectAgentRun,
 } from "../lib/agent-inspection.ts";
 
@@ -160,6 +161,94 @@ describe("agent-inspection", () => {
     expect(run.host).toBe(OTHER_HOST);
     expect(run.state).toBe("running");
     expect(run.cancelRequestedAt).toBe("2026-09-20T12:00:00.000Z");
+  });
+
+  describe("removing a run from the queue", () => {
+    /** Lists `record` at the address the `agent` builtin gives its entry. */
+    const listAtItsAddress = async (
+      record: ReturnType<Runtime["getCell"]>,
+      host: string,
+    ) => {
+      const runtime = runtimes.get(HOME_HOST)!;
+      await runtime.editWithRetry((tx) => {
+        const entries = runtime.getCell(home, "home-pattern", undefined, tx)
+          .key("agentQueue").key("entries");
+        const entry = entries.elementById(record.getAsNormalizedFullLink().id);
+        entry.set({ run: record, host });
+        entries.addUnique(entry);
+      });
+    };
+
+    // A command disposes the connections it used. These cases read the queue
+    // again afterwards, so their connections outlive the command.
+    beforeEach(() => {
+      for (const runtime of runtimes.values()) {
+        runtime.dispose = () => Promise.resolve();
+      }
+    });
+    afterEach(() => {
+      for (const runtime of runtimes.values()) {
+        Reflect.deleteProperty(runtime, "dispose");
+      }
+    });
+
+    /** The same two runs as `seed()`, each listed as a real listing does. */
+    const seedAtAddresses = async () => {
+      const seeded = await seed();
+      const runtime = runtimes.get(HOME_HOST)!;
+      await runtime.editWithRetry((tx) => {
+        runtime.getCell(home, "home-pattern", undefined, tx)
+          .key("agentQueue").key("entries").set([]);
+      });
+      await listAtItsAddress(seeded.completed, OTHER_HOST);
+      await listAtItsAddress(seeded.queued, HOME_HOST);
+      return seeded;
+    };
+
+    it("takes a finished run off the queue and leaves its record and the other runs", async () => {
+      const { completed } = await seedAtAddresses();
+
+      const removed = await removeAgentRun(config, "hash-completed", deps);
+
+      expect(removed.state).toBe("completed");
+      expect((await readAgentRuns(config, deps)).map((run) => run.requestHash))
+        .toEqual(["hash-queued"]);
+      expect(completed.key("state").get()).toBe("completed");
+    });
+
+    it("refuses a run that has not finished, and leaves it listed", async () => {
+      await seedAtAddresses();
+
+      await expect(removeAgentRun(config, "hash-queued", deps)).rejects.toThrow(
+        "only a finished run can be removed",
+      );
+
+      expect((await readAgentRuns(config, deps)).length).toBe(2);
+    });
+
+    it("refuses a run listed twice, and leaves both listings", async () => {
+      const { completed } = await seedAtAddresses();
+      const runtime = runtimes.get(HOME_HOST)!;
+      const entries = runtime.getCell(home, "home-pattern").key("agentQueue")
+        .key("entries");
+      await runtime.editWithRetry((tx) => {
+        entries.withTx(tx).push({ run: completed, host: OTHER_HOST });
+      });
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("listed 2 times");
+
+      expect((entries.get() as unknown[] | undefined)?.length).toBe(3);
+    });
+
+    it("refuses an entry away from the address its id gives it", async () => {
+      await seed();
+
+      await expect(removeAgentRun(config, "hash-completed", deps)).rejects
+        .toThrow("cannot be removed");
+
+      expect((await readAgentRuns(config, deps)).length).toBe(2);
+    });
   });
 
   it("reads an exact record without opening an unrelated unavailable host", async () => {
