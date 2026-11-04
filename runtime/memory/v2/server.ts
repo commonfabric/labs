@@ -5662,7 +5662,8 @@ export class Server {
   /** Path for a cell-derived db file. Sibling of the space db for file stores;
    *  a deterministic temp file for in-memory stores (so it survives the
    *  connection, unlike an `:memory:` attach). The space + id are hashed into
-   *  the filename so distinct (space, id) pairs never collide.
+   *  the filename, with a hash that two pairs can share
+   *  (`cellDatabaseFileName()` says how).
    *
    *  `scopeKey` is the resolved scope key (`Engine.resolveScopeKey`): `space`
    *  for the default scope (left out of the name, so existing space-scoped files
