@@ -89,6 +89,7 @@ import {
   newSharedServer,
   testPrincipalSessionOpenAuthFactory,
 } from "../../runner/test/memory-v2-test-utils.ts";
+import { isInertAnnotationKey } from "../src/schema-compatibility.ts";
 import {
   companionFileName,
   companionSpace,
@@ -971,26 +972,37 @@ export function isReduction(value: unknown): boolean {
  *   the two must not be allowed to collapse again.
  */
 
-/** How the schema generator's note on inherited docs opens. */
+/**
+ * How the schema generator's note on inherited docs opens. The generator
+ * appends the note to a `$comment` the schema already carries.
+ */
 const INHERITED_DOCS_NOTE = "Docs inherited from intersection constituents.";
 
 /**
- * `schema` without the schema generator's note on inherited docs, at any
- * depth. The note prints a TypeScript type the way the checker's options have
- * it print, and constrains no value. Every other `$comment` stays, because a
+ * `schema` without what only describes it, at any depth: the keywords
+ * {@link isInertAnnotationKey} names, and the schema generator's note on
+ * inherited docs, which prints a TypeScript type the way the checker's
+ * options have it print. The note is cut from where it opens. What a
+ * `$comment` held before it stays, as does every other `$comment`, because a
  * reader of a schema can act on one: `rejectedProperty` is one such.
  */
-function withoutInheritedDocsNotes(schema: JSONSchemaObj): JSONSchemaObj {
-  const { $comment, ...rest } = schema;
-  const kept = typeof $comment === "string" &&
-      $comment.startsWith(INHERITED_DOCS_NOTE)
-    ? rest
-    : schema;
+function withoutDescriptiveAnnotations(schema: JSONSchemaObj): JSONSchemaObj {
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (isInertAnnotationKey(key)) continue;
+    if (key === "$comment" && typeof value === "string") {
+      const note = value.indexOf(INHERITED_DOCS_NOTE);
+      const comment = note === -1 ? value : value.slice(0, note).trimEnd();
+      if (comment !== "") kept[key] = comment;
+      continue;
+    }
+    kept[key] = value;
+  }
   return mapSubschemas(
-    kept,
+    kept as JSONSchemaObj,
     (child) =>
       isObjectNotArray(child)
-        ? withoutInheritedDocsNotes(child as JSONSchemaObj)
+        ? withoutDescriptiveAnnotations(child as JSONSchemaObj)
         : child,
     { includeDefs: true, includeUnused: true },
   );
@@ -1004,12 +1016,13 @@ function withoutInheritedDocsNotes(schema: JSONSchemaObj): JSONSchemaObj {
  * comparing structurally does not settle this — recomposition derives `$defs`
  * names from content hashes where the inline side carries the author's — so
  * the INLINE side is decomposed instead, and the two canonical root
- * references either match or they do not. A difference in the schema
- * generator's note on inherited docs is not a difference in content, so when
- * the two do not match they are compared again without it, which reads the
- * reference's documents from the registry. `undefined` means neither side is
- * a bare reference and the ordinary walk decides; a bare reference paired
- * with anything that does not decompose to it is a change.
+ * references either match or they do not. A difference in what only describes
+ * a schema, as {@link withoutDescriptiveAnnotations} removes it, is not a
+ * difference in content, so when the two do not match they are compared again
+ * without it, which reads the reference's documents from the registry.
+ * `undefined` means neither side is a bare reference and the ordinary walk
+ * decides; a bare reference paired with anything that does not decompose to
+ * it is a change.
  */
 function externalSchemaRefEquivalent(
   before: unknown,
@@ -1045,16 +1058,17 @@ function externalSchemaRefEquivalent(
   const afterRef = canonicalRefOf(after);
   if (beforeRef === undefined || afterRef === undefined) return false;
   if (beforeRef === afterRef) return true;
-  const refWithoutNotesOf = (value: unknown): string => {
+  const refWithoutAnnotationsOf = (value: unknown): string => {
     const own = bareRefOf(value);
     const schema = own === undefined
       ? value
       : recomposeSchema(own, lookupSchemaDocument);
-    return decomposeSchema(withoutInheritedDocsNotes(schema as JSONSchemaObj))
-      .rootRef;
+    return decomposeSchema(
+      withoutDescriptiveAnnotations(schema as JSONSchemaObj),
+    ).rootRef;
   };
   try {
-    return refWithoutNotesOf(before) === refWithoutNotesOf(after);
+    return refWithoutAnnotationsOf(before) === refWithoutAnnotationsOf(after);
   } catch {
     return false;
   }

@@ -173,8 +173,11 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
  * treats as a constraint. `$comment` is not one: the runner reads a few
  * reserved values as traversal markers, as
  * {@link sourceAlternativeAcceptedBy} describes.
+ *
+ * Exported so that another reader comparing schemas classifies keywords by
+ * this list rather than by a copy of it.
  */
-const isInertAnnotationKey = (key: string): boolean =>
+export const isInertAnnotationKey = (key: string): boolean =>
   key !== "$comment" && DESCRIPTIVE_ANNOTATION_KEYS.has(key);
 
 /**
