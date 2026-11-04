@@ -932,8 +932,8 @@ const skeletonForms = (
 };
 
 /**
- * Helper for command tools, which measures a batch's answers in the calls'
- * order against one output bound for the whole batch, so a batch shows the
+ * Helper for command tools, which measures a batch's answers smallest-first
+ * against one output bound for the whole batch, so a batch shows the
  * model no more than one call may. Each executed call's summary takes, in
  * the calls' order, the largest of its forms whose serialized size fits
  * beside the smallest forms of the calls after it, so a later call's
@@ -973,14 +973,19 @@ const measureBatch = async (
     return { ...call, skeleton };
   });
   const results: RunCommandCallOutput[] = [];
-  for (const call of compacted) {
+  const allocationOrder = compacted.map((call, index) => ({ call, index }))
+    .sort((a, b) =>
+      (isAnswered(a.call) ? a.call.skeleton.outcome.bodyBytes : 0) -
+      (isAnswered(b.call) ? b.call.skeleton.outcome.bodyBytes : 0)
+    );
+  for (const { call, index } of allocationOrder) {
     if (!isAnswered(call)) {
-      results.push(call);
+      results[index] = call;
       continue;
     }
     const measured = await measureAnswer(context, call, reserved);
     reserved += JSON.stringify({ entry: measured.entry }).length;
-    results.push(measured);
+    results[index] = measured;
   }
   const executed = results.filter((result) => result.status === "executed");
   const observedLabel = mergeConfidentialityOnlyLabels(

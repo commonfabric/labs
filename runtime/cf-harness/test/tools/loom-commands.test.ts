@@ -926,6 +926,45 @@ describe("loom-commands tools", () => {
         );
       });
 
+      it("allocates bodies smallest-first while returning calls in input order", async () => {
+        const bodies: Record<string, object> = {
+          "calendar.day": {
+            ok: true,
+            rows: Array.from({ length: 10 }, () => "c".repeat(3_900)),
+          },
+          "source.read": { ok: true, text: "e".repeat(3_000) },
+          "person.find": { ok: true, name: "Donut" },
+          "search.query": {
+            ok: true,
+            rows: Array.from({ length: 3 }, () => "s".repeat(3_900)),
+          },
+        };
+        for (
+          const commands of [Object.keys(bodies), Object.keys(bodies).reverse()]
+        ) {
+          const { context } = contextWith({
+            answer: ({ id }) => new Response(JSON.stringify(bodies[id])),
+          });
+          const output = batched(
+            await runCommandTool.invoke(context, {
+              calls: commands.map((command) => ({ command, args: {} })),
+            }),
+          );
+          const results = output.results.map(executed);
+          for (const [index, command] of commands.entries()) {
+            expect(results[index].outcome.bodyBytes).toBe(
+              new TextEncoder().encode(JSON.stringify(bodies[command])).length,
+            );
+            expect(results[index].entry?.status).toBe(
+              command === "calendar.day" ? undefined : "admitted",
+            );
+          }
+          expect(JSON.stringify(output).length).toBeLessThanOrEqual(
+            LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+          );
+        }
+      });
+
       it("keeps the batch's model view within the output bound whatever the summaries carry", async () => {
         const { context } = contextWith({
           answer: JSON.stringify({
