@@ -476,3 +476,28 @@ Deno.test("a panel taken out of the group while hidden is drawn again", async ()
   expect(page.second.style.display).toBe("");
   expect(page.handle.style.display).toBe("");
 });
+
+Deno.test("a stacked group taken out of the page draws its hidden panel and handle again", async () => {
+  const page = built("horizontal");
+  page.group.stackBelow = 500;
+  page.second.hideWhenStacked = true;
+  document.body.append(page.group);
+  await laidOut(page.group);
+  expect(page.second.style.display).toBe("none");
+  page.group.remove();
+  expect(page.second.style.display).toBe("");
+  expect(page.handle.style.display).toBe("");
+});
+
+Deno.test("a panel marked in the same turn the group starts stacking still turns the handles", async () => {
+  using page = await mounted("horizontal");
+  await laidOut(page.group);
+  // The panel updates before the group does.
+  page.first.hideWhenStacked = true;
+  page.group.stackBelow = 500;
+  await page.first.updateComplete;
+  await page.group.updateComplete;
+  expect(page.group.stacked).toBe(true);
+  expect(page.handle.dataset.orientation).toBe("vertical");
+  expect(page.first.style.display).toBe("none");
+});

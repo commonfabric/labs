@@ -4554,8 +4554,8 @@ interface CFResizablePanelAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFResizablePanelGroupAttributes<T> extends CFHTMLAttributes<T> {
   "direction"?: "horizontal" | "vertical" | CellLike<"horizontal" | "vertical">;
-  /** Below this width (px) of the group itself, its panels lie vertically
-   * whatever `direction` says. */
+  /** Below this width (px) of a horizontal group itself, its panels lie
+   * vertically (the group is stacked). A vertical group never stacks. */
   "stackBelow"?: number | CellLike<number>;
 }
 

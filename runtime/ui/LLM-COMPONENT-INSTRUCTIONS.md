@@ -591,10 +591,12 @@ Default slot for cf-tab elements
 
 - `direction` - "horizontal" | "vertical"
 - `stack-below` (`stackBelow` in JSX) - a positive number of pixels (anything
-  else throws a `RangeError`): while the group itself is narrower, its panels
-  stack vertically whatever `direction` says, keeping their split and the
-  handle. Prefer the layout breakpoints, 640, 768 or 1024. For example, to put a
-  list beside its detail where there is room and above it where there is not:
+  else throws a `RangeError`): while a horizontal group is itself narrower, its
+  panels stack vertically, keeping their split and the handle, except a panel
+  marked `hide-when-stacked`, which steps aside with the handles beside it. A
+  vertical group never stacks. Prefer the layout breakpoints, 640, 768 or 1024.
+  For example, to put a list beside its detail where there is room and above it
+  where there is not:
   `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
   **Events**:
 - `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default

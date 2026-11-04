@@ -54,10 +54,10 @@ interface PanelInfo {
  * @extends BaseElement
  *
  * @property {PanelGroupDirection} direction - Layout direction ("horizontal" | "vertical")
- * @property {number} stackBelow - A width in pixels: while the group itself
- *   is narrower, its panels lie vertically whatever `direction` says (the
- *   group is stacked), and a panel marked `hideWhenStacked` is not drawn.
- *   Unset, the group always follows `direction`.
+ * @property {number} stackBelow - A width in pixels: while a horizontal
+ *   group is itself narrower, its panels lie vertically (the group is
+ *   stacked), and a panel marked `hideWhenStacked` is not drawn. A vertical
+ *   group is never stacked. Unset, the group always follows `direction`.
  *
  * @attribute {string} direction - Sets the layout direction for panels
  * @attribute {number} stack-below - Sets `stackBelow`
@@ -219,6 +219,12 @@ export class CFResizablePanelGroup extends BaseElement {
     this.removeEventListener("cf-panel-sizes", this.#onPanelSizes);
     this.removeEventListener("cf-panel-shown", this.#onPanelShown);
     this.#resizeObserver?.disconnect();
+    // Children taken out with the group are drawn wherever they go next.
+    for (const [element, display] of this.#hidden) {
+      element.style.display = display;
+    }
+    this.#hidden.clear();
+    this.#laidOut = undefined;
 
     // Clean up event listeners
     this._handles.forEach((handle) => {
@@ -259,20 +265,27 @@ export class CFResizablePanelGroup extends BaseElement {
     if (
       orientation === this.#laidOut && this.stacked === this.#laidOutStacked
     ) return;
-    // The direction can arrive after the panels are in place, before the
-    // first render or after it, and the group can cross `stackBelow` at any
-    // time: the panels' sizes move to the new axis and the handles' grips
-    // turn with it. A drag measures along one axis from where it started, so
-    // a drag in progress ends. A width that crosses nothing changes nothing.
-    if (this._activeHandle) this.#cancelResize();
-    for (const handle of this._handles) this.#orient(handle);
+    this.#relayOut();
+  }
+
+  /** Lays the panels and handles out for the group's orientation now. The
+   * direction can arrive after the panels are in place, before the first
+   * render or after it, and the group can cross `stackBelow` at any time:
+   * the panels' sizes move to the new axis and the handles' grips turn with
+   * it. A drag measures along one axis from where it started, so a drag in
+   * progress ends when the axis moves, and only then. */
+  #relayOut(): void {
+    if (this.orientation !== this.#laidOut) {
+      if (this._activeHandle) this.#cancelResize();
+      for (const handle of this._handles) this.#orient(handle);
+    }
     this.applyPanelSizes();
   }
 
   #onPanelSizes = (): void => this.updatePanels();
   /** A panel's hideWhenStacked changed: its sizes did not, so a drag goes
    * on. */
-  #onPanelShown = (): void => this.applyPanelSizes();
+  #onPanelShown = (): void => this.#relayOut();
 
   private updatePanels(): void {
     // A drag measures from the sizes it started with, so a re-read ends it.
