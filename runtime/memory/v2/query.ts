@@ -715,6 +715,9 @@ export type QueryEvaluationCacheDiagnostics = {
  * bypass it (key-vocabulary.md §5, the identity-bound inventory).
  */
 export type QueryEvaluationCache = {
+  /** Largest entity count admitted before cloning an evaluation. */
+  readonly maxEntryWeight: number;
+
   /** The engine the entries were evaluated against. A sequence number
    * identifies state only within its engine, so a different engine object
    * for the same space rotates the cache exactly as a seq advance does —
@@ -754,7 +757,10 @@ export type QueryEvaluationCache = {
   rotations: number;
 };
 
-export const createQueryEvaluationCache = (): QueryEvaluationCache => ({
+export const createQueryEvaluationCache = (
+  maxEntryWeight = Infinity,
+): QueryEvaluationCache => ({
+  maxEntryWeight,
   engine: null,
   seq: -1,
   entries: new Map(),
@@ -2717,7 +2723,8 @@ export const trackGraph = (
   };
   if (
     cache !== undefined && cacheKeys !== undefined &&
-    cache.entries.size < EVALUATION_CACHE_MAX_ENTRIES
+    cache.entries.size < EVALUATION_CACHE_MAX_ENTRIES &&
+    state.entities.size <= cache.maxEntryWeight
   ) {
     // The cache keeps its own clone: the state returned below belongs to
     // the caller's session, whose refreshes and extensions mutate it.
