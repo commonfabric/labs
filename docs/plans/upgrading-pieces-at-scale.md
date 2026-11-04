@@ -431,11 +431,11 @@ This plan keeps that line and names the tiers on each side of it, so that
 `system:` is the tier the deployment vouches for rather than a mechanism of its
 own.
 
-| Origin            | Who gated the release     | What adoption does unattended                                                                                                                                                                                                                                                                                                              |
-| ----------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `system:` ref     | this deployment's CI      | adopts the candidate as it stands, with the writer delegation of invariant 7                                                                                                                                                                                                                                                               |
-| Fabric origin     | nobody the runtime trusts | adopts a candidate the runtime itself proves an acceptable replacement for what the piece runs — the Tier 1 relation, applied by the adopting runtime to the candidate's contract over the piece's own recorded contract — and only within the first class of §3; anything else is offered to the owner, which the piece menu already does |
-| Pinned fabric URL | —                         | never reports an update (invariant 14)                                                                                                                                                                                                                                                                                                     |
+| Origin            | Who gated the release     | What adoption does unattended                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system:` ref     | this deployment's CI      | adopts the candidate as it stands, with the writer delegation of invariant 7                                                                                                                                                                                                                                                                                                                                                     |
+| Fabric origin     | nobody the runtime trusts | adopts a same-contract candidate as a pointer move (§2); adopts a contract-moving candidate when the runtime itself proves it an acceptable replacement for what the piece runs — the Tier 1 relation, applied by the adopting runtime to the candidate's contract over the piece's own recorded contract — and its change is in the first class of §3; anything else is offered to the owner, which the piece menu already does |
+| Pinned fabric URL | —                         | never reports an update (invariant 14)                                                                                                                                                                                                                                                                                                                                                                                           |
 
 The second row is the acceptable-replacement relation invariant 7 asks for and
 the lifecycle lists as required, and it is what opens the mechanism to a
@@ -444,16 +444,18 @@ side: the proof runs over the piece's _own_ recorded contract, which the
 provider does not control, so nothing the provider publishes about its history
 is consulted or needed. What the proof establishes is bounded, and the bound is
 stated rather than papered over: Tier 1 is a statement about contracts, and only
-Tier 2 — a fixture of real data — speaks to stored state. So an unattended
-adoption from a fabric origin carries only a change the schema itself
-reinterprets (§3's first class), which is the class whose safety the contract
-relation does prove. A pure-function migrate step (§6) from such an origin runs
-only with the owner's consent, for a reason that is CFC's before it is trust's:
-an unattended update from an origin the deployment does not gate carries no
-writer delegation (invariant 7), so the successor cannot write what the
-predecessor's handlers protected until the owner's acceptance confers it. A
-candidate in the third class is refused from every origin but the first, and
-from the first unless the release names its sweep.
+Tier 2 — a fixture of real data — speaks to stored state. A same-contract
+candidate needs no proof beyond the hash compare and adopts unattended from any
+origin, as §2 says. A contract-moving candidate from a fabric origin adopts
+unattended only when its change is one the schema itself reinterprets (§3's
+first class), which is the class whose safety the contract relation does prove.
+A pure-function migrate step (§6) from such an origin runs only with the owner's
+consent, for a reason that is CFC's before it is trust's: an unattended update
+from an origin the deployment does not gate carries no writer delegation
+(invariant 7), so the successor cannot write what the predecessor's handlers
+protected until the owner's acceptance confers it. A candidate in the third
+class is refused from every origin but the first, and from the first unless the
+release names its sweep.
 
 A provider with many pieces in other people's spaces therefore ships
 same-contract and schema-expressible releases with no one in the loop, and a
@@ -502,8 +504,8 @@ counters: the per-space record names the identity an origin last resolved to; a
 document's shape marker is the content-addressed schema that wrote it, which the
 runtime already stamps; a pattern's migration progress names the identifier of
 the last completed step, which is what Topics' ordered identifier list already
-encodes behind its integer. The reader-handles-every- writer half of the
-principle is exactly rule 4's reinterpretation chain.
+encodes behind its integer. The half of the principle that asks a reader to
+handle every writer is exactly rule 4's reinterpretation chain.
 
 ## What needs a ruling
 
@@ -677,11 +679,12 @@ The fabric-origin work the lifecycle lists, in the order a provider needs it.
 - [ ] Creation from a fabric URL: `cf piece new` and the piece menu accept a
       `cf:` URL to a published pattern, and the piece records it as its origin
       with a create revision.
-- [ ] The acceptable-replacement relation: the adopting runtime proves a
+- [ ] The acceptable-replacement relation: a same-contract candidate adopts as a
+      pointer move; for a contract-moving one the adopting runtime proves the
       candidate's contract applies over the piece's own recorded contract — the
-      Tier 1 relation, run at adoption — and adopts unattended only a candidate
-      that passes and whose change is schema-expressible; anything else is
-      offered to the owner. The second row of §8's table.
+      Tier 1 relation, run at adoption — and adopts unattended only when it
+      passes and its change is schema-expressible; anything else is offered to
+      the owner. The second row of §8's table.
 - [ ] The live subscription to a mutable entity's revision head while a
       following piece runs, through the same guarded transition.
 - [ ] Cross-space source replication under CFC policy, failing closed before
