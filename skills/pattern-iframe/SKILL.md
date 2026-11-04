@@ -49,6 +49,11 @@ What the guides cannot leave to judgment:
   that verb an event over making the same change through its own cell writes.
   The general guide's "Optional streams" section covers this, including LLM
   built-ins.
+- For interim `agent()` messages, opt in with `progress: true` in the wrapper
+  and expose the returned `progress` in `$context` as a `readonly` resource. The
+  guest subscribes to it alongside the request's other state. The example is in
+  `docs/common/ai/iframe-pattern-guide.md`; reporting and confidentiality
+  semantics are in `docs/common/capabilities/agent.md`.
 - One joint initial `pull()` barrier owns readiness for every resource an action
   uses. Keep action controls disabled until it resolves; an individual
   synchronous `sink()` callback must never declare the guest ready.

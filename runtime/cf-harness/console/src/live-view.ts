@@ -1241,6 +1241,8 @@ const REASONS: ReadonlyMap<string, Reason> = new Map(Object.entries(
       `${task} ${WRITE_WHERE}`,
     write_file_enforce_strict_requires_direct_command: (task) =>
       `${task} ${WHY}`,
+    progress_return: () =>
+      "This run may report progress through its configured return channel.",
     structured_result_return: () =>
       "Handing back the run's result is always allowed.",
     subagent_profile_allowed: () =>

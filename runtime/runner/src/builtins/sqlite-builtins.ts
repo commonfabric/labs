@@ -372,15 +372,53 @@ function withSlotIdentityLabel(
  */
 function asCellColumnsFromRowSchema(rowSchema: unknown): string[] {
   if (!rowSchema || typeof rowSchema !== "object") return [];
-  const props = (rowSchema as { properties?: Record<string, unknown> })
-    .properties;
+  const { properties: props, $defs } = rowSchema as {
+    properties?: Record<string, unknown>;
+    $defs?: Record<string, unknown>;
+  };
   if (!props || typeof props !== "object") return [];
   return Object.entries(props)
-    .filter(([, v]) =>
-      !!v && typeof v === "object" &&
-      Array.isArray((v as { asCell?: unknown }).asCell)
-    )
+    .filter(([, v]) => mayReadAsCell(v, $defs, new Set()))
     .map(([k]) => k);
+}
+
+/**
+ * Whether `schema` can read as a cell: it is marked `asCell`, or one of its
+ * `anyOf`, `oneOf`, or `allOf` branches is, so a `Cell<T> | null` column is a
+ * link column too. A `$ref` into the row schema's `$defs`, as a named type
+ * lowers to, is followed; `visiting` holds the refs being followed, so a cycle
+ * among them ends.
+ */
+function mayReadAsCell(
+  schema: unknown,
+  $defs: Record<string, unknown> | undefined,
+  visiting: Set<string>,
+): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const { asCell, anyOf, oneOf, allOf, $ref } = schema as {
+    asCell?: unknown;
+    anyOf?: unknown;
+    oneOf?: unknown;
+    allOf?: unknown;
+    $ref?: unknown;
+  };
+  if (Array.isArray(asCell)) return true;
+  if (
+    [anyOf, oneOf, allOf].some((branches) =>
+      Array.isArray(branches) &&
+      branches.some((branch) => mayReadAsCell(branch, $defs, visiting))
+    )
+  ) {
+    return true;
+  }
+  const name = typeof $ref === "string" && $ref.startsWith("#/$defs/")
+    ? $ref.slice("#/$defs/".length)
+    : undefined;
+  if (name === undefined || visiting.has(name)) return false;
+  visiting.add(name);
+  const found = mayReadAsCell($defs?.[name], $defs, visiting);
+  visiting.delete(name);
+  return found;
 }
 
 /** Replace each asCell column's stored sigil-link STRING with the parsed sigil

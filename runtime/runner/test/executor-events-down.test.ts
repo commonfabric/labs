@@ -61,8 +61,8 @@ import { ExecutorHost } from "../src/executor/host.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import {
   deriveEventKey,
+  handlingReceiptId,
   scopeCallerEventId,
-  servedReceiptCause,
 } from "../src/scheduler/event-identity.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
 import { sourceDocKey } from "../src/compilation-cache/cell-cache.ts";
@@ -418,7 +418,7 @@ const THROW_PATTERN = [
  * serving-side receipt/result-write pins (events.md §4 "Result carriage").
  * `probe` returns a plain value derived from the event payload; `quiet`
  * returns nothing (the `{}` existence witness). Both bind `{}` — no context
- * cells — so the handlings' cause-derived receipt addresses depend on
+ * cells — so the handlings' receipt addresses depend on
  * nothing but the pattern and the invocation id, and their only durable
  * consequence is the receipt itself. */
 const DECLARED_RESULT_PATTERN = [
@@ -431,6 +431,22 @@ const DECLARED_RESULT_PATTERN = [
   "  { value: Writable<number> },",
   "  { value: number; probe: Stream<unknown>; quiet: Stream<unknown> }",
   ">(({ value }) => ({ value, probe: probe({}), quiet: quiet({}) }));",
+].join("\n");
+
+/** A handler whose result launches a child piece, so its receipt takes the
+ * launch branch of the handler-result path rather than the plain write. */
+const LAUNCHED_RESULT_PATTERN = [
+  "import { handler, pattern, Stream, Writable } from 'commonfabric';",
+  "const Note = pattern<{ title: string }, { title: string }>(",
+  "  ({ title }) => ({ title }),",
+  ");",
+  "const probe = handler<{ n?: number }, Record<string, never>>(",
+  "  (ev) => ({ note: Note({ title: 'tok-' + (ev?.n ?? 0) }) }),",
+  ");",
+  "export default pattern<",
+  "  { value: Writable<number> },",
+  "  { value: number; probe: Stream<unknown> }",
+  ">(({ value }) => ({ value, probe: probe({}) }));",
 ].join("\n");
 
 /** A handler whose `$ctx` requires a plain-number `gate` the argument doc
@@ -3078,7 +3094,7 @@ describe("Phase 3 events-down (serving side)", () => {
    * three pins below share. The commit callback is the durable-ack
    * coupling's — it settles only after the handling CONSEQUENCED — and
    * hands back the echo's transaction, whose `handlingReceiptLink` is the
-   * cause-derived receipt address. */
+   * receipt address. */
   const fireVerb = (
     result: Cell<Record<string, unknown>>,
     verb: string,
@@ -3150,7 +3166,7 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(fired.entries[0].status).not.toBe("error");
 
     // WS-D under ON: the echo's transaction publishes the handling's
-    // receipt address — the same cause-derived cell the serving side
+    // receipt address — the same cell the serving side
     // wrote. An unchanged caller (the CLI verb dispatch) needs no
     // migration: address out of the callback, value by ordinary read.
     const link = fired.entries[0].tx.handlingReceiptLink;
@@ -3301,12 +3317,19 @@ describe("Phase 3 events-down (serving side)", () => {
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
+    const streamLink = result.key("probe").resolveAsCell()
+      .getAsNormalizedFullLink();
     const durableId = scopeCallerEventId(
       "cas-loss-1",
       "receipt-pin-session",
-      result.key("probe").resolveAsCell().getAsNormalizedFullLink(),
+      streamLink,
     );
-    const taken = probeRuntime.getCell(space, servedReceiptCause(durableId));
+    const taken = probeRuntime.getCellFromLink({
+      id: handlingReceiptId(durableId, streamLink),
+      path: [],
+      space,
+      scope: "space",
+    });
     await probeRuntime.editWithRetry((tx) =>
       taken.withTx(tx).set({ token: "tok-99" })
     );
@@ -3340,7 +3363,7 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(fired.entries[0].status).not.toBe("error");
 
     // The echo published the address the serving run wrote to, which derives
-    // from the event alone.
+    // from the event and its stream.
     const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
     expect(link!.id).toBe(takenId);
@@ -3362,6 +3385,78 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(JSON.stringify(carryingBatch!.operations)).not.toContain(link!.id);
 
     // The LOUD half: the serving runner counted the skip.
+    expect(servingRuntime!.runner.servedReceiptCasLosses).toBe(1);
+    cancelDemand();
+  });
+
+  it("leaves a receipt that already holds a value alone when the served handling's result launches a piece", async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, LAUNCHED_RESULT_PATTERN, {
+      arg: "cas-loss-launch-arg",
+      result: "cas-loss-launch-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    const probeManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    extraManagers.push(probeManager);
+    const probeRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: probeManager,
+      experimental: { serverExecution: false, commitPreconditions: true },
+    });
+    extraRuntimes.push(probeRuntime);
+    const streamLink = result.key("probe").resolveAsCell()
+      .getAsNormalizedFullLink();
+    const durableId = scopeCallerEventId(
+      "cas-loss-launch-1",
+      "receipt-pin-session",
+      streamLink,
+    );
+    const taken = probeRuntime.getCellFromLink({
+      id: handlingReceiptId(durableId, streamLink),
+      path: [],
+      space,
+      scope: "space",
+    });
+    await probeRuntime.editWithRetry((tx) =>
+      taken.withTx(tx).set({ token: "tok-99" })
+    );
+    await probeRuntime.storageManager.synced();
+    const takenId = taken.getAsNormalizedFullLink().id;
+    await awaitAdmitted(
+      server,
+      () => Engine.read(engine, { id: takenId })?.value !== undefined,
+    );
+
+    host = newHost();
+    const fired = fireVerb(result, "probe", { n: 7 }, "cas-loss-launch-1");
+    await clientRuntime.idle();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
+    await fired.reached(1);
+    expect(fired.entries[0].status).not.toBe("error");
+
+    // The launch never ran over the standing value, and nothing but the one
+    // authored commit has written this document.
+    expect(Engine.read(engine, { id: takenId })?.value).toEqual({
+      token: "tok-99",
+    });
+    const writers = commitsWriting(engine, takenId);
+    expect(writers.length).toBe(1);
+    expect(writers[0].class).toBe("authored");
     expect(servingRuntime!.runner.servedReceiptCasLosses).toBe(1);
     cancelDemand();
   });

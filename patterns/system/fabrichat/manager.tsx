@@ -58,6 +58,7 @@ import {
   principalOf,
   profileOwnerOf,
   spaceAccess,
+  spaceDeleted,
   spaceOf,
   Stream,
   UI,
@@ -783,6 +784,12 @@ export interface ListRoomsEvent {
   // written in the event type.
   room: Cell<ChatRoomLink>;
 
+  /** The kind of room it is. */
+  kind: ChatRoomKind;
+
+  /** A direct room's counterpart; absent for a group room. */
+  counterpart?: string;
+
   /** A group room's title; absent for a direct room. */
   title?: string;
 
@@ -791,20 +798,42 @@ export interface ListRoomsEvent {
 }
 
 /**
- * Lists a room this user created in their catalog, as `listRoom()` does. It
- * runs as an event of its own, queued by the one that creates the room, so
- * that the catalog is read apart from that creation: a transaction's writes
- * are held to the labels of everything it reads, and the catalog can carry a
- * label, such as its owner's `PersonalSpace`, that the room's space doesn't
- * admit. While the room's space is not known, nothing is listed.
+ * Lists a room this user created in their catalog, as `listRoom()` does, and
+ * records their membership of it, at the catalog entry's revision, so that
+ * the manager holds the room's link once nothing can read the room: a
+ * deleted room is listed under `deletedRooms` by that record. It runs as an
+ * event of its own, queued by the one that creates the room, so that the
+ * catalog is read apart from that creation: a transaction's writes are held
+ * to the labels of everything it reads, and the catalog can carry a label,
+ * such as its owner's `PersonalSpace`, that the room's space doesn't admit.
+ * While the room's space is not known, nothing is listed.
  */
-const listRooms = handler<ListRoomsEvent, { catalog: CatalogCell }>(
-  (event, { catalog }) => {
-    const space = spaceOf(event?.room);
-    if (!isWellFormedDID(space)) return;
-    listRoom(catalog, space, { title: event.title, since: event.since });
-  },
-);
+const listRooms = handler<
+  ListRoomsEvent,
+  { catalog: CatalogCell; roomMembership: RoomMembershipCell }
+>((event, { catalog, roomMembership }) => {
+  const space = spaceOf(event?.room);
+  if (!isWellFormedDID(space)) return;
+  listRoom(catalog, space, { title: event.title, since: event.since });
+  const memberships = roomMembership.get() ?? [];
+  if (memberships.some((known) => equals(known.room, event.room))) return;
+  const revision = readSharedSpaceCatalog(catalog).entries[space]?.revision ??
+    eventKey();
+  roomMembership.set([
+    ...memberships,
+    {
+      room: event.room,
+      kind: event.kind,
+      ...(event.counterpart === undefined
+        ? {}
+        : { counterpart: event.counterpart }),
+      since: epochNsecFromMsec(event.since),
+      state: "saved",
+      revision,
+      catalogRevision: revision,
+    },
+  ]);
+});
 
 /**
  * A room's result, as the link an index entry holds. The room is created
@@ -915,6 +944,8 @@ const createRoom = (
   if (isWellFormedDID(space)) {
     state.listRooms.send({
       room,
+      kind,
+      ...(counterpart === undefined ? {} : { counterpart }),
       ...(title === undefined ? {} : { title }),
       since: now,
     });
@@ -1091,7 +1122,7 @@ const performManagerAct = (
       });
       return;
     }
-    const known = direct.key(counterpart).get();
+    const known = liveDirect(direct.key(counterpart).get());
     if (known !== undefined) {
       // Restores an archived entry at the revision just read, as `listRoom`
       // says: starting the chat is the choice to have it listed.
@@ -1444,10 +1475,17 @@ const performManagerAct = (
           return;
         }
       }
+      const counterpart = forgottenCounterpart(
+        kind,
+        membership,
+        direct.get() ?? {},
+        room,
+      );
       const entry: RoomMembership = {
         room,
         container: membership?.container ?? container,
         kind,
+        ...(counterpart === undefined ? {} : { counterpart }),
         since: membership?.since ?? epochNsecFromMsec(source?.since ?? 0),
         state: "archived",
         revision: eventKey(),
@@ -1495,11 +1533,18 @@ const performManagerAct = (
       });
       return;
     }
+    const counterpart = forgottenCounterpart(
+      kind,
+      membership,
+      direct.get() ?? {},
+      room,
+    );
     state.roomMembership.set([
       ...memberships,
       {
         room,
         kind,
+        ...(counterpart === undefined ? {} : { counterpart }),
         since: epochNsecFromMsec(entry?.since ?? 0),
         state: "archived",
         revision: eventKey(),
@@ -1589,7 +1634,10 @@ const performManagerAct = (
       restore,
     });
   }
-  if (container !== undefined || membership !== undefined) {
+  // A membership is recorded for a standalone room too, so that the manager
+  // holds the room's link once nothing can read the room: a deleted room is
+  // listed under `deletedRooms` by that record.
+  if (container !== undefined || membership !== undefined || catalogManaged) {
     if (
       membership === undefined || (membership.state === "archived" && restore)
     ) {
@@ -1597,6 +1645,12 @@ const performManagerAct = (
         ...memberships.filter((known) => !equals(known.room, room)),
         {
           ...entry,
+          // A room this user created names no counterpart in its label, so
+          // rejoining it keeps the one its membership recorded.
+          ...(entry.counterpart === undefined &&
+              membership?.counterpart !== undefined
+            ? { counterpart: membership.counterpart }
+            : {}),
           container: container ?? membership?.container,
           since: membership?.since ?? entry.since,
           catalogRevision: catalogManaged
@@ -1618,9 +1672,12 @@ const performManagerAct = (
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
+  // A held direct room whose space is deleted does not keep a received one
+  // out, as it does not for `openDirect`: the first replacement offered to
+  // either side is the one both hold.
   if (
     kind === "direct" && counterpart !== undefined &&
-    direct.key(counterpart).get() === undefined
+    liveDirect(direct.key(counterpart).get()) === undefined
   ) {
     direct.key(counterpart).set(entry);
   }
@@ -1732,8 +1789,21 @@ export interface FabriChatManagerOutput {
   /** The manager's rendering. */
   [UI]: VNode;
 
-  /** Every room this user belongs to and hasn't forgotten, newest first. */
+  /**
+   * Every room this user belongs to and hasn't forgotten, newest first, other
+   * than one whose space is deleted.
+   */
   rooms: PerUser<ChatIndexEntry[]>;
+
+  /**
+   * The rooms `rooms` leaves out because their space is deleted, newest
+   * first, among those this user holds a membership for, saved or archived.
+   * A room from before the manager recorded memberships has none, and only
+   * the catalog's `deleted` list shows it. A deleted room can't be read,
+   * written or forgotten, so a client shows each as deleted and offers no
+   * control for it.
+   */
+  deletedRooms: PerUser<ChatIndexEntry[]>;
 
   /**
    * The stored catalog used for standalone membership and container discovery.
@@ -1783,7 +1853,9 @@ export interface FabriChatManagerOutput {
   /**
    * Makes a room this user has entered one of their chats: lists it, or
    * lists it again once forgotten, and adds them to its participants. A room
-   * their chats list already is left as it is.
+   * their chats list already keeps its membership as it is; a join that no
+   * message or reaction sent brings its catalog title up to date with the
+   * room's.
    */
   joinRoom: Stream<ManagerStreamEvent>;
 
@@ -1919,6 +1991,100 @@ const counterpartOf = (
   return creator === self ? undefined : creator;
 };
 
+/**
+ * The counterpart a forgotten direct room's membership keeps: its own
+ * record's, or else the one `direct` or the room's creator names now. A
+ * room held only through the catalog has no record of its own, and `direct`
+ * stops naming its counterpart once a replacement takes the room's place
+ * there, so it is read while it still does.
+ */
+const forgottenCounterpart = (
+  kind: ChatIndexEntry["kind"],
+  membership: RoomMembership | undefined,
+  direct: Record<string, ChatIndexEntry>,
+  room: Cell<ChatRoomLink>,
+): string | undefined =>
+  kind === "direct"
+    ? membership?.counterpart ?? counterpartOf(direct, room, currentPrincipal())
+    : undefined;
+
+/**
+ * Whether `room`'s space is deleted: by the catalog's word, an entry in the
+ * `deleted` state, or the memory server's, which `spaceDeleted()` reads. The
+ * catalog hears of a deletion from the runtime that met it, so a room can be
+ * deleted on the server before any catalog says so, and the reverse while
+ * this runtime has not asked the server again.
+ */
+const roomDeleted = (
+  entries: Record<string, RoomCatalogEntry>,
+  room: Cell<ChatRoomLink>,
+): boolean =>
+  entries[spaceOf(room) ?? ""]?.state === "deleted" ||
+  spaceDeleted(room) === true;
+
+/**
+ * The direct room `known` holds, unless the memory server says its space is
+ * deleted: a deleted room is gone for both people, so it keeps no
+ * conversation and no received room out, and the next `openDirect` or
+ * acceptance replaces the entry. In a handler, a room whose space the memory
+ * server has not answered for runs the handler again once it has. The
+ * catalog's word is not read here: `openDirect` creates the replacement in
+ * the transaction that asks, and a catalog entry's confidentiality label
+ * would come into that transaction with the read.
+ */
+const liveDirect = (
+  known: ChatIndexEntry | undefined,
+): ChatIndexEntry | undefined =>
+  known !== undefined && spaceDeleted(known.room) !== true ? known : undefined;
+
+/** Orders index entries newest first. */
+const newestFirst = (a: ChatIndexEntry, b: ChatIndexEntry): number =>
+  nsecOf(b.since) < nsecOf(a.since)
+    ? -1
+    : nsecOf(b.since) > nsecOf(a.since)
+    ? 1
+    : 0;
+
+/**
+ * The rooms the catalog's saved `entries` led to, each once it resolves and
+ * reads as a room, as `rooms` lists them: `found` holds each entry's room as
+ * `FoundRoom` found it, `catalog` says which standalone entries are still
+ * saved, and `stored` and `self` name a direct room's counterpart. The room's
+ * own records are read here, beside the entry they belong to; `FoundRoom`
+ * has already read them for each room it found, so none of these reads waits
+ * on a space this replica can't serve.
+ */
+const discoveredRooms = (
+  entries: readonly RoomCatalogEntry[],
+  found: readonly (FoundRoomOutput | undefined)[],
+  catalog: Record<string, RoomCatalogEntry>,
+  stored: Record<string, ChatIndexEntry>,
+  self: string | undefined,
+): ChatIndexEntry[] =>
+  entries.flatMap((entry, index): ChatIndexEntry[] => {
+    const room = found[index]?.room;
+    if (room === undefined) return [];
+    const standalone = catalog[spaceOf(room) ?? ""];
+    if (
+      standalone?.kind === CHAT_ROOM_OFFER_KIND &&
+      standalone.state !== "saved"
+    ) return [];
+    const kind = roomKindOf(room);
+    if (kind === undefined) return [];
+    const counterpart = kind === "direct"
+      ? counterpartOf(stored, room, self)
+      : undefined;
+    return [{
+      room,
+      kind,
+      ...(counterpart === undefined ? {} : { counterpart }),
+      since: epochNsecFromMsec(entry.since ?? 0),
+      revision: entry.kind === CHAT_ROOM_OFFER_KIND
+        ? entry.revision
+        : chatRevision(entry, room),
+    }];
+  });
+
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
   extends Required<FabriChatManagerInput> {
@@ -2033,50 +2199,57 @@ export const FabriChatManagerCore = pattern<
         const room = keptForUser[index]?.room;
         return room !== undefined && roomKindOf(room) !== undefined;
       });
-      const discovered = savedRooms.flatMap(
-        (entry, index): ChatIndexEntry[] => {
-          const room = foundForUser[index]?.room;
-          if (room === undefined) return [];
-          const standalone = catalogEntries[spaceOf(room) ?? ""];
-          if (
-            standalone?.kind === CHAT_ROOM_OFFER_KIND &&
-            standalone.state !== "saved"
-          ) return [];
-          const kind = roomKindOf(room);
-          if (kind === undefined) return [];
-          const counterpart = kind === "direct"
-            ? counterpartOf(stored, room, self)
-            : undefined;
-          return [{
-            room,
-            kind,
-            ...(counterpart === undefined ? {} : { counterpart }),
-            since: epochNsecFromMsec(entry.since ?? 0),
-            revision: entry.kind === CHAT_ROOM_OFFER_KIND
-              ? entry.revision
-              : chatRevision(entry, room),
-          }];
-        },
+      const discovered = discoveredRooms(
+        savedRooms,
+        foundForUser,
+        catalogEntries,
+        stored,
+        self,
       );
       const listed = [
         ...kept,
         ...discovered.filter((entry) =>
           !memberships.some((known) => equals(known.room, entry.room))
         ),
-      ];
+      ].filter((entry) => !roomDeleted(catalogEntries, entry.room));
       return listed.filter((entry, index) =>
         listed.findIndex((known) => equals(known.room, entry.room)) === index
       ).map((entry) =>
         entry.kind === "direct"
           ? { ...entry, counterpart: counterpartOf(stored, entry.room, self) }
           : entry
-      ).sort((a, b) =>
-        nsecOf(b.since) < nsecOf(a.since)
-          ? -1
-          : nsecOf(b.since) > nsecOf(a.since)
-          ? 1
-          : 0
+      ).sort(newestFirst);
+    });
+    // The rooms `rooms` leaves out because their space is deleted, newest
+    // first, among those this user holds a membership for, saved or archived.
+    // The manager records one for every room it creates, accepts or joins, so
+    // a deleted room's link outlives the catalog's finding of it, which reads
+    // the space; what it holds of a room nothing can read is that record, its
+    // kind, counterpart and admission time. A room from before memberships
+    // were recorded at creation and acceptance has none, and is the catalog's
+    // deleted list's to show. Per user, as `roomsForUser` is, and named for
+    // the same reason.
+    const deletedRoomsForUser = computed((): PerUser<ChatIndexEntry[]> => {
+      const self = profileOwnerOf(myProfile);
+      const stored = direct.get() ?? {};
+      const gone = effectiveMemberships(
+        roomMembership.get() ?? [],
+        catalogEntries,
+      ).filter((entry) =>
+        (entry.state === "saved" || entry.state === "archived") &&
+        roomDeleted(catalogEntries, entry.room)
       );
+      return gone.filter((entry, index) =>
+        gone.findIndex((known) => equals(known.room, entry.room)) === index
+      ).map((entry) =>
+        entry.kind === "direct"
+          ? {
+            ...entry,
+            counterpart: entry.counterpart ??
+              counterpartOf(stored, entry.room, self),
+          }
+          : entry
+      ).sort(newestFirst);
     });
     // The people the listed rooms' rosters hold, by the principal each
     // profile's own label attests, read beside the rooms that list them, and
@@ -2118,7 +2291,7 @@ export const FabriChatManagerCore = pattern<
         requests,
       }),
       joinRooms: joining,
-      listRooms: listRooms({ catalog: sharedSpaceCatalog }),
+      listRooms: listRooms({ catalog: sharedSpaceCatalog, roomMembership }),
       draft,
       startRefusal,
     };
@@ -2216,6 +2389,7 @@ export const FabriChatManagerCore = pattern<
     };
     const view = {
       rooms: roomsForUser,
+      deletedRooms: deletedRoomsForUser,
       sharedSpaceCatalog,
       roomMembership,
       direct,
@@ -2391,6 +2565,7 @@ const FabriChatManager = pattern<
     [UI]: core[UI],
     [VIEWS]: core[VIEWS],
     rooms: core.rooms,
+    deletedRooms: core.deletedRooms,
     sharedSpaceCatalog: core.sharedSpaceCatalog,
     roomMembership: core.roomMembership,
     direct: core.direct,

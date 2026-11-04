@@ -120,6 +120,7 @@ export function registerBuiltins(runtime: Runtime) {
   moduleRegistry.addModuleByRef(
     "agent",
     raw<BuiltInAgentParams, {
+      progress: Cell<unknown>;
       pending: Cell<boolean>;
       result: Cell<unknown>;
       error: Cell<string | undefined>;

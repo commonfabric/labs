@@ -986,8 +986,8 @@ cross-space child-phase limitation is explicit below.
 
 The receipt is not a new document kind: **the receipt is the handling's
 result cell.** Every event handling conceptually owns one result document —
-the same `{ resultFor: cause }` cell that hosts a launched pattern when the
-handler returns one; when the handler launches nothing, the cell is simply
+the same `receipt:` cell (`handlingReceiptId()`, a hash of the event id and its
+stream) that hosts a launched pattern when the handler returns one; when the handler launches nothing, the cell is simply
 the receipt. This gives handlers the same shape as computations: one
 canonical output document per unit of work, whose creation doubles as the
 exactly-once witness. A receipt-only handling carries the handler's normalized
@@ -1538,7 +1538,7 @@ Summary table; the full per-mechanism walkthrough with file references is in
     `queueSchedulerEvent`). Multi-handler dispatch is a future opt-in
     feature; if it lands, the handler id joins the receipt derivation.
 13. **The receipt is the handler's result cell.** Every handling owns one
-    result document — the `{ resultFor: cause }` cell that hosts a
+    result document — the `receipt:` cell that hosts a
     launched pattern when there is one, and is just the receipt when there
     was nothing to launch. For inline non-navigation results, an `inSpace`
     child has its own target-space result, but the canonical handler

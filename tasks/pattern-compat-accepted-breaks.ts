@@ -2381,10 +2381,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.room.canSend",
       "result.$VIEWS.chat.canSend",
       "result.room.canSend",
+      // The state's new `deleted` value, which
+      // `fabrichat-placement-deleted-state-break.md` records.
+      "result.$VIEWS.chat.state",
     ],
     reason:
       "the room keeps no activity log, so the placement's data face no longer carries one" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; and its state gains `deleted` for a room whose space is deleted (docs/history/fabrichat-placement-deleted-state-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2409,10 +2413,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chat.canSend",
       "result.placement.$VIEWS.chat.canSend",
       "result.placement.room.canSend",
+      // The placement state's new `deleted` value, which
+      // `fabrichat-placement-deleted-state-break.md` records.
+      "result.$VIEWS.chat.state",
+      "result.placement.$VIEWS.chat.state",
     ],
     reason:
       "the room keeps no activity log, so the data face the adapter re-exports no longer carries one" +
-      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)",
+      "; and the room's answers about its reader are per session again (docs/history/fabrichat-room-viewer-per-session-reland.md)" +
+      "; and the placement's state gains `deleted` for a room whose space is deleted (docs/history/fabrichat-placement-deleted-state-break.md)",
     record: "docs/history/fabrichat-pushed-messages-break.md",
   },
   {
@@ -2470,9 +2479,14 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "argument.room.canSend",
       "result.$VIEWS.chat.canSend",
       "result.room.canSend",
+      // The state's new `deleted` value, a value outside the three-value enum
+      // every placement baseline carries;
+      // `fabrichat-placement-deleted-state-break.md` records it.
+      "result.$VIEWS.chat.state",
     ],
     reason:
-      "a placement's `canSend`, and its read of the room's, are per session, as the room's are",
+      "a placement's `canSend`, and its read of the room's, are per session, as the room's are" +
+      "; and its state gains `deleted` for a room whose space is deleted (docs/history/fabrichat-placement-deleted-state-break.md)",
     record: "docs/history/fabrichat-room-viewer-per-session-reland.md",
   },
   {
@@ -2490,9 +2504,15 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.$VIEWS.chat.canSend",
       "result.placement.$VIEWS.chat.canSend",
       "result.placement.room.canSend",
+      // The placement state's new `deleted` value, a value outside the
+      // three-value enum every adapter baseline carries;
+      // `fabrichat-placement-deleted-state-break.md` records it.
+      "result.$VIEWS.chat.state",
+      "result.placement.$VIEWS.chat.state",
     ],
     reason:
-      "the placement the adapter holds, and its data face the adapter re-exports, declare `canSend` per session",
+      "the placement the adapter holds, and its data face the adapter re-exports, declare `canSend` per session" +
+      "; and the placement's state gains `deleted` for a room whose space is deleted (docs/history/fabrichat-placement-deleted-state-break.md)",
     record: "docs/history/fabrichat-room-viewer-per-session-reland.md",
   },
   {
@@ -2743,5 +2763,30 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "the collection view's ready branch gains optional `deleted` lists, which the proof reads as a narrowed union branch under a baseline that never had the property",
     record: "docs/history/shared-space-collection-deleted-lists-break.md",
+  },
+  {
+    // A placement's `state` gains `"deleted"`, which the specification adds
+    // for a room whose space is deleted and asks clients to show as such. A
+    // published enum that grows is a value an older reader never admitted,
+    // so the proof refuses it over every baseline that carried the enum.
+    // Every earlier baseline carries the same three-value enum, and is
+    // forgiven on this path by the entry above that already names it.
+    pattern: "system/fabrichat/placement.tsx",
+    baselines: ["20261029T012601Z-DvhNFxSKBXqtZjw2"],
+    paths: ["result.$VIEWS.chat.state"],
+    reason:
+      "a placement's state gains `deleted` for a room whose space is deleted, a value the specification adds and no older reader's enum admitted",
+    record: "docs/history/fabrichat-placement-deleted-state-break.md",
+  },
+  {
+    // The adapter re-exports the placement's data face, so its state gains
+    // the same value; every earlier baseline carries the same three-value
+    // enum, and is forgiven by the entry above that already names it.
+    pattern: "system/fabrichat/adapter.tsx",
+    baselines: ["20261029T012601Z-IIPTt7RKzLCix33Y"],
+    paths: ["result.$VIEWS.chat.state", "result.placement.$VIEWS.chat.state"],
+    reason:
+      "the placement's state the adapter re-exports gains `deleted` for a room whose space is deleted, a value the specification adds and no older reader's enum admitted",
+    record: "docs/history/fabrichat-placement-deleted-state-break.md",
   },
 ];

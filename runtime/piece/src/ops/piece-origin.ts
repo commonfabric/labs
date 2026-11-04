@@ -30,9 +30,8 @@ import {
   spaceHostFromFabricAuthority,
 } from "@commonfabric/runner";
 import {
-  entityKindOfIdString,
+  entityUriSchemePrefix,
   stripEntityUriScheme,
-  uriSchemeForEntityKind,
 } from "@commonfabric/runner/entity-kind";
 import {
   parseReleaseTime,
@@ -342,11 +341,10 @@ export async function resolvePieceOriginSource(
 /**
  * Whether a stable fabric reference names the entity `pieceId` addresses. The
  * id can arrive as a bare tagged hash or as its schemed URI, so both are
- * reduced to the kind and hash the reference carries.
+ * reduced to the scheme and hash the reference carries.
  */
 function namesEntity(ref: StableFabricRef, pieceId: string): boolean {
-  return uriSchemeForEntityKind(entityKindOfIdString(pieceId)) ===
-      ref.ref.scheme &&
+  return (entityUriSchemePrefix(pieceId) ?? "of:") === `${ref.ref.scheme}:` &&
     stripEntityUriScheme(pieceId) === `fid1:${ref.ref.hash}`;
 }
 

@@ -38,6 +38,7 @@ describe("agent inspection commands", () => {
   const setup = () => {
     const outputs: unknown[] = [];
     const cancelled: string[] = [];
+    const removed: string[] = [];
     const deps: AgentInspectionCommandDeps = {
       read: () => Promise.resolve([queued, completed]),
       readOne: (_config, identifier) =>
@@ -45,6 +46,10 @@ describe("agent inspection commands", () => {
       cancel: (_config, run) => {
         cancelled.push(run);
         return Promise.resolve(queued);
+      },
+      remove: (_config, run) => {
+        removed.push(run);
+        return Promise.resolve(completed);
       },
       render: (value) => {
         outputs.push(value);
@@ -59,7 +64,7 @@ describe("agent inspection commands", () => {
           "--api-url",
           "https://home.example",
         ]);
-    return { outputs, cancelled, run };
+    return { outputs, cancelled, removed, run };
   };
 
   it("lists only the requested state as structured JSON metadata", async () => {
@@ -78,6 +83,13 @@ describe("agent inspection commands", () => {
     const { run, cancelled } = setup();
     await run(["cancel", "run-queued"]);
     expect(cancelled).toEqual(["run-queued"]);
+  });
+
+  it("passes removal to the queue writer", async () => {
+    const { run, removed, cancelled } = setup();
+    await run(["remove", "run-completed"]);
+    expect(removed).toEqual(["run-completed"]);
+    expect(cancelled).toEqual([]);
   });
 
   it("keeps provider cost, estimated cost, and the withheld reason distinct", () => {
@@ -133,6 +145,10 @@ describe("agent inspection commands", () => {
       cancel: () => {
         opened = true;
         return Promise.resolve(queued);
+      },
+      remove: () => {
+        opened = true;
+        return Promise.resolve(completed);
       },
       render: () => {},
     };

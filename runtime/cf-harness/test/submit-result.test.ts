@@ -186,6 +186,7 @@ describe("submit_result", () => {
     runId: string,
     turns: readonly unknown[],
     options: {
+      reportProgress?: (message: string) => Promise<void>;
       schema?: boolean;
       allowedToolIds?: string[];
       stopOnStructuredResult?: boolean;
@@ -197,6 +198,7 @@ describe("submit_result", () => {
     const engine = new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runId,
+      reportProgress: options.reportProgress,
       model: "gpt-5.4",
       ...(options.schema === false ? {} : {
         structuredResult: { schema: RESULT_SCHEMA, path: resultPath },
@@ -356,6 +358,43 @@ describe("submit_result", () => {
       "describe_handle",
       "submit_result",
     ]);
+  });
+
+  it("admits opt-in progress under context at strict enforcement without ending the run", async () => {
+    const messages: string[] = [];
+    const { result, engine, offeredTools } = await run("strict-progress", [
+      {
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{
+              id: "progress-one",
+              type: "function",
+              function: {
+                name: "report_progress",
+                arguments: JSON.stringify({ message: "Checked sources" }),
+              },
+            }],
+          },
+        }],
+      },
+      submit("result-one", { answer: "Hyperion" }),
+      finalTurn("Done."),
+    ], {
+      reportProgress: (message) => {
+        messages.push(message);
+        return Promise.resolve();
+      },
+    });
+    expect(engine.getRunState().cfcEnforcementMode).toBe("enforce-strict");
+    expect(offeredTools[0]).toContain("report_progress");
+    expect(messages).toEqual(["Checked sources"]);
+    expect(toolOutputs(result.transcript)[0]).toMatchObject({ status: "ok" });
+    expect(JSON.parse(await Deno.readTextFile(resultPath)).answer).toBe(
+      "Hyperion",
+    );
   });
 
   it("records a valid submission as the structured result, under the `context` role at `enforce-strict`", async () => {

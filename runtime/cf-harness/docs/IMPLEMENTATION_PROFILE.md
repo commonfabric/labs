@@ -155,22 +155,25 @@ dependency readiness.
   authority-only host boundary, not a new flow-aware store commit gate; see
   [LOOM_AUTHORING.md](LOOM_AUTHORING.md). The agent result writer
   (`src/result-writer.ts`) is a third trusted host path and not a model tool: a
-  host caller invokes it after a run reaches its structured result, and it
-  writes that result into the same configured space over the same session. Its
-  bounded authority is the session's (AH-TOOL-7): every handle the result names
-  must be one the run's table holds, a cell handle becomes a link and never a
-  copy, a non-cell referent becomes a document under the label its tool reported
-  when the result cites it, and an uncited referent passes the same write
-  admission in an isolated aborted transaction and contributes through an opaque
-  runtime CONTENT-observation receipt. The cells the run observed and the cited
-  referents are read through the writing transaction so the runner derives the
-  inline text's label without making uncited content durable. The write is
-  attributed to the `agent` builtin so the result carries the runtime-minted
-  `LlmDerived` family, and the run's observation ceiling is declared as the
-  result document's store policy so the runner's commit boundary — not the
-  writer — decides whether the derived join fits. A refusal reaches the caller
-  as a typed failure carrying the refusal code and the boundary's structured
-  detail, with no label atom in its message.
+  host caller invokes it for opt-in progress reports and after a run reaches its
+  structured result, and it writes those outputs into the same configured space
+  over the same session. Its bounded authority is the session's (AH-TOOL-7). For
+  a final result, every handle the result names must be one the run's table
+  holds, a cell handle becomes a link and never a copy, a non-cell referent
+  becomes a document under the label its tool reported when the result cites it,
+  and an uncited referent passes the same write admission in an isolated aborted
+  transaction and contributes through an opaque runtime CONTENT-observation
+  receipt. Progress reports use `literalStrings: true`: handle tokens remain
+  display text, create no links, and cite no referents. Observed non-cell
+  referents still contribute through the uncited observation path. In both
+  paths, the cells the run observed and any cited referents are read through the
+  writing transaction so the runner derives the inline text's label without
+  making uncited content durable. The write is attributed to the `agent` builtin
+  so the result carries the runtime-minted `LlmDerived` family, and the run's
+  observation ceiling is declared as the result document's store policy so the
+  runner's commit boundary — not the writer — decides whether the derived join
+  fits. A refusal reaches the caller as a typed failure carrying the refusal
+  code and the boundary's structured detail, with no label atom in its message.
 - Network: explicit in configuration but still provisional. Sandboxed `bash`
   applies a direct-`curl` destination guard; `web_fetch` and web child profiles
   have their own bounded request policies.
@@ -234,6 +237,20 @@ schema (AH-TOOL-4's explicit grant), it is absent from a run configured with
 none, and it reaches nothing but that run's own result file. A subagent run is
 not offered it. The model writing the file itself remains available to a run
 that holds a tool able to.
+
+`report_progress` is the opt-in interim return channel. The host supplies its
+publication callback, and the tool is absent without that callback and in child
+runs. It accepts a nonempty message of at most 2,000 characters and continues
+the run. Its description asks for user-facing milestone reports. Like
+`submit_result`, it is admitted under every prompt-slot role, with reason
+`progress_return`, because its destination is fixed by the host. For `agent()`
+requests the callback writes a separate labeled document through the canonical
+agent result writer, retaining literal message text, observed-input influence,
+and the model-derived integrity stamp. Attaching the document's link requires
+the runner still to own the active, uncancelled attempt. These are host-owned
+return boundaries; they grant no general write authority. Their storage writes
+remain subject to ordinary CFC commit admission (§18.2.4 and §18.3.3 of the CFC
+runtime implementation profile).
 
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available

@@ -235,7 +235,9 @@ show the gap. Each script stops at the first command that fails, so no step
 runs on the strength of one that did not finish. Set the four names at the top
 of each first: the space's DID, a date for the file names, the live directory,
 and the directory that receives what the swap replaces, which has to be on the
-live directory's file system for the copy to be quick.
+live directory's file system for the copy to be quick. The store's file name is derived from the DID and the directory, as the
+memory server derives it, rather than typed. The window prints an id, the date
+and a random suffix, which names what it keeps; the way back takes it.
 
 ```bash
 set -euo pipefail
@@ -244,6 +246,36 @@ DATE='<date>'
 LIVE=/data/memory/engine-v3/engine-v3
 REPLACED=/data/replaced
 cd "$LIVE"
+
+# The store's file name is the memory server's for the DID
+# (`resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`), and the
+# directory's own name says which: in directory mode, whose directory is
+# .../engine-v3/engine-v3, the DID itself; in single-file mode, whose
+# directory is <stem>.engine-v3, the DID as `encodeURIComponent` encodes it.
+# A store under the other spelling means the names above are wrong.
+uri_component() {
+  local LC_ALL=C s=$1 i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9_.!~*\'\(\)-]) printf '%s' "$c" ;;
+      *) printf '%%%02X' $(($(printf '%d' "'$c") & 255)) ;;
+    esac
+  done
+}
+encoded="$(uri_component "$DID").sqlite"
+case "$(basename "$LIVE")" in
+  engine-v3) STORE="$DID.sqlite" OTHER=$encoded ;;
+  *.engine-v3) STORE=$encoded OTHER="$DID.sqlite" ;;
+  *)
+    echo "$LIVE is not a store directory: stop here" >&2
+    exit 1
+    ;;
+esac
+if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
+  echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
+  exit 1
+fi
 
 # 0. Space, disk, which instance owns it, and the release each instance runs
 #    (the guard check above, again: a deploy between the preflight and the
@@ -268,7 +300,7 @@ fi
 #    through the instances' own coordination when one has it open, and
 #    writes nothing; its numbers are not the run's, which come from the
 #    backup taken after the stop.
-cf space compact "$LIVE/$DID.sqlite" --documents computed: --dry-run
+cf space compact "$LIVE/$STORE" --documents computed: --dry-run
 ```
 
 Then, once the dry run agrees with the rehearsal's:
@@ -280,6 +312,41 @@ DATE='<date>'
 LIVE=/data/memory/engine-v3/engine-v3
 REPLACED=/data/replaced
 cd "$LIVE"
+
+# The store's file name is the memory server's for the DID
+# (`resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`), and the
+# directory's own name says which: in directory mode, whose directory is
+# .../engine-v3/engine-v3, the DID itself; in single-file mode, whose
+# directory is <stem>.engine-v3, the DID as `encodeURIComponent` encodes it.
+# A store under the other spelling means the names above are wrong.
+uri_component() {
+  local LC_ALL=C s=$1 i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9_.!~*\'\(\)-]) printf '%s' "$c" ;;
+      *) printf '%%%02X' $(($(printf '%d' "'$c") & 255)) ;;
+    esac
+  done
+}
+encoded="$(uri_component "$DID").sqlite"
+case "$(basename "$LIVE")" in
+  engine-v3) STORE="$DID.sqlite" OTHER=$encoded ;;
+  *.engine-v3) STORE=$encoded OTHER="$DID.sqlite" ;;
+  *)
+    echo "$LIVE is not a store directory: stop here" >&2
+    exit 1
+    ;;
+esac
+if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
+  echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
+  exit 1
+fi
+# The run's id names what it keeps in $REPLACED: the date and a random
+# suffix, so a second run on the same day keeps its own. Note it down; the
+# way back needs it.
+RUN="$DATE-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+echo "run id: $RUN"
 
 # 2. Stop every instance. Nothing writes any space from here on. A log
 #    beside the store that is not empty holds what an instance did not write
@@ -295,12 +362,12 @@ for p in $(seq 8001 8021); do
   fi
 done
 for log in -wal -journal; do
-  if [ -s "$DID.sqlite$log" ]; then
-    echo "$DID.sqlite$log is not empty: stop here" >&2
+  if [ -s "$STORE$log" ]; then
+    echo "$STORE$log is not empty: stop here" >&2
     exit 1
   fi
 done
-sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
+sudo rm -f "$STORE-wal" "$STORE-shm" "$STORE-journal"
 
 # 3. The authoritative backup, AFTER the stop, into a directory with room,
 #    checksummed. This is the rollback, the archive, and the source. It reads
@@ -308,16 +375,16 @@ sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
 #    log beside it holds anything (see below for why not `-readonly`).
 # SQLite decodes `%HH` in a URI's path and ends the path at `?` or `#`, so
 # those three are escaped in the store's path.
-STORE_URI="file:$(printf '%s' "$LIVE/$DID.sqlite" |
+STORE_URI="file:$(printf '%s' "$LIVE/$STORE" |
   sed -e 's/%/%25/g' -e 's/?/%3F/g' -e 's/#/%23/g')"
 sqlite3 "$STORE_URI?immutable=1" \
-  "VACUUM INTO '$REPLACED/$DID.pre-compaction-$DATE.sqlite'"
-sha256sum "$REPLACED/$DID.pre-compaction-$DATE.sqlite"
+  "VACUUM INTO '$REPLACED/$DID.pre-compaction-$RUN.sqlite'"
+sha256sum "$REPLACED/$DID.pre-compaction-$RUN.sqlite"
 
 # 4. Compact a COPY of the backup — the backup itself is never written to —
 #    and write the result beside it. The dry-run report it prints first must
 #    agree with step 1's up to the commits accepted between the two reads.
-cp "$REPLACED/$DID.pre-compaction-$DATE.sqlite" "$REPLACED/$DID.work.sqlite"
+cp "$REPLACED/$DID.pre-compaction-$RUN.sqlite" "$REPLACED/$DID.work.sqlite"
 cf space compact "$REPLACED/$DID.work.sqlite" --documents computed: \
   --out "$REPLACED/$DID.compacted.sqlite"
 rm -f "$REPLACED/$DID.work.sqlite" "$REPLACED/$DID.work.sqlite-wal" \
@@ -325,16 +392,20 @@ rm -f "$REPLACED/$DID.work.sqlite" "$REPLACED/$DID.work.sqlite-wal" \
 
 # 5. Verify, on the host, against the post-stop backup.
 cf space compact "$REPLACED/$DID.compacted.sqlite" \
-  --verify --against "$REPLACED/$DID.pre-compaction-$DATE.sqlite"
+  --verify --against "$REPLACED/$DID.pre-compaction-$RUN.sqlite"
 
 # 6. Swap. The live file is copied aside, never deleted, and the result,
 #    owned by deploy, is renamed over it, so the directory holds a store
 #    throughout. The space's cell databases stay where they are: a
 #    compaction keeps them.
-sudo cp -p "$DID.sqlite" "$REPLACED/$DID.live-$DATE.sqlite"
+if [ -e "$REPLACED/$DID.live-$RUN.sqlite" ]; then
+  echo "$REPLACED/$DID.live-$RUN.sqlite exists: stop here" >&2
+  exit 1
+fi
+sudo cp -p "$STORE" "$REPLACED/$DID.live-$RUN.sqlite"
 sudo install -o deploy -g deploy -m 644 "$REPLACED/$DID.compacted.sqlite" \
-  "$DID.sqlite.compacted"
-sudo mv -f "$DID.sqlite.compacted" "$DID.sqlite"
+  "$STORE.compacted"
+sudo mv -f "$STORE.compacted" "$STORE"
 
 # 7. Start them all, and confirm.
 for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
@@ -361,14 +432,45 @@ instance has the result open and may be writing it, and by then the result has
 companions of its own. A file moved out from under an open database replaces
 nothing, since the instances keep the old inode, and a `-wal` left beside a
 restored original would be replayed into it on the next open, so the result's
-companions go with the result into `/data/replaced/rolled-back/`. Write these
+companions go with the result into `/data/replaced/rolled-back-<run id>/`. Write these
 commands down before anything is stopped. The backup is a second copy of the
 same pre-compaction state should the original be damaged in the move. With the
-same four names set:
+same four names set, and the run id the window printed:
 
 ```bash
 set -euo pipefail
+RUN='<the run id the run printed>'
 cd "$LIVE"
+
+# The store's file name is the memory server's for the DID
+# (`resolveSpaceStoreUrl` in `runtime/memory/v2/storage-path.ts`), and the
+# directory's own name says which: in directory mode, whose directory is
+# .../engine-v3/engine-v3, the DID itself; in single-file mode, whose
+# directory is <stem>.engine-v3, the DID as `encodeURIComponent` encodes it.
+# A store under the other spelling means the names above are wrong.
+uri_component() {
+  local LC_ALL=C s=$1 i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9_.!~*\'\(\)-]) printf '%s' "$c" ;;
+      *) printf '%%%02X' $(($(printf '%d' "'$c") & 255)) ;;
+    esac
+  done
+}
+encoded="$(uri_component "$DID").sqlite"
+case "$(basename "$LIVE")" in
+  engine-v3) STORE="$DID.sqlite" OTHER=$encoded ;;
+  *.engine-v3) STORE=$encoded OTHER="$DID.sqlite" ;;
+  *)
+    echo "$LIVE is not a store directory: stop here" >&2
+    exit 1
+    ;;
+esac
+if [ "$OTHER" != "$STORE" ] && [ -e "$OTHER" ]; then
+  echo "$LIVE holds $OTHER, not $STORE: stop here" >&2
+  exit 1
+fi
 
 # 1. Stop every instance, and stop here unless each reports itself inactive:
 #    nothing moves while an instance may still have the result open. (sudo.)
@@ -383,18 +485,18 @@ done
 
 # 2. Keep the result, with the companions it grew, where its names cannot
 #    collide with the original's.
-sudo mkdir -p "$REPLACED/rolled-back"
+sudo mkdir -p "$REPLACED/rolled-back-$RUN"
 for companion in -wal -shm -journal; do
-  if [ -e "$DID.sqlite$companion" ]; then
-    sudo mv "$DID.sqlite$companion" "$REPLACED/rolled-back/"
+  if [ -e "$STORE$companion" ]; then
+    sudo mv "$STORE$companion" "$REPLACED/rolled-back-$RUN/"
   fi
 done
-sudo cp -p "$DID.sqlite" "$REPLACED/rolled-back/$DID.sqlite"
+sudo cp -p "$STORE" "$REPLACED/rolled-back-$RUN/$STORE"
 
 # 3. Rename the original back over the result, so the directory holds a store
 #    throughout.
-sudo cp -p "$REPLACED/$DID.live-$DATE.sqlite" "$DID.sqlite.restored"
-sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
+sudo cp -p "$REPLACED/$DID.live-$RUN.sqlite" "$STORE.restored"
+sudo mv -f "$STORE.restored" "$STORE"
 
 # 4. Start them all, and confirm, as step 7 does. (sudo.)
 for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
