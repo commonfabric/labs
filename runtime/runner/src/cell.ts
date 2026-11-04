@@ -1758,11 +1758,25 @@ export class CellImpl<T extends FabricValue>
     }
   }
 
-  /** The object the siblings share as their identity; `CauseContainer.cell`. */
+  /**
+   * The object the siblings share as their identity; `CauseContainer.cell`.
+   * A sibling made with no transaction and no frame, as `#linkOnlyCopy()`
+   * makes a copy: `withTx()` keeps the transaction of a cell bound to the run
+   * under way, and a frame carries its action's transaction.
+   */
   #identityCell(): OpaqueCell<unknown> {
-    this.#causeContainer.cell ??= this.withTx() as unknown as OpaqueCell<
-      unknown
-    >;
+    if (this.#causeContainer.cell === undefined) {
+      const identity = new CellImpl(
+        this.#runtime,
+        undefined,
+        this.#_link,
+        this.#synced,
+        this.#causeContainer,
+        this.#kind,
+      );
+      identity.#frame = undefined;
+      this.#causeContainer.cell = identity as unknown as OpaqueCell<unknown>;
+    }
     return this.#causeContainer.cell;
   }
 

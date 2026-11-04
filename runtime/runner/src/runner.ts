@@ -1680,6 +1680,12 @@ const pieceOwnedStores = (
   ),
 ];
 
+/** Whether a transaction has neither committed nor aborted yet. */
+const isOpenTransaction = (tx: IExtendedStorageTransaction): boolean => {
+  const { status } = tx.status();
+  return status === "ready" || status === "pending";
+};
+
 /**
  * Stamps `start`, the transaction a deferred piece start runs in, with the run
  * context `info` gives it (`Runtime.stampServerRun()`), and hands it the trust
@@ -1704,12 +1710,6 @@ const pieceOwnedStores = (
  * identity is addressing alone: a bookkeeping run acts as no principal
  * (serving-loop.md §3d).
  */
-/** Whether a transaction has neither committed nor aborted yet. */
-const isOpenTransaction = (tx: IExtendedStorageTransaction): boolean => {
-  const { status } = tx.status();
-  return status === "ready" || status === "pending";
-};
-
 const stampDeferredStart = (
   runtime: Runtime,
   from: IExtendedStorageTransaction,

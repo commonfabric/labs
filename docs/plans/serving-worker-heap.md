@@ -100,7 +100,10 @@ the main thread under the worker arm and so are not on the worker.
 ## What is left
 
 Per create on the worker rig, a demanded board, removing holders cumulatively in
-this order. The total is 862 KB.
+this order. The figures are from the holder table taken at 862 KB per create,
+before the last two changes under "Landed", which did not move them apart from
+the holders the two entries at the end of this list describe; the total is
+522 KB now.
 
 - Each Topic's documents, about 135 KB per create in `SpaceReplica.#docs` and
   shared with the session's watch view, and the watch bookkeeping that remains
