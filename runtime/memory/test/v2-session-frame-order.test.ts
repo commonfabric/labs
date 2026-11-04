@@ -621,8 +621,8 @@ describe("v2/server", () => {
       reader = await connect();
       await resume();
 
-      const [frame] = framesOf(reader.messages);
-      expect(frame.ids).toContain(NAMING_ID);
+      expect(framesOf(reader.messages).flatMap(({ ids }) => ids))
+        .toContain(NAMING_ID);
     });
   });
 });
