@@ -600,12 +600,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   inputSynced?(): Promise<void>;
 
   /**
-   * Resolves once every frame the connection has handed over has been applied
-   * and has notified its subscribers, so that a synchronous read of the
-   * scheduler's state afterward sees the work those frames set off. Unlike
-   * `inputSynced()`, this rests on an application that nothing parks behind:
-   * a frame's novelty can stay shadowed by a sealed commit, but its application
-   * finishes.
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
    */
   framesApplied?(): Promise<void>;
 
@@ -1229,12 +1230,13 @@ export interface IStorageProvider {
   inputSynced?(): Promise<void>;
 
   /**
-   * Resolves once every frame the connection has handed over has been applied
-   * and has notified its subscribers, so that a synchronous read of the
-   * scheduler's state afterward sees the work those frames set off. Unlike
-   * `inputSynced()`, this rests on an application that nothing parks behind:
-   * a frame's novelty can stay shadowed by a sealed commit, but its application
-   * finishes.
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
    */
   framesApplied?(): Promise<void>;
 

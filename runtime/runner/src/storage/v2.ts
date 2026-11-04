@@ -6364,10 +6364,11 @@ export class SpaceReplica
   }
 
   /**
-   * Resolves once this replica has applied every frame its connection has
-   * handed over, what they notified having been told. A frame is applied in
-   * one synchronous stretch by the consumer of the watch view, which then comes
-   * back for the next, so that coming back is the signal.
+   * Resolves once this replica has dealt with every frame its connection has
+   * handed over: applied it, its subscribers told, or dropped it as failing to
+   * apply, which `#consumeUpdates()` logs. The consumer of the watch view does
+   * either in one synchronous stretch and then comes back for the next frame,
+   * so that coming back is the signal.
    */
   async framesApplied(): Promise<void> {
     await this.#sessionClient?.delivered();
