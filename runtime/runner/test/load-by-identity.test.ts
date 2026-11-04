@@ -17,6 +17,7 @@ import {
   writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
 import { Engine } from "../src/harness/engine.ts";
 import { computeModuleHashes } from "../src/harness/module-identity.ts";
@@ -305,6 +306,143 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     );
     expect(fromLegacy.identity).toBe(fromClean.identity);
     expect(fromLegacy.js).toBe(fromClean.js);
+  });
+
+  // A stored program the exact check refuses is admitted when it checks clean
+  // without the flag, but is emitted from the exact program (the test above
+  // says why). Its schemas then come from types the exact rule assigns to
+  // source that breaks that rule, which can differ from what the program
+  // computes. The two tests below record what is accepted: such a program
+  // stays loadable and computes what it did, and its emitted schemas may
+  // describe less than that.
+  it("admits a legacy program whose result schema omits a field the exact checker recovered past", async () => {
+    // The generic call's argument fails the exact check, and the checker
+    // recovers by giving the call the constraint `{ name?: string }` in place
+    // of the inferred `{ name: undefined; count: number }`. Schema generation
+    // reads that recovered type, so `count` leaves the result schema, which
+    // carried it without the flag.
+
+    const legacy: Source[] = [{
+      name: "/main.tsx",
+      contents: [
+        "import { lift, pattern } from 'commonfabric';",
+        "function identity<T extends { name?: string }>(value: T): T {",
+        "  return value;",
+        "}",
+        "const helper = lift(() => identity({ name: undefined, count: 42 }));",
+        "export default pattern(() => ({ result: helper({}) }));",
+      ].join("\n"),
+    }];
+    await expect(
+      engine.compileToRecordGraph({ main: "/main.tsx", files: legacy }),
+    ).rejects.toThrow("'count' does not exist");
+
+    const recovered = await engine.compileResolvedToRecordGraph(
+      legacy,
+      "/main.tsx",
+    );
+    const evaluated = await engine.evaluateCachedModules(
+      toCached(recovered.modules),
+      recovered.entryIdentity,
+      { sourceFiles: legacy },
+    );
+    const legacyPattern = (evaluated.main as { default?: unknown })?.default;
+    const { resultSchema } = legacyPattern as { resultSchema: unknown };
+    expect(resultSchema).toEqual({
+      type: "object",
+      properties: {
+        result: { type: "object", properties: { name: { type: "string" } } },
+      },
+      required: ["result"],
+    });
+
+    type Result = { result: { name?: string; count?: number } };
+    const resultCell = runtime.getCell<Result>(
+      space,
+      "legacy generic constraint",
+      undefined,
+      tx,
+    );
+    // deno-lint-ignore no-explicit-any
+    const result = runtime.run(tx, legacyPattern as any, {}, resultCell);
+    await tx.commit().settled;
+    tx = runtime.edit();
+    await result.pull();
+    // The program computes `count`; a read through its result schema no
+    // longer shows it.
+    expect(result.withTx(tx).get().result.count).toBe(42);
+    const viewed = result.withTx(tx).asSchema(resultSchema as JSONSchema)
+      .get() as Result;
+    expect(Object.hasOwn(viewed.result, "count")).toBe(false);
+  });
+
+  it("admits a legacy program whose required input the exact rule types as never undefined", async () => {
+    // Under the exact rule, `'name' in o` narrows `o.name` to `string`, so
+    // `helper` returns `string` and the observer's `value` input is a required
+    // string. The admitted program still returns `undefined` there. Without
+    // the flag `value` was `string | undefined` and the observer ran.
+
+    const legacy: Source[] = [{
+      name: "/main.tsx",
+      contents: [
+        "import { lift, pattern } from 'commonfabric';",
+        "const helper = lift((_input: number) => {",
+        "  const o: { name?: string } = { name: undefined };",
+        "  return 'name' in o ? o.name : 'missing';",
+        "});",
+        "const observer = lift(",
+        "  (input: { value: ReturnType<typeof helper> }) =>",
+        "    input.value === undefined ? 'was undefined' : input.value,",
+        ");",
+        "export default pattern<{ trigger: number }>(({ trigger }) => {",
+        "  const value = helper(trigger);",
+        "  return { value, observed: observer({ value }) };",
+        "});",
+      ].join("\n"),
+    }];
+    await expect(
+      engine.compileToRecordGraph({ main: "/main.tsx", files: legacy }),
+    ).rejects.toThrow("exactOptionalPropertyTypes");
+
+    const recovered = await engine.compileResolvedToRecordGraph(
+      legacy,
+      "/main.tsx",
+    );
+    const evaluated = await engine.evaluateCachedModules(
+      toCached(recovered.modules),
+      recovered.entryIdentity,
+      { sourceFiles: legacy },
+    );
+    const legacyPattern = (evaluated.main as { default?: unknown })?.default;
+    const { resultSchema } = legacyPattern as { resultSchema: unknown };
+    expect(resultSchema).toEqual({
+      type: "object",
+      properties: { value: { type: "string" }, observed: { type: "string" } },
+      required: ["value", "observed"],
+    });
+
+    type Result = { value?: string; observed?: string };
+    const resultCell = runtime.getCell<Result>(
+      space,
+      "legacy narrowed value",
+      undefined,
+      tx,
+    );
+    // deno-lint-ignore no-explicit-any
+    const result = runtime.run(
+      tx,
+      legacyPattern as any,
+      { trigger: 1 },
+      resultCell,
+    );
+    await tx.commit().settled;
+    tx = runtime.edit();
+    await result.pull();
+    // The observer's input does not meet its schema, so it yields nothing
+    // where it yielded "was undefined" without the flag.
+    const value = result.withTx(tx).get();
+    expect(value.value).toBeUndefined();
+    expect(value.observed).toBeUndefined();
   });
 
   it("cold-loads an exact attached source-root package", async () => {
