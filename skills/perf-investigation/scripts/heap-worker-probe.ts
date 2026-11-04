@@ -33,7 +33,10 @@ const root = fromFileUrl(new URL("../../../", import.meta.url)).replace(
 const [firstArgument, moreArgument, outDir, patternArgument] = Deno.args;
 const first = Number(firstArgument);
 const more = Number(moreArgument);
-if (!(first >= 0) || !(more > 0) || outDir === undefined) {
+if (
+  !Number.isInteger(first) || first < 0 || !Number.isInteger(more) ||
+  more <= 0 || outDir === undefined
+) {
   console.error(
     "usage: heap-worker-probe.ts <first> <more> <outdir> [pattern]",
   );
@@ -42,6 +45,10 @@ if (!(first >= 0) || !(more > 0) || outDir === undefined) {
 const pattern = patternArgument ?? `${root}/patterns/apps/topics/main.tsx`;
 const start = Deno.env.get("PROBE_START") !== "0";
 const concurrency = Number(Deno.env.get("PROBE_CONCURRENCY") ?? "1");
+if (!Number.isInteger(concurrency) || concurrency <= 0) {
+  console.error(`PROBE_CONCURRENCY takes a positive count, not ${concurrency}`);
+  Deno.exit(2);
+}
 const disposeClient = Deno.env.get("DISPOSE_CLIENT") === "1";
 await Deno.mkdir(outDir, { recursive: true });
 // The worker reads this when it starts, so it is set before the worker is.
@@ -153,11 +160,12 @@ const workerSnapshot = async (out: string): Promise<number> => {
   try {
     for await (const event of watcher) {
       if (!event.paths.includes(done)) continue;
-      try {
-        return Number(await Deno.readTextFile(done));
-      } catch {
-        // The event preceded the write's content; the next one follows it.
+      // The worker renames the file into place, so it arrives whole.
+      const heapUsed = await Deno.readTextFile(done);
+      if (!/^\d+$/.test(heapUsed)) {
+        throw new Error(`${done} holds "${heapUsed}", not a heap size`);
       }
+      return Number(heapUsed);
     }
   } finally {
     watcher.close();

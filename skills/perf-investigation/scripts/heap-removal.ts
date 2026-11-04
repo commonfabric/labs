@@ -153,7 +153,7 @@ if (import.meta.main) {
     const option = Deno.args[i];
     if (option === "--steps" || option === "--rows") {
       const count = Number(Deno.args[++i]);
-      if (!(count > 0)) {
+      if (!Number.isInteger(count) || count <= 0) {
         console.error(`${option} takes a positive count, not ${Deno.args[i]}`);
         Deno.exit(2);
       }

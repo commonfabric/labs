@@ -44,7 +44,9 @@ if (directory !== undefined) {
     gc?.();
     const heapUsed = Deno.memoryUsage().heapUsed;
     v8.writeHeapSnapshot(out);
-    await Deno.writeTextFile(`${out}.done`, String(heapUsed));
+    // The probe watches for `<out>.done`; a rename lands it complete.
+    await Deno.writeTextFile(`${out}.done.partial`, String(heapUsed));
+    await Deno.rename(`${out}.done.partial`, `${out}.done`);
   };
   (async () => {
     for await (const event of Deno.watchFs(directory)) {

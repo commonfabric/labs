@@ -2292,11 +2292,12 @@ export class WaveAccumulator
     if (this.#closed) {
       throw new Error("wave already committed or abandoned");
     }
-    try {
-      return await this.#commitHeld(sink, options);
-    } finally {
-      this.#releaseSealedState();
-    }
+    const outcome = await this.#commitHeld(sink, options);
+    // A commit step that throws leaves the wave as it stood, with its
+    // contributions undecided, as the serving loop expects of a cycle that
+    // failed; only an outcome releases them.
+    this.#releaseSealedState();
+    return outcome;
   }
 
   /** The commit step over the sealed commits, which `commitWave()` then releases. */
