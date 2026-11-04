@@ -2,7 +2,12 @@ import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 
+import type { JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decomposeSchema,
+  STORED_ARGUMENT_SCHEMA_REFUSAL,
+} from "@commonfabric/runner";
 
 import {
   schemaRelaxedForComparison,
@@ -68,7 +73,6 @@ import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
-import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "@commonfabric/runner";
 
 const ID_A = "bafyaaaa";
 const ID_B = "bafybbbb";
@@ -819,6 +823,31 @@ describe("stranded-state comparison", () => {
       expect(findings[0].lost, `${JSON.stringify(before)} should FAIL`)
         .toBe(true);
     }
+  });
+
+  it("grades a schema now written as a reference to other content as changed", () => {
+    const schemaWith = (comment: string): JSONSchemaObj => ({
+      type: "array",
+      items: { $ref: "#/$defs/Row" },
+      $defs: { Row: { type: "string", $comment: comment } },
+    });
+    const refTo = (schema: JSONSchemaObj) => ({
+      $ref: decomposeSchema(schema).rootRef,
+    });
+    const before = schemaWith("captured");
+
+    expect(strandedKeys({ schema: before }, { schema: refTo(before) }))
+      .toEqual([]);
+
+    const findings = strandedKeys({ schema: before }, {
+      schema: refTo(schemaWith("rebuilt")),
+    });
+    expect(findings.map((finding) => [finding.key, finding.lost])).toEqual([
+      ["schema", false],
+    ]);
+
+    // Nothing in the place of a reference is still a loss.
+    expect(strandedKeys({ schema: refTo(before) }, {})[0].lost).toBe(true);
   });
 
   it("grades PARTIAL loss as lost, not merely changed", () => {

@@ -1194,8 +1194,10 @@ function lostAnything(before: unknown, after: unknown): boolean {
   if (isEmptyValue(before)) return false;
   // Held something, holds nothing now.
   if (isEmptyValue(after)) return true;
-  // A schema whose representation changed still carries everything it did.
-  if (externalSchemaRefEquivalent(before, after) === true) return false;
+  // A schema written as a reference is either the same schema, which carries
+  // everything it did, or another one, which is a change. Walking the two as
+  // containers would report the inline side's keys as gone, whichever it is.
+  if (externalSchemaRefEquivalent(before, after) !== undefined) return false;
   if (isReduction(before) || isReduction(after)) return false;
   // A CONTAINER that stopped being one took everything under it with it,
   // whichever direction the flip went. Guarding only the array side let
