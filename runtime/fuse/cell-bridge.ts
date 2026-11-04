@@ -150,12 +150,15 @@ function displayCallableInputType(
  * opening `---` line and the next one. A value that parses as a JSON string,
  * number, boolean, or `null` is taken as such, and any other is kept as text.
  * Returns the fields and the body after the closing line, with one blank
- * separator line dropped; text with no frontmatter is all body.
+ * separator line dropped; text with no frontmatter is all body. A leading
+ * byte-order mark is dropped and CRLF and CR line endings are read as LF, so
+ * an editor that saves either way still has its frontmatter found.
  */
 function parseFrontmatter(
-  text: string,
+  rawText: string,
 ): { frontmatter: Record<string, unknown>; body: string } {
   const fm: Record<string, unknown> = {};
+  const text = rawText.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   if (!text.startsWith("---\n")) return { frontmatter: fm, body: text };
   const end = text.indexOf("\n---\n", 4);
   if (end === -1) return { frontmatter: fm, body: text };

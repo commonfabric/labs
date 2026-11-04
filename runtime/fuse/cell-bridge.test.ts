@@ -44,6 +44,7 @@ import {
   StorageManager as V2StorageManager,
 } from "../runner/src/storage/v2.ts";
 import { FsTree } from "./tree.ts";
+import { buildFsProjection } from "./tree-builder.ts";
 import {
   CellBridge,
   type EntityProjectionLookupOwner,
@@ -2561,7 +2562,7 @@ describe("cell-bridge", () => {
 
           const index = getFileContent(tree, pieceIno, "index.md");
           expect(index).toBe(
-            "---\nentityId: of:fs-roundtrip\ntitle: Hello\ncount: 7\npublished: false\n---\n\nHello body",
+            '---\nentityId: of:fs-roundtrip\ntitle: "Hello"\ncount: 7\npublished: false\n---\n\nHello body',
           );
           const tagsIno = tree.lookup(pieceIno, "tags")!;
           expect(getFileContent(tree, tagsIno, "0")).toBe("alpha");
@@ -2588,6 +2589,138 @@ describe("cell-bridge", () => {
             { path: ["$FS", "frontmatter", "meta"], value: undefined },
             { path: ["$FS", "content"], value: "Updated body" },
           ]);
+        });
+
+        describe("saving the projected index.md unedited", () => {
+          // Each case projects a title through `buildFsProjection()` and
+          // hands the file it wrote, byte for byte, to `writeFsFile()`. The
+          // write that comes back carries the title the projection started
+          // from.
+
+          /**
+           * Projects `frontmatter` and `content` to `index.md` and returns
+           * the file's text.
+           */
+          const project = (
+            frontmatter: Record<string, unknown>,
+            content: string,
+          ): string => {
+            const tree = new FsTree();
+            buildFsProjection(
+              tree,
+              tree.rootIno,
+              { type: "text/markdown", frontmatter, content },
+              "of:projected",
+            );
+            return getFileContent(tree, tree.rootIno, "index.md");
+          };
+
+          /**
+           * Saves `text` through a fresh bridge to a piece whose current
+           * frontmatter is `existing`, and returns the writes it made.
+           */
+          const save = async (
+            text: string,
+            existing: Record<string, unknown>,
+          ): Promise<Array<{ path: (string | number)[]; value: unknown }>> => {
+            const bridge = new CellBridge(new FsTree(), "/tmp/cf-exec");
+            const writes: Array<{ path: (string | number)[]; value: unknown }> =
+              [];
+            const ok = await bridge.writeFsFile(
+              {
+                fsProjection: "markdown",
+                piece: {
+                  result: {
+                    get: (path?: (string | number)[]) =>
+                      Promise.resolve(
+                        path?.join("/") === "$FS/frontmatter"
+                          ? existing
+                          : undefined,
+                      ),
+                    set: (value: unknown, path?: (string | number)[]) => {
+                      writes.push({ path: path ?? [], value });
+                      return Promise.resolve();
+                    },
+                  },
+                },
+              } as WritePath,
+              text,
+            );
+            expect(ok).toBe(true);
+            return writes;
+          };
+
+          const titles: Array<[string, string]> = [
+            ["a title in quotes", '"Quoted title"'],
+            ["a title with surrounding spaces", "  padded  "],
+            ["a title that looks like a number", "2026"],
+            ["a title that looks like a boolean", "true"],
+            ["a title that looks like null", "null"],
+            [
+              "a title spanning lines, with a field and a fence inside",
+              "Line one\nkey: value\n---\nline four",
+            ],
+          ];
+          for (const [name, title] of titles) {
+            it(`writes ${name} back unchanged`, async () => {
+              const writes = await save(
+                project({ title }, "Hello body"),
+                { title },
+              );
+
+              expect(writes).toStrictEqual([
+                { path: ["$FS", "frontmatter", "title"], value: title },
+                { path: ["$FS", "content"], value: "Hello body" },
+              ]);
+            });
+          }
+
+          it("keeps a hand-written bare value as text", async () => {
+            const writes = await save(
+              "---\ntitle: Hello there\n---\n\nHello body",
+              { title: "Hello" },
+            );
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello there" },
+              { path: ["$FS", "content"], value: "Hello body" },
+            ]);
+          });
+
+          it("finds the frontmatter of a save with CRLF line endings", async () => {
+            const text = project({ title: "Hello" }, "Hello body")
+              .replaceAll("\n", "\r\n");
+
+            const writes = await save(text, { title: "Hello" });
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello" },
+              { path: ["$FS", "content"], value: "Hello body" },
+            ]);
+          });
+
+          it("finds the frontmatter of a save with CR line endings", async () => {
+            const text = project({ title: "Hello" }, "Hello body")
+              .replaceAll("\n", "\r");
+
+            const writes = await save(text, { title: "Hello" });
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello" },
+              { path: ["$FS", "content"], value: "Hello body" },
+            ]);
+          });
+
+          it("finds the frontmatter of a save with a byte-order mark", async () => {
+            const text = "\uFEFF" + project({ title: "Hello" }, "Hello body");
+
+            const writes = await save(text, { title: "Hello" });
+
+            expect(writes).toStrictEqual([
+              { path: ["$FS", "frontmatter", "title"], value: "Hello" },
+              { path: ["$FS", "content"], value: "Hello body" },
+            ]);
+          });
         });
       });
 

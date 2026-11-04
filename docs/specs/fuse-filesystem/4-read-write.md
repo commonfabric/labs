@@ -171,8 +171,15 @@ When a piece uses the `[FS]` projection, writing to `index.md` or
 
 **`index.md`**: The file is parsed as YAML frontmatter + markdown body.
 - Each frontmatter key (except `entityId`, which is read-only) is written to
-  its corresponding cell via the `$FS.frontmatter.<key>` path.
+  its corresponding cell via the `$FS.frontmatter.<key>` path. A value in
+  double quotes is read as the string inside them, with JSON escapes
+  applied, which is the form the projection writes every string in. A bare
+  number, boolean, or `null` is read as that value, and any other bare value
+  is read as text.
+- Keys present in the cell but absent from the file are cleared.
 - The body is written to the `$FS.content` cell.
+- CRLF and CR line endings are read as LF, and a leading byte-order mark is
+  dropped, so a file saved either way keeps its frontmatter.
 - Invalid YAML frontmatter is silently skipped.
 
 **`index.json`**: Parsed as a JSON object.
