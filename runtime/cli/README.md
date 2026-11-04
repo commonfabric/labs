@@ -694,16 +694,17 @@ that was not connected; `github-webhook-relay/README.md` in the infra repository
 describes it. The dialog's input line holds the `host:port` of the relay's
 subscriber listener. When the push succeeds and the server offers a page for
 creating a pull request, the viewer connects to the relay, and opens the page
-once it has connected or failed to. While it connects, Abort gives up on the
-connection and opens the page. When a delivery reports that a pull request was
-opened from the pushed branch, at the pushed commit, in the GitHub repository
-that `origin` names, the viewer closes the push dialog and quits as Quit does.
-Once the screen is restored, it prints the pull request's address on the
-terminal. The address is printed only when the viewer quit for it, so a quit
-after cancelling the save prompt it raised prints nothing. With the check box
-on, the push dialog says under git's output whether the viewer is connecting or
-watching, or why it is not watching: no relay is set, `origin` is not on GitHub,
-or the connection failed or ended. Closing the push dialog stops the watch.
+once it has connected or failed to. While it connects, Abort, or an interrupt,
+gives up on the connection and opens the page. When a delivery reports that a
+pull request was opened from the pushed branch, at the pushed commit, in the
+GitHub repository that `origin` names, the viewer closes the push dialog and
+quits as Quit does. Once the screen is restored, it prints the pull request's
+address on the terminal. The address is printed only when the viewer quit for
+it, so a quit after cancelling the save prompt it raised prints nothing. With
+the check box on, the push dialog says under git's output whether the viewer is
+connecting or watching, or why it is not watching: no relay is set, `origin` is
+not on GitHub, or the connection failed or ended. Closing the push dialog stops
+the watch.
 
 The viewer keeps these settings in git's configuration, as the boolean
 `cf-view.quitOnPullRequest` and the string `cf-view.webhookRelay`, so the

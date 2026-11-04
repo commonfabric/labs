@@ -404,7 +404,6 @@ export async function runPager(
   // request opens once the connection is open or has failed, or once `push`,
   // the push's own signal, aborts, which abandons the connection.
   const startWatching = async (branch: string, push: AbortSignal) => {
-    stopWatching();
     try {
       const settings = readSettings(deps.git);
       if (!settings.quitOnPullRequest) return;
@@ -418,19 +417,19 @@ export async function runPager(
         notWatching("origin is not a GitHub repository");
         return;
       }
+      if (push.aborted) {
+        notWatching("the watch was aborted");
+        return;
+      }
       const controller = new AbortController();
       watchController = controller;
       const ready = Promise.withResolvers<void>();
+      // What aborts the push draws the dialog itself.
       const abandon = () => {
-        if (watchController === controller) stopWatching();
+        controller.abort();
         notWatching("the watch was aborted");
-        draw();
         ready.resolve();
       };
-      if (push.aborted) {
-        abandon();
-        return;
-      }
       push.addEventListener("abort", abandon, { once: true });
       session.setPullRequestWatch("Connecting to the webhook relay.");
       draw();

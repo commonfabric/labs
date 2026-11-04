@@ -1385,11 +1385,10 @@ describe("view-push", () => {
           }),
           {
             git: viewerGit(),
+            // A connect that never settles, whatever its signal does.
             relay: () => (signal) => {
               abandoned = signal;
-              return new Promise((_, reject) =>
-                signal?.addEventListener("abort", () => reject(signal.reason))
-              );
+              return new Promise(() => {});
             },
           },
         );
@@ -1409,6 +1408,33 @@ describe("view-push", () => {
           "Not watching for the pull request: the watch was aborted.",
         );
         expect(shown).toContain("Pushed feature to origin and opened");
+      });
+
+      it("opens the page and says why once the connection fails", async () => {
+        const opened: string[] = [];
+        const harness = pagerHarness(
+          () => ({
+            ...fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            open: (url) => {
+              opened.push(url);
+              return true;
+            },
+          }),
+          {
+            git: viewerGit(),
+            relay: () => () => Promise.reject(new Error("connection refused")),
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(opened).toEqual([
+          "https://github.com/fork/repo/pull/new/feature",
+        ]);
+        expect(harness.writes.join("")).toContain(
+          "Not watching for the pull request: connection refused.",
+        );
       });
 
       it("connects to nothing when Abort was pressed during a push that succeeded anyway", async () => {
