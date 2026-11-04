@@ -1032,7 +1032,7 @@ run_three_topic_fixture() {
   # retry collides on the create-only receipt and says so (`deduplicated`);
   # ON, no receipt precondition exists (events.md §4's subsumption) — the
   # duplicate is skipped at the dedupe horizon, and the retry's readback
-  # resolves the SAME cause-derived receipt the SERVING side wrote for the
+  # resolves the SAME receipt the SERVING side wrote for the
   # original handling (the ruled result carriage, 2026-08-29). The
   # original-result readback below is the witness in both arms.
   if server_execution_on; then

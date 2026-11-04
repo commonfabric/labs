@@ -50,6 +50,7 @@ const PROMPT_INFLUENCE = {
 } as const;
 
 type AgentResult = {
+  progress?: { message: string; sequence: number };
   pending?: boolean;
   result?: { answer: string };
   error?: string;
@@ -162,6 +163,53 @@ describe("agent builtin", () => {
     expect(settled.error).toContain("agentBuiltin");
     expect(settled.pending).toBe(false);
     expect(result.withTx().key("run").get()).toBeUndefined();
+  });
+
+  it("refuses requested progress when the registered runner does not support it", async () => {
+    setUp();
+    agentQueueIndexCell(runtime, space, tx).key("agentRunner").set({
+      host: "https://runner.example",
+      tools: [],
+      registeredAt: "2026-09-18T00:00:00.000Z",
+    });
+    const result = runAgentPattern("unsupported-progress", { progress: true });
+    await tx.commit().settled;
+    const settled = await waitForCellValue<AgentResult>(
+      runtime,
+      result,
+      (value) => value?.error !== undefined,
+    );
+    expect(settled.error).toContain("INVALID_INPUT");
+    expect(settled.error).toContain("progress");
+    expect(settled.progress).toBeUndefined();
+    expect(settled.pending).toBe(false);
+  });
+
+  it("keeps progress opt-in in request identity and clears it on replacement", async () => {
+    setUp();
+    const id = "progress-identity";
+    const first = runAgentPattern(id, { progress: true });
+    await tx.commit().settled;
+    const record = await waitForRecord(first);
+    const hash = first.key("requestHash").get();
+    expect(record.key("progressRequested").get()).toBe(true);
+    const milestone = runtime.getCell(space, "milestone", {
+      type: "object",
+      properties: { message: { type: "string" }, sequence: { type: "number" } },
+    });
+    await runtime.editWithRetry((tx) => {
+      milestone.withTx(tx).set({ message: "Working", sequence: 1 });
+      record.withTx(tx).key("progress").set(milestone);
+    });
+    await waitForCellValue<AgentResult>(
+      runtime,
+      first,
+      (value) => value?.progress?.sequence === 1,
+    );
+    const replacement = await restart(id, first);
+    await waitForRecord(replacement);
+    expect(replacement.key("requestHash").get()).not.toBe(hash);
+    expect(replacement.key("progress").get()).toBeUndefined();
   });
 
   it("creates a queued record holding the task as a value and each input as a link", async () => {

@@ -308,7 +308,7 @@ receipts as a value surface or re-spec the verb contract. ~~Flag as a
 Phase 3 decision.~~ **(b) RULED 2026-08-29 (owner: serving-side
 receipt/result write): receipts are carried as a value surface — the
 SERVING side writes every handling's receipt (the `{}` witness
-included) in the handler run's own wave, at the same cause-derived
+included) in the handler run's own wave, at the same `receipt:`
 address, write-once by CAS (lost CAS = loud no-op); the readback
 contract is unchanged. Normative text: events.md §4 "Result
 carriage".**

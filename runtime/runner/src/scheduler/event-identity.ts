@@ -1,6 +1,8 @@
 import type { DID } from "@commonfabric/api";
-import { hashStringOf } from "@commonfabric/data-model";
+import { hashOf, hashStringOf } from "@commonfabric/data-model";
+import { RECEIPT_URI_SCHEME } from "../entity-kind.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
+import type { URI } from "../sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 
 // Per-origin-transaction state for minting causally-derived event ids:
@@ -20,16 +22,51 @@ function originStateFor(tx: object): { key: string; counter: number } {
 }
 
 /**
- * The cause of the receipt a served handling of the event `eventId` writes: the
- * cell that holds its outcome (events.md §4, "Result carriage"). It derives from
- * the durable event id alone, so a client that sends the event and runs nothing
- * of the piece can name the receipt as well as a client whose echo of the
- * handler mints it.
+ * The id of the receipt of the handling of the event `eventId`, sent to the
+ * stream `eventLink`: the cell that holds its outcome (events.md §4, "Result
+ * carriage"). It derives from those two alone, so a client that handles the
+ * event itself, a serving runtime, and a client that sends the event and runs
+ * nothing of the piece all name one document.
+ *
+ * The actor is left out, unlike in {@link deriveEventKey}: one event id on one
+ * stream is one handling whoever sends it, so a second sender is told the first
+ * outcome. The stream is in because a durable id is visible to anyone who can
+ * read the stream, and a client can append it to another one, whose handling
+ * would otherwise take this receipt first.
  */
-export function servedReceiptCause(eventId: string): {
-  resultFor: { $event: string };
-} {
-  return { resultFor: { $event: eventId } };
+export function handlingReceiptId(
+  eventId: string,
+  eventLink: NormalizedFullLink,
+): URI {
+  return `${RECEIPT_URI_SCHEME}:${
+    hashOf({
+      event: eventId,
+      stream: {
+        id: eventLink.id,
+        path: [...eventLink.path],
+        scope: eventLink.scope,
+        space: eventLink.space,
+      },
+    })
+  }`;
+}
+
+/**
+ * The address of the receipt of the handling of the event `eventId`, sent to
+ * the stream `eventLink`: {@link handlingReceiptId} in the stream's space. A
+ * served handling's transaction writes the one space its stream lives in
+ * (protocol.md §2b), and a sender that runs nothing knows no other.
+ */
+export function handlingReceiptLink(
+  eventId: string,
+  eventLink: NormalizedFullLink,
+): NormalizedFullLink {
+  return {
+    id: handlingReceiptId(eventId, eventLink),
+    path: [],
+    space: eventLink.space,
+    scope: "space",
+  };
 }
 
 /**
@@ -63,17 +100,10 @@ export function mintEventId(
  * caller minting an unguessable one keeps its outcomes out of reach of anyone
  * who can guess a piece, a verb, and a word like that id.
  *
- * Every minted id above ends in `eventLink.id`, and that is load-bearing. Under
- * server execution the handling's receipt derives from the event id alone
- * ({@link servedReceiptCause}). Otherwise it derives from the handler's input
- * bindings plus the event id (`runner.ts`, `cause.$event`), and the bindings
- * alone do not identify the verb — two handlers on one piece that close over the
- * same state have byte-identical bindings. Either way the stream component is
- * what keeps their receipts apart. A raw caller id carries no such component, so
- * without this an agent
- * reusing one invocation id across two verbs would have its second call
- * collide on the first's receipt and be reported as an already-settled
- * success it never made.
+ * A raw caller id does not identify the verb: without this binding, an agent
+ * reusing one invocation id across two verbs would have the two calls be one
+ * event to anything that keys on the id, such as the frame's cause, which an
+ * event's minted cells derive from.
  *
  * Scoping keeps the property the protocol actually wants: the same id, in the
  * same session, sent to the same stream is the same invocation (retries

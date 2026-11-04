@@ -25,6 +25,10 @@ import type {
   RunCommandOutput,
 } from "./tools/loom-commands.ts";
 import type {
+  ReportProgressInput,
+  ReportProgressOutput,
+} from "./tools/report-progress.ts";
+import type {
   SubmitResultInput,
   SubmitResultOutput,
 } from "./tools/submit-result.ts";
@@ -378,6 +382,7 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
+  report_progress: ReportProgressInput;
   submit_result: SubmitResultInput;
 }
 
@@ -420,6 +425,7 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
+  report_progress: ReportProgressOutput;
   submit_result: SubmitResultOutput;
 }
 
@@ -611,6 +617,12 @@ export interface CreateHarnessEngineOptions
    */
   structuredResult?: HarnessStructuredResultTarget;
 
+  /** Publishes a milestone with observed handles; false means publication failed. */
+  reportProgress?: (
+    message: string,
+    table: HarnessHandleTable | undefined,
+  ) => Promise<void | boolean>;
+
   /**
    * Host-supplied attachments or session-retained targets to mint handles for
    * at run start; see `establishInputCells`. Requires a fabric session — the
@@ -744,6 +756,7 @@ export class CfHarnessEngine {
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #reportProgress?: CreateHarnessEngineOptions["reportProgress"];
   readonly #structuredResult?: HarnessStructuredResultTarget;
   #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
@@ -991,6 +1004,10 @@ export class CfHarnessEngine {
         "resumed run structured-result configuration does not match the recorded configuration",
       );
     }
+    this.#reportProgress = options.lineage?.role === "subagent" ||
+        options.runState?.lineage?.role === "subagent"
+      ? undefined
+      : options.reportProgress;
     this.#structuredResult = options.lineage?.role !== "subagent" &&
         options.runState?.lineage?.role !== "subagent"
       ? structuredClone(recordedStructuredResult ?? options.structuredResult)
@@ -1880,6 +1897,11 @@ export class CfHarnessEngine {
     );
     await this.recordHandleTable(minted.table);
     return minted.token;
+  }
+
+  /** Whether this run can return interim milestones. */
+  get progressAvailable(): boolean {
+    return this.#reportProgress !== undefined;
   }
 
   /** Whether this run was configured with a structured-result schema. */
@@ -3049,6 +3071,10 @@ export class CfHarnessEngine {
         ? { browserHost: this.#browserHost }
         : {}),
       handleValueOrigins: this.config.handleValueOrigins,
+      ...(this.#reportProgress === undefined ? {} : {
+        reportProgress: (message: string) =>
+          this.#reportProgress!(message, this.handleTable),
+      }),
       handleTable: this.handleTable,
       ...(this.#fabricSessionFactory !== undefined
         ? { getFabricSession: this.#fabricSessionFactory }

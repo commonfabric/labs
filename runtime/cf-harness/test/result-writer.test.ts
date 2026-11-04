@@ -187,6 +187,39 @@ describe("writeAgentResult()", () => {
     await storageManager.close();
   });
 
+  it("preserves progress text literally while retaining observation labels and model integrity", async () => {
+    const written = await writeAgentResult({
+      session,
+      handleTable,
+      structuredResult: { message: tokenA, sequence: 1 },
+      resultSchema: {
+        type: "object",
+        properties: {
+          message: { type: "string" },
+          sequence: { type: "integer" },
+        },
+        required: ["message", "sequence"],
+      },
+      literalStrings: true,
+      observedHandles: cellHandles(),
+      maxConfidentiality: [FINANCE, HEALTH],
+      cause: "literal-progress",
+    });
+    const cell = runtime.getCellFromLink(written.link);
+    await cell.sync();
+    expect(cell.get()).toEqual({ message: tokenA, sequence: 1 });
+    expect(await confidentialityOf(written.link, "message")).toContainEqual(
+      FINANCE,
+    );
+    expect(await confidentialityOf(written.link, "message")).toContainEqual(
+      HEALTH,
+    );
+    expect(await integrityOf(written.link)).toContainEqual(
+      cfcAtom.llmDerived(),
+    );
+    expect(written.mintedDocuments).toEqual([]);
+  });
+
   it("writes one result document whose handles are links, whose text carries the derived join, and which carries `LlmDerived`", async () => {
     const written = await writeAgentResult({
       session,

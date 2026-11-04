@@ -410,6 +410,7 @@ export async function startAgentRunner(
       runnerHost: config.runnerHost,
       runnerId: `${home}#${crypto.randomUUID()}`,
       tools: config.tools,
+      progress: true,
       maxConcurrent: config.maxConcurrent,
       leaseMs: config.leaseMs,
       runtimeForHost,

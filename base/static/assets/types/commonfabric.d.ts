@@ -3311,12 +3311,27 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/** Latest user-facing milestone reported by an agent run. */
+export interface AgentProgress {
+  /** Literal user-facing milestone text. */
+  message: string;
+
+  /** One-based report number within this execution attempt. */
+  sequence: number;
+
+  /** ISO timestamp assigned by the host. */
+  updatedAt: string;
+}
+
 /**
  * The request an `agent()` node submits: a task, the cells it may read, and
  * the schema its answer takes. A runner the requester registered executes it
  * as the requester; the builtin's cell follows the run's record.
  */
 export interface BuiltInAgentParams {
+  /** Enables the progress tool and milestone-reporting instructions. */
+  progress?: boolean;
+
   /**
    * What the run is for, as context rather than a command. Labeled data
    * interpolated into this text becomes a value the request carries and the
@@ -3356,6 +3371,9 @@ export interface BuiltInAgentParams {
  * space and not the host that serves it.
  */
 export interface BuiltInAgentState<T> {
+  /** Latest reported milestone, retained when the run finishes. */
+  progress?: AgentProgress;
+
   pending: boolean;
   result?: T;
   error?: string;

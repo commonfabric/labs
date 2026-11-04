@@ -1144,6 +1144,7 @@ const SCOPE_KIND_CANDIDATES: readonly Candidate[] = [
 const ID_PREFIX_CANDIDATES: readonly Candidate[] = [
   { value: "of:", description: "entity documents" },
   { value: "computed:", description: "computed cells" },
+  { value: "receipt:", description: "handling receipts" },
   { value: "cid:", description: "content-addressed label documents" },
 ];
 
