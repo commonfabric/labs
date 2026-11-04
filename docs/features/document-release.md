@@ -60,6 +60,14 @@ piece), and when a host's client departs
 also call `Runtime.releaseUnreadDocuments()` itself. The pass waits until the
 scheduler is idle. Passes run one after another, never two at once.
 
+What a stopped piece read was loaded or read since the previous pass began,
+so the pass its stop asks for keeps it. Where a pass kept a document for that
+reason alone, `Runtime.releaseUnreadDocuments()` runs one more pass once the
+scheduler is next idle, which releases what nothing has read since. That pass
+asks for no further one. A document read after the first pass began is still
+read since the previous pass when the second runs, so the second keeps it,
+and the next pass anything asks for decides it.
+
 A pass that has watches to remove first gives each document the replica keeps,
 as above, and the session still delivers, a watch of its own where it has none,
 with a selector that follows no links: a document that something reads only

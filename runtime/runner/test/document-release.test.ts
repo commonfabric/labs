@@ -168,6 +168,49 @@ describe("document-release", () => {
     expect(loaded(id)).toBe(false);
   });
 
+  it("reports a document it keeps only for a recent load, which the next pass releases", async () => {
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+    expect(loaded(id)).toBe(true);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(false);
+    expect(loaded(id)).toBe(false);
+  });
+
+  it("releases what a stopped piece read in the pass after the one its stop asked for", async () => {
+    // The stop's own pass keeps what was loaded since the previous pass, as
+    // it keeps anything a read still under way may need; the pass that
+    // follows it, which nothing else asks for here, releases it.
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    const { pattern, lift } = createTrustedBuilder(reader).commonfabric;
+    const doubled = pattern<{ n: number }>(({ n }) =>
+      lift((n: number) => n * 2, { type: "number" }, { type: "number" })(n)
+    );
+    const tx = reader.edit();
+    const piece = reader.run(
+      tx,
+      doubled,
+      { n: 2 },
+      reader.getCell<number>(space, "doubled-and-stopped", undefined, tx),
+    );
+    reader.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    expect(await piece.pull()).toBe(4);
+    expect(loaded(id)).toBe(true);
+
+    reader.runner.stop(piece);
+    // Shares the release the stop asked for, which is still waiting for the
+    // scheduler to be idle.
+    await reader.releaseUnreadDocuments();
+    expect(loaded(id)).toBe(false);
+  });
+
   it("keeps a document a scheduler action reads until the action is unsubscribed", async () => {
     await write("counter", 1);
     const id = idOf("counter");

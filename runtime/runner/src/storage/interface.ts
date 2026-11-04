@@ -856,9 +856,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * the previous call began keeps its watch through this one. A later read
    * of a dropped document loads it again. A space whose server does not
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
-   * session has answered.
+   * session has answered, to whether some root was kept only for having been
+   * loaded or read since the previous call began, which a later call may
+   * release.
    */
-  releaseUnreadDocuments?(): Promise<void>;
+  releaseUnreadDocuments?(): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
