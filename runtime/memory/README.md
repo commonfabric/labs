@@ -40,6 +40,11 @@ released when it finishes, including an incremental watch addition or removal.
 [Schema graph queries](../../docs/features/schema-graph-queries.md) describes
 that lifetime and the tracker that preserves delivery between evaluations.
 
+The server's query evaluation cache admits only graphs that fit individually
+within its retained-entity budget, before cloning them. Its cross-space eviction
+then bounds the combined weight of admitted entries. Entity count is a proxy for
+retained memory, not a byte limit or a bound on an active session's graph.
+
 ## Commit model
 
 A client ships a batch of operations as a **client commit**, which carries the

@@ -9678,7 +9678,9 @@ export class Server {
       this.#queryEvaluationCaches.set(space, cache);
       return cache;
     }
-    cache = createQueryEvaluationCache();
+    cache = createQueryEvaluationCache(
+      this.options.queryEvaluationCacheBudget ?? QUERY_EVALUATION_CACHE_BUDGET,
+    );
     this.#queryEvaluationCaches.set(space, cache);
     // An inactive space's cache would otherwise linger until that space's
     // next commit — which may never come. The space bound is the
@@ -9694,8 +9696,8 @@ export class Server {
 
   /** Evict least-recently-evaluated spaces' oldest entries until the
    * caches' total retained weight fits the budget. Runs after every
-   * evaluation that may have inserted; an entry heavier than the whole
-   * budget is therefore never retained past its own evaluation. */
+   * evaluation that may have inserted. Entries heavier than the whole
+   * budget are refused before cloning by the cache's admission bound. */
   #enforceEvaluationCacheBudget(): void {
     const budget = this.options.queryEvaluationCacheBudget ??
       QUERY_EVALUATION_CACHE_BUDGET;

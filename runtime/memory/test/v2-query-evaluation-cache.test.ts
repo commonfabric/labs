@@ -1,9 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { spy } from "@std/testing/mock";
 import { applyCommit, open as openEngine } from "../v2/engine.ts";
 import {
   classifyStateScope,
   createQueryEvaluationCache,
+  EngineObjectManager,
   queryEvaluationCacheDiagnostics,
   type TrackedGraphState,
   trackGraph,
@@ -937,10 +939,13 @@ describe("v2 query evaluation cache", () => {
         "of:doc:1",
         "of:doc:2",
       ]);
-      await watchAdd(connection, messages, space, sessionId, "o", [
+      using copies = spy(EngineObjectManager.prototype, "mergeFrom");
+      const sync = await watchAdd(connection, messages, space, sessionId, "o", [
         { id: "of:doc:1" },
         { id: "of:doc:2" },
       ]);
+      expect(sync.upserts).toHaveLength(2);
+      expect(copies.calls).toHaveLength(0);
       const diagnostics = server.evaluationCacheDiagnostics(space);
       expect(diagnostics.misses).toBe(1);
       expect(diagnostics.entries).toBe(0);
