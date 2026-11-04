@@ -22,8 +22,9 @@ Two neighbors:
   copy the rehearsal runs on. Read it first; a compaction that has not been
   rehearsed on a clone is not run on a host.
 - [`staging-space-copy.md`](staging-space-copy.md) is how a space's file is
-  snapshotted, moved aside and installed on a host. The swap below is its
-  steps 5 through 8 for one instance.
+  snapshotted, set aside and installed on a host. The swap below follows its
+  steps 5 through 8 for one instance, with the live file copied aside and the
+  result renamed over it, so the live directory always holds a store.
 
 The tool is `cf space compact`, described in
 [the CLI README](../../runtime/cli/README.md#compacting-a-space-store). Three
@@ -31,8 +32,9 @@ things about it decide the shape of everything below. It rewrites a store in
 place and writes the result as a fresh file, so it runs against a **copy of
 the backup**, never the backup and never a served file. It **refuses** a store
 whose schema the engine would migrate on opening, a store with a second branch,
-foreign-key violations, more than one ACL document, or a `-wal` beside it, and
-a result path that exists or sits in a served directory, so a refusal is a
+foreign-key violations, more than one ACL document, a `-wal` or `-journal`
+beside it that is not empty, or one another connection holds, and a result
+path that exists or sits in a served directory, so a refusal is a
 message to read and not a thing to route around. And its `--verify --against`
 is a second implementation of what the run claims, run on the result and the
 backup, which is the step that stands between the result and the install.
@@ -223,102 +225,161 @@ the staging copy does, and starts them all after. The space is down for the
 window either way; the other spaces are down with it, which at a quiet hour
 costs less than a write landing on a file that is about to be replaced.
 
-Steps 2, 6 and 7 carry `sudo` and are the operator's to run by hand. The window
-in which the space is down is steps 2 through 7, and the backup that becomes the
+The run is two scripts. The first, steps 0 and 1, checks the host and prints
+the dry run while the space is still served, for the operator to read and
+compare with the rehearsal's before going on. The second, steps 2 through 7, is
+the window in which the space is down, and the backup that becomes the
 replacement is taken inside it: a snapshot from before the stop would silently
 drop every commit accepted between the two, and verifying against it would not
-show the gap.
+show the gap. Each script stops at the first command that fails, so no step
+runs on the strength of one that did not finish. Set the four names at the top
+of each first: the space's DID, a date for the file names, the live directory,
+and the directory that receives what the swap replaces, which has to be on the
+live directory's file system for the copy to be quick.
 
 ```bash
+set -euo pipefail
+DID='<did>'
+DATE='<date>'
+LIVE=/data/memory/engine-v3/engine-v3
+REPLACED=/data/replaced
+cd "$LIVE"
+
 # 0. Space, disk, which instance owns it, and the release each instance runs
 #    (the guard check above, again: a deploy between the preflight and the
-#    window would move it). Do not trust the record; check.
-df -h /data
-ls -la /data/memory/engine-v3/engine-v3/ | grep '<did>'
-curl -s localhost:8020/api/health/stats | grep -c '<did>'
+#    window would move it). Do not trust the record; check. The release
+#    check stops the script unless all 21 instances name one sha.
+df -h "$LIVE" "$REPLACED"
+ls -la "$LIVE" | grep -F "$DID" || true
+curl -s localhost:8020/api/health/stats | grep -c -F "$DID" || true
 for p in $(seq 8001 8021); do
-  sha=$(curl -s --max-time 5 "localhost:$p/api/meta" | grep -o '"gitSha":"[0-9a-f]\{40\}"' | cut -d'"' -f4)
+  sha=$(curl -s --max-time 5 "localhost:$p/api/meta" | grep -o '"gitSha":"[0-9a-f]\{40\}"' | cut -d'"' -f4 || true)
   echo "$p ${sha:-NONE}"
-done | tee /tmp/releases.txt
-awk '{print $2}' /tmp/releases.txt | sort | uniq -c   # exactly one line, "21 <sha>"; a NONE or a second sha = stop here
+done | tee "$REPLACED/releases-$DATE.txt"
+releases=$(awk '{print $2}' "$REPLACED/releases-$DATE.txt" | sort | uniq -c)
+echo "$releases"
+if [ "$(echo "$releases" | wc -l)" -ne 1 ] || grep -q NONE "$REPLACED/releases-$DATE.txt"; then
+  echo "the instances do not all name one release: stop here" >&2
+  exit 1
+fi
 
-# 1. Dry run against a LIVE snapshot, with the instance still serving, and
-#    compare with the clone rehearsal's report. This snapshot is for the
-#    numbers only; it is not the one that gets compacted.
-sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
-  "VACUUM INTO '/data/replaced/<did>.dry-run-<date>.sqlite'"
-cf space compact '/data/replaced/<did>.dry-run-<date>.sqlite' \
-  --documents computed: --dry-run
+# 1. Dry run against the live store, with the instances still serving, and
+#    compare with the clone rehearsal's report. It reads the store read-only,
+#    through the instances' own coordination when one has it open, and
+#    writes nothing; its numbers are not the run's, which come from the
+#    backup taken after the stop.
+cf space compact "$LIVE/$DID.sqlite" --documents computed: --dry-run
+```
 
-# 2. Stop every instance. (sudo.) Nothing writes any space from here on.
-for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
+Then, once the dry run agrees with the rehearsal's:
 
-# 3. The authoritative backup, AFTER the stop: read-only, into a directory
-#    with room, checksummed. This is the rollback, the archive, and the source.
-sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
-  "VACUUM INTO '/data/replaced/<did>.pre-compaction-<date>.sqlite'"
-sha256sum '/data/replaced/<did>.pre-compaction-<date>.sqlite'
+```bash
+set -euo pipefail
+DID='<did>'
+DATE='<date>'
+LIVE=/data/memory/engine-v3/engine-v3
+REPLACED=/data/replaced
+cd "$LIVE"
+
+# 2. Stop every instance. Nothing writes any space from here on. A log
+#    beside the store that is not empty holds what an instance did not write
+#    back, so it stops the run; an empty one goes, and so does the `-shm`
+#    index, which holds no writes.
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for log in -wal -journal; do
+  if [ -s "$DID.sqlite$log" ]; then
+    echo "$DID.sqlite$log is not empty: stop here" >&2
+    exit 1
+  fi
+done
+sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
+
+# 3. The authoritative backup, AFTER the stop, into a directory with room,
+#    checksummed. This is the rollback, the archive, and the source. It reads
+#    the store as immutable, which is exact now that nothing writes it and no
+#    log beside it holds anything (see below for why not `-readonly`).
+sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
+  "VACUUM INTO '$REPLACED/$DID.pre-compaction-$DATE.sqlite'"
+sha256sum "$REPLACED/$DID.pre-compaction-$DATE.sqlite"
 
 # 4. Compact a COPY of the backup — the backup itself is never written to —
-#    and write the result beside it. The dry-run report printed first must
-#    agree with step 1's up to the commits accepted between the two snapshots.
-cp '/data/replaced/<did>.pre-compaction-<date>.sqlite' /data/replaced/<did>.work.sqlite
-cf space compact /data/replaced/<did>.work.sqlite --documents computed: \
-  --out '/data/replaced/<did>.compacted.sqlite'
-rm /data/replaced/<did>.work.sqlite
+#    and write the result beside it. The dry-run report it prints first must
+#    agree with step 1's up to the commits accepted between the two reads.
+cp "$REPLACED/$DID.pre-compaction-$DATE.sqlite" "$REPLACED/$DID.work.sqlite"
+cf space compact "$REPLACED/$DID.work.sqlite" --documents computed: \
+  --out "$REPLACED/$DID.compacted.sqlite"
+rm -f "$REPLACED/$DID.work.sqlite" "$REPLACED/$DID.work.sqlite-wal" \
+  "$REPLACED/$DID.work.sqlite-shm" "$REPLACED/$DID.work.sqlite-journal"
 
 # 5. Verify, on the host, against the post-stop backup.
-cf space compact '/data/replaced/<did>.compacted.sqlite' \
-  --verify --against '/data/replaced/<did>.pre-compaction-<date>.sqlite'
+cf space compact "$REPLACED/$DID.compacted.sqlite" \
+  --verify --against "$REPLACED/$DID.pre-compaction-$DATE.sqlite"
 
-# 6. Swap. Move the live file ASIDE with its companions, never delete; install
-#    the result owned by deploy. (sudo.)
-cd /data/memory/engine-v3/engine-v3/
-ls -la '<did>.sqlite'*
-sudo mv '<did>.sqlite'* /data/replaced/
-sudo install -o deploy -g deploy -m 644 '/data/replaced/<did>.compacted.sqlite' '<did>.sqlite'
+# 6. Swap. The live file is copied aside, never deleted, and the result,
+#    owned by deploy, is renamed over it, so the directory holds a store
+#    throughout. The space's cell databases stay where they are: a
+#    compaction keeps them.
+sudo cp -p "$DID.sqlite" "$REPLACED/$DID.live-$DATE.sqlite"
+sudo install -o deploy -g deploy -m 644 "$REPLACED/$DID.compacted.sqlite" \
+  "$DID.sqlite.compacted"
+sudo mv -f "$DID.sqlite.compacted" "$DID.sqlite"
 
-# 7. Start them all, confirm, read back. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl start toolshed-binary@$p; done
-for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
+# 7. Start them all, and confirm.
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
 ```
 
 After the start, the two checks the staging copy document ends with: the space
 is listed, and a read through the API returns the content.
 
+Step 3 reads the store as immutable rather than through `sqlite3 -readonly`.
+After a clean stop a WAL-mode store has no `-shm` beside it, and a read-only
+connection cannot create one, so the macOS `sqlite3` (3.51) refuses even a
+`SELECT` on such a store with "unable to open database file". The host's
+`sqlite3` has not been checked against this. An immutable read takes no locks
+and ignores any log, which is exact only once nothing writes the file and the
+log is empty, which is why step 2 checks the log first.
+
 ## Rolling back
 
-The procedure never deletes the original: step 6 moves it aside with its
-`-wal` and `-shm` companions into `/data/replaced/`, and installs the result
-under its name. Rolling back is the swap in reverse, and once step 7 has run
-it begins with the stop again: every instance has the result open and may be
-writing it, and by then the result has companions of its own. A file moved
-out from under an open database replaces nothing, since the instances keep
-the old inode, and a `-wal` left beside a restored original would be replayed
-into it on the next open. Write these commands down before anything is
-stopped. The backup is a second copy of the same pre-compaction state should
-the original be damaged in the move.
+The procedure never deletes the original: step 6 copies it into
+`/data/replaced/` before the result is renamed over it. Rolling back is the
+swap in reverse, and once step 7 has run it begins with the stop again: every
+instance has the result open and may be writing it, and by then the result has
+companions of its own. A file moved out from under an open database replaces
+nothing, since the instances keep the old inode, and a `-wal` left beside a
+restored original would be replayed into it on the next open, so the result's
+companions go with the result into `/data/replaced/rolled-back/`. Write these
+commands down before anything is stopped. The backup is a second copy of the
+same pre-compaction state should the original be damaged in the move. With the
+same four names set:
 
 ```bash
+set -euo pipefail
+cd "$LIVE"
+
 # 1. Stop every instance and confirm each has stopped. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
-for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done   # 21 lines: inactive
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p" || true; done # 21 lines: inactive
 
-# 2. Move the result OUT, with the companions it grew, together, to a place
-#    whose names cannot collide with the original's in /data/replaced/.
-cd /data/memory/engine-v3/engine-v3/
-sudo mkdir -p /data/replaced/rolled-back
-sudo mv '<did>.sqlite'* /data/replaced/rolled-back/
+# 2. Keep the result, with the companions it grew, where its names cannot
+#    collide with the original's.
+sudo mkdir -p "$REPLACED/rolled-back"
+for companion in -wal -shm -journal; do
+  if [ -e "$DID.sqlite$companion" ]; then
+    sudo mv "$DID.sqlite$companion" "$REPLACED/rolled-back/"
+  fi
+done
+sudo cp -p "$DID.sqlite" "$REPLACED/rolled-back/$DID.sqlite"
 
-# 3. Move the original back with its companions. The glob matches the
-#    original and its companions only: the backup, result and dry-run files
-#    are named <did>.<what>.sqlite. Nothing of the result's is left beside it.
-sudo mv /data/replaced/'<did>.sqlite'* .
-ls -la '<did>.sqlite'*
+# 3. Rename the original back over the result, so the directory holds a store
+#    throughout.
+sudo cp -p "$REPLACED/$DID.live-$DATE.sqlite" "$DID.sqlite.restored"
+sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
 
-# 4. Start them all, confirm, read back, as step 7 does. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl start toolshed-binary@$p; done
-for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
+# 4. Start them all, and confirm, as step 7 does. (sudo.)
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
 ```
 
 Before step 7 has run, step 1 already holds and the rest is the same.
