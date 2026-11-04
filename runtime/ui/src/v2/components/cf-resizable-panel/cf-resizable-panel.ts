@@ -114,10 +114,11 @@ export class CFResizablePanel extends BaseElement {
       changedProperties.has("defaultSize") ||
       changedProperties.has("maxSize");
     if (sized) this.validateSizes();
-    if (sized || changedProperties.has("hideWhenStacked")) {
-      // A renderer assigns these as properties, possibly after the group
-      // read its panels, so the group reads them again.
-      this.emit("cf-panel-sizes", undefined, { composed: false });
+    // A renderer assigns these as properties, possibly after the group
+    // read its panels, so the group reads them again.
+    if (sized) this.emit("cf-panel-sizes", undefined, { composed: false });
+    else if (changedProperties.has("hideWhenStacked")) {
+      this.emit("cf-panel-shown", undefined, { composed: false });
     }
   }
 

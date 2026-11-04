@@ -182,9 +182,12 @@ export class CFResizablePanelGroup extends BaseElement {
   #laidOut: PanelGroupDirection | undefined;
   /** Whether the panels were last laid out stacked. */
   #laidOutStacked = false;
-  /** The panels and handles this group stopped drawing, so it shows again
-   * only what it hid. */
-  #hidden = new Set<HTMLElement>();
+  /** The panels and handles this group stopped drawing, each with the
+   * inline display it had, so it shows again only what it hid, as it was. */
+  #hidden = new Map<HTMLElement, string>();
+  /** How much larger the drawn panels are than their stored sizes, while a
+   * panel is hidden; 1 otherwise. */
+  #scale = 1;
   /** Measures the group's own width, for `stackBelow`. The first report
    * arrives after layout and before paint, so a narrow group is never drawn
    * side by side first. */
@@ -197,6 +200,7 @@ export class CFResizablePanelGroup extends BaseElement {
     this._observer = new MutationObserver(() => this.updatePanels());
     this._observer.observe(this, { childList: true });
     this.addEventListener("cf-panel-sizes", this.#onPanelSizes);
+    this.addEventListener("cf-panel-shown", this.#onPanelShown);
     this.#resizeObserver ??= new ResizeObserver((entries) => {
       const entry = entries.at(-1);
       if (entry) this._width = entry.contentRect.width;
@@ -213,6 +217,7 @@ export class CFResizablePanelGroup extends BaseElement {
     // Clean up observer
     this._observer?.disconnect();
     this.removeEventListener("cf-panel-sizes", this.#onPanelSizes);
+    this.removeEventListener("cf-panel-shown", this.#onPanelShown);
     this.#resizeObserver?.disconnect();
 
     // Clean up event listeners
@@ -265,6 +270,9 @@ export class CFResizablePanelGroup extends BaseElement {
   }
 
   #onPanelSizes = (): void => this.updatePanels();
+  /** A panel's hideWhenStacked changed: its sizes did not, so a drag goes
+   * on. */
+  #onPanelShown = (): void => this.applyPanelSizes();
 
   private updatePanels(): void {
     // A drag measures from the sizes it started with, so a re-read ends it.
@@ -387,7 +395,9 @@ export class CFResizablePanelGroup extends BaseElement {
     const totalSize = horizontal ? this.offsetWidth : this.offsetHeight;
     const currentPosition = horizontal ? x : y;
     const delta = currentPosition - this._startPosition;
-    const deltaPercent = (delta / totalSize) * 100;
+    // The sizes are stored unscaled, so a move is too: the handle follows
+    // the pointer while a panel is hidden and the rest are drawn larger.
+    const deltaPercent = (delta / totalSize) * 100 / this.#scale;
 
     // Update sizes of panels adjacent to the handle
     const leftPanel = panels[handleIndex];
@@ -455,7 +465,8 @@ export class CFResizablePanelGroup extends BaseElement {
 
     if (leftPanel && rightPanel) {
       const delta = e.detail.delta;
-      const adjustAmount = Math.min(Math.abs(delta), 5) * Math.sign(delta);
+      const adjustAmount = Math.min(Math.abs(delta), 5) * Math.sign(delta) /
+        this.#scale;
 
       const newLeftSize = Math.max(
         leftPanel.minSize,
@@ -528,24 +539,27 @@ export class CFResizablePanelGroup extends BaseElement {
       (sum, panel, i) => hide[i] ? sum : sum + panel.currentSize,
       0,
     );
-    const scale = shown > 0 ? 100 / shown : 1;
+    const scale = hide.some(Boolean) && shown > 0 ? 100 / shown : 1;
     const hidden = new Set<HTMLElement>();
     panels.forEach((panel, i) => {
       if (hide[i]) hidden.add(panel.element);
       if (stale) panel.element.style[stale] = "";
-      const size = hide.some(Boolean)
-        ? panel.currentSize * scale
-        : panel.currentSize;
-      panel.element.style[dimension] = `${size}%`;
+      panel.element.style[dimension] = `${panel.currentSize * scale}%`;
     });
     this._handles.forEach((handle, i) => {
       if (hide[i] || hide[i + 1]) hidden.add(handle);
     });
-    for (const element of this.#hidden) {
-      if (!hidden.has(element)) element.style.display = "";
+    for (const [element, display] of this.#hidden) {
+      if (hidden.has(element)) continue;
+      element.style.display = display;
+      this.#hidden.delete(element);
     }
-    for (const element of hidden) element.style.display = "none";
-    this.#hidden = hidden;
+    for (const element of hidden) {
+      if (this.#hidden.has(element)) continue;
+      this.#hidden.set(element, element.style.display);
+      element.style.display = "none";
+    }
+    this.#scale = scale;
 
     this.#sizedDimension = dimension;
     this.#laidOut = orientation;
