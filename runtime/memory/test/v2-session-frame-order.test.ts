@@ -10,7 +10,11 @@
  * competing frame there. That moment is a few microtasks long in production, so
  * only holding it makes the order deterministic. The cases read frames as the
  * connection's transport gets them, and so say nothing of what a client does
- * with them.
+ * with them. A session with views takes the space's publication lock on each of
+ * these routes, so its cases read the frame at the hold, with nothing competing.
+ *
+ * The last cases are what becomes of a frame that cannot go out, which is found
+ * out inside the step that records it.
  */
 
 import { assert } from "@std/assert";
@@ -23,9 +27,11 @@ import {
   getMemoryProtocolFlags,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
+  resetServerExecutionConfig,
   type ResponseMessage,
   type ServerMessage,
   type SessionOpenAuthMetadata,
+  setServerExecutionConfig,
 } from "../v2.ts";
 
 const AUDIENCE = "did:key:z6Mk-frame-order-audience";
@@ -49,6 +55,11 @@ type Peer = {
   messages: ServerMessage[];
   connection: ReturnType<Server["connect"]>;
   sessionOpen: SessionOpenAuthMetadata;
+  /**
+   * Makes the transport throw on every later response, and returns the list of
+   * those it was handed.
+   */
+  refuseResponses: () => ServerMessage[];
 };
 
 /** A document value naming the leaf schema through a link's schema position. */
@@ -74,6 +85,17 @@ const watchOn = (id: string, watchId: string) => ({
   query: {
     roots: [{ id, selector: { path: [], schema: false as const } }],
   },
+});
+
+/** A view of one document, for a session that runs on the server. */
+const viewOn = (id: string) => ({
+  id: "frame-order-view",
+  revision: 0,
+  query: {
+    roots: [{ id, selector: { path: [], schema: false as const } }],
+  },
+  mode: "speculate" as const,
+  componentContractVersion: "1",
 });
 
 /**
@@ -103,7 +125,7 @@ const holdFirstReturn = <A extends unknown[], R>(
   };
 };
 
-describe("session frame order", () => {
+describe("v2/server", () => {
   let server: Server;
   let reader: Peer;
   let readerSession: string;
@@ -116,7 +138,15 @@ describe("session frame order", () => {
 
   const connect = async (): Promise<Peer> => {
     const messages: ServerMessage[] = [];
-    const connection = server.connect((message) => messages.push(message));
+    const refused: ServerMessage[] = [];
+    let refusing = false;
+    const connection = server.connect((message) => {
+      if (refusing && message.type === "response") {
+        refused.push(message);
+        throw new Error("frame-order transport refused");
+      }
+      messages.push(message);
+    });
     await connection.receive(encodeMemoryBoundary({
       type: "hello",
       protocol: MEMORY_PROTOCOL,
@@ -124,7 +154,15 @@ describe("session frame order", () => {
     }));
     const hello = messages.shift() as HelloOkMessage;
     assert(hello.sessionOpen !== undefined, "expected session-open metadata");
-    return { messages, connection, sessionOpen: hello.sessionOpen };
+    return {
+      messages,
+      connection,
+      sessionOpen: hello.sessionOpen,
+      refuseResponses: () => {
+        refusing = true;
+        return refused;
+      },
+    };
   };
 
   /** The request that opens a session, or resumes the one `session` names. */
@@ -195,6 +233,19 @@ describe("session frame order", () => {
         ? []
         : [{ kind: "response", ids: ok.sync.upserts.map(({ id }) => id) }];
     });
+
+  /** Resumes the reader's session on a new connection. */
+  const resume = (): Promise<void> =>
+    reader.connection.receive(
+      openRequest(reader, READER, {
+        sessionId: readerSession,
+        sessionToken: readerToken,
+      }),
+    );
+
+  /** The failure `received` rejects with, if it does. */
+  const failureOf = (received: Promise<void>): Promise<Error | undefined> =>
+    received.then(() => undefined, (error: Error) => error);
 
   beforeEach(async () => {
     server = new Server({
@@ -364,7 +415,7 @@ describe("session frame order", () => {
       expect(frames[1].ids).toEqual([NAMING_ID]);
     });
 
-    it("is answered after the call returns when it records nothing", async () => {
+    it("is answered once when it records nothing", async () => {
       await addWatch(NAMING_ID, "w-naming");
       const from = reader.messages.length;
 
@@ -410,12 +461,7 @@ describe("session frame order", () => {
       const hold = holdFirstReturn(server.openSession.bind(server));
       server.openSession = hold.wrapped;
       const from = reader.messages.length;
-      const resumed = reader.connection.receive(
-        openRequest(reader, READER, {
-          sessionId: readerSession,
-          sessionToken: readerToken,
-        }),
-      );
+      const resumed = resume();
       await hold.reached;
       await commit({ [NAMING_ID]: naming(3) });
       await server.flushSessions([SPACE]);
@@ -426,6 +472,157 @@ describe("session frame order", () => {
       expect(frames.map(({ kind }) => kind)).toEqual(["response", "effect"]);
       expect(frames[0].ids).toContain(NAMING_ID);
       expect(frames[1].ids).toEqual([NAMING_ID]);
+    });
+  });
+
+  describe("a session with views", () => {
+    beforeEach(() => {
+      setServerExecutionConfig(true);
+    });
+
+    afterEach(() => {
+      resetServerExecutionConfig();
+    });
+
+    const setViews = (): Promise<void> =>
+      send({
+        type: "session.watch.set",
+        watches: [watchOn(NAMING_ID, "w-naming")],
+        views: [viewOn(PLAIN_ID)],
+      });
+
+    /**
+     * Runs `act` and returns the message types the reader got by the time the
+     * held method returned, and by the time `act` was done.
+     */
+    const typesAroundHold = async (
+      hold: { reached: Promise<void>; release: () => void },
+      act: () => Promise<void>,
+    ): Promise<{ atHold: string[]; atEnd: string[] }> => {
+      const from = reader.messages.length;
+      const types = () => reader.messages.slice(from).map(({ type }) => type);
+      const done = act();
+      await hold.reached;
+      const atHold = types();
+      hold.release();
+      await done;
+      return { atHold, atEnd: types() };
+    };
+
+    it("has a `watch.set`'s response on the wire when `watchSet()` returns", async () => {
+      const hold = holdFirstReturn(server.watchSet.bind(server));
+      server.watchSet = hold.wrapped;
+
+      expect(await typesAroundHold(hold, setViews)).toEqual({
+        atHold: ["response"],
+        atEnd: ["response"],
+      });
+    });
+
+    it("has a `watch.add`'s response on the wire when `watchAdd()` returns", async () => {
+      await setViews();
+      const hold = holdFirstReturn(server.watchAdd.bind(server));
+      server.watchAdd = hold.wrapped;
+
+      expect(
+        await typesAroundHold(hold, () => addWatch(OTHER_NAMING_ID, "w-other")),
+      ).toEqual({ atHold: ["response"], atEnd: ["response"] });
+    });
+
+    it("has a `watch.remove`'s response on the wire when `watchRemove()` returns", async () => {
+      await setViews();
+      const hold = holdFirstReturn(server.watchRemove.bind(server));
+      server.watchRemove = hold.wrapped;
+
+      expect(
+        await typesAroundHold(
+          hold,
+          () => send({ type: "session.watch.remove", watchIds: ["w-naming"] }),
+        ),
+      ).toEqual({ atHold: ["response"], atEnd: ["response"] });
+    });
+
+    it("has an effect on the wire when its evaluation returns", async () => {
+      await setViews();
+      await commit({ [NAMING_ID]: naming(2) });
+      const hold = holdFirstReturn(
+        server.syncSessionForConnection.bind(server),
+        (_space, sessionId) => sessionId === readerSession,
+      );
+      server.syncSessionForConnection = hold.wrapped;
+
+      expect(
+        await typesAroundHold(hold, () => server.flushSessions([SPACE])),
+      ).toEqual({ atHold: ["session/effect"], atEnd: ["session/effect"] });
+    });
+
+    it("has a resume's response on the wire when `openSession()` returns", async () => {
+      await setViews();
+      reader.connection.close();
+      // What the session has not been told of, for its catch-up to carry.
+      await commit({ [NAMING_ID]: naming(2) });
+      reader = await connect();
+      const hold = holdFirstReturn(server.openSession.bind(server));
+      server.openSession = hold.wrapped;
+
+      expect(await typesAroundHold(hold, resume)).toEqual({
+        atHold: ["response"],
+        atEnd: ["response"],
+      });
+      const [response] = reader.messages as ResponseMessage<
+        { sync?: { upserts: Upsert[] } }
+      >[];
+      expect(response.ok?.sync?.upserts.map(({ id }) => id)).toContain(
+        NAMING_ID,
+      );
+    });
+  });
+
+  describe("a response the transport refuses", () => {
+    it("rejects `receive` with a `DeliveryError`, after one attempt, on a `watch.add`", async () => {
+      const attempts = reader.refuseResponses();
+
+      const failure = await failureOf(addWatch(NAMING_ID, "w-naming"));
+
+      expect(failure?.name).toBe("DeliveryError");
+      expect(attempts.length).toBe(1);
+    });
+
+    it("rejects `receive` with a `DeliveryError`, after one attempt, on a resume", async () => {
+      await addWatch(NAMING_ID, "w-naming");
+      reader.connection.close();
+      await commit({ [NAMING_ID]: naming(2) });
+      reader = await connect();
+      const attempts = reader.refuseResponses();
+
+      const failure = await failureOf(resume());
+
+      expect(failure?.name).toBe("DeliveryError");
+      expect(attempts.length).toBe(1);
+    });
+  });
+
+  describe("a connection that closes while an effect is evaluated", () => {
+    it("leaves the effect's documents for the session's resume to carry", async () => {
+      await addWatch(NAMING_ID, "w-naming");
+      await commit({ [NAMING_ID]: naming(2) });
+      const from = reader.messages.length;
+      const evaluate = server.syncSessionForConnection.bind(server);
+      server.syncSessionForConnection = (...args) => {
+        if (args[1] === readerSession) reader.connection.close();
+        return evaluate(...args);
+      };
+
+      await server.flushSessions([SPACE]);
+
+      expect(framesOf(reader.messages.slice(from))).toEqual([]);
+
+      server.syncSessionForConnection = evaluate;
+      reader = await connect();
+      await resume();
+
+      const [frame] = framesOf(reader.messages);
+      expect(frame.ids).toContain(NAMING_ID);
     });
   });
 });

@@ -1055,9 +1055,11 @@ type PublishTransactVerdict = (
  * the `cid:` documents that record says the session holds, so no other frame
  * of the session may reach the wire between that step and this frame
  * (docs/specs/memory-v2/04-protocol.md, section 4.3.6). It is called at most
- * once, and only for a frame that carries documents, so a refusal, and a frame
- * with nothing in it for a later frame to leave out, still comes back as the
- * caller's return value. It does not throw.
+ * once, and only for a frame that carries documents. A refusal, and a frame
+ * that carries none, comes back as the caller's return value. A connection's
+ * function holds a failed send until the caller has returned, so that the
+ * failure is not taken for one of the caller's own; a caller that wraps it may
+ * still throw for reasons of its own before it sends anything.
  */
 type PublishFrame<M> = (message: M) => void;
 
@@ -10846,6 +10848,15 @@ export class Server {
                 // fromSeq is not stale. emptyCatchUp receives the original fromSeq
                 // explicitly, so this does not mutate the bounds of this sync (the
                 // Cubic fix keeps fromSeq pinned to the pre-refresh value).
+                //
+                // What this records can be the session's own writes, `cid:`
+                // documents included, with only a marker to say so, sent on
+                // return. A watch mutation's response may leave such a
+                // document out and reach the wire ahead of that marker. No
+                // frame order protects that: the client holds the document
+                // because it wrote it, keeping the write visible until the
+                // marker promotes it, and it validates an arrival against what
+                // is visible (04-protocol.md section 4.3.6).
                 commitEntities();
                 session.lastSyncedSeq = Math.max(session.lastSyncedSeq, toSeq);
                 return await emptyCatchUp(fromSeq, toSeq);

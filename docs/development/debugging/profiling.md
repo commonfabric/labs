@@ -302,9 +302,11 @@ it answers with the process's own loggers, and with the loop off it answers
 The memory server emits `memory/refresh/batch` for each space processed by a
 flush, with its dirty instance keys, derived-key count, and connection count.
 `memory/refresh/session/{touched,untouched}` details identify the session,
-sequence interval, dirty count, graph count, and tracked-document count. A flush
-can process multiple batches; a touched session can refresh multiple graphs.
-Count these boundaries separately before dividing traversal counts by them.
+sequence interval, dirty count, graph count, and tracked-document count. A
+touched row whose frame carries documents includes sending that frame, since the
+frame goes out in the step that records its documents as delivered. A flush can
+process multiple batches; a touched session can refresh multiple graphs. Count
+these boundaries separately before dividing traversal counts by them.
 
 `memory/refresh/walk/total` details identify the graph's scope identity, affected
 and missed document keys, root-evaluation count, manager reads, updates, and
@@ -809,8 +811,10 @@ a client's push waits at least the refresh delay plus these two — and reach fo
 
 `memory/watchAdd/total` covers each `session.watch.add` handler from admission
 through completion, including duplicate or empty additions, rejected requests,
-and failures. It ends before outbound schema preparation and transport.
-`slowQueries` records successful additions over its threshold, measured from
+and failures. An addition whose response carries documents sends that response
+in the step that records them, so the row includes its outbound schema
+preparation, encoding, and hand-off to the transport; any other response goes
+out after the row closes. `slowQueries` records successful additions over its threshold, measured from
 evaluation through response assembly. `memory/response/prepareSchemas` against
 `memory/response/sendRaw` splits each outbound message, response or effect, into
 schema-table compression and the hand-off to the transport;
