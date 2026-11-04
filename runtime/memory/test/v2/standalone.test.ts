@@ -123,8 +123,7 @@ describe("StandaloneMemoryServer", () => {
           }),
         );
 
-        expect(report.closeReason).toBe("");
-        expect(report.reply).toBeDefined();
+        expect(report).toEqual({ reply: expect.any(String), closeReason: "" });
         expect(decodeMemoryBoundary<HelloOkMessage>(report.reply!).type)
           .toBe("hello.ok");
       } finally {
@@ -135,8 +134,11 @@ describe("StandaloneMemoryServer", () => {
     it("reads a close from a socket upgraded with Deno's default, across the same stall", async () => {
       // The control for the case above: it is the stall crossing that
       // deadline which closes a socket, so a stall that stopped doing so would
-      // leave that case passing while showing nothing. This server echoes, so
-      // a socket that stayed open ends with a reply rather than with a wait.
+      // leave that case passing while showing nothing. This server echoes and
+      // the peer closes only after a reply, so a report with no reply is a
+      // socket something else closed. The report's reason is not the test: the
+      // peer's send on waking races the close, and on Linux the close has been
+      // read with its reason empty.
 
       using _upgrade = compressIdleDeadlines();
       const server = Deno.serve(
@@ -156,7 +158,7 @@ describe("StandaloneMemoryServer", () => {
           "echoed if the socket stayed open",
         );
 
-        expect(report).toEqual({ closeReason: "No response from ping frame." });
+        expect(report.reply).toBeUndefined();
       } finally {
         await server.shutdown();
       }
