@@ -2,7 +2,11 @@ import * as HttpStatusCodes from "stoker/http-status-codes";
 import { z } from "zod";
 import { formatReleaseTime } from "@commonfabric/runner/pattern-release-time";
 import env from "@/env.ts";
-import { resolveGitSha, shellServerExecutionDefine } from "@/lib/build-info.ts";
+import {
+  buildInfo,
+  resolveGitSha,
+  shellServerExecutionDefine,
+} from "@/lib/build-info.ts";
 import { cfcPosture } from "@/lib/cfc-posture.ts";
 import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import { identity } from "@/lib/identity.ts";
@@ -26,6 +30,8 @@ const CfcDialSchema = z.object({
 export const MetaResponseSchema = z.object({
   did: z.string(),
   gitSha: z.string().nullable(),
+  // The namespace actually served by this binary, independent of reported Git SHA.
+  browserAssetBase: z.string(),
   // The server-execution v2 posture the binary's browser shell was BUILT
   // with (the raw `EXPERIMENTAL_SERVER_EXECUTION` build define: "true",
   // "false", or null when unset — the shell then takes the arm
@@ -97,6 +103,9 @@ export const index: AppRouteHandler<IndexRoute> = (c) => {
   const response: MetaResponse = {
     did: SERVER_DID,
     gitSha: GIT_SHA,
+    browserAssetBase: buildInfo.commitSha
+      ? `/builds/${encodeURIComponent(buildInfo.commitSha)}/`
+      : "/",
     shellServerExecutionDefine,
     releasedAt: env.TOOLSHED_RELEASED_AT === undefined
       ? null

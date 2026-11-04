@@ -37,6 +37,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./cell-reference": "./src/cell-reference.ts",
     "./native-ui": "./src/native-ui.ts",
     "./hashtags": "./src/hashtags.ts",
     "./space-invites": "./src/space-invites.ts",

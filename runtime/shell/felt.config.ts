@@ -40,6 +40,16 @@ const SHELL_PORT = parseInt(
 const config: Config = {
   entries: [
     { in: "src/index.ts", out: "scripts/index" },
+    { in: "src/library.ts", out: "scripts/shell-library", splitting: true },
+    {
+      in: "src/library-components.ts",
+      out: "scripts/shell-components",
+      splitting: true,
+    },
+    {
+      in: "../../base/iframe-sandbox/src/outer-frame-script.js",
+      out: "scripts/outer-frame-script",
+    },
     {
       in: "../runtime-client/src/backends/web-worker/index.ts",
       // Changing this path requires a matching update in
