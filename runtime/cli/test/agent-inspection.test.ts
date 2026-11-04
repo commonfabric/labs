@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+} from "@commonfabric/runner/storage/cache.deno";
 import { renderCellReference } from "@commonfabric/runner/shared";
 
 import {
@@ -19,19 +22,28 @@ const HOME_HOST = "https://home.example";
 const OTHER_HOST = "https://other.example";
 
 describe("agent-inspection", () => {
+  let signer: Identity;
   let home: `did:key:${string}`;
+  let servers: Map<string, ReturnType<typeof newLoopbackServer>>;
   let runtimes: Map<string, Runtime>;
-  let managers: ReturnType<typeof StorageManager.emulate>[];
+  let managers: EmulatedStorageManager[];
   let deps: AgentInspectionDeps;
   const config = { identity: "/test.key", apiUrl: HOME_HOST };
 
+  // Each host's store is a server the test owns, so it outlives the runtimes
+  // that inspection disposes once it has answered.
   beforeEach(async () => {
-    const signer = await Identity.fromPassphrase(crypto.randomUUID());
+    signer = await Identity.fromPassphrase(crypto.randomUUID());
     home = signer.did();
+    servers = new Map();
     managers = [];
     runtimes = new Map();
     for (const host of [HOME_HOST, OTHER_HOST]) {
-      const storageManager = StorageManager.emulate({ as: signer });
+      const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      servers.set(host, server);
+      const storageManager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
       managers.push(storageManager);
       runtimes.set(
         host,
@@ -53,6 +65,7 @@ describe("agent-inspection", () => {
   afterEach(async () => {
     for (const runtime of runtimes.values()) await runtime.dispose();
     for (const manager of managers) await manager.close();
+    for (const server of servers.values()) await server.close();
   });
 
   const seed = async () => {
@@ -415,7 +428,26 @@ describe("agent-inspection", () => {
     await expect(cancelAgentRun(config, "hash-completed", deps)).rejects.toBe(
       rejection,
     );
-    expect(completed.key("cancelRequestedAt").get()).toBeUndefined();
+
+    // Inspection disposed the remote runtime, so the record is read back from
+    // the remote host's store by a runtime of its own.
+    const reader = new Runtime({
+      apiUrl: new URL(OTHER_HOST),
+      storageManager: EmulatedStorageManager.connectTo(
+        servers.get(OTHER_HOST)!,
+        { as: signer },
+      ),
+    });
+    try {
+      const stored = reader.getCellFromLink(
+        completed.getAsNormalizedFullLink(),
+      );
+      await stored.sync();
+      expect(stored.key("state").get()).toBe("running");
+      expect(stored.key("cancelRequestedAt").get()).toBeUndefined();
+    } finally {
+      await reader.dispose();
+    }
   });
 
   it("rejects an unknown identifier", async () => {

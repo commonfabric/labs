@@ -352,6 +352,7 @@ export enum RequestType {
    * round trip covering all four.
    */
   GetLoggerCounts = "runtime:getLoggerCounts",
+  GetLoggerErrorMessages = "runtime:getLoggerErrorMessages",
 
   /** Snapshot storage work without waiting for the durability barrier. */
   GetStorageDiagnostics = "runtime:getStorageDiagnostics",
@@ -2100,6 +2101,14 @@ export type GetLoggerCountsRequest = BaseRequest & {
 };
 
 /**
+ * The {@link RequestType.GetLoggerErrorMessages} request, which carries no
+ * payload.
+ */
+export type GetLoggerErrorMessagesRequest = BaseRequest & {
+  type: RequestType.GetLoggerErrorMessages;
+};
+
+/**
  * The {@link RequestType.GetPatternCoverage} request, which carries no payload.
  */
 export type GetPatternCoverageRequest = BaseRequest & {
@@ -2671,6 +2680,12 @@ export type LoggerFlagsData = Record<
   string,
   Record<string, Record<string, FabricPlainObject | null>>
 >;
+
+/**
+ * The earliest messages each logger logged at `error`, by logger name and
+ * message key, as text.
+ */
+export type LoggerErrorMessagesData = Record<string, Record<string, string[]>>;
 
 /**
  * The {@link RequestType.PieceCreate} request. `source` names a URL or a
@@ -3494,6 +3509,7 @@ export type IPCClientRequest =
   | GetGraphSnapshotRequest
   | GetStorageDiagnosticsRequest
   | GetLoggerCountsRequest
+  | GetLoggerErrorMessagesRequest
   | GetPatternCoverageRequest
   | SetLoggerLevelRequest
   | SetLoggerEnabledRequest
@@ -3882,6 +3898,18 @@ export type GraphSnapshotResponse = {
    * The graph as of the read.
    */
   snapshot: SchedulerGraphSnapshot;
+};
+
+/**
+ * The messages behind a logger's `error` counts. It is a request of its own,
+ * rather than part of the counts, because this text can quote a value and the
+ * counts are read by tools that write what they read into their own output.
+ */
+export type LoggerErrorMessagesResponse = {
+  /**
+   * The messages, by logger and message key.
+   */
+  messages: LoggerErrorMessagesData;
 };
 
 /**
@@ -4418,6 +4446,7 @@ export type RemoteResponse =
   | GraphSnapshotResponse
   | StorageDiagnosticsResponse
   | LoggerCountsResponse
+  | LoggerErrorMessagesResponse
   | PatternCoverageResponse
   | SettleStatsResponse
   | SettleStatsHistoryResponse
@@ -4532,6 +4561,10 @@ export type Commands = {
   [RequestType.GetLoggerCounts]: {
     request: GetLoggerCountsRequest;
     response: LoggerCountsResponse;
+  };
+  [RequestType.GetLoggerErrorMessages]: {
+    request: GetLoggerErrorMessagesRequest;
+    response: LoggerErrorMessagesResponse;
   };
   [RequestType.GetPatternCoverage]: {
     request: GetPatternCoverageRequest;

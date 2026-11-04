@@ -254,6 +254,13 @@ Two properties follow from terminating rather than looping:
   challenge race, a transport blip — can heal on a fresh connection when the
   transport supports reset. Classification as retriable does not supply that
   transport capability.
+
+  A serving host also reports admitted ACL changes to already-open providers.
+  When that notice and an authorization termination have both arrived, the
+  provider opens through server admission and restores its retained watches,
+  including watches that previously confirmed a document absent. The input
+  barrier includes that restoration. A refused reopen retains its failed
+  loads for a later ACL notice; it starts no retry loop.
 - **A wedged-but-reachable backend still waits.** With no wall-clock guard, a
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event

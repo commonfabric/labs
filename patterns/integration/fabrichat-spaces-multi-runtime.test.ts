@@ -305,6 +305,9 @@ describe("fabrichat spaces across runtimes", () => {
     await harness.settle();
     await invited.client().call("selectProfile", { path: ["profile"] });
     await harness.settle();
+    await harness.settleUntil(async () =>
+      (await invited.read(["canSend"], { piece: room })) === true
+    );
     expect(await invited.read(["canSend"], { piece: room })).toBe(true);
     await invited.send(
       "sendMessage",
