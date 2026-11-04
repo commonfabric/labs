@@ -3790,6 +3790,17 @@ export interface ISpaceReplica extends ISpace {
   ): number | undefined;
 
   /**
+   * Waits for any re-delivery of the document a quarantine holds back, and
+   * returns the failure if the replica still cannot apply it. `undefined` when
+   * no quarantine holds it back, which says nothing of whether it exists.
+   */
+  quarantineFailure?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): Promise<Error | undefined>;
+
+  /**
    * Whether the replica holds a known stored version of the document, with
    * no pending local write, refused local fold, or incomplete wave promotion.
    * A watched delivery establishes it, including absence; a newer own write

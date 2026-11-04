@@ -668,14 +668,19 @@ PROCESS: this validation runs on the background consume path, where a
 frame-wide throw was an unhandled rejection that killed the consuming
 worker wholesale on one bad document. Quarantine is containment for a
 defect, not a protocol state: the elision design means an unchanged
-quarantined document may never be re-delivered mid-session (the
-server's session cache rightly claims the client holds its ref), so
-the heal waits for the next reconnect — whose declared holdings omit
-the quarantined document, so the server re-delivers it with its
-closure — or the next watch.set, whose full frame carries the whole
-assembled closure; the arrival diagnostic is the loud record meanwhile,
-and the underlying absorb/ordering defect is the thing to find and fix
-(OW61). The repair
+quarantined document is not re-delivered mid-session on its own (the
+server's session cache rightly claims the client holds its ref), so the
+replica asks for it, with a `session.watch.set` of the session's own
+watches declaring its holdings, which omit the quarantined document and
+any `cid:` document it lacks, so one response delivers them together. A
+reconnect declares holdings the same way. Until that answer, a load of the
+document waits rather than taking it for absent, since the server holds it.
+Each copy of a document, by its seq, is asked for once, so a copy the
+replica cannot apply even then ends there: it logs
+`schema-doc-quarantine-unhealed`, a load of it fails, and nothing asks
+again until a newer copy arrives. The arrival diagnostic is the loud
+record throughout, and the underlying absorb/ordering defect is the thing
+to find and fix (OW61). The repair
 paths that do exist serve callers, not arrival: the traversal loader's
 reads are tracked (arrival re-runs the reader), the missing-target kick
 requests the fetch, and any sync of a schema document delivers its
