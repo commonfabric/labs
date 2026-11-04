@@ -274,7 +274,7 @@ function createProbe(): RecordingProbeApi {
 
   const mostMatched = new Map<string, number>();
 
-  const collect = (selector: string): Element[] => {
+  const find = (selector: string): Element[] => {
     const out: Element[] = [];
     const walk = (root: Document | ShadowRoot) => {
       for (const el of root.querySelectorAll("*")) {
@@ -287,23 +287,26 @@ function createProbe(): RecordingProbeApi {
       }
     };
     walk(document);
-    mostMatched.set(
-      selector,
-      Math.max(mostMatched.get(selector) ?? 0, out.length),
-    );
     return out;
   };
 
   return {
-    collect,
+    collect(selector) {
+      const out = find(selector);
+      mostMatched.set(
+        selector,
+        Math.max(mostMatched.get(selector) ?? 0, out.length),
+      );
+      return out;
+    },
     collectedElements() {
-      return [...mostMatched.keys()].map((selector) => {
-        const matched = collect(selector);
+      return [...mostMatched].map(([selector, most]) => {
+        const matched = find(selector);
         return {
           selector,
           matched: matched.length,
           rendered: matched.filter(isRendered).length,
-          mostMatched: mostMatched.get(selector) ?? 0,
+          mostMatched: most,
         };
       });
     },

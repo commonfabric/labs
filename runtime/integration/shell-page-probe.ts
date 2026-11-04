@@ -74,8 +74,9 @@ export interface ConditionElement {
   rendered: number;
 
   /**
-   * The most elements it matched at any check during the wait. `0` says the
-   * element never existed at a moment the condition looked.
+   * The most elements it matched at any check during the wait, which writing
+   * the report does not count as one. `0` says the element did not exist at any
+   * moment the condition looked.
    */
   mostMatched: number;
 }
@@ -542,7 +543,7 @@ function describeConditionElements(probe: ShellPageProbe): string[] {
     `${elements.length === 1 ? "selector" : "selectors"}):`,
     ...shown.map(({ selector, matched, rendered, mostMatched }) =>
       `    ${JSON.stringify(selector)}: ` +
-      (mostMatched === 0
+      (matched === 0 && mostMatched === 0
         ? "no match now, or at any check during the wait"
         : `${matched} matched now, ${rendered} rendered, at most ` +
           `${mostMatched} at any check during the wait`)

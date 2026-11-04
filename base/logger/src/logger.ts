@@ -178,8 +178,11 @@
 import { isDeno } from "@commonfabric/platform/env";
 
 /**
- * A message argument: either the value to log, or a function returning it,
- * which is called only when the message is actually going to be emitted.
+ * A message argument: either the value to log, or a function returning it. The
+ * function is called only when the message is actually going to be emitted,
+ * with one exception: at `error`, it is also called while a logger still has
+ * room to keep that key's text, emitted or not, so a call that does both
+ * evaluates it twice.
  */
 export type LogMessage = unknown | (() => unknown);
 

@@ -905,6 +905,29 @@ describe("shell-failure-reports", () => {
         );
       });
 
+      it("does not count writing the report as a check", async () => {
+        await load("/elements");
+
+        // The first check finds nothing and adds the element, and no later
+        // check collects, so only the report's own read could find it.
+        const message = await shortNetRejectionMessage(() =>
+          waitForCondition(page, (probe) => {
+            if (document.querySelector("#late") === null) {
+              probe.collect("#late");
+              const late = document.createElement("div");
+              late.id = "late";
+              late.textContent = "late";
+              document.body.append(late);
+            }
+            return false;
+          })
+        );
+        expect(message.split("\n")).toContain(
+          '    "#late": 1 matched now, 1 rendered, at most 0 at any check ' +
+            "during the wait",
+        );
+      });
+
       it("reports a condition that collected nothing", async () => {
         await load("/elements");
 
@@ -1035,6 +1058,19 @@ describe("shell-failure-reports", () => {
         );
         expect(lines).toContain(
           '    "#hidden": 1 matched now, 0 rendered, at most 1 at any check ' +
+            "during the wait",
+        );
+      });
+
+      it("does not call an element that exists now one with no match", () => {
+        expect(
+          describedLines({
+            conditionElements: [
+              { selector: "#late", matched: 1, rendered: 1, mostMatched: 0 },
+            ],
+          }),
+        ).toContain(
+          '    "#late": 1 matched now, 1 rendered, at most 0 at any check ' +
             "during the wait",
         );
       });

@@ -1040,6 +1040,25 @@ describe("logger", () => {
       ]);
     });
 
+    it("cuts a record at ten keys, and names a function rather than calling it", () => {
+      const logger = disabledLogger("kept-messages-wide-record");
+      let called = 0;
+      const record: Record<string, unknown> = {
+        callback: () => {
+          called++;
+        },
+      };
+      for (let i = 1; i < 11; i++) record[`key${i}`] = i;
+
+      logger.error("a-key", record);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{callback: [function], key1: 1, key2: 2, key3: 3, key4: 4, key5: 5, " +
+        "key6: 6, key7: 7, key8: 8, key9: 9, …}",
+      ]);
+      expect(called).toBe(0);
+    });
+
     it("names an instance of a class, calling neither `toJSON()` nor `toString()`", () => {
       const logger = disabledLogger("kept-messages-instance");
       let called = 0;
@@ -1068,6 +1087,22 @@ describe("logger", () => {
       logger.errorMessagesByKey["a-key"]?.push("not kept");
 
       expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["kept"]);
+    });
+
+    it("evaluates a lazy message twice where the logger also prints it", () => {
+      const logger = getLogger("kept-messages-printed", { level: "error" });
+      let evaluated = 0;
+
+      captureConsole("error", () =>
+        logger.error("a-key", () => {
+          evaluated++;
+          return "lazily built";
+        }));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "lazily built",
+      ]);
+      expect(evaluated).toBe(2);
     });
 
     it("returns nothing once the counts are reset", () => {
