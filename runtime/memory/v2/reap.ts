@@ -45,9 +45,9 @@ export type ReapPlan = {
    * The start of the file names of the space's cell databases, which are
    * files beside the live store rather than rows in it, so a reap of a copy
    * cannot reach them: the install that puts the result in place of the live
-   * store moves them out of the live directory, beside the live store it
-   * moves aside. It is a hash, which another space's cell databases can
-   * share, rarely (`cellDatabaseFilePrefix()`).
+   * store moves them out of the live directory, beside the copy of the live
+   * store it keeps, unless another store there shares the prefix, which is a
+   * hash (`cellDatabaseFilePrefix()`; {@link liveCellDatabases}).
    */
   cellDatabaseFilePrefix: string;
 };
@@ -373,7 +373,7 @@ export const formatReapPlan = (plan: ReapPlan): string => {
     `cells      the space's cell databases are among the files beside the ` +
     `live store named ${plan.cellDatabaseFilePrefix}*.sqlite, a hash ` +
     "another space's can share; the install moves them out of the live " +
-    "directory, beside the live store it moves aside",
+    "directory unless another store there shares it",
   ].join("\n");
 };
 

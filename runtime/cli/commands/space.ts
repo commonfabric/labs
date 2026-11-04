@@ -812,7 +812,8 @@ export const space = new Command()
   .option(
     "--live <path:string>",
     "With --dry-run, the space's live store: name the cell databases beside " +
-      "it, and refuse when another space's there share their prefix.",
+      "it the install moves, which are none when another store there shares " +
+      "their prefix.",
     { depends: ["dry-run"] },
   )
   .option(
@@ -845,27 +846,29 @@ export const space = new Command()
           }
           throw error;
         }
-        if (cells !== undefined && cells.sharedWith.length > 0) {
-          // The install moves the cell databases by their prefix, which
-          // would take these spaces' along with the deleted one's.
-          throw new ValidationError(
-            `the cell databases of ${plan.space} share the prefix ` +
-              `${plan.cellDatabaseFilePrefix} with those of ` +
-              `${cells.sharedWith.join(", ")}, so which are whose cannot be ` +
-              "told by name: install the result leaving every cell database " +
-              "in place",
-          );
-        }
+        // The install moves the cell databases by their prefix, which would
+        // take another space's along with the deleted one's when that space's
+        // prefix is the same, so then it moves none.
+        const moved = cells === undefined || cells.sharedWith.length > 0
+          ? []
+          : cells.files;
         out(
           !!options.json,
-          cells === undefined ? plan : { ...plan, cellDatabases: cells.files },
+          cells === undefined
+            ? plan
+            : { ...plan, cellDatabases: moved, sharedWith: cells.sharedWith },
           () => {
             console.log(formatReapPlan(plan));
-            if (cells !== undefined) {
+            if (cells !== undefined && cells.sharedWith.length > 0) {
               console.log(
-                `cell files ${
-                  cells.files.length === 0 ? "none" : cells.files.join(" ")
-                }`,
+                `cell files none moved: the prefix ` +
+                  `${plan.cellDatabaseFilePrefix} is shared with the store of ` +
+                  `${cells.sharedWith.join(", ")}, so which files are whose ` +
+                  "cannot be told by name",
+              );
+            } else if (cells !== undefined) {
+              console.log(
+                `cell files ${moved.length === 0 ? "none" : moved.join(" ")}`,
               );
             }
             console.log(

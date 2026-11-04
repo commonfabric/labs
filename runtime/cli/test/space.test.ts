@@ -13,6 +13,7 @@ import { clonePaths } from "@commonfabric/state-inspector";
 import { argv, cf, stripAnsi } from "./utils.ts";
 import { join, toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
+import { cellDatabaseFilePrefix } from "@commonfabric/memory/v2/storage-path";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.
@@ -470,17 +471,22 @@ describe("cf space reap", () => {
       const liveDir = `${root}/live`;
       await Deno.mkdir(liveDir);
       await Deno.writeTextFile(`${liveDir}/${space}.sqlite`, "");
+      const cell = `${cellDatabaseFilePrefix(space)}0.sqlite`;
+      await Deno.writeTextFile(`${liveDir}/${cell}`, "");
       const named = await cf(
         argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
       );
       expect(named.code).toBe(0);
-      expect(text(named.stdout)).toContain("cell files none");
+      expect(text(named.stdout)).toContain(`cell files ${cell}`);
       await Deno.writeTextFile(`${liveDir}/${sharing}.sqlite`, "");
       const shared = await cf(
-        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite`,
+        argv`space reap ${store} --dry-run --live ${liveDir}/${space}.sqlite --json`,
       );
-      expect(shared.code).not.toBe(0);
-      expect(text(shared.stderr)).toContain(`with those of ${sharing}`);
+      expect(shared.code).toBe(0);
+      expect(JSON.parse(shared.stdout.join("\n"))).toMatchObject({
+        cellDatabases: [],
+        sharedWith: [sharing],
+      });
 
       const ran = await cf(argv`space reap ${store} --out ${result}`);
       expect(ran.code).toBe(0);

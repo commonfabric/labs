@@ -43,12 +43,8 @@ LIVE=/data/memory/engine-v3/engine-v3
 REPLACED=/data/replaced
 cd "$LIVE"
 
-# 0. The space is deleted: the dry run refuses any other store. It lists
-#    the space's cell databases beside the live store, by their file-name
-#    prefix, a 32-bit hash of the DID, and refuses when another space's store
-#    there shares that prefix. Then the files under it cannot be told apart:
-#    run the dry run again without --live, and leave every cell database in
-#    place by emptying the list it writes.
+# 0. The space is deleted: the dry run refuses any other store. Read the
+#    report, and the cell databases it names beside the live store.
 #    The snapshot is read through the instance's shared memory when one has
 #    the store open; a read-only connection cannot create that, so a store
 #    no instance has open is read as immutable, which nothing then writes.
@@ -58,9 +54,6 @@ sqlite3 "file:$LIVE/$DID.sqlite?mode=ro" \
     "VACUUM INTO '$REPLACED/$DID.dry-run-$DATE.sqlite'"
 cf space reap "$REPLACED/$DID.dry-run-$DATE.sqlite" --dry-run \
   --live "$LIVE/$DID.sqlite"
-cf space reap "$REPLACED/$DID.dry-run-$DATE.sqlite" --dry-run \
-  --live "$LIVE/$DID.sqlite" --json |
-  jq -r '.cellDatabases[]' >"$REPLACED/$DID.cells-$DATE.txt"
 
 # 1. Stop every instance. Nothing writes any space from here on. A
 #    companion beside the store that is not empty holds what an instance did
@@ -90,10 +83,20 @@ cf space reap "$REPLACED/$DID.work.sqlite" \
 rm -f "$REPLACED/$DID.work.sqlite" "$REPLACED/$DID.work.sqlite-wal" \
   "$REPLACED/$DID.work.sqlite-shm"
 
-# 4. Swap. The live file is copied aside, never deleted, and the result is
-#    renamed over it, so the directory holds a store throughout. Then the
-#    cell databases step 0 listed are moved aside: a reap of a copy cannot
-#    reach them.
+# 4. Swap. First the cell databases, which a reap of a copy cannot reach:
+#    the check lists, from the live directory as it stands, the files under
+#    the space's prefix, a 32-bit hash of the DID. When another store there
+#    shares the prefix, which are whose cannot be told by name, so the list
+#    is empty and the check names that store. A check that fails ends the
+#    script here, before anything moves. Then the live file is copied aside,
+#    never deleted, the result is renamed over it, so the directory holds a
+#    store throughout, and the listed cell databases are moved aside.
+cf space reap "$REPLACED/$DID.pre-reap-$DATE.sqlite" --dry-run \
+  --live "$LIVE/$DID.sqlite" --json >"$REPLACED/$DID.plan-$DATE.json"
+jq -r '.sharedWith[] | "cell databases left in place: the prefix is shared with " + .' \
+  "$REPLACED/$DID.plan-$DATE.json" >&2
+jq -r '.cellDatabases[]' "$REPLACED/$DID.plan-$DATE.json" \
+  >"$REPLACED/$DID.cells-$DATE.txt"
 sudo cp -p "$DID.sqlite" "$REPLACED/$DID.live-$DATE.sqlite"
 sudo install -o deploy -g deploy -m 644 "$REPLACED/$DID.reaped.sqlite" \
   "$DID.sqlite.reaped"
