@@ -18,8 +18,9 @@ procedure's host run with the reap in place of the compaction:
   taken after the stop, never the backup and never a served file;
 - the tool checks its result against the store it read before reporting, and
   removes a result that fails;
-- the swap moves the live file aside, never deletes it, and rolling back is the
-  compaction procedure's rollback.
+- the live directory always holds a store for the space: the swap keeps a copy
+  of the live file, then renames the result over it in one step, since a
+  server that finds no store gives the DID a fresh space, and history with it.
 
 Reap only a space that is deleted, which the tool checks, and only once its
 owner no longer needs the history the backup keeps. The backup is the archive
@@ -27,55 +28,84 @@ of everything the reap removes; keeping it is the space owner's decision.
 
 ## The host run
 
-```bash
-# 0. The space is deleted: the dry run refuses any other store. Read the
-#    report, and note the cell databases it names beside the live store.
-#    It refuses when another space's store there has cell databases under
-#    the same prefix, which is a 32-bit hash of the DID: then the files
-#    under it cannot be told apart, and step 4 leaves every cell database
-#    in place.
-sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
-  "VACUUM INTO '/data/replaced/<did>.dry-run-<date>.sqlite'"
-cf space reap '/data/replaced/<did>.dry-run-<date>.sqlite' --dry-run \
-  --live '/data/memory/engine-v3/engine-v3/<did>.sqlite'
+The run is one script. It stops at the first command that fails, so no step
+runs on the strength of one that did not finish. The reads open the store
+through a URI, which a DID's characters never need escaping in. Set the four names at its top
+first: the space's DID, a date for the file names, the live directory, and
+the directory that receives what the swap replaces, which has to be on the
+live directory's file system for the copy to be quick.
 
-# 1. Stop every instance. (sudo.) Nothing writes any space from here on.
-for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
+```bash
+set -euo pipefail
+DID='<did>'
+DATE='<date>'
+LIVE=/data/memory/engine-v3/engine-v3
+REPLACED=/data/replaced
+cd "$LIVE"
+
+# 0. The space is deleted: the dry run refuses any other store. It lists
+#    the space's cell databases beside the live store, by their file-name
+#    prefix, a 32-bit hash of the DID, and refuses when another space's store
+#    there shares that prefix. Then the files under it cannot be told apart:
+#    run the dry run again without --live, and leave every cell database in
+#    place by emptying the list it writes.
+#    The snapshot is read through the instance's shared memory when one has
+#    the store open; a read-only connection cannot create that, so a store
+#    no instance has open is read as immutable, which nothing then writes.
+sqlite3 "file:$LIVE/$DID.sqlite?mode=ro" \
+  "VACUUM INTO '$REPLACED/$DID.dry-run-$DATE.sqlite'" ||
+  sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
+    "VACUUM INTO '$REPLACED/$DID.dry-run-$DATE.sqlite'"
+cf space reap "$REPLACED/$DID.dry-run-$DATE.sqlite" --dry-run \
+  --live "$LIVE/$DID.sqlite"
+cf space reap "$REPLACED/$DID.dry-run-$DATE.sqlite" --dry-run \
+  --live "$LIVE/$DID.sqlite" --json |
+  jq -r '.cellDatabases[]' >"$REPLACED/$DID.cells-$DATE.txt"
+
+# 1. Stop every instance. Nothing writes any space from here on. A
+#    companion beside the store that is not empty holds what an instance did
+#    not write back, so it stops the run; empty ones go.
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for companion in -wal -shm -journal; do
+  if [ -s "$DID.sqlite$companion" ]; then
+    echo "$DID.sqlite$companion is not empty: stop here" >&2
+    exit 1
+  fi
+  sudo rm -f "$DID.sqlite$companion"
+done
 
 # 2. The authoritative backup, AFTER the stop, checksummed: the rollback, the
-#    archive, and the source.
-sqlite3 -readonly '/data/memory/engine-v3/engine-v3/<did>.sqlite' \
-  "VACUUM INTO '/data/replaced/<did>.pre-reap-<date>.sqlite'"
-sha256sum '/data/replaced/<did>.pre-reap-<date>.sqlite'
+#    archive, and the source. Read as immutable: nothing writes the file now,
+#    and no log beside it holds anything.
+sqlite3 "file:$LIVE/$DID.sqlite?immutable=1" \
+  "VACUUM INTO '$REPLACED/$DID.pre-reap-$DATE.sqlite'"
+sha256sum "$REPLACED/$DID.pre-reap-$DATE.sqlite"
 
 # 3. Reap a COPY of the backup into a fresh result. The command checks the
 #    result against the copy and exits nonzero, leaving no result, when a
-#    check fails. Go on to the swap only when it exits 0: the swap moves the
-#    live store aside before installing the result, and a server finding no
-#    store gives the DID a fresh space.
-cp '/data/replaced/<did>.pre-reap-<date>.sqlite' '/data/replaced/<did>.work.sqlite'
-if cf space reap '/data/replaced/<did>.work.sqlite' \
-  --out '/data/replaced/<did>.reaped.sqlite'; then
-  echo 'reaped; go on to step 4'
-else
-  echo 'the reap failed; stop here, with every instance stopped'
-fi
-rm '/data/replaced/<did>.work.sqlite'
+#    check fails, which ends the script here.
+cp "$REPLACED/$DID.pre-reap-$DATE.sqlite" "$REPLACED/$DID.work.sqlite"
+cf space reap "$REPLACED/$DID.work.sqlite" \
+  --out "$REPLACED/$DID.reaped.sqlite"
+rm -f "$REPLACED/$DID.work.sqlite" "$REPLACED/$DID.work.sqlite-wal" \
+  "$REPLACED/$DID.work.sqlite-shm"
 
-# 4. Swap, as the compaction procedure's step 6 does, and move the space's
-#    cell databases aside too: the report names their prefix,
-#    cell-<hash>-, and a reap of a copy cannot reach them. (sudo.) Leave
-#    the pattern out of the mv when step 0 named no cell file, or refused
-#    because another space shares the prefix.
-cd /data/memory/engine-v3/engine-v3/
-ls -la '<did>.sqlite'* 'cell-<hash>-'*.sqlite
-sudo mv '<did>.sqlite'* 'cell-<hash>-'*.sqlite /data/replaced/
-sudo install -o deploy -g deploy -m 644 '/data/replaced/<did>.reaped.sqlite' '<did>.sqlite'
+# 4. Swap. The live file is copied aside, never deleted, and the result is
+#    renamed over it, so the directory holds a store throughout. Then the
+#    cell databases step 0 listed are moved aside: a reap of a copy cannot
+#    reach them.
+sudo cp -p "$DID.sqlite" "$REPLACED/$DID.live-$DATE.sqlite"
+sudo install -o deploy -g deploy -m 644 "$REPLACED/$DID.reaped.sqlite" \
+  "$DID.sqlite.reaped"
+sudo mv -f "$DID.sqlite.reaped" "$DID.sqlite"
+while read -r cell; do
+  sudo mv -- "$cell" "$REPLACED/"
+done <"$REPLACED/$DID.cells-$DATE.txt"
 
-# 5. Start them all, and confirm the space reads as deleted. (sudo.)
-for p in $(seq 8001 8021); do sudo systemctl start toolshed-binary@$p; done
-for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
-cf inspect summary '/data/memory/engine-v3/engine-v3/<did>.sqlite'
+# 5. Start them all, and confirm the space reads as deleted.
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+cf inspect summary "$LIVE/$DID.sqlite"
 ```
 
 The summary's `deleted:` line names who deleted the space and the deletion
@@ -84,7 +114,23 @@ carrying the same `aclRevision` as before the reap.
 
 ## Rolling back
 
-Rolling back is
-[the compaction procedure's rollback](space-compaction.md#rolling-back): stop
-every instance, move the result out with its companions, and move the original
-and the cell databases back from `/data/replaced/`.
+Rolling back is the swap in reverse, and like
+[the compaction procedure's rollback](space-compaction.md#rolling-back) it
+begins with the stop: once step 5 has run, every instance may have the result
+open. With the same four names set:
+
+```bash
+set -euo pipefail
+cd "$LIVE"
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm"
+sudo cp -p "$REPLACED/$DID.live-$DATE.sqlite" "$DID.sqlite.restored"
+sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
+while read -r cell; do
+  sudo mv -- "$REPLACED/$cell" "$LIVE/"
+done <"$REPLACED/$DID.cells-$DATE.txt"
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+```
+
+The companions removed belong to the reaped result, which holds nothing the
+copy of the live file lacks.

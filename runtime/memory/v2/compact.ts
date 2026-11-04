@@ -29,6 +29,7 @@ import {
   readRevision,
 } from "./engine.ts";
 import { isACL, isDeletionTombstone } from "../acl.ts";
+import { type AclHead, readAclHeads } from "./acl-heads.ts";
 import {
   checkRewrittenStore,
   fileSize,
@@ -697,9 +698,6 @@ export const formatCompactionReport = (report: CompactionReport): string => {
 // ---------------------------------------------------------------------------
 // The run.
 
-/** The id of a space's ACL document: the one `of:did:…` id a store holds. */
-const ACL_ID_PATTERN = "of:did:%";
-
 /**
  * A store the run will not write, by name. The planner's preconditions, the
  * file's companions and the migrations a store may predate are each a reason
@@ -1002,7 +1000,7 @@ export const compactStore = async (
   // the store for writing.
   const worklist: InstancePlan[] = [];
   let report: CompactionReport;
-  let aclHeads: Array<{ id: string; op: string; data: string | null }>;
+  let aclHeads: AclHead[];
   const planning = new Database(store, { readonly: true });
   let schemaBefore: string;
   try {
@@ -1031,12 +1029,7 @@ export const compactStore = async (
     if (reasons.length > 0) {
       throw new CompactionRefused(`refused: ${reasons.join("; ")}`);
     }
-    aclHeads = planning.prepare(
-      `SELECT h.id, h.op, r.data FROM head h
-       JOIN revision r ON r.branch = h.branch AND r.id = h.id AND r.scope_key = h.scope_key
-         AND r.seq = h.seq AND r.op_index = h.op_index
-       WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE ?`,
-    ).all<{ id: string; op: string; data: string | null }>(ACL_ID_PATTERN);
+    aclHeads = readAclHeads(planning);
     if (aclHeads.length > 1) {
       throw new CompactionRefused(
         `the store holds ${aclHeads.length} ACL documents (${

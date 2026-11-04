@@ -46,6 +46,7 @@ import {
   ReapRefused,
   reapStore,
   refuseUnmigratedStore,
+  removeReapResult,
 } from "@commonfabric/memory/v2/reap";
 import type { CellScope } from "@commonfabric/memory/v2";
 import {
@@ -889,7 +890,13 @@ export const space = new Command()
       }
       throw error;
     }
-    const verification = verifyReap({ result: run.out, against: store });
+    let verification;
+    try {
+      verification = verifyReap({ result: run.out, against: store });
+    } catch (error) {
+      removeReapResult(run.out);
+      throw error;
+    }
     out(!!options.json, { ...run, verification }, () => {
       // A result that failed its check is removed below, so only one that
       // passed is reported as a result.
@@ -900,7 +907,7 @@ export const space = new Command()
     if (!verification.ok) {
       // A result that failed its check is not one to install, so none is
       // left to install by mistake.
-      Deno.removeSync(run.out);
+      removeReapResult(run.out);
       Deno.exit(1);
     }
   })

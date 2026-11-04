@@ -41,13 +41,30 @@ describe("reap", () => {
       apply([{ op: "set", id: "of:doc", value: { value: { n: 1 } } }]);
       engine.database.exec(
         `CREATE TABLE private_rows (x TEXT); INSERT INTO private_rows VALUES ('a');
-         CREATE TABLE "constructor" (x TEXT); INSERT INTO "constructor" VALUES ('a')`,
+         CREATE TABLE "constructor" (x TEXT); INSERT INTO "constructor" VALUES ('a');
+         CREATE TABLE sqliteX (x TEXT); INSERT INTO sqliteX VALUES ('a')`,
       );
       apply([{
         op: "set",
         id: ACL,
         value: { value: { deleted: { by: ALICE } } },
       }]);
+      // The engine records no invocation or authorization for a commit, so
+      // the rows the deletion commit references, and one it does not, are
+      // written here.
+      for (const ref of ["ref:deletion", "ref:earlier"]) {
+        engine.database.prepare(
+          `INSERT INTO invocation (ref, iss, cmd, sub, invocation)
+           VALUES (?, ?, '/memory/transact', ?, '{}')`,
+        ).run(ref, ALICE, SPACE);
+        engine.database.prepare(
+          `INSERT INTO authorization (ref, authorization) VALUES (?, '{}')`,
+        ).run(ref);
+      }
+      engine.database.exec(
+        `UPDATE "commit" SET invocation_ref = 'ref:deletion',
+           authorization_ref = 'ref:deletion' WHERE seq = 3`,
+      );
       close(engine);
       await reapStore({ store, out });
     });

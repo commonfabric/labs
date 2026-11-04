@@ -149,7 +149,7 @@ export function verifyReap(
       new Set(
         main.all<{ name: string }>(
           `SELECT name FROM ${schema}.sqlite_master
-           WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+           WHERE type = 'table' AND substr(name, 1, 7) != 'sqlite_'`,
         ).map((row) => row.name),
       );
     const resultTables = tablesOf("main");

@@ -5,7 +5,10 @@
 import type { CommitRow, SpaceDb } from "./db.ts";
 import { hasSchedulerBasisTable, tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
-import { isDeletionTombstone } from "@commonfabric/memory/acl";
+import {
+  deletionTombstoneOf,
+  readAclHeads,
+} from "@commonfabric/memory/v2/acl-heads";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
 import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 import { rowLimit } from "./model.ts";
@@ -73,29 +76,19 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     }
   }
 
-  // The op is the revision's, which every store's has: a store from before
-  // the current-op migration has a `head` without one, or none at all.
-  const acl = tableNames(db).includes("head")
-    ? db.prepare(
-      `SELECT h.seq, r.data FROM head h
-       JOIN revision r ON r.branch = h.branch AND r.id = h.id
-         AND r.scope_key = h.scope_key AND r.seq = h.seq
-         AND r.op_index = h.op_index
-       WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE 'of:did:%'
-         AND r.op = 'set'`,
-    ).all<{ seq: number; data: string | null }>()
-    : [];
+  // A store from before the head table has no ACL head to read.
+  const acl = tableNames(db).includes("head") ? readAclHeads(db) : [];
   let deletion: SpaceSummary["deletion"];
-  if (acl.length === 1 && acl[0].data !== null) {
-    let value: unknown;
+  if (acl.length === 1) {
+    let tombstone;
     try {
-      value = (decodeStored(acl[0].data) as { value?: unknown } | null)?.value;
+      tombstone = deletionTombstoneOf(acl[0], decodeStored);
     } catch {
       // An ACL document that does not decode holds no tombstone, and the
       // summary goes on to report the rest of the store.
     }
-    if (isDeletionTombstone(value)) {
-      deletion = { by: value.deleted.by, seq: acl[0].seq };
+    if (tombstone !== undefined) {
+      deletion = { by: tombstone.deleted.by, seq: acl[0].seq };
     }
   }
 

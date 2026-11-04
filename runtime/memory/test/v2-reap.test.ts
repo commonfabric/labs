@@ -66,9 +66,10 @@ describe("reap", () => {
   });
 
   /**
-   * Builds a space alice owns alone, with documents and history, and two
+   * Builds a space alice owns alone, with documents and history, and three
    * tables no engine declares holding a row each, as a pattern's private
-   * tables would, one of them named as an `Object.prototype` member is.
+   * tables would: one named as an `Object.prototype` member is, and one whose
+   * name `LIKE 'sqlite_%'` would match.
    * With `deleted`, alice then deletes it. Returns the deletion's seq, or 0.
    */
   const build = async (deleted = true): Promise<number> => {
@@ -87,7 +88,8 @@ describe("reap", () => {
     apply([setOp("computed:x", { n: 3 })]);
     engine.database.exec(
       `CREATE TABLE private_rows (x TEXT); INSERT INTO private_rows VALUES ('kept?');
-       CREATE TABLE "constructor" (x TEXT); INSERT INTO "constructor" VALUES ('kept?')`,
+       CREATE TABLE "constructor" (x TEXT); INSERT INTO "constructor" VALUES ('kept?');
+       CREATE TABLE sqliteX (x TEXT); INSERT INTO sqliteX VALUES ('kept?')`,
     );
     const seq = deleted ? apply([setOp(ACL, { deleted: { by: ALICE } })]) : 0;
     close(engine);
@@ -111,6 +113,7 @@ describe("reap", () => {
     expect(rows(out, "branch").map((row) => row.name)).toEqual([""]);
     expect(rows(out, "private_rows")).toEqual([]);
     expect(rows(out, "constructor")).toEqual([]);
+    expect(rows(out, "sqliteX")).toEqual([]);
     expect(rows(out, "snapshot")).toEqual([]);
   });
 
@@ -168,12 +171,44 @@ describe("reap", () => {
     }
   });
 
-  it("refuses the store of a space that is not deleted", async () => {
+  it("keeps the invocation and authorization rows the deletion commit references, and no other", async () => {
+    const seq = await build();
+    const db = new Database(store);
+    try {
+      for (const ref of ["ref:deletion", "ref:earlier"]) {
+        db.prepare(
+          `INSERT INTO invocation (ref, iss, cmd, sub, invocation)
+           VALUES (?, ?, '/memory/transact', ?, '{}')`,
+        ).run(ref, ALICE, SPACE);
+        db.prepare(
+          `INSERT INTO authorization (ref, authorization) VALUES (?, '{}')`,
+        ).run(ref);
+      }
+      db.prepare(
+        `UPDATE "commit" SET invocation_ref = 'ref:deletion',
+           authorization_ref = 'ref:deletion' WHERE seq = ?`,
+      ).run(seq);
+    } finally {
+      db.close();
+    }
+
+    await reapStore({ store, out });
+
+    expect(rows(out, "invocation").map((row) => row.ref)).toEqual([
+      "ref:deletion",
+    ]);
+    expect(rows(out, "authorization").map((row) => row.ref)).toEqual([
+      "ref:deletion",
+    ]);
+  });
+
+  it("refuses the store of a space that is not deleted, and leaves no result", async () => {
     await build(false);
     await expect(reapStore({ store, out })).rejects.toThrow(ReapRefused);
     await expect(reapStore({ store, out })).rejects.toThrow(
       "holds no deletion tombstone",
     );
+    expect(() => Deno.statSync(out)).toThrow(Deno.errors.NotFound);
   });
 
   it("refuses a store holding a commit after its deletion, which no server writes", async () => {

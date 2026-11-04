@@ -60,6 +60,7 @@ import {
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
 import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
@@ -4308,20 +4309,8 @@ export const findSpaceDeletion = (
       ? { space, aclRevision: state.seq }
       : undefined;
   }
-  const heads = engine.database.prepare(
-    `SELECT h.id, h.seq, r.data FROM head h
-     JOIN revision r ON r.branch = h.branch AND r.id = h.id
-       AND r.scope_key = h.scope_key AND r.seq = h.seq
-       AND r.op_index = h.op_index
-     WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE 'of:did:%'
-       AND h.op = 'set'`,
-  ).all<{ id: string; seq: number; data: string | null }>();
-  for (const head of heads) {
-    if (head.data === null) continue;
-    const document = decodeTrustedMemoryBoundary(head.data) as
-      | EntityDocument
-      | null;
-    if (isDeletionTombstone(document?.value)) {
+  for (const head of readAclHeads(engine.database)) {
+    if (deletionTombstoneOf(head) !== undefined) {
       return { space: head.id.slice("of:".length), aclRevision: head.seq };
     }
   }

@@ -6,7 +6,7 @@
  * result, and checks what it wrote before handing it on.
  */
 
-import type { Database } from "@db/sqlite";
+import { Database } from "@db/sqlite";
 
 /** The file's stat, or undefined for a file that is not there. Any other
  * failure — a permission refused, an I/O error — is not absence and is
@@ -40,10 +40,17 @@ export const entryExists = (path: string): boolean => {
 
 /**
  * Refuses, by throwing what `refused` makes of the reason, a run over
- * `store` that would write `out`, unless `store` is there, nothing holds it
- * open, and nothing is at `out`. A store some process holds open in WAL mode
- * has a log beside it, and a stale log left beside a replaced database is
- * recovered onto the replacement.
+ * `store` that would write `out`, unless `store` is there, no log that is not
+ * empty is beside it, no connection holds it, and nothing is at `out`.
+ *
+ * A stale log left beside a replaced database is recovered onto the
+ * replacement, so a log that is not empty is refused whoever left it. Whether
+ * a connection holds the store is asked of SQLite: the check takes the file's
+ * exclusive lock and lets it go, which any connection to a WAL-mode store
+ * prevents, idle or not, as does a connection to a rollback-mode store inside
+ * a transaction. An idle connection to a rollback-mode store holds no lock,
+ * so nothing here can see it; that the store is a copy nothing has open is
+ * the procedure's to ensure.
  */
 export const preflightOfflineStore = (
   store: string,
@@ -65,6 +72,34 @@ export const preflightOfflineStore = (
   if (entryExists(out)) {
     throw refused(`${out} exists; the result is never overwritten`);
   }
+  if (!exclusiveLockFree(store)) {
+    throw refused(
+      `${store} is held by another connection: a process has it open; the run writes only a store nothing has open`,
+    );
+  }
+};
+
+/**
+ * Whether the exclusive lock on the SQLite file at `store` can be taken at
+ * once. The connection takes it before its first access, so a WAL-mode store
+ * is read with no shared-memory index, and it writes nothing.
+ */
+const exclusiveLockFree = (store: string): boolean => {
+  const db = new Database(store, { create: false });
+  try {
+    db.exec("PRAGMA busy_timeout = 0");
+    db.exec("PRAGMA locking_mode = EXCLUSIVE");
+    try {
+      db.exec("BEGIN EXCLUSIVE");
+    } catch (error) {
+      if (/database is locked/.test(String(error))) return false;
+      throw error;
+    }
+    db.exec("COMMIT");
+    return true;
+  } finally {
+    db.close();
+  }
 };
 
 /**
@@ -77,10 +112,17 @@ export const checkRewrittenStore = (db: Database): void => {
   const violations = db.prepare(`PRAGMA foreign_key_check`).all();
   if (violations.length > 0) {
     throw new Error(
-      `PRAGMA foreign_key_check reports ${violations.length} violation(s) after the run; the store is left as it is`,
+      `PRAGMA foreign_key_check reports ${violations.length} violation(s) after the run`,
     );
   }
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get<
+    { busy: number }
+  >();
+  if (checkpoint?.busy !== 0) {
+    throw new Error(
+      "PRAGMA wal_checkpoint(TRUNCATE) could not finish: another connection reads the file the run wrote",
+    );
+  }
   const integrity = db.prepare(`PRAGMA integrity_check`).all<
     { integrity_check: string }
   >();

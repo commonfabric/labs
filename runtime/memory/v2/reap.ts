@@ -10,8 +10,7 @@
 import { Database } from "@db/sqlite";
 import { basename, dirname, resolve } from "@std/path";
 
-import { decodeTrustedMemoryBoundary, type EntityDocument } from "../v2.ts";
-import { isDeletionTombstone } from "../acl.ts";
+import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   checkRewrittenStore,
   fileSize,
@@ -62,9 +61,6 @@ export type ReapRun = ReapPlan & {
   outBytes: number;
 };
 
-/** The id of a space's ACL document: the one `of:did:…` id a store holds. */
-const ACL_ID_PATTERN = "of:did:%";
-
 /**
  * Each table whose rows a reap may keep, with the condition a kept row meets,
  * over the named parameters `:acl` (the ACL document's id), `:seq` (the
@@ -100,11 +96,12 @@ const parametersOf = (
     ),
   );
 
-/** The tables `db` declares, but SQLite's own. */
+/** The tables `db` declares, but SQLite's own, whose names start with
+ * `sqlite_` (compared as a prefix: `LIKE` would read the `_` as a wildcard). */
 const tablesOf = (db: Database): string[] =>
   db.prepare(
     `SELECT name FROM sqlite_master
-     WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+     WHERE type = 'table' AND substr(name, 1, 7) != 'sqlite_' ORDER BY name`,
   ).all<{ name: string }>().map((row) => row.name);
 
 /** The named parameters {@link KEPT}'s conditions read, for `plan`. */
@@ -154,25 +151,15 @@ export const planReap = (db: Database): ReapPlan => {
 const planWithParameters = (
   db: Database,
 ): { plan: ReapPlan; parameters: KeptParameters } => {
-  const heads = db.prepare(
-    `SELECT h.id, h.seq, h.op, r.data FROM head h
-     JOIN revision r ON r.branch = h.branch AND r.id = h.id
-       AND r.scope_key = h.scope_key AND r.seq = h.seq
-       AND r.op_index = h.op_index
-     WHERE h.branch = '' AND h.scope_key = 'space' AND h.id LIKE ?`,
-  ).all<{ id: string; seq: number; op: string; data: string | null }>(
-    ACL_ID_PATTERN,
-  );
+  const heads = readAclHeads(db);
   if (heads.length !== 1) {
     throw new ReapRefused(
       `the store holds ${heads.length} ACL documents; a deleted space's holds one, its deletion tombstone`,
     );
   }
   const [acl] = heads;
-  const value = acl.op === "set" && acl.data !== null
-    ? (decodeTrustedMemoryBoundary(acl.data) as EntityDocument | null)?.value
-    : undefined;
-  if (!isDeletionTombstone(value)) {
+  const tombstone = deletionTombstoneOf(acl);
+  if (tombstone === undefined) {
     throw new ReapRefused(
       `${acl.id} holds no deletion tombstone: only a deleted space's store is reaped`,
     );
@@ -220,7 +207,7 @@ const planWithParameters = (
       space,
       aclId: acl.id,
       deletionSeq: acl.seq,
-      deletedBy: value.deleted.by,
+      deletedBy: tombstone.deleted.by,
       removed,
       cellDatabaseFilePrefix: cellDatabaseFilePrefix(space),
     },
@@ -235,11 +222,12 @@ const planWithParameters = (
  * commit's row, the invocation and authorization rows it references, the
  * deletion tombstone's revision and head rows, and the default branch's
  * row; every other row of every table is removed, and the result is checked
- * and vacuumed before it is returned.
+ * and vacuumed before it is returned. A run that does not finish leaves no
+ * result.
  *
  * @throws ReapRefused when the store is not a deleted space's, is held open,
  *   predates a migration the server runs on opening it, or the result path
- *   exists.
+ *   exists; Error when a check of the result fails.
  */
 export const reapStore = async (
   options: { store: string; out?: string },
@@ -250,39 +238,61 @@ export const reapStore = async (
     : resolve(options.out);
   preflightOfflineStore(store, out, (reason) => new ReapRefused(reason));
 
-  // Planned on a connection that cannot write, which also makes the copy
-  // the run rewrites, so the store is never written.
-  let planned: { plan: ReapPlan; parameters: KeptParameters };
+  // The copy the run rewrites is made on a connection that cannot write, so
+  // the store is never written.
   const source = new Database(store, { readonly: true });
   try {
     await refuseUnmigratedStore(source);
-    planned = planWithParameters(source);
     source.prepare(`VACUUM main INTO ?`).run(out);
   } finally {
     source.close();
   }
 
-  const result = new Database(out);
+  // From here a result is on disk, and a run that does not finish removes
+  // it, so none is left to install by mistake.
   try {
-    result.exec("PRAGMA locking_mode = EXCLUSIVE");
-    result.exec("PRAGMA foreign_keys = OFF");
-    result.transaction(() => {
-      for (const table of tablesOf(result)) {
-        const kept = KEPT.get(table);
-        if (kept === undefined) {
-          result.exec(`DELETE FROM ${quoted(table)}`);
-        } else {
-          result.prepare(`DELETE FROM ${quoted(table)} WHERE NOT (${kept})`)
-            .run(parametersOf(kept, planned.parameters));
+    const result = new Database(out);
+    try {
+      result.exec("PRAGMA locking_mode = EXCLUSIVE");
+      result.exec("PRAGMA foreign_keys = OFF");
+      // Planned on the copy itself, which `VACUUM INTO` made as one read of
+      // the store, so the plan and the rows it keeps are of the same state.
+      const planned = planWithParameters(result);
+      result.transaction(() => {
+        for (const table of tablesOf(result)) {
+          const kept = KEPT.get(table);
+          if (kept === undefined) {
+            result.exec(`DELETE FROM ${quoted(table)}`);
+          } else {
+            result.prepare(`DELETE FROM ${quoted(table)} WHERE NOT (${kept})`)
+              .run(parametersOf(kept, planned.parameters));
+          }
         }
-      }
-    }).immediate();
-    checkRewrittenStore(result);
-    result.exec("VACUUM");
-  } finally {
-    result.close();
+      }).immediate();
+      checkRewrittenStore(result);
+      result.exec("VACUUM");
+      return { ...planned.plan, out, outBytes: fileSize(out) };
+    } finally {
+      result.close();
+    }
+  } catch (error) {
+    removeReapResult(out);
+    throw error;
   }
-  return { ...planned.plan, out, outBytes: fileSize(out) };
+};
+
+/**
+ * Removes the reap result at `out` and the companions SQLite may have left
+ * beside it, whichever are there: a result that failed is not one to install.
+ */
+export const removeReapResult = (out: string): void => {
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    try {
+      Deno.removeSync(`${out}${suffix}`);
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
 };
 
 /** The cell databases beside a live store, as the install would move them. */
