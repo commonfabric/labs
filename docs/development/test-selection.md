@@ -1798,8 +1798,8 @@ leaves](#the-comment-a-run-on-the-default-branch-leaves), which does not name
 it as a first failure. A test that failed every rerun counts each of those
 failures in its churn.
 
-A unit runs again as its batch ran it, with the same skip list, so that the
-rerun asks the same tests the same thing. A [unit that runs
+A unit runs again as its batch's first pass ran it, with the same skip list,
+so that the rerun asks the same tests the same thing. A [unit that runs
 whole](#units-that-run-whole) runs whole again, and the records of every test
 in it ship. Coverage is off for a rerun, since nothing scores what a rerun
 would measure. A test that has already passed beside its failure in the lane,
@@ -2212,11 +2212,24 @@ where its budget has room: a file the default branch gained after the commit
 the manifest was published from is not forced in for want of records, and
 the exploration pass reaches its stand-in first. A new test
 inside a unit the manifest already knows is not made mandatory on its own.
-It runs whenever a lane runs its unit, because a lane's skip list names only
-identities the manifest holds. Where that unit is a file, the change that
-adds the test edits it, which makes the unit mandatory. A record that
+It runs once whenever a lane runs its unit, because a lane's skip list names
+only identities the manifest holds. Where that unit is a file, the change
+that adds the test edits it, which makes the unit mandatory. A record that
 belongs to a suite as a whole rather than to one of its units makes no unit
 known.
+
+A lane runs such a test once however many times it runs the unit. A unit runs
+as many times as the most runs any identity the lane holds in it asks for by
+[its flake rate](../specs/test-selection.md#how-many-times-a-lane-runs-one-test),
+and the packer charges each of those runs for the identities the manifest
+holds in the unit and for nothing else. So every pass after the first adds to
+the unit's skip list each name the first pass registered that the manifest
+does not hold and that encloses nothing it does, and a new test runs in the
+first pass alone. A new test beside one whose flake rate asks for ten runs
+would otherwise run ten times with none of them charged, and a few tests of a
+few minutes each are then enough to run a lane past its step's bound. A unit
+that runs whole, or whose first pass left no name map, runs every pass as it
+ran the first.
 
 Two things are worth knowing while writing one, and both are consequences
 of the identity being the reported name:

@@ -634,6 +634,14 @@ export interface Batch {
    * account. Absent, no such test is known.
    */
   known?: ReadonlySet<string>;
+
+  /**
+   * The names the manifest holds in each unit whose runner reads a skip
+   * list, with every name enclosing one of them. A name a unit's first pass
+   * registered outside these is a test the manifest has not seen, which no
+   * later pass runs. A unit absent here skips the same names in every pass.
+   */
+  holds?: ReadonlyMap<Unit, ReadonlySet<string>>;
 }
 
 /** How `Batch.known` names an identity in a unit. */
@@ -651,9 +659,34 @@ export function batchRepeats(batch: Batch): number {
   return most;
 }
 
-/** The units of a batch that are still running on the `run`th time round. */
-export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
-  return batch.units.filter((unit) => (batch.runs.get(unit.unit) ?? 1) >= run);
+/**
+ * The units of a batch that are still running on the `run`th time round,
+ * each with the names that pass is not to run, where `first` is what the
+ * first pass registered, by unit.
+ *
+ * A pass after the first also skips each name the first pass registered in
+ * a unit that the manifest does not hold. The packer charges each pass of a
+ * unit for the identities the manifest holds in it and has no cost for one
+ * it has not seen, so such a test runs once, in the first pass, which is
+ * what a test that has never disagreed with itself is given.
+ */
+export function unitsForRun(
+  batch: Batch,
+  run: number,
+  first: ReadonlyMap<Unit, ReadonlySet<string>> = new Map(),
+): UnitRequest[] {
+  return batch.units
+    .filter((unit) => (batch.runs.get(unit.unit) ?? 1) >= run)
+    .map((request) => {
+      const holds = batch.holds?.get(request.unit);
+      if (run === 1 || holds === undefined) return request;
+      const unseen = [...first.get(request.unit) ?? []]
+        .filter((name) => !holds.has(name))
+        .toSorted();
+      return unseen.length === 0
+        ? request
+        : { ...request, skip: [...request.skip, ...unseen] };
+    });
 }
 
 /**
@@ -683,6 +716,7 @@ export function batchesOf(
   }
   const batches = new Map<string, Batch>();
   const known = new Map<string, Set<string>>();
+  const holds = new Map<string, Map<Unit, ReadonlySet<string>>>();
   // What each unit was selected for: the names to run, and the most
   // repeats any one of them asked for.
   const selected = new Map<string, { names: Set<string>; repeats: number }>();
@@ -729,6 +763,16 @@ export function batchesOf(
     const suiteKnows = known.get(suiteId) ?? new Set();
     known.set(suiteId, suiteKnows);
     for (const entry of all) suiteKnows.add(knownKey(unit, entry.test));
+    const suiteHolds = holds.get(suiteId) ?? new Map();
+    holds.set(suiteId, suiteHolds);
+    if (!whole) {
+      suiteHolds.set(
+        unit,
+        new Set(
+          all.flatMap(({ test }) => [test.n, ...enclosingNames(test.n)]),
+        ),
+      );
+    }
     const batch = batches.get(suiteId);
     if (batch === undefined) {
       batches.set(suiteId, {
@@ -741,6 +785,7 @@ export function batchesOf(
           selections.filter(({ entry }) => entry.suite === suiteId),
         ),
         known: suiteKnows,
+        holds: suiteHolds,
       });
     } else {
       batch.units.push(request);
@@ -1200,13 +1245,14 @@ export async function runBatch(
     const outputDir = path.join(workDir, `${batch.suite.id}-${run}`);
     const batchSpool = path.join(outputDir, "spool");
     await Deno.mkdir(batchSpool, { recursive: true });
-    const asked = unitsForRun(batch, run);
+    const asked = unitsForRun(batch, run, executions[0]?.registered);
     opened += asked.length;
     // The tests a unit's skip list named, by unit and name. Each is a test
-    // the plan gave another lane, or none, so the skip its process
-    // registers is a fact about this lane's share rather than about the
-    // test, and it ships no record. A skip the test registers itself is
-    // not on this list and ships.
+    // the plan gave another lane, or none, or one the manifest does not hold
+    // that the first pass ran already, so the skip its process registers is
+    // a fact about this lane's share rather than about the test, and it
+    // ships no record. A skip the test registers itself is not on this list
+    // and ships.
     const skipped = new Set(
       asked.flatMap((request) =>
         request.skip.map((name) => `${request.unit}\t${name}`)
@@ -1784,10 +1830,10 @@ export interface Reruns {
  * goes on reading as broken. They collect evidence and decide nothing:
  * what the lane fails for is settled from the batches' own records.
  *
- * A unit runs again as its batch ran it, with the same skip list, so the
- * rerun asks the same tests the same thing. A unit its suite runs whole
- * runs whole again, and is charged for every test it holds. Coverage is
- * off, since nothing scores what a rerun would measure.
+ * A unit runs again as its batch's first pass ran it, with the same skip
+ * list, so the rerun asks the same tests the same thing. A unit its suite
+ * runs whole runs whole again, and is charged for every test it holds.
+ * Coverage is off, since nothing scores what a rerun would measure.
  *
  * Each rerun goes to the batch holding the unit that has run again least,
  * across every batch, and offers that batch's units the budget in the same

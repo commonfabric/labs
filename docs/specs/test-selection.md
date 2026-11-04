@@ -645,10 +645,18 @@ Two rules force a test in.
   What a consumer can see is a unit, so the rule is applied per unit. A
   unit that no identity the manifest knows in its suite and variant
   belongs to is represented by a stand-in, and the stand-in must run. A
-  new identity inside a known unit is not forced in. It runs whenever its
-  unit runs, because what a runner is told to skip names only identities
-  the manifest holds. A record a suite writes for itself rather than for
-  one of its units makes no unit known.
+  new identity inside a known unit is not forced in. It runs once wherever
+  its unit runs, because what a runner is told to skip names only
+  identities the manifest holds, and a lane that runs the unit again for an
+  identity's repeats tells each later run to skip as well every name the
+  first run registered that the manifest does not hold and that encloses
+  none it does. The packer has no
+  cost for such an identity and charges a lane nothing for it, so every run
+  of it after the first would be time no lane was packed for. One run is
+  also what [an identity that has never disagreed with
+  itself](#how-many-times-a-lane-runs-one-test) is given. A record a
+  suite writes for itself rather than for one of its units makes no unit
+  known.
 
   A unit is not forced in for want of records where it is a file the
   default branch gained after the commit the manifest was published from
