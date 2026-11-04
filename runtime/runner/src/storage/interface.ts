@@ -29,7 +29,6 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
-  FieldAnchor,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
@@ -39,6 +38,7 @@ import type {
   EntityIdListOptions,
   EntityIdListResult,
   EventAttentionResolveResult,
+  FieldAnchor,
   GenesisRoot,
   MemoryProtocolFlags,
   OperationFieldQuery,
