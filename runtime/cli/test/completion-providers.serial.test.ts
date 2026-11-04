@@ -304,6 +304,8 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf space verify ", "dirs", undefined],
   ["cf space compact ", "files", "*.sqlite"],
   ["cf space compact x --against ", "files", "*.sqlite"],
+  ["cf space reap ", "files", "*.sqlite"],
+  ["cf space reap x --live ", "files", "*.sqlite"],
   ["cf space reset ", "dirs", undefined],
   ["cf inspect spaces --dir ", "dirs", undefined],
   ["cf profile repair-root --from-snapshot ", "dirs", undefined],

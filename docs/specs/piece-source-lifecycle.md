@@ -813,11 +813,17 @@ historical origin retains that origin.
 
 Preflight and setup share stored-argument validation. Optional fields holding
 `undefined` count as absent. An argument document or linked value unreadable in
-the validating transaction defers to reactive reads; a readable wrong-typed
-value is refused. A link stored at a position the schema types as a cell
-handle validates as that handle: only the top level of what it reaches is
-read, without descending, and held to the type the position allows. Preflight
-does not establish that every linked value is available.
+the validating transaction defers to reactive reads. So does a value a stored
+link reaches in another space or scope than the argument document's own: it is
+not read at all, and the reads that follow the link check it. It is another
+piece's or another audience's data, and a read of it would join its labels to
+the setup transaction, which then could not write the piece's own stores
+wherever those labels do not fit. A readable wrong-typed value within the
+argument document's own space and scope is refused. A link stored there at a
+position the schema types as a cell handle validates as that handle: only the
+top level of what it reaches is read, without descending, and held to the type
+the position allows. Preflight does not establish that every linked value is
+available.
 
 When validation needs to distinguish unreadable links from literal absence, its
 fallback builds a view whose fields follow stored links as validation reads
