@@ -151,8 +151,9 @@ export function spaceAccessOf(
  * has not arrived, a space that has no access list, a run with no principal,
  * and a `target` passed as `undefined` all return. The answer depends on who
  * asks, so a call in a computation makes its value a per-user one, as
- * {@link spaceAccess} does, and is run again when the list changes or, on a
- * client, when the memory server refuses or readmits this runtime.
+ * {@link spaceAccess} does, and is run again when the list changes or when the
+ * memory server refuses or readmits this runtime. On a serving runtime only a
+ * refusal marked `deleted` changes the answer, to `undefined`.
  *
  * The list tells a member only what a member can already read, since any
  * member can read the whole access list. On a serving runtime, which reads
