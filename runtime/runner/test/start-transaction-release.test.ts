@@ -8,6 +8,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 describe("start-transaction-release", () => {
   // Collection needs `--expose-gc` and the real clock, which this package's
@@ -20,13 +21,19 @@ describe("start-transaction-release", () => {
         "./start-transaction-release-gc-helper.ts",
         import.meta.url,
       );
-      // Spawned by name so the launch matches the task's `--allow-run=deno`
-      // grant, which resolves the name through PATH the same way.
-      const output = await new Deno.Command("deno", {
-        args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
+      // The Deno running this test, under the checked-in lockfile and frozen
+      // resolution ("Tests that start Deno" in `docs/development/TESTING.md`).
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        args: (lockPath) => [
+          "run",
+          `--lock=${lockPath}`,
+          "--frozen=true",
+          "-A",
+          "--v8-flags=--expose-gc",
+          fromFileUrl(helper),
+        ],
+      });
       const stdout = new TextDecoder().decode(output.stdout);
       expect(
         output.success,
