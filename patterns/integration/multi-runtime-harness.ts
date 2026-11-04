@@ -697,6 +697,17 @@ export class MultiRuntimeSession {
     };
   }
 
+  /**
+   * Raw write of a whole document at an explicit storage address, in a commit
+   * nothing prepares, for a test to store what no pattern here writes.
+   */
+  async rawWrite(
+    address: { id: string; space: string; scope?: FabricValue },
+    value: FabricValue,
+  ): Promise<void> {
+    await this.#client.call("rawWrite", { ...address, value });
+  }
+
   async idle(): Promise<void> {
     await this.#client.call("idle");
   }

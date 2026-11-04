@@ -293,6 +293,15 @@ says only that an open has started.
   whose reads the serving runtime's own store supplies has no answer to wait
   for, as below.
 
+The memory server sends no document from a deleted space, so a load of one ends
+with no data. The storage manager settles that load as an absence rather than as
+a failed load, whether the runtime learned of the deletion from a refused open or
+from the revocation of a session it held on the space when the deletion
+committed. So an event whose handler reads a document it has to load from a
+deleted space runs, rather than failing or waiting on the load, and reads the
+document as absent, and `spaceDeleted()` on the document tells the handler why
+([events.md §5](../specs/server-side-execution/events.md#5-failure-semantics)).
+
 A runtime with no memory server it can ask about the space returns `undefined`
 from both, and a handler is not run again: there is no answer to wait for. Such
 a runtime is one whose storage manager has no sessions to report on, or one

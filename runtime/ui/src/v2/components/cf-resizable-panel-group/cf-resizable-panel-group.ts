@@ -29,12 +29,18 @@ import { CFResizablePanel } from "../cf-resizable-panel/cf-resizable-panel.ts";
  * ```html
  * <cf-resizable-panel-group stack-below="768">…</cf-resizable-panel-group>
  * ```
+ *
+ * A panel with nothing to show while stacked steps aside then, and the other
+ * panels take its room:
+ * ```html
+ * <cf-resizable-panel default-size="64" hide-when-stacked>…</cf-resizable-panel>
+ * ```
  */
 
 export type PanelGroupDirection = "horizontal" | "vertical";
 
 interface PanelInfo {
-  element: HTMLElement;
+  element: CFResizablePanel;
   minSize: number;
   maxSize: number;
   defaultSize: number;
@@ -48,9 +54,10 @@ interface PanelInfo {
  * @extends BaseElement
  *
  * @property {PanelGroupDirection} direction - Layout direction ("horizontal" | "vertical")
- * @property {number} stackBelow - A width in pixels: while the group itself
- *   is narrower, its panels lie vertically whatever `direction` says. Unset,
- *   the group always follows `direction`.
+ * @property {number} stackBelow - A width in pixels: while a horizontal
+ *   group is itself narrower, its panels lie vertically (the group is
+ *   stacked), and a panel marked `hideWhenStacked` is not drawn. A vertical
+ *   group is never stacked. Unset, the group always follows `direction`.
  *
  * @attribute {string} direction - Sets the layout direction for panels
  * @attribute {number} stack-below - Sets `stackBelow`
@@ -80,10 +87,14 @@ export class CFResizablePanelGroup extends BaseElement {
   /** The direction the panels lie in now: `direction`, or vertical while the
    * group is narrower than `stackBelow`. */
   get orientation(): PanelGroupDirection {
-    return this.stackBelow != null && this._width !== undefined &&
-        this._width < this.stackBelow
-      ? "vertical"
-      : this.direction;
+    return this.stacked ? "vertical" : this.direction;
+  }
+
+  /** Whether the group lies vertically only because it is narrower than
+   * `stackBelow`. */
+  get stacked(): boolean {
+    return this.direction === "horizontal" && this.stackBelow != null &&
+      this._width !== undefined && this._width < this.stackBelow;
   }
 
   static override styles = css`
@@ -169,6 +180,14 @@ export class CFResizablePanelGroup extends BaseElement {
   #sizedDimension: "width" | "height" | undefined;
   /** The orientation the handles and panels were last given. */
   #laidOut: PanelGroupDirection | undefined;
+  /** Whether the panels were last laid out stacked. */
+  #laidOutStacked = false;
+  /** The panels and handles this group stopped drawing, each with the
+   * inline display it had, so it shows again only what it hid, as it was. */
+  #hidden = new Map<HTMLElement, string>();
+  /** How much larger the drawn panels are than their stored sizes, while a
+   * panel is hidden; 1 otherwise. */
+  #scale = 1;
   /** Measures the group's own width, for `stackBelow`. The first report
    * arrives after layout and before paint, so a narrow group is never drawn
    * side by side first. */
@@ -181,6 +200,7 @@ export class CFResizablePanelGroup extends BaseElement {
     this._observer = new MutationObserver(() => this.updatePanels());
     this._observer.observe(this, { childList: true });
     this.addEventListener("cf-panel-sizes", this.#onPanelSizes);
+    this.addEventListener("cf-panel-shown", this.#onPanelShown);
     this.#resizeObserver ??= new ResizeObserver((entries) => {
       const entry = entries.at(-1);
       if (entry) this._width = entry.contentRect.width;
@@ -197,7 +217,14 @@ export class CFResizablePanelGroup extends BaseElement {
     // Clean up observer
     this._observer?.disconnect();
     this.removeEventListener("cf-panel-sizes", this.#onPanelSizes);
+    this.removeEventListener("cf-panel-shown", this.#onPanelShown);
     this.#resizeObserver?.disconnect();
+    // Children taken out with the group are drawn wherever they go next.
+    for (const [element, display] of this.#hidden) {
+      element.style.display = display;
+    }
+    this.#hidden.clear();
+    this.#laidOut = undefined;
 
     // Clean up event listeners
     this._handles.forEach((handle) => {
@@ -235,18 +262,30 @@ export class CFResizablePanelGroup extends BaseElement {
   override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
     const orientation = this.orientation;
-    if (orientation === this.#laidOut) return;
-    // The direction can arrive after the panels are in place, before the
-    // first render or after it, and the group can cross `stackBelow` at any
-    // time: the panels' sizes move to the new axis and the handles' grips
-    // turn with it. A drag measures along one axis from where it started, so
-    // a drag in progress ends. A width that crosses nothing changes nothing.
-    if (this._activeHandle) this.#cancelResize();
-    for (const handle of this._handles) this.#orient(handle);
+    if (
+      orientation === this.#laidOut && this.stacked === this.#laidOutStacked
+    ) return;
+    this.#relayOut();
+  }
+
+  /** Lays the panels and handles out for the group's orientation now. The
+   * direction can arrive after the panels are in place, before the first
+   * render or after it, and the group can cross `stackBelow` at any time:
+   * the panels' sizes move to the new axis and the handles' grips turn with
+   * it. A drag measures along one axis from where it started, so a drag in
+   * progress ends when the axis moves, and only then. */
+  #relayOut(): void {
+    if (this.orientation !== this.#laidOut) {
+      if (this._activeHandle) this.#cancelResize();
+      for (const handle of this._handles) this.#orient(handle);
+    }
     this.applyPanelSizes();
   }
 
   #onPanelSizes = (): void => this.updatePanels();
+  /** A panel's hideWhenStacked changed: its sizes did not, so a drag goes
+   * on. */
+  #onPanelShown = (): void => this.#relayOut();
 
   private updatePanels(): void {
     // A drag measures from the sizes it started with, so a re-read ends it.
@@ -369,7 +408,9 @@ export class CFResizablePanelGroup extends BaseElement {
     const totalSize = horizontal ? this.offsetWidth : this.offsetHeight;
     const currentPosition = horizontal ? x : y;
     const delta = currentPosition - this._startPosition;
-    const deltaPercent = (delta / totalSize) * 100;
+    // The sizes are stored unscaled, so a move is too: the handle follows
+    // the pointer while a panel is hidden and the rest are drawn larger.
+    const deltaPercent = (delta / totalSize) * 100 / this.#scale;
 
     // Update sizes of panels adjacent to the handle
     const leftPanel = panels[handleIndex];
@@ -437,7 +478,8 @@ export class CFResizablePanelGroup extends BaseElement {
 
     if (leftPanel && rightPanel) {
       const delta = e.detail.delta;
-      const adjustAmount = Math.min(Math.abs(delta), 5) * Math.sign(delta);
+      const adjustAmount = Math.min(Math.abs(delta), 5) * Math.sign(delta) /
+        this.#scale;
 
       const newLeftSize = Math.max(
         leftPanel.minSize,
@@ -491,18 +533,50 @@ export class CFResizablePanelGroup extends BaseElement {
   private applyPanelSizes(): void {
     const panels = Array.from(this._panels.values());
     const orientation = this.orientation;
+    const stacked = this.stacked;
     const dimension = orientation === "horizontal" ? "width" : "height";
     // Only a size this group wrote is cleared, and only when the axis moves.
     const stale = this.#sizedDimension === dimension
       ? undefined
       : this.#sizedDimension;
 
-    panels.forEach((panel) => {
+    // While stacked, a panel marked hideWhenStacked is not drawn, nor is a
+    // handle beside it, and the panels drawn share the whole length in
+    // proportion to their sizes; the sizes themselves are kept for when the
+    // group widens. If every panel is marked, every panel is drawn.
+    const marked = panels.map((panel) =>
+      stacked && panel.element.hideWhenStacked
+    );
+    const hide = marked.every(Boolean) ? marked.map(() => false) : marked;
+    const shown = panels.reduce(
+      (sum, panel, i) => hide[i] ? sum : sum + panel.currentSize,
+      0,
+    );
+    const scale = hide.some(Boolean) && shown > 0 ? 100 / shown : 1;
+    const hidden = new Set<HTMLElement>();
+    panels.forEach((panel, i) => {
+      if (hide[i]) hidden.add(panel.element);
       if (stale) panel.element.style[stale] = "";
-      panel.element.style[dimension] = `${panel.currentSize}%`;
+      panel.element.style[dimension] = `${panel.currentSize * scale}%`;
     });
+    this._handles.forEach((handle, i) => {
+      if (hide[i] || hide[i + 1]) hidden.add(handle);
+    });
+    for (const [element, display] of this.#hidden) {
+      if (hidden.has(element)) continue;
+      element.style.display = display;
+      this.#hidden.delete(element);
+    }
+    for (const element of hidden) {
+      if (this.#hidden.has(element)) continue;
+      this.#hidden.set(element, element.style.display);
+      element.style.display = "none";
+    }
+    this.#scale = scale;
+
     this.#sizedDimension = dimension;
     this.#laidOut = orientation;
+    this.#laidOutStacked = stacked;
     // On the group too, so a host can style either orientation.
     this.dataset.orientation = orientation;
   }

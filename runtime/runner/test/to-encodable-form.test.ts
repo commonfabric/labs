@@ -28,8 +28,13 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import {
   moduleWithAliasBindings,
+  moduleWithReusedGraphBindings,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
+import {
+  KEYLESS_PATTERN_IDENTITY_PREFIX,
+  setArtifactEntryRef,
+} from "../src/builder/pattern-metadata.ts";
 import type { Module } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createCell, exportCell } from "../src/cell.ts";
@@ -455,6 +460,83 @@ describe("to-encodable-form", () => {
       const arr = withAliasBindings([1, "x"]) as any;
       expect(arr).toEqual([1, "x"]);
       expect(Array.isArray(arr)).toBe(true);
+    });
+  });
+
+  describe("moduleWithReusedGraphBindings", () => {
+    const graphOfNoIdentity = () => ({
+      argumentSchema: {},
+      resultSchema: {},
+      result: { $alias: { cell: "result", path: ["title"] } },
+      nodes: [{
+        module: { type: "javascript", implementation: () => 1 },
+        inputs: { $alias: { cell: "argument", path: [] } },
+        outputs: {},
+      }],
+    });
+    const closedGraph = () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, { identity: "module", symbol: "default" });
+      return graph;
+    };
+    const moduleOf = (implementation: unknown) =>
+      ({ type: "pattern", implementation }) as unknown as Module;
+
+    it("binds a graph that reaches no outer cell once", () => {
+      const graph = closedGraph();
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second).not.toBe(first);
+      expect(second.implementation).toBe(first.implementation);
+    });
+
+    it("binds such a graph as moduleWithAliasBindings() does", () => {
+      const graph = closedGraph();
+      const reused = moduleWithReusedGraphBindings(moduleOf(graph));
+      const walked = moduleWithAliasBindings(moduleOf(graph));
+
+      expect(JSON.stringify(reused)).toBe(JSON.stringify(walked));
+      expect((reused.implementation as any).result.$alias.defer).toBe(1);
+    });
+
+    it("leaves moduleWithAliasBindings() walking the graph each time", () => {
+      const graph = closedGraph();
+      const first = moduleWithAliasBindings(moduleOf(graph));
+      const second = moduleWithAliasBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with no content identity again each time", () => {
+      // Only a content identity promises that the graph will not change.
+      const graph = graphOfNoIdentity();
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with a keyless identity again each time", () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, {
+        identity: `${KEYLESS_PATTERN_IDENTITY_PREFIX}built`,
+        symbol: "default",
+      });
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph holding a cell again each time", () => {
+      const cell = createCell(runtime, { space, path: [] });
+      const graph = { ...closedGraph(), result: { held: cell } };
+      const resolve = () => ({ $alias: { cell: "argument", path: [] } } as any);
+      const first = moduleWithReusedGraphBindings(moduleOf(graph), resolve);
+      const second = moduleWithReusedGraphBindings(moduleOf(graph), resolve);
+
+      expect(second.implementation).not.toBe(first.implementation);
     });
   });
 

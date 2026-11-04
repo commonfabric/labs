@@ -842,6 +842,15 @@ export interface WaveLease {
   isCurrentTenure(sealedTenure: number): boolean;
 }
 
+/** What `WaveAccumulator.commitWave()` takes besides the sink. */
+export interface WaveCommitOptions {
+  /** The watermark the home commit carries (protocol.md §4's
+   * `derivedThrough`). The serving loop passes the post-wave W —
+   * unchanged from the current W on a budget-exhausted flush
+   * (serving-loop.md §3). Absent for waves driven outside a loop. */
+  derivedThrough?: number;
+}
+
 /** One sealed action run held by the accumulator. */
 interface WaveContribution {
   /** Set only by the closure that invalidates reads of withdrawn state. */
@@ -1210,6 +1219,22 @@ export class WaveAccumulator
     | ((change: ServedAclChange) => Promise<ServedAclChangeVerdict>)
     | undefined;
   #contributions: WaveContribution[] = [];
+
+  /**
+   * What the serving loop still asks a wave once it is over, kept by
+   * {@link #releaseSealedState} in place of the contributions. A node started
+   * in a wave holds the transaction that sealed into it, which names the
+   * wave, so what a wave keeps after its outcome stays on the heap with it.
+   */
+  #released:
+    | {
+      contributionCount: number;
+      contentContributionCount: number;
+      hasOutboundAppends: boolean;
+      foreignSpaces: MemorySpace[];
+      settlements: Promise<void>[];
+    }
+    | undefined;
   #assembly: PendingAssembly | undefined;
   #closed = false;
   #derivedThrough: number | undefined;
@@ -1393,7 +1418,7 @@ export class WaveAccumulator
   }
 
   get contributionCount(): number {
-    return this.#contributions.length;
+    return this.#released?.contributionCount ?? this.#contributions.length;
   }
 
   /**
@@ -1445,6 +1470,9 @@ export class WaveAccumulator
    * would mint a successor covering its own commit — the
    * #coverageHead commit-storm class. */
   get contentContributionCount(): number {
+    if (this.#released !== undefined) {
+      return this.#released.contentContributionCount;
+    }
     let count = 0;
     for (const contribution of this.#contributions) {
       if (contribution.context.kind !== "bookkeeping") count += 1;
@@ -1459,12 +1487,23 @@ export class WaveAccumulator
     return this.#closed;
   }
 
+  /** How many sealed commits the accumulator still holds, across its contributions. */
+  get accessForTestingOnly(): { readonly heldSealedCommits: number } {
+    return {
+      heldSealedCommits: this.#contributions.reduce(
+        (count, contribution) => count + contribution.spaces.length,
+        0,
+      ),
+    };
+  }
+
   /** Whether any contribution staged outbound appends — the serving
    * loop's cheap gate on draining the durable outbox after this wave's
    * commit (a pre-disposition upper bound: withdrawn contributions'
    * appends never actually ride). */
   get hasOutboundAppends(): boolean {
-    return this.#contributions.some((c) => c.outboundAppends.length > 0);
+    return this.#released?.hasOutboundAppends ??
+      this.#contributions.some((c) => c.outboundAppends.length > 0);
   }
 
   /** Whether an append is staged by a transaction that can still seal.
@@ -1486,6 +1525,7 @@ export class WaveAccumulator
    * co-hosted engines BEFORE driving the commit step, so the sink's
    * synchronous engineFor lookup never misses (Phase 5). */
   get foreignSpaces(): MemorySpace[] {
+    if (this.#released !== undefined) return [...this.#released.foreignSpaces];
     const spaces = new Set<MemorySpace>();
     for (const contribution of this.#contributions) {
       for (const sealed of contribution.spaces) {
@@ -1912,16 +1952,45 @@ export class WaveAccumulator
    * state.
    */
   async settled(): Promise<void> {
-    await Promise.all(
-      this.#contributions.flatMap((contribution) =>
-        [
-          ...contribution.spaces.map((space) => space.sealed.settled),
-          ...(contribution.emptySettlement === undefined
-            ? []
-            : [contribution.emptySettlement.promise]),
-        ].map((settlement) => settlement.then(() => undefined, () => undefined))
-      ),
+    await Promise.all(this.#released?.settlements ?? this.#settlements());
+  }
+
+  /** Every sealed commit's local settlement, each resolving however it ends. */
+  #settlements(): Promise<void>[] {
+    return this.#contributions.flatMap((contribution) =>
+      [
+        ...contribution.spaces.map((space) => space.sealed.settled),
+        ...(contribution.emptySettlement === undefined
+          ? []
+          : [contribution.emptySettlement.promise]),
+      ].map((settlement) => settlement.then(() => undefined, () => undefined))
     );
+  }
+
+  /**
+   * Lets go of the sealed commits once the wave's outcome is decided, keeping
+   * what is still asked of the wave afterwards: its counts, the spaces it
+   * sealed into, and its settlement. Each sealed commit holds the documents
+   * its run wrote and read, and a wave stays reachable for as long as a node
+   * started in it runs.
+   */
+  #releaseSealedState(): void {
+    if (this.#released !== undefined) return;
+    this.#released = {
+      contributionCount: this.#contributions.length,
+      contentContributionCount: this.contentContributionCount,
+      hasOutboundAppends: this.hasOutboundAppends,
+      foreignSpaces: this.foreignSpaces,
+      settlements: this.#settlements(),
+    };
+    this.#contributions = [];
+    this.#assembly = undefined;
+    this.#ownCommits.length = 0;
+    this.#ownWaveCommits.length = 0;
+    this.#foreignGrantVerdicts.clear();
+    this.#txsWithStagedAppends.clear();
+    this.#sealFailedEventIds.clear();
+    this.#failedForeignSpaces.clear();
   }
 
   /**
@@ -2108,6 +2177,7 @@ export class WaveAccumulator
         "wave-abandoned",
       );
     }
+    this.#releaseSealedState();
   }
 
   /** Whether the lease tenure this wave sealed under has ended. */
@@ -2217,17 +2287,24 @@ export class WaveAccumulator
    */
   async commitWave(
     sink: WaveCommitSink,
-    options: {
-      /** The watermark the home commit carries (protocol.md §4's
-       * `derivedThrough`). The serving loop passes the post-wave W —
-       * unchanged from the current W on a budget-exhausted flush
-       * (serving-loop.md §3). Absent for waves driven outside a loop. */
-      derivedThrough?: number;
-    } = {},
+    options: WaveCommitOptions = {},
   ): Promise<WaveCommitOutcome> {
     if (this.#closed) {
       throw new Error("wave already committed or abandoned");
     }
+    const outcome = await this.#commitHeld(sink, options);
+    // A commit step that throws leaves the wave as it stood, with its
+    // contributions undecided, as the serving loop expects of a cycle that
+    // failed; only an outcome releases them.
+    this.#releaseSealedState();
+    return outcome;
+  }
+
+  /** The commit step over the sealed commits, which `commitWave()` then releases. */
+  async #commitHeld(
+    sink: WaveCommitSink,
+    options: WaveCommitOptions,
+  ): Promise<WaveCommitOutcome> {
     this.#closed = true;
     this.#derivedThrough = options.derivedThrough;
     const outcome: WaveCommitOutcome = {

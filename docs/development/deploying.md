@@ -176,10 +176,8 @@ isolate rather than to the process, so the main thread and the serving worker
 can each reach 8 GiB, and a host's memory has to cover both for every instance
 it runs.
 
-A serving worker keeps each piece a handler started until its space parks, which
-costs about 3.5 MB per Topic on a Topics board. A worker that reaches the limit
-takes its process down. Events still queued survive that, and the restarted
-process handles them.
+A worker that reaches the limit takes its process down. Events still queued
+survive that, and the restarted process handles them.
 
 ## A deploy states when it happened
 

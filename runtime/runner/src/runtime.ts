@@ -2495,6 +2495,11 @@ export class Runtime {
     tracked.finally(() => this.#pendingAsyncWork.delete(tracked));
   }
 
+  /** Whether an operation `trackAsyncWork()` was given is still in flight. */
+  get hasAsyncWorkPending(): boolean {
+    return this.#pendingAsyncWork.size > 0;
+  }
+
   /**
    * Wait until the runtime is fully settled: the scheduler is idle, storage is
    * synced, AND every in-flight async builtin operation (`trackAsyncWork`) has
