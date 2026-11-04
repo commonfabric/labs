@@ -1,5 +1,5 @@
 /**
- * Upgrades `request` to a websocket for a memory server to serve, with Deno's
+ * Upgrades `request` to a websocket carrying the memory protocol, with Deno's
  * idle timeout turned off.
  *
  * That timeout, 30 seconds unless told otherwise, closes a socket whose peer
