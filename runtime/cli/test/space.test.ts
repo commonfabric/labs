@@ -493,6 +493,21 @@ describe("cf space reap", () => {
       expect(text(ran.stdout)).toContain(`result     ${result} (`);
       expect(text(ran.stdout)).not.toContain("FAIL");
 
+      // The JSON names the result where it was put, not the file the run
+      // staged it in, which is gone.
+      const jsonResult = `${root}/space.reaped-json.sqlite`;
+      const ranJson = await cf(
+        argv`space reap ${store} --out ${jsonResult} --json`,
+      );
+      expect(ranJson.code).toBe(0);
+      const report = JSON.parse(ranJson.stdout.join("\n"));
+      expect(report.out).toBe(jsonResult);
+      expect(report.verification).toMatchObject({
+        ok: true,
+        result: jsonResult,
+      });
+      expect(report.staged).toBeUndefined();
+
       const live = `${root}/live.sqlite`;
       await spaceStore(live, false);
       const refused = await cf(argv`space reap ${live} --dry-run`);

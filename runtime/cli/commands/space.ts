@@ -914,7 +914,10 @@ export const space = new Command()
     }
     if (run === undefined) discardReap(staged.staged);
     const { staged: _staged, ...planned } = staged;
-    out(!!options.json, { ...(run ?? planned), verification }, () => {
+    // The check read the staged file, which is gone by now: the result it
+    // speaks for is the one at the result path.
+    const checked = { ...verification, result: staged.out };
+    out(!!options.json, { ...(run ?? planned), verification: checked }, () => {
       console.log(
         run === undefined ? formatReapPlan(planned) : formatReapRun(run),
       );
