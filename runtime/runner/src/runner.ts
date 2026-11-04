@@ -223,7 +223,10 @@ import {
   setCfcTrustSnapshot,
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
-import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteDetails,
+} from "./storage/transaction-inspection.ts";
 import {
   type CommitError,
   type IExtendedStorageTransaction,
@@ -6058,11 +6061,14 @@ export class Runner {
     let instantiatedPatternKey: string | undefined;
     // The swap requested last; only it may step the watcher back.
     let latestSwap: object | undefined;
-    // The pointer the store held, apart from this start's transaction, when
-    // the start read it, where that differs from the pattern the start
-    // instantiates: the previous pattern's, until the start's own write of
-    // its pointer lands. The watcher reading it is the pointer lagging this
-    // start, not a move, so it passes over it until the pointer moves on.
+    // For a start whose transaction writes the result document, the pointer
+    // the store held apart from that transaction when the start read it,
+    // where it names a pattern other than the one the transaction's view
+    // names: the previous pattern's, until the transaction's own write lands.
+    // The watcher reading it is the pointer lagging this start, not a move,
+    // so it passes over it until the pointer moves on. A start that writes
+    // nothing there, such as one through a cell whose transaction read the
+    // pointer before it moved, follows whatever the pointer names.
     let laggingPointerKey: string | undefined;
     // The identity of the pattern whose nodes are LIVE right now — which can
     // differ from `currentPatternKey` (the pointer value last observed): a
@@ -7303,7 +7309,13 @@ export class Runner {
     if (givenPattern) {
       currentPatternKey = initialRef ? patternIdentityKey(initialRef) : KEYLESS;
       instantiatedPatternKey = currentPatternKey;
-      if (storedPointerKey !== currentPatternKey) {
+      if (
+        storedPointerKey !== currentPatternKey && tx !== undefined &&
+        [...getTransactionWriteDetails(tx, resultCell.space)].some(
+          (write) =>
+            write.address.id === resultCell.getAsNormalizedFullLink().id,
+        )
+      ) {
         laggingPointerKey = storedPointerKey;
       }
       try {
@@ -7385,9 +7397,6 @@ export class Runner {
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
     instantiatedPatternKey = currentPatternKey;
-    if (storedPointerKey !== currentPatternKey) {
-      laggingPointerKey = storedPointerKey;
-    }
     const initialPattern = this.#resolveToPattern(initialResolved);
     instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
