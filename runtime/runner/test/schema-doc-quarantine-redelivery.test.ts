@@ -263,6 +263,32 @@ describe("schema-doc-quarantine-redelivery", () => {
       expect(factory.watchSets).toBe(1);
     });
 
+    it("has applied it by the time `inputSynced()` resolves, with no load waiting", async () => {
+      const { factory, storage, replica, revision } = readerDropping(1);
+      await storage.open(space).sync(DOCUMENT_ID as URI, {
+        path: [],
+        schema: false,
+      });
+
+      await replica.inputSynced();
+
+      expect(factory.dropsLeft).toBe(0);
+      expect(revision()).toBe(1);
+    });
+
+    it("has applied it by the time `synced()` resolves, with no load waiting", async () => {
+      const { factory, storage, replica, revision } = readerDropping(1);
+      await storage.open(space).sync(DOCUMENT_ID as URI, {
+        path: [],
+        schema: false,
+      });
+
+      await replica.synced();
+
+      expect(factory.dropsLeft).toBe(0);
+      expect(revision()).toBe(1);
+    });
+
     it("logs no unhealed quarantine", async () => {
       const before = unhealedErrors();
       const { runtime, cellOf } = readerDropping(1);

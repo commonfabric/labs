@@ -674,7 +674,9 @@ replica asks for it, with a `session.watch.set` of the session's own
 watches declaring its holdings, which omit the quarantined document and
 any `cid:` document it lacks, so one response delivers them together. A
 reconnect declares holdings the same way. Until that answer, a load of the
-document waits rather than taking it for absent, since the server holds it.
+document waits rather than taking it for absent, since the server holds it,
+and `synced()` and `inputSynced()` wait too, so a settle resting on them sees
+what the answer applies.
 Each copy of a document, by its seq, is asked for once, so a copy the
 replica cannot apply even then ends there: it logs
 `schema-doc-quarantine-unhealed`, a load of it fails, and nothing asks

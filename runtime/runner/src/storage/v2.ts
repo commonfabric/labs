@@ -11244,6 +11244,12 @@ export class SpaceReplica
       }
     });
     this.#quarantineHeal = heal;
+    // Input this replica asked for, as a pull's is, so the barriers on input
+    // wait for it with or without a reader. A settle rests on them: what the
+    // answer applies can set off work.
+    const counted = heal.then((): Result<Unit, PullError> => ({ ok: {} }));
+    this.#syncPromises.add(counted);
+    void counted.finally(() => this.#syncPromises.delete(counted));
   }
 
   #quarantinesAwaitingRequest(): QuarantinedDocument[] {
