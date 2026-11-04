@@ -50,6 +50,9 @@ const SOMEONE_ELSE = "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
 /** A well-formed host origin for an offer to name. */
 const HOST = "https://example.com";
 
+/** A present `undefined`, for a malformed offer's field, typed to get it sent. */
+const MISSING: any = undefined;
+
 /** The offer in `offers` with `id`, if any. */
 function offerWithId(
   offers: readonly (Offer | undefined)[],
@@ -408,12 +411,12 @@ export default pattern(() => {
       from: me.get(),
     };
     inbox.receive.send({ ...valid, id: "bad-space", space: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-space", space: undefined });
+    inbox.receive.send({ ...valid, id: "no-space", space: MISSING });
     inbox.receive.send({ ...valid, id: "bad-from", from: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-from", from: undefined });
+    inbox.receive.send({ ...valid, id: "no-from", from: MISSING });
     inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
     inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
-    inbox.receive.send({ ...valid, id: "no-host", host: undefined });
+    inbox.receive.send({ ...valid, id: "no-host", host: MISSING });
     inbox.receive.send({
       ...valid,
       id: "userinfo-host",
@@ -545,9 +548,9 @@ export default pattern(() => {
     holdElsewhereInbox.send();
   });
   const action_point_one_elsewhere = action(() => {
-    pointed.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    pointed.setInbox.send({ inbox: elsewhere.get().piece!.resolveAsCell() });
     earlierPointed.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_point_profiles = action(() => {
@@ -588,7 +591,7 @@ export default pattern(() => {
   });
   const action_point_fresh_elsewhere = action(() => {
     freshPointedElsewhere.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_seed_fresh_profiles = action(() => {
@@ -842,10 +845,10 @@ export default pattern(() => {
         outsider,
       ]
     ) {
-      profile.setInbox.send({ inbox: advertised });
+      profile.setInbox.send({ inbox: advertised! });
     }
-    stillAdvertisingHeld.setInbox.send({ inbox: homeInbox });
-    aliasAdvertising.setInbox.send({ inbox: homeInbox });
+    stillAdvertisingHeld.setInbox.send({ inbox: homeInbox! });
+    aliasAdvertising.setInbox.send({ inbox: homeInbox! });
     for (
       const holder of [
         readopting,
@@ -857,52 +860,52 @@ export default pattern(() => {
         heldNamingAnOutsider,
       ]
     ) {
-      holder.set({ piece: homeInbox });
+      holder.set({ piece: homeInbox! });
     }
-    aliasKeeping.set({ piece: home.get().piece });
+    aliasKeeping.set({ piece: home.get().piece! });
     if (advertised !== undefined) returningRetained.set([advertised]);
   });
   const action_advertise_a_second_inbox = action(() => {
     const another = third.get().piece?.resolveAsCell();
-    otherAdvertising.setInbox.send({ inbox: another });
-    decidingAdvertising.setInbox.send({ inbox: another });
+    otherAdvertising.setInbox.send({ inbox: another! });
+    decidingAdvertising.setInbox.send({ inbox: another! });
   });
   const action_ensure_inboxes = action(() => {
     const vetted = elsewhere.get().piece?.resolveAsCell();
     const another = third.get().piece?.resolveAsCell();
     const homeInbox = home.get().piece?.resolveAsCell();
     ensureCreating.ensure.send({});
-    ensureAdoptingOne.ensure.send({ adopt: vetted, from: loneAdvertising });
+    ensureAdoptingOne.ensure.send({ adopt: vetted!, from: loneAdvertising });
     ensureAdoptingAmongOthers.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: adoptedAdvertising,
     });
     ensureFollowingDecider.ensure.send({
-      adopt: another,
+      adopt: another!,
       from: decidingAdvertising,
     });
     ensureUnvetted.ensure.send({});
     ensureMismatched.ensure.send({
-      adopt: another,
+      adopt: another!,
       from: mismatchedAdvertising,
     });
-    ensureNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
-    ensureAdoptingUnnamed.ensure.send({ adopt: vetted });
+    ensureNamingAnOutsider.ensure.send({ adopt: vetted!, from: outsider });
+    ensureAdoptingUnnamed.ensure.send({ adopt: vetted! });
     ensureReadopting.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: readoptingAdvertising,
     });
     ensureReadoptingOverAnother.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: decidingElsewhere,
     });
-    ensureReturning.ensure.send({ adopt: vetted, from: returningAdvertising });
+    ensureReturning.ensure.send({ adopt: vetted!, from: returningAdvertising });
     ensureKeepingUnadvertised.ensure.send({});
     ensureRefusing.ensure.send({});
-    ensureGuarded.ensure.send({ adopt: another, from: guardedAdvertising });
-    ensureHeldNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
+    ensureGuarded.ensure.send({ adopt: another!, from: guardedAdvertising });
+    ensureHeldNamingAnOutsider.ensure.send({ adopt: vetted!, from: outsider });
     ensureAliasKeeping.ensure.send({
-      adopt: homeInbox,
+      adopt: homeInbox!,
       from: aliasAdvertising,
     });
   });
@@ -1194,18 +1197,18 @@ export default pattern(() => {
         otherInboxAdvertising,
       ]
     ) {
-      profile.setInbox.send({ inbox: advertised });
+      profile.setInbox.send({ inbox: advertised! });
     }
     const homeInbox = home.get().piece?.resolveAsCell();
     const another = third.get().piece?.resolveAsCell();
-    secondFirst.setInbox.send({ inbox: another });
-    heldLaterDeciding.setInbox.send({ inbox: homeInbox });
-    refusedHeld.set({ piece: homeInbox });
-    abandoned.set({ piece: homeInbox });
-    stillRefused.set({ piece: homeInbox });
-    movedAway.set({ piece: homeInbox });
-    secondAdvertiser.set({ piece: homeInbox });
-    heldLater.set({ piece: homeInbox });
+    secondFirst.setInbox.send({ inbox: another! });
+    heldLaterDeciding.setInbox.send({ inbox: homeInbox! });
+    refusedHeld.set({ piece: homeInbox! });
+    abandoned.set({ piece: homeInbox! });
+    stillRefused.set({ piece: homeInbox! });
+    movedAway.set({ piece: homeInbox! });
+    secondAdvertiser.set({ piece: homeInbox! });
+    heldLater.set({ piece: homeInbox! });
     if (advertised !== undefined && another !== undefined) {
       keptRefusal.set({
         refusal: { reason: REFUSED, inbox: advertised, refusedAt: EARLIER },
@@ -1318,15 +1321,15 @@ export default pattern(() => {
 
   const action_move_refused_pointers = action(() => {
     repeatedAdvertising.setInbox.send({
-      inbox: third.get().piece?.resolveAsCell(),
+      inbox: third.get().piece!.resolveAsCell(),
     });
     refusedHeldAdvertising.setInbox.send({
-      inbox: home.get().piece?.resolveAsCell(),
+      inbox: home.get().piece!.resolveAsCell(),
     });
     abandonedAdvertising.setInbox.send({});
     stillRefusedMoved.setInbox.send({});
     movedAwayAdvertising.setInbox.send({
-      inbox: third.get().piece?.resolveAsCell(),
+      inbox: third.get().piece!.resolveAsCell(),
     });
   });
   const action_send_after_the_refusals = action(() => {
@@ -1338,7 +1341,7 @@ export default pattern(() => {
       refused: { reason: REFUSED_AGAIN, inbox: another },
     });
     ensureRefusedHeld.ensure.send({ from: refusedHeldAdvertising });
-    ensureCured.ensure.send({ adopt: advertised, from: curedAdvertising });
+    ensureCured.ensure.send({ adopt: advertised!, from: curedAdvertising });
     ensureAbandoned.ensure.send({});
     ensureStillRefused.ensure.send({ from: stillRefusedStaying });
     if (advertised === undefined) return;
@@ -1463,7 +1466,7 @@ export default pattern(() => {
     if (refused === undefined || homeInbox === undefined) return;
     replacedFirst.setInbox.send({ inbox: refused });
     replacedSecond.setInbox.send({ inbox: refused });
-    replacedOther.setInbox.send({ inbox: third.get().piece?.resolveAsCell() });
+    replacedOther.setInbox.send({ inbox: third.get().piece!.resolveAsCell() });
     unrefusedAdvertising.setInbox.send({ inbox: refused });
     replacing.set({ piece: homeInbox });
     unrefused.set({ piece: homeInbox });
@@ -1501,7 +1504,7 @@ export default pattern(() => {
   );
   const action_point_back_at_the_replaced_inbox = action(() => {
     replacedSecond.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_repoint_again = action(() => {

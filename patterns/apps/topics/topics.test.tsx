@@ -126,7 +126,7 @@ const propValue = (value: any): unknown =>
  * to survive being handed one.
  */
 interface LegacyUnsignedTopicOutput {
-  [NAME]: string | undefined;
+  [NAME]?: string;
   title: string;
   body: string;
   comments: TopicComment[];
@@ -172,7 +172,6 @@ const LegacyUnsignedTopic = pattern<
   const mention = action<MentionEvent>(() => {});
   const unmention = action<UnmentionEvent>(() => {});
   return {
-    [NAME]: undefined,
     title: "Legacy unsigned sibling",
     body: "",
     comments: [],
@@ -899,7 +898,7 @@ export default pattern(() => {
       get: () => ({ [NAME]: "Named", title: "Titled", shortName: "42" }),
     };
     const cold = {
-      get: () => ({ [NAME]: undefined, title: "Cold title" }),
+      get: () => ({ title: "Cold title" }),
     };
     const blankName = { get: () => ({ [NAME]: "", title: "Blank name" }) };
     const midSync = { get: () => undefined };
