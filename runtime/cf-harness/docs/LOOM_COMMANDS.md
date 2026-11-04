@@ -76,7 +76,6 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "name": "people-discovery.dossier",
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
-      "description": "…",
       "relevant": true
     }
   ]
@@ -104,14 +103,15 @@ Each entry's `signature` is one line read from the command's argument schema
   `run_command` passes the one a call names and infers none from the target.
 
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
-command named in `detail` also carries its `inputSchema`: the host's schema with
-its `x-*` extension keywords removed, which every schema the model sees is, or
-`true`, open, where the host's is not an object or is larger than 16 KiB once
-those keywords are removed. A listing larger than the model bound keeps its
-first entries whole and the rest without description; a command named in
-`detail` is always kept whole. Every row the host lists is kept, however many;
-`omitted` counts rows that could not be read as a command, and `compacted` the
-entries shown without description.
+command named in `detail` also carries its description and `inputSchema`: the
+host's schema with its `x-*` extension keywords removed, which every schema the
+model sees is, or `true`, open, where the host's is not an object or is larger
+than 16 KiB once those keywords are removed. A listing larger than the model
+bound keeps its first entries whole and the rest without description; a command
+named in `detail` is always kept whole. Every row the host lists is kept,
+however many; `omitted` counts rows that could not be read as a command, and
+`compacted` the entries reduced by the catalog bound. Descriptions and schemas
+are absent for commands not named in `detail`, regardless of that bound.
 
 The listing's `notice` says to assume a command with an absent or unknown effect
 may change the person's data.

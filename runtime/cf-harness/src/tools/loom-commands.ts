@@ -140,7 +140,7 @@ export type ListCommandsErrorCode =
  * One command as `list_commands` shows it: its signature line, which carries
  * its parameters, output names, effect, and target, its title, and whether
  * the host names it as relevant to this run. A command named in `detail`
- * also carries its full argument schema.
+ * also carries its description and full argument schema.
  */
 export interface LoomCommandListing {
   name: string;
@@ -313,7 +313,7 @@ const catalogSourceOf = (
 /**
  * Helper for `list_commands`, which shows one entry as a listing: its
  * signature and title always, its `relevant` mark when the host names it,
- * its description unless compacted, and its schema only when `whole`.
+ * its description and schema only when `whole`.
  */
 const listingOf = (
   entry: LoomCommandEntry,
@@ -323,7 +323,7 @@ const listingOf = (
   name: entry.name,
   signature: renderCommandSignature(entry),
   ...(entry.title !== undefined ? { title: entry.title } : {}),
-  ...(entry.description !== undefined
+  ...(whole && entry.description !== undefined
     ? { description: entry.description }
     : {}),
   ...(relevant ? { relevant: true } : {}),

@@ -412,7 +412,6 @@ describe("loom-commands tools", () => {
           signature:
             "loom.compose(title?: string) -> {loom_id, version}  [global]",
           title: "Compose a loom.",
-          description: "Creates or extends a loom.",
         },
         {
           name: "loom.inspect",
@@ -452,6 +451,18 @@ describe("loom-commands tools", () => {
       expect(JSON.stringify(output)).not.toContain("x-");
     });
 
+    it("returns descriptions only for commands named in `detail`", async () => {
+      const { context } = contextWith();
+      const plain = listed(await listCommandsTool.invoke(context, {}));
+      expect(plain.entries[0]).not.toHaveProperty("description");
+      const detailed = listed(
+        await listCommandsTool.invoke(context, { detail: ["loom.compose"] }),
+      );
+      expect(detailed.entries[0]).toMatchObject({
+        description: "Creates or extends a loom.",
+      });
+    });
+
     it("shows the commands the host names as relevant first, marked, and keeps every other command", async () => {
       const { context, config } = contextWith();
       config.relevant = ["people-discovery.dossier", "not.listed"];
@@ -474,9 +485,10 @@ describe("loom-commands tools", () => {
 
     it("compacts a catalog past the model bound, keeping the commands named in `detail` whole", async () => {
       const help = "h".repeat(4_000);
-      const rows = Array.from({ length: 12 }, (_, index) => ({
+      const rows = Array.from({ length: 500 }, (_, index) => ({
         id: `cmd.n${index}`,
         help,
+        title: help,
         inputs: { type: "object" },
       }));
       expect(JSON.stringify(rows).length).toBeGreaterThan(
@@ -486,16 +498,16 @@ describe("loom-commands tools", () => {
         manifest: JSON.stringify({ commands: rows }),
       });
       const output = listed(
-        await listCommandsTool.invoke(context, { detail: ["cmd.n11"] }),
+        await listCommandsTool.invoke(context, { detail: ["cmd.n499"] }),
       );
       expect(output.compacted).toBeGreaterThan(0);
       const last = output.entries.at(-1)!;
-      expect(last.name).toBe("cmd.n11");
+      expect(last.name).toBe("cmd.n499");
       expect("description" in last).toBe(true);
       expect("inputSchema" in last).toBe(true);
       const compactedEntry = output.entries.at(-2)!;
       expect("description" in compactedEntry).toBe(false);
-      expect(compactedEntry.signature).toBe("cmd.n10(...)  [global]");
+      expect(compactedEntry.signature).toBe("cmd.n498(...)  [global]");
     });
   });
 
