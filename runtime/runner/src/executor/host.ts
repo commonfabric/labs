@@ -264,6 +264,16 @@ export class ExecutorHost {
   /** The routed plane, while the host has a route. */
   readonly #route: RoutedPlane | undefined;
 
+  /** Re-evaluations of a space chained behind a park and not yet decided. */
+  readonly #reactivations = new Set<Promise<void>>();
+
+  /**
+   * Moves each time a loop suspends on its input wait, and each time a tenure
+   * starts or ends, so that an unmoved count says no loop did anything between
+   * two readings of it.
+   */
+  #quiescenceEpoch = 0;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
@@ -375,6 +385,49 @@ export class ExecutorHost {
 
   spaceServer(space: MemorySpace): SpaceServer | undefined {
     return this.#spaces.get(space);
+  }
+
+  /**
+   * Resolves once nothing this host has been told of has anything left to do:
+   * every activation and re-activation has been decided, every tenure is
+   * {@link SpaceServer.quiescent} at one instant, and no loop did anything
+   * since this call's last pass began. A cascade stays open across its links
+   * this way, whichever spaces they cross: a follow-up event in the same space
+   * keeps its loop from suspending, and a delivery into another space reaches
+   * that space's feed, or starts its activation, before the delivering cycle
+   * ends.
+   *
+   * Reactions to what the wait delivers belong to whoever reads them. The value
+   * is the epoch the wait ended at, so a caller that has since let its own
+   * runtime react waits again and compares: an equal answer says the reactions
+   * gave the loops nothing to do. Never resolves while a loop keeps working.
+   *
+   * Comes from the host, so only a caller on the loop's own thread has it.
+   */
+  async whenQuiescent(): Promise<number> {
+    while (!this.#closed) {
+      const epoch = this.#quiescenceEpoch;
+      // A frame still on a connection can be the commit that wakes a loop.
+      await this.#options.server.idle();
+      await Promise.allSettled([
+        ...this.#activating.values(),
+        ...this.#reactivations,
+      ]);
+      await Promise.all(
+        [...this.#spaces.values()].map(async (server) => {
+          if (server.active) await server.whenQuiescent();
+          else await server.whenParked;
+        }),
+      );
+      if (
+        epoch === this.#quiescenceEpoch && this.#activating.size === 0 &&
+        this.#reactivations.size === 0 &&
+        [...this.#spaces.values()].every((server) => server.quiescent)
+      ) {
+        return epoch;
+      }
+    }
+    return this.#quiescenceEpoch;
   }
 
   /**
@@ -587,7 +640,7 @@ export class ExecutorHost {
     // A tenure that ended for its space's deletion leaves nothing to
     // re-evaluate (serving-loop.md, "A deleted space").
     if (parking?.endedForDeletion === true) return;
-    void (async () => {
+    const reactivation = (async () => {
       await parking?.whenParked;
       await this.#activating.get(space);
       if (this.#closed || this.#spaces.get(space)?.active) return;
@@ -614,7 +667,8 @@ export class ExecutorHost {
         if (this.#closed || this.#spaces.get(space)?.active) return;
       }
       void this.#activate(space);
-    })();
+    })().finally(() => this.#reactivations.delete(reactivation));
+    this.#reactivations.add(reactivation);
   }
 
   #activate(space: MemorySpace): Promise<void> {
@@ -629,6 +683,7 @@ export class ExecutorHost {
       }
     });
     this.#activating.set(space, activation);
+    this.#quiescenceEpoch += 1;
     return activation;
   }
 
@@ -771,6 +826,9 @@ export class ExecutorHost {
         ...(this.#options.onEffectRetired !== undefined
           ? { onEffectRetired: this.#options.onEffectRetired }
           : {}),
+        onLoopRest: () => {
+          this.#quiescenceEpoch += 1;
+        },
         onWaveCommitted: () => {
           // Real served progress clears the failure streak — the
           // signal a crash-looping tenure never produces (its first
@@ -867,6 +925,7 @@ export class ExecutorHost {
     servedWarm: boolean,
   ): void {
     if (this.#spaces.get(space) === server) this.#spaces.delete(space);
+    this.#quiescenceEpoch += 1;
     if (servedWarm || server.warmNotices.length === 0) return;
     this.#pendingNotices.set(space, [
       ...server.warmNotices,

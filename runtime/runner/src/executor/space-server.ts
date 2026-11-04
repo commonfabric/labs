@@ -556,6 +556,12 @@ export type SpaceServerOptions = {
    * See `docs/development/waiting-in-tests.md`. */
   onWaveCycle?: () => void;
 
+  /**
+   * Called each time the loop suspends on its input wait, the one place a
+   * tenure's work comes to rest. `ExecutorHost.whenQuiescent()` counts these.
+   */
+  onLoopRest?: () => void;
+
   /** DIAGNOSTIC (tests): called as each drain pass ends, with the
    * number of events it queued — `stats.events.processed` moves here.
    * A pass ends before the settle that follows it, so this is earlier
@@ -907,6 +913,12 @@ export class SpaceServer implements TransactionSealDestination {
   #sealChain: Promise<unknown> = Promise.resolve();
   #feed: AdmittedCommitNotice[] = [];
   #feedArrived: PromiseWithResolvers<void> | undefined;
+
+  /** How many times the loop has suspended on its input wait. */
+  #rests = 0;
+
+  /** Resolved by the loop's next suspension on its input wait, or the park. */
+  #nextRest = Promise.withResolvers<void>();
 
   /** The feed record whose store refresh is failing and how many cycles in
    * a row it has: the drain holds that record and everything behind it for
@@ -2609,6 +2621,64 @@ export class SpaceServer implements TransactionSealDestination {
     return this.#feedArrived !== undefined;
   }
 
+  /**
+   * Whether this tenure, at this instant, has nothing to do that it knows of.
+   * Its loop is suspended on its input wait with no input, seal, drain, demand
+   * pass, retry or commit outstanding and no wake of its own armed; its
+   * runtime's scheduler has nothing to run and no commit in flight; and no
+   * effect or asynchronous built-in is working on its behalf.
+   *
+   * An event stays pending through this when what it waits for lies outside
+   * the loop: the program closure another runtime has yet to write, or
+   * recovery evidence for a delivery in its failed state (events.md §5). A
+   * time gate's trailing wake is not waited for, as a client's `idle()` does
+   * not wait for one.
+   */
+  get quiescent(): boolean {
+    const runtime = this.#runtime;
+    return runtime !== undefined && this.#atRest() &&
+      runtime.scheduler.isIdleWithPendingCommits() &&
+      !runtime.hasAsyncWorkPending && (this.#outbox?.inflightCount ?? 0) === 0;
+  }
+
+  /**
+   * Resolves once {@link quiescent} holds and every frame the memory server
+   * has sent toward this tenure's runtime has been applied, or once the tenure
+   * has ended. A loop that goes on to do anything during the wait, however
+   * briefly, is waited for again.
+   */
+  async whenQuiescent(): Promise<void> {
+    while (this.#active) {
+      if (!this.#atRest()) {
+        await this.#nextRest.promise;
+        continue;
+      }
+      const rests = this.#rests;
+      const runtime = this.#runtime!;
+      await this.#outbox?.settle();
+      await runtime.settled();
+      await this.#options.server.idle();
+      await runtime.storageManager.inputSynced?.();
+      // A handed-over frame's application schedules work, and this lets it
+      // register, as the wave's own settle does.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (rests === this.#rests && this.quiescent) return;
+    }
+  }
+
+  /**
+   * Whether the loop is suspended on its input wait and nothing it owes will
+   * wake it: what `quiescent` asks of the loop itself, each part of which ends
+   * in a further suspension.
+   */
+  #atRest(): boolean {
+    return this.suspendedOnInput && this.#feed.length === 0 &&
+      this.#nothingOwed() && !this.#pendingShadowFlipWake &&
+      !this.#outboxDrainOwed && this.#demandWakeTimer === undefined &&
+      this.#deferredRescanTimer === undefined &&
+      this.#originFollowsInFlight.size === 0;
+  }
+
   /** DIAGNOSTIC (tests): the demanding identities recorded for a root
    * doc across its demand keys — M1's demand carriage (Phase 2), space
    * roots included (stage B). Two principals demanding one root yield
@@ -4228,6 +4298,10 @@ export class SpaceServer implements TransactionSealDestination {
       return;
     }
     this.#feedArrived = Promise.withResolvers<void>();
+    this.#rests += 1;
+    this.#options.onLoopRest?.();
+    this.#nextRest.resolve();
+    this.#nextRest = Promise.withResolvers<void>();
     const timer = setTimeout(() => this.#feedArrived?.resolve(), maxMs);
     try {
       await this.#feedArrived.promise;
@@ -8329,6 +8403,7 @@ export class SpaceServer implements TransactionSealDestination {
       this.#options.retainParkedRuntime !== undefined;
     this.#active = false;
     this.#parkRequested = true;
+    this.#nextRest.resolve();
     // A tenure activated on this server again starts its first burst at the
     // base deadline, as one after a quiet loop does.
     this.#grownFlushDeadlineMs = undefined;
