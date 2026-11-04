@@ -7456,8 +7456,12 @@ export class SpaceReplica
   }
 
   /** ISpaceReplica.isQuarantined. */
-  isQuarantined(id: URI, scope?: CellScope): boolean {
-    return this.#quarantined.has(this.#docKeyOf({ id, scope }));
+  isQuarantined(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean {
+    return this.#quarantined.has(this.#docKeyOf({ id, scope }, identity));
   }
 
   /** ISpaceReplica.quarantineFailure. */

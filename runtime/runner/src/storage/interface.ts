@@ -3815,7 +3815,11 @@ export interface ISpaceReplica extends ISpace {
    * Whether a quarantine holds back a copy of the document the server holds, so
    * that an earlier finding of its absence no longer stands.
    */
-  isQuarantined?(id: URI, scope?: CellScope): boolean;
+  isQuarantined?(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean;
 
   /**
    * Waits for any re-delivery of the document a quarantine holds back, and

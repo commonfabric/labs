@@ -397,7 +397,9 @@ describe("storage/v2", () => {
       expect(response.removes).toEqual([]);
     });
 
-    it("applies a frame that arrived ahead of its response", async () => {
+    it("applies a marker that arrived ahead of its response", async () => {
+      // The response carries any document a frame ahead of it did, so what only
+      // that frame can bring is the marker covering this replica's own write.
       await write({ [PLAIN_ID]: { revision: 1 } });
       const { factory, runtime, replica, cellOf, syncOf, revision } =
         readerDropping(0);
@@ -407,20 +409,28 @@ describe("storage/v2", () => {
       await syncOf(DOCUMENT_ID);
       await factory.firstWatchSet.promise;
       const effect = factory.nextEffect.promise;
-      await write({ [PLAIN_ID]: { revision: 2 } });
+      const tx = runtime.edit();
+      tx.writeValueOrThrow(
+        { space, id: PLAIN_ID as URI, scope: "space", path: [] },
+        { revision: 2 },
+      );
+      const receipt = tx.commit();
+      expect((await receipt.verdict).ok).toBeDefined();
       await effect;
 
       factory.releaseResponses();
+      expect((await receipt.settled).ok).toBeDefined();
       await replica.inputSynced();
 
       expect(revision(PLAIN_ID)).toBe(2);
       expect(revision()).toBe(1);
     });
 
-    it("applies a retraction its response carries", async () => {
+    it("keeps a retracted document's value for its holder", async () => {
       await write({ [PLAIN_ID]: { revision: 1 } });
-      const { factory, runtime, replica, cellOf } = readerDropping(0);
+      const { factory, runtime, replica, cellOf, revision } = readerDropping(0);
       await loadDocument(runtime, cellOf(PLAIN_ID));
+      const release = replica.sinkDocument(PLAIN_ID as URI, () => {});
       factory.dropsLeft = 1;
       factory.rewriteWatchSetResponse = (response) => {
         const { ok } = response as ResponseMessage<{ sync: SessionSync }>;
@@ -439,7 +449,8 @@ describe("storage/v2", () => {
       await loadDocument(runtime, cellOf(DOCUMENT_ID));
 
       expect(replica.holdings().map(({ id }) => id)).not.toContain(PLAIN_ID);
-      expect(replica.isConfirmedDocument(PLAIN_ID as URI, "space")).toBe(false);
+      expect(revision(PLAIN_ID)).toBe(1);
+      release();
     });
 
     it("heals a later copy with a request of its own", async () => {
@@ -527,8 +538,8 @@ describe("storage/v2", () => {
     });
 
     it("runs no computed over the document until it arrives, so no absent value is stored", async () => {
-      const { factory, runtime, replica, cellOf, syncOf } = healingReader();
-      await syncOf(DOCUMENT_ID);
+      const { factory, runtime, replica, cellOf } = healingReader();
+      const load = loadDocument(runtime, cellOf(DOCUMENT_ID));
       await factory.firstWatchSet.promise;
       const { commonfabric: cf } = createTrustedBuilder(runtime);
       const seen: unknown[] = [];
@@ -576,6 +587,7 @@ describe("storage/v2", () => {
       expect(await stored()).toBeUndefined();
 
       factory.releaseResponses();
+      expect(await load).toBe(true);
       await replica.synced();
       await runtime.idle();
       await replica.synced();
@@ -669,7 +681,9 @@ describe("storage/v2", () => {
         }],
         removes: [],
       }, "integrate");
+      // Past the re-delivery's own wait on the session, which started first.
       await Promise.resolve();
+      await replica.ensureSession();
       replica.accessForTestingOnly.applySessionSync({
         type: "sync",
         fromSeq: 900_001,
@@ -741,6 +755,44 @@ describe("storage/v2", () => {
   });
 
   describe("a document a reader confirmed absent, then quarantined", () => {
+    it("loads it again once a frame ends the quarantine its load failed on", async () => {
+      const cancels: (() => void)[] = [];
+      const { factory, runtime, replica, cellOf } = readerDropping(Infinity);
+      const readiness = createDocumentReadiness(
+        runtime,
+        (cancel) => cancels.push(cancel),
+      );
+      const cell = cellOf(ABSENT_ID);
+      const presence = () => {
+        const tx = runtime.edit();
+        try {
+          return readiness.requireDocument(cell, tx);
+        } finally {
+          tx.abort();
+        }
+      };
+      expect(presence).toThrow(DocumentPending);
+      await runtime.storageManager.synced();
+      await write({ [ABSENT_ID]: naming(1) });
+      await factory.firstWatchSet.promise;
+      await replica.quarantineFailure(ABSENT_ID as URI, "space");
+      expect(presence).toThrow(DocumentPending);
+      await runtime.storageManager.synced();
+      expect(presence).toThrow(DocumentLoadError);
+
+      replica.accessForTestingOnly.applySessionSync({
+        type: "sync",
+        fromSeq: 900_000,
+        toSeq: 900_001,
+        upserts: [],
+        removes: [{ branch: "", id: ABSENT_ID, scope: "space" }],
+      }, "integrate");
+
+      factory.dropsLeft = 0;
+      expect(presence).toThrow(DocumentPending);
+      for (const cancel of cancels) cancel();
+    });
+
     it("stops reading as absent, and reports the failed load", async () => {
       const cancels: (() => void)[] = [];
       const { factory, runtime, replica, cellOf } = readerDropping(Infinity);
