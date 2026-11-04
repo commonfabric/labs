@@ -79,6 +79,7 @@ import {
   ClientNotificationType,
   type GetPatternSourcesRequest,
   type IPCRemotePost,
+  type LoggerErrorMessagesResponse,
   NotificationType,
   RequestType,
   RuntimeErrorCode,
@@ -7890,6 +7891,23 @@ describe("runtime-processor", () => {
           type: RequestType.GetPatternCoverage,
         }),
       ).toEqual({ data: report });
+    });
+  });
+
+  describe("`RuntimeProcessor` logger error messages", () => {
+    it("routes a `GetLoggerErrorMessages` request to what the loggers kept", async () => {
+      const logger = getLogger("runtime-processor-kept-messages", {
+        enabled: false,
+      });
+      logger.error("a-key", "it broke");
+      const processor = buildProcessor();
+
+      const response = await processor.handleRequest({
+        type: RequestType.GetLoggerErrorMessages,
+      }) as LoggerErrorMessagesResponse;
+
+      expect(response.messages["runtime-processor-kept-messages"])
+        .toStrictEqual({ "a-key": ["it broke"] });
     });
   });
 

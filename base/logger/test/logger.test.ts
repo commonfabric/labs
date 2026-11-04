@@ -7,6 +7,7 @@ import {
   getGlobalLogFloor,
   getLogger,
   getLoggerCountsBreakdown,
+  getLoggerErrorMessagesBreakdown,
   getTimingMeasuresState,
   getTimingStatsBreakdown,
   getTotalLoggerCounts,
@@ -902,6 +903,173 @@ describe("logger", () => {
       // Counts should work normally after reset
       captureConsole("log", () => logger.info("test-key", "test"));
       expect(logger.counts.info).toBe(1);
+    });
+  });
+
+  describe("errorMessagesByKey", () => {
+    // Each logger is disabled, which prints nothing, and which a logger's
+    // kept messages are meant to survive.
+
+    const disabledLogger = (name: string) =>
+      getLogger(name, { enabled: false });
+
+    it("returns the text of what was logged at `error`, by key", () => {
+      const logger = disabledLogger("kept-messages-text");
+
+      logger.error("first-key", "something", "broke");
+      logger.error("second-key", "something else broke");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({
+        "first-key": ["something broke"],
+        "second-key": ["something else broke"],
+      });
+    });
+
+    it("returns nothing of what was logged at any other level", () => {
+      const logger = disabledLogger("kept-messages-levels");
+
+      logger.debug("a-key", "debug");
+      logger.info("a-key", "info");
+      logger.warn("a-key", "warn");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+      expect(logger.countsByKey["a-key"]?.total).toBe(3);
+    });
+
+    it("returns the earliest three messages of a key, which goes on counting", () => {
+      const logger = disabledLogger("kept-messages-bound");
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", `message ${i}`);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "message 0",
+        "message 1",
+        "message 2",
+      ]);
+      expect(logger.countsByKey["a-key"]?.error).toBe(5);
+    });
+
+    it("cuts a message at a thousand characters", () => {
+      const logger = disabledLogger("kept-messages-length");
+
+      logger.error("a-key", "x".repeat(1001));
+      logger.error("a-key", "y".repeat(1000));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        `${"x".repeat(1000)}…`,
+        "y".repeat(1000),
+      ]);
+    });
+
+    it("evaluates a lazy message once it has room for it, and not after", () => {
+      const logger = disabledLogger("kept-messages-lazy");
+      let evaluated = 0;
+      const lazy = () => {
+        evaluated++;
+        return ["lazily", "built"];
+      };
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", lazy);
+
+      expect(logger.errorMessagesByKey["a-key"]?.[0]).toBe("lazily built");
+      expect(evaluated).toBe(3);
+    });
+
+    it("returns a sentence for a lazy message that throws, rather than throwing", () => {
+      const logger = disabledLogger("kept-messages-throwing");
+
+      logger.error("a-key", () => {
+        throw new Error("the message could not be built");
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "(this message could not be rendered)",
+      ]);
+    });
+
+    it("returns an error's name, message and cause", () => {
+      const logger = disabledLogger("kept-messages-error");
+
+      logger.error(
+        "a-key",
+        "failed:",
+        new TypeError("the outer one", { cause: new Error("the inner one") }),
+      );
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "failed: TypeError: the outer one (cause: Error: the inner one)",
+      ]);
+    });
+
+    it("returns the contents of records and arrays, to a bounded extent", () => {
+      const logger = disabledLogger("kept-messages-record");
+
+      logger.error("a-key", {
+        kind: "write",
+        count: 2,
+        error: new Error("it broke"),
+        deep: { deeper: { deepest: { value: 1 } } },
+        list: Array.from({ length: 12 }, (_, index) => index),
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{kind: write, count: 2, error: Error: it broke, " +
+        "deep: {deeper: {deepest: …}}, " +
+        "list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, …]}",
+      ]);
+    });
+
+    it("names an instance of a class, calling neither `toJSON()` nor `toString()`", () => {
+      const logger = disabledLogger("kept-messages-instance");
+      let called = 0;
+      class Donut {
+        toJSON() {
+          called++;
+          return "json";
+        }
+
+        toString() {
+          called++;
+          return "string";
+        }
+      }
+
+      logger.error("a-key", new Donut());
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["[Donut]"]);
+      expect(called).toBe(0);
+    });
+
+    it("returns copies, which a caller cannot use to change what is kept", () => {
+      const logger = disabledLogger("kept-messages-copies");
+      logger.error("a-key", "kept");
+
+      logger.errorMessagesByKey["a-key"]?.push("not kept");
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["kept"]);
+    });
+
+    it("returns nothing once the counts are reset", () => {
+      const logger = disabledLogger("kept-messages-reset");
+      logger.error("a-key", "kept");
+
+      logger.resetCounts();
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+    });
+  });
+
+  describe("getLoggerErrorMessagesBreakdown()", () => {
+    it("returns each logger's kept messages by name, omitting a logger with none", () => {
+      getLogger("breakdown-quiet", { enabled: false }).warn("a-key", "warned");
+      getLogger("breakdown-failing", { enabled: false }).error(
+        "a-key",
+        "it broke",
+      );
+
+      expect(getLoggerErrorMessagesBreakdown()).toStrictEqual({
+        "breakdown-failing": { "a-key": ["it broke"] },
+      });
     });
   });
 
