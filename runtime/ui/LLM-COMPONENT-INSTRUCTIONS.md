@@ -591,10 +591,12 @@ Default slot for cf-tab elements
 
 - `direction` - "horizontal" | "vertical"
 - `stack-below` (`stackBelow` in JSX) - a positive number of pixels (anything
-  else throws a `RangeError`): while the group itself is narrower, its panels
-  stack vertically whatever `direction` says, keeping their split and the
-  handle. Prefer the layout breakpoints, 640, 768 or 1024. For example, to put a
-  list beside its detail where there is room and above it where there is not:
+  else throws a `RangeError`): while a horizontal group is itself narrower, its
+  panels stack vertically, keeping their split and the handle, except a panel
+  marked `hide-when-stacked`, which steps aside with the handles beside it. A
+  vertical group never stacks. Prefer the layout breakpoints, 640, 768 or 1024.
+  For example, to put a list beside its detail where there is room and above it
+  where there is not:
   `<cf-resizable-panel-group direction="horizontal" stackBelow={768}>`
   **Events**:
 - `cf-resize` - Fired on resize with detail: `{ panels }` **Slots**: Default
@@ -608,7 +610,13 @@ Default slot for cf-tab elements
 - `default-size` - number (percentage)
 - `min-size` - number (percentage)
 - `max-size` - number (percentage)
-- `collapsible` - boolean **Slots**: Default slot for content
+- `collapsible` - boolean
+- `hide-when-stacked` (`hideWhenStacked` in JSX) - boolean: while the group is
+  stacked by its `stackBelow`, the panel and the handles beside it are not
+  drawn, and the other panels take its room; it comes back, at its size, when
+  the group widens. For example, a detail panel with nothing open:
+  `<cf-resizable-panel defaultSize={64} hideWhenStacked={!open}>` **Slots**:
+  Default slot for content
 
 ### 31. cf-resizable-handle
 

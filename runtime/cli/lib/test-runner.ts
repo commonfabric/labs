@@ -126,7 +126,11 @@ import {
   unmetRuntimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
 import { collectServedErrors, servedRuntimeErrors } from "./served-errors.ts";
-import { servedConsequences, settleServed } from "./served-settle.ts";
+import {
+  servedConsequences,
+  type ServedQuiescence,
+  settleServed,
+} from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
 
 /**
@@ -1220,6 +1224,9 @@ export async function runTestPattern(
   await using servingCleanup = new AsyncDisposableStack();
   // Set on that arm: whether the caller is running the serving loop's work.
   let inServingContext: (() => boolean) | undefined;
+  // Set on that arm too: the wait for the serving loop to finish what it was
+  // set off on, which a settle ends with.
+  let servedQuiescence: ServedQuiescence | undefined;
   // A caller-supplied store is FILE-BACKED, which the default emulation is not:
   // `StorageManager.emulate` runs against `:memory:` and leaves nothing to
   // snapshot. See `TestRunnerOptions.storageHost`.
@@ -1252,6 +1259,7 @@ export async function runTestPattern(
           // which a worker's port does not carry.
           worker: false,
         });
+        servedQuiescence = () => serving.host.host!.whenQuiescent();
         servingCleanup.defer(() =>
           serving.close().catch((error) => {
             console.error(
@@ -1647,7 +1655,7 @@ export async function runTestPattern(
         // updates can arrive after idle() resolves, scheduling more work.
         await storageManager.synced();
         await runtime.idle();
-      }));
+      }, servedQuiescence));
     await initializationBudgetSettlement;
     initializationBudgetSettlement = undefined;
 
@@ -1771,7 +1779,7 @@ export async function runTestPattern(
               ["runTestPattern", "step", stepLabel, "settle", "finalIdle"],
               () => runtime.idle(),
             );
-          }),
+          }, servedQuiescence),
       ).catch((error) => {
         settlementFailed = true;
         throw error;
@@ -1792,7 +1800,7 @@ export async function runTestPattern(
           settleServed(runtime, async () => {
             await runtime.settled();
             await servedConsequences(runtime);
-          }),
+          }, servedQuiescence),
       ).catch((error) => {
         settlementFailed = true;
         throw error;

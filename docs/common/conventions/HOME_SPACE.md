@@ -141,12 +141,11 @@ most-recently-used (MRU) ordering:
   is skipped before it is read, so once it is retired and no live profile is
   left, the roster is empty and `#profile` opens profile creation. The picker
   sends `retireProfile` for a profile `profiles` lists whose
-  `spaceDeleted(space)` returns `true`, as a pattern that lists catalog entries
-  sends `markDeleted`. `setProfileRetired` admits such a profile in place of
-  the ownership test it can no longer pass: its link is in `profiles` and
-  `spaceDeleted(space)` returns `true` in the handler, asked by the handler
-  itself, so an event naming a profile that is not deleted is held to the
-  usual refusals. The refusals that keep `#profile` from moving without the
+  `spaceDeleted(space)` returns `true`. `setProfileRetired` admits such a
+  profile in place of the ownership test it can no longer pass: its link is in
+  `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
+  the handler itself, so an event naming a profile that is not deleted is held
+  to the usual refusals. The refusals that keep `#profile` from moving without the
   person choosing do not apply, since a deleted profile is none of the live
   ones they protect. Where the memory server has not yet answered for the
   space, the handler runs again once it has, under the conditions

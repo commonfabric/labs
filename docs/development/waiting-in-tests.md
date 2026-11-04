@@ -442,6 +442,16 @@ turning true. A test that installs its own gate or fault seam owns that seam's
 edge already: record each hit on a log rather than incrementing a counter, and
 the counter's readers become the log's, with a wait available for free.
 
+`ExecutorHost.whenQuiescent()` is the barrier for a whole cascade rather than
+for one seq: it resolves once every tenure's loop has come to rest with nothing
+it can do on its own, across spaces, and it covers what the watermark does not,
+such as an event a served handler fired that a later wave serves. Its value
+stays the same until a loop does anything further, so a caller that has let its
+own runtime react to what the wait delivered asks again and compares. `cf test`
+settles on it ([The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process)). It lives on the host, so a
+loop in a worker does not offer it.
+
 A serving-side value that exists only in the SERVING runtime's view — a write
 sealed into an open wave, which the store does not hold yet — has no edge in
 that list, and the `waitForCellValue` shape below is wrong for it: idling the
@@ -601,9 +611,12 @@ By the time the marker arrives, the server holds what the announcing participant
 wrote before it, so the reads that follow resolve against a server that has it.
 On the server-execution arm what a participant's handlers write is the serving
 loop's, and the participant announces only once every event it fired has its
-consequence back at its own runtime, so that holds for those writes too; an
-event a served handler fires on its own account is no participant's, and is not
-covered.
+consequence back at its own runtime and the serving loop has finished what that
+set off, so that holds for those writes too, and for what an event a served
+handler fires on its own account writes. It does not hold for an event left
+waiting on something outside the loop, which [The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process) describes: what that event
+goes on to write can land after the marker.
 Two mechanisms deliver it and both are ordered behind the marker. A document
 already in the awaiting replica's watch set arrives in a fan-out frame the
 server computes by diffing current storage, so a frame carrying the marker
@@ -1415,12 +1428,12 @@ read, and what the page held at the moment it gave up: the document's URL,
 title, and HTTP status, whether the shell's `x-root-view` element is in it,
 whether `globalThis.app` is there and which view it holds, the requests its
 runtime has sent the worker and has no reply to, the messages that worker has
-logged at `warn` or `error` with how often, and the tail of console messages
-`Page.applyConsoleFormatter` retains in the page. Reading the worker's logs is
-a round trip the others do not need, so a worker that has stopped answering
-costs the report that one line, which says so, and nothing else. The page half
-of that is `readShellPageProbe` in
-`runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
+logged at `warn` or `error` with how often, the text of the earliest few it
+logged at `error`, and the tail of console messages `Page.applyConsoleFormatter`
+retains in the page. Reading the worker's logs is a round trip the others do not
+need, so a worker that has stopped answering costs the report that one line,
+which says so, and nothing else. The page half of that is `readShellPageProbe`
+in `runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
 `shell-utils.ts` assembles the whole block, and a test may call it directly to
 report a wait of its own the same way.
 
@@ -1437,13 +1450,26 @@ the run waits out the full minute and reports nothing that names the cause.
 `waitForCondition` carries the same block, and carries it for every wait rather
 than for a wrapped few. A wait that reaches the stuck-condition net renders the
 source the page ran, the arguments it was handed one to a line, the last throw
-the predicate itself made where it made one, and the page it ran out against;
-`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles
-that. The source is usually what names the wait, waits carrying no names of
-their own, and where several sites share one predicate the arguments are what
-tell them apart. The predicate's own throw is the part nothing else can supply:
-a predicate that throws on every evaluation leaves a page identical to one a
-predicate merely reads as false.
+the predicate itself made where it made one, what the loggers of the test's own
+process have recorded at `error`, and the page it ran out against;
+`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles that.
+The source is usually what names the wait, waits carrying no names of their own,
+and where several sites share one predicate the arguments are what tell them
+apart. The predicate's own throw is the part nothing else can supply: a
+predicate that throws on every evaluation leaves a page identical to one a
+predicate merely reads as false. The test process's errors are the other part: a
+test's own runtime logs there rather than in any page's worker, so a page can
+sit idle over a refusal that only that process recorded.
+
+The predicate is an opaque function, so the probe it is handed records the
+selectors it asks `collect()` for, and the report gives each one's matches at
+the moment of the report, how many of those are rendered, and the most it
+matched at any check during the wait. That tells apart an element that never
+existed, one that came and went, and one that exists and failed the rest of the
+condition. A predicate that reads the page without `collect()` gets a line
+saying it collected nothing. A waiter is installed in one document, so a wait
+whose document a navigation replaced has no predicate left to run, and the
+report says that too.
 
 The net is five minutes and no test can sit through one, so its length for a
 single wait is read from `CF_WAIT_FOR_CONDITION_TIMEOUT_MS`. That exists for
