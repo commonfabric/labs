@@ -160,31 +160,73 @@ scp /tmp/<did>.sqlite deploy@rapids.saga-castor.ts.net:/tmp/
 # 4. On rapids: find the store, and look at what is already there.
 grep -E '^(MEMORY_DIR|DB_PATH)=' /opt/cf/releases/.env
 ls -la <store>/engine-v3/engine-v3/
-sha256sum /tmp/<did>.sqlite      # same digest as step 1, or stop here
-
-# 5. Stop everything that can hold the store open, or write through it.
-for p in $(seq 8001 8021); do sudo systemctl stop toolshed-binary@$p; done
-
-# 6. Move any existing file for that DID ASIDE — never delete it, and take its
-#    -wal and -shm companions with it. The engine runs in WAL mode, and a stale
-#    write-ahead log left beside a replaced database is recovered onto the file
-#    you just installed. List before you move: nothing listed means there is
-#    nothing to set aside, and the move is skipped rather than silenced.
-cd <store>/engine-v3/engine-v3/
-ls -la '<did>.sqlite'*
-sudo install -d -o deploy -g deploy /data/replaced
-sudo mv '<did>.sqlite'* /data/replaced/
-
-# 7. Install the copy, owned by the user the services run as.
-sudo install -o deploy -g deploy -m 644 /tmp/<did>.sqlite '<did>.sqlite'
-
-# 8. Start the servers, and confirm they came up.
-for p in $(seq 8001 8021); do sudo systemctl start toolshed-binary@$p; done
-for p in $(seq 8001 8021); do systemctl is-active toolshed-binary@$p; done
 ```
 
-Steps 5 through 8 are one continuous window in which staging is down. Have the
-file on the host and its checksum checked before you begin it.
+Steps 5 through 8 are one continuous window in which staging is down, and they
+are one script on rapids. It stops at the first command that fails, so no step
+runs on the strength of one that did not finish, and it checks the copy's
+checksum before it stops anything. Set the names at its top first: the space's
+DID, the file step 3 copied up, step 1's digest, the directory step 4 listed,
+a date for the file names, and the directory that receives what the install
+replaces, which has to be on the store's file system for the copy to be quick.
+
+```bash
+set -euo pipefail
+DID='<did>'
+COPY='/tmp/<did>.sqlite'
+DIGEST='<the digest step 1 printed>'
+LIVE='<store>/engine-v3/engine-v3'
+DATE='<date>'
+REPLACED=/data/replaced
+cd "$LIVE"
+
+# The copy that arrived is the one step 1 made, or nothing else runs.
+if [ "$(sha256sum "$COPY" | cut -d' ' -f1)" != "$DIGEST" ]; then
+  echo "$COPY does not have step 1's digest: stop here" >&2
+  exit 1
+fi
+
+# 5. Stop everything that can hold the store open, or write through it, and
+#    stop here unless every instance reports itself inactive.
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
+
+# 6. Set aside any existing store for the DID: never delete it. The engine
+#    runs in WAL mode, and a stale log left beside a replaced database is
+#    recovered onto the file installed over it, so a log that is not empty
+#    stops the run (it holds what an instance did not write back), and the
+#    empty ones and the -shm index go. The store itself is copied aside, and
+#    stays in place until the install renames the copy over it, so the
+#    directory never lacks a store for the DID.
+for log in -wal -journal; do
+  if [ -s "$DID.sqlite$log" ]; then
+    echo "$DID.sqlite$log is not empty: stop here" >&2
+    exit 1
+  fi
+done
+sudo rm -f "$DID.sqlite-wal" "$DID.sqlite-shm" "$DID.sqlite-journal"
+sudo install -d -o deploy -g deploy "$REPLACED"
+if [ -e "$DID.sqlite" ]; then
+  sudo cp -p "$DID.sqlite" "$REPLACED/$DID.staging-$DATE.sqlite"
+fi
+
+# 7. Install the copy, owned by the user the services run as, under a
+#    temporary name, and rename it over the store.
+sudo install -o deploy -g deploy -m 644 "$COPY" "$DID.sqlite.copy"
+sudo mv -f "$DID.sqlite.copy" "$DID.sqlite"
+
+# 8. Start the servers, and confirm they came up.
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+```
+
+Have the file on the host before the window begins.
 
 ## Confirming the copy is the one being served
 
@@ -205,8 +247,8 @@ space you meant to install.
 
 Do not checksum the installed file after the services start. The server opens
 it, migrates what it migrates, and writes a WAL beside it; the digest moves for
-reasons that have nothing to do with whether the transfer was clean. Step 4 is
-where that question gets settled.
+reasons that have nothing to do with whether the transfer was clean. The
+digest check at the top of the window is where that question gets settled.
 
 ## What a staging copy shows, and what it does not
 
@@ -231,11 +273,42 @@ It still does not show:
 ## Removing the copy
 
 A staging copy is real content on a shared host, so it comes down when the
-question that justified it has been answered. Removal is steps 5 to 8 in
-reverse: stop the instances, move the copy out of the store directory with its
-`-wal` and `-shm` companions, move back whatever step 6 set aside, start
-everything. If nothing was set aside, leaving the space absent is the correct
+question that justified it has been answered. Removal is the window in reverse,
+and it begins with the stop: every instance may have the copy open, and by then
+the copy has companions of its own, which go with it so that none is recovered
+onto the store put back. The store step 6 set aside, if there was one, is
+copied back and renamed over the copy, so the directory never lacks a store
+for the DID. If nothing was set aside, leaving the space absent is the correct
 end state — the server will create an empty one if anyone asks for it again.
+Write these commands down before step 5, not after. With the same names set:
 
-Write the rollback down before step 5, not after: the path step 6 moved things
-to, and the commands that put them back.
+```bash
+set -euo pipefail
+cd "$LIVE"
+for p in $(seq 8001 8021); do sudo systemctl stop "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do
+  state=$(systemctl is-active "toolshed-binary@$p" || true)
+  if [ "$state" != inactive ]; then
+    echo "toolshed-binary@$p is ${state:-unknown}, not inactive: stop here" >&2
+    exit 1
+  fi
+done
+
+# Keep the copy, with the companions it grew, out of the store directory.
+sudo install -d -o deploy -g deploy "$REPLACED/removed-copy-$DATE"
+for companion in -wal -shm -journal; do
+  if [ -e "$DID.sqlite$companion" ]; then
+    sudo mv "$DID.sqlite$companion" "$REPLACED/removed-copy-$DATE/"
+  fi
+done
+if [ -e "$REPLACED/$DID.staging-$DATE.sqlite" ]; then
+  sudo cp -p "$DID.sqlite" "$REPLACED/removed-copy-$DATE/$DID.sqlite"
+  sudo cp -p "$REPLACED/$DID.staging-$DATE.sqlite" "$DID.sqlite.restored"
+  sudo mv -f "$DID.sqlite.restored" "$DID.sqlite"
+else
+  sudo mv "$DID.sqlite" "$REPLACED/removed-copy-$DATE/"
+fi
+
+for p in $(seq 8001 8021); do sudo systemctl start "toolshed-binary@$p"; done
+for p in $(seq 8001 8021); do systemctl is-active "toolshed-binary@$p"; done
+```
