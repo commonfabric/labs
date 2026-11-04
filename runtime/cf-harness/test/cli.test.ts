@@ -4352,7 +4352,7 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
     runPromptOptions?.systemPrompt?.includes(
       "Writing a JSON file at /workspace/capture.results.json",
     ),
-    true,
+    false,
   );
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(

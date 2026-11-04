@@ -49,6 +49,44 @@ describe("cli structured result prompt", () => {
     }
   });
 
+  it("advertises only submission when available and files otherwise", () => {
+    const structuredResult = {
+      path: "/tmp/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema,
+    };
+    for (
+      const allowedToolIds of [
+        undefined,
+        ["submit_result"] as const,
+        ["write_file"] as const,
+      ]
+    ) {
+      for (
+        const prompt of [
+          buildCfHarnessBatchSystemPrompt({ structuredResult, allowedToolIds }),
+          buildCfHarnessOperatorSystemPrompt({
+            workspace: "/tmp",
+            focusRoot: "/tmp",
+            structuredResult,
+            allowedToolIds,
+          }),
+        ]
+      ) {
+        const submits = allowedToolIds === undefined ||
+          allowedToolIds[0] === "submit_result";
+        expect(prompt.includes("Finish by calling submit_result")).toBe(
+          submits,
+        );
+        expect(prompt.includes("Writing a JSON file")).toBe(!submits);
+        expect(prompt.includes("The harness validates that file")).toBe(
+          !submits,
+        );
+        expect(prompt.includes("If the file is missing")).toBe(!submits);
+      }
+    }
+  });
+
   it("includes a boolean schema and omits the contract when no schema is configured", () => {
     expect(buildCfHarnessBatchSystemPrompt({
       structuredResult: {
