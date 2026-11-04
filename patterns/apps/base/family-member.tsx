@@ -125,10 +125,11 @@ const selectSameAs = handler<
 
 const clearSameAs = handler<unknown, { member: Writable<FamilyMember> }>(
   (_event, { member }) => {
-    // Writing `undefined` would keep `sameAs`, holding `undefined`; the link
-    // is gone only once the object is written without it.
-    const { sameAs: _sameAs, ...rest } = member.get();
-    member.set(rest);
+    // There is no way yet to remove one property from a cell, so this
+    // stores `undefined` at `sameAs`, which reads as no link. Writing the
+    // object back without it would drop every field outside this
+    // handler's schema, such as a subtype's.
+    member.key("sameAs").set(undefined);
   },
 );
 
